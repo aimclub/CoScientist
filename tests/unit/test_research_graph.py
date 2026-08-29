@@ -112,11 +112,40 @@ def test_commit_is_atomic_on_any_error(store):
     r = store.commit(
         source="HypothesesAgent",
         nodes=[{"type": "Hypothesis", "ref": "h", "attrs": {"formulation": "ok"}},
-               {"type": "Evidence", "attrs": {"subtype": "literature"}}],  # not allowed for Hypotheses
+               {"type": "Conclusion", "attrs": {}}],  # not allowed for Hypotheses (ValidatorAgent-only)
     )
     assert not r.ok
-    assert any("may not create 'Evidence'" in e for e in r.errors)
+    assert any("may not create 'Conclusion'" in e for e in r.errors)
     assert store.full()["nodes"] == before, "partial write on a failed commit"
+
+
+def test_hypotheses_agent_can_ground_hypothesis_in_literature_evidence(store):
+    """HypothesesAgent may cite the paper a hypothesis was derived from (e.g.
+    MOOSE-Chem's inspiration paper) as literature Evidence — relates_to only,
+    never supports/refutes/refines (that polarity call stays ValidatorAgent's)."""
+    _init(store)
+    r = store.commit(
+        source="HypothesesAgent",
+        nodes=[{"type": "Hypothesis", "ref": "h", "attrs": {"formulation": "X binds Y"}},
+               {"type": "Evidence", "ref": "ev",
+                "attrs": {"subtype": "literature", "content": "paper abstract",
+                          "source_ref": "Some Inspiration Paper Title"}}],
+        edges=[{"type": "relates_to", "from": "#ev", "to": "#h"}],
+    )
+    assert r.ok, r.errors
+    ids = {n["type"]: n["id"] for n in r.committed["nodes"]}
+    assert ids["Hypothesis"] == "H1" and ids["Evidence"] == "E1"
+
+    # supports/refutes/refines still rejected for this agent — polarity stays
+    # ValidatorAgent's judgment call, not asserted at hypothesis creation time.
+    r2 = store.commit(
+        source="HypothesesAgent",
+        nodes=[{"type": "Evidence", "ref": "ev2",
+                "attrs": {"subtype": "literature", "content": "x", "source_ref": "y"}}],
+        edges=[{"type": "supports", "from": "#ev2", "to": ids["Hypothesis"]}],
+    )
+    assert not r2.ok
+    assert any("supports" in e for e in r2.errors)
 
 
 # ── permission / transition / edge rejections ──────────────────────────────────

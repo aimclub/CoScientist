@@ -58,7 +58,10 @@ You MUST:
 - If novelty < 2: differentiate from known approaches.
 - WHEN TOOLS ARE AVAILABLE: prefer verifiable over novel — a testable hypothesis
   with moderate novelty beats an untestable one with high novelty.
-- Return the COMPLETE revised hypothesis as JSON (all fields filled)."""
+- Return the COMPLETE revised hypothesis as JSON (all fields filled), plus a
+  top-level "revision_reasoning" string (2-4 sentences): which failing
+  dimension(s) you targeted, what you changed, and why that change addresses
+  the critic's specific feedback — not a summary of the hypothesis itself."""
 
 
 class HypothesisLoopCoordinator:
@@ -133,14 +136,30 @@ class HypothesisLoopCoordinator:
         edges: List[Dict[str, Any]] = []
         for i, h in enumerate(active, 1):
             href, vmref, ccref = f"h{i}", f"vm{i}", f"cc{i}"
+            trace = "\n".join(
+                f"[{r.action} by {r.agent}] {r.detail}"
+                for r in h.provenance.history if r.detail
+            )
             nodes.append({
                 "type": "Hypothesis", "ref": href,
                 "attrs": {
                     "formulation": h.claim,
                     "rationale": h.reasoning,
                     "priority": "medium",
+                    **({"reasoning_trace": trace} if trace else {}),
                 },
             })
+            for j, ref in enumerate(h.evidence_basis or [], 1):
+                eref = f"ev{i}_{j}"
+                nodes.append({
+                    "type": "Evidence", "ref": eref,
+                    "attrs": {
+                        "subtype": "literature",
+                        "content": ref.description or ref.title,
+                        "source_ref": ref.doi or ref.url or ref.title,
+                    },
+                })
+                edges.append({"type": "relates_to", "from": f"#{eref}", "to": f"#{href}"})
             nodes.append({
                 "type": "VerificationMethod", "ref": vmref,
                 "attrs": {
@@ -289,10 +308,19 @@ class HypothesisLoopCoordinator:
                 for v in parsed.values():
                     if isinstance(v, dict) and "claim" in v:
                         parsed = v; break
+            reasoning = str(parsed.pop("revision_reasoning", "") or "").strip()
             revised = Hypothesis(**parsed)
+            # Carry the prior history forward explicitly rather than trust the
+            # LLM to round-trip the nested provenance object verbatim — one
+            # dropped field there and the whole trace before this iteration
+            # silently disappears.
+            revised.provenance.creator = hypothesis.provenance.creator
+            revised.provenance.created_at = hypothesis.provenance.created_at
+            revised.provenance.history = list(hypothesis.provenance.history)
             revised.provenance.history.append(ProvenanceRecord(
                 action="revised", agent="HypothesisLoopCoordinator/LLM",
-                detail=f"Refinement at iteration {iteration}"))
+                detail=reasoning or f"Refinement at iteration {iteration} "
+                                     "(model returned no revision_reasoning)"))
             return revised
         except Exception as exc:
             self._audit.log_error("refine_via_llm", str(exc), hypothesis.claim)

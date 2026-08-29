@@ -57,6 +57,9 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
             "formulation": "the testable statement",
             "rationale": "why it is plausible",
             "priority": "verification priority (e.g. 1..5 or high/medium/low)",
+            "reasoning_trace": "optional step-by-step log of how this hypothesis "
+                               "was arrived at (generation → critic → revision "
+                               "rounds), one entry per step",
         },
     ),
     NodeTypeSpec(
@@ -419,11 +422,11 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         # the orchestrator/coder later flips them to available/being_created. A
         # needs_adaptation tool keeps the hypothesis correctly BLOCKED until then.
         create=frozenset({"Hypothesis", "VerificationMethod", "ConfirmationCriteria",
-                          "Tool"}),
+                          "Tool", "Evidence"}),
         update_attrs=frozenset(),
         transitions=_transitions(("Hypothesis", "formulated", "postponed")),
         edges=_edges("motivates", "tested_by", "requires", "formulated_for",
-                     "uses", "consumes"),
+                     "uses", "consumes", "relates_to"),
     ),
     "ResearchAgent": AgentPerm(
         create=frozenset({"Evidence", "EmpiricalBase"}),
