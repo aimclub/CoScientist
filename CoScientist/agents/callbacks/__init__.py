@@ -13,6 +13,7 @@ from CoScientist.agents.callbacks.med_callbacks import (
 )
 from CoScientist.agents.callbacks.json_output import sanitize_json_output
 from CoScientist.agents.callbacks.research_callbacks import (
+    capture_literature_reactions,
     capture_literature_smiles,
     cleanup_uploaded_papers,
     ensure_local_papers_uploaded,
@@ -37,6 +38,7 @@ __all__ = [
     "ensure_local_papers_uploaded",
     "cleanup_uploaded_papers",
     "capture_literature_smiles",
+    "capture_literature_reactions",
     "before_tool_reranker_model",
     "after_tool_reranker_agent",
     "after_fullset_reranker_agent",

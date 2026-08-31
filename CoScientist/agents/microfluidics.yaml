@@ -178,8 +178,10 @@ agents:
       before_tool: [WebSearchLimiter]
       # capture_literature_smiles: pulls SMILES out of the raw RAG/paper-search
       # result (before the LLM paraphrases it away) into state["literature_smiles"]
-      # for MolDesignAgent (stage 3) to build on.
-      after_tool: [log_research_tool_calls, capture_literature_smiles]
+      # for MolDesignAgent (stage 3) to build on. capture_literature_reactions:
+      # same, for reaction SMILES, into state["literature_reactions"] for
+      # SynthRouteAgent (stage 4).
+      after_tool: [log_research_tool_calls, capture_literature_smiles, capture_literature_reactions]
     hitl: true
 
   # ── Module B — stages 3–5: design ──────────────────────────────────────────

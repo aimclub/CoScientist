@@ -529,6 +529,11 @@ def _capture_literature_smiles():
     return capture_literature_smiles
 
 
+def _capture_literature_reactions():
+    from CoScientist.agents.callbacks import capture_literature_reactions
+    return capture_literature_reactions
+
+
 def _skip_retriever_context():
     from CoScientist.agents.callbacks import before_tool_reranker_model
     return before_tool_reranker_model
@@ -603,6 +608,9 @@ _cb("log_research_tool_calls", "after_tool", factory=lambda ctx: _log_research_t
 # Pull SMILES out of RAG/paper-search tool results (raw response, before the
 # LLM paraphrase) and stash them in state for the design stage to pick up.
 _cb("capture_literature_smiles", "after_tool", factory=lambda ctx: _capture_literature_smiles())
+# Same, for reaction SMILES (reactants>agents>products) — feeds the
+# retrosynthesis stage instead of the molecular-design one.
+_cb("capture_literature_reactions", "after_tool", factory=lambda ctx: _capture_literature_reactions())
 _cb("skip_retriever_context", "before_model", factory=lambda ctx: _skip_retriever_context())
 _cb("collect_reranked_tools", "after_agent", factory=lambda ctx: _collect_reranked_tools())
 _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranked_mcps())
