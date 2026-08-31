@@ -142,6 +142,7 @@ class OpikSettings(BaseModel):
 class MCPSettings(BaseModel):
     paper_analysis_url: Optional[str] = None
     papers_search_url: Optional[str] = None
+    economics_url: Optional[str] = None
 
 
 # =========================

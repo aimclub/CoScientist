@@ -4,17 +4,31 @@ import logging
 import os
 import asyncio
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmResponse, LlmRequest
+from google.adk.tools.base_tool import BaseTool
+from google.adk.tools.tool_context import ToolContext
 from google.genai.types import Part
 
+from CoScientist.chemical_utils.smiles_extraction import extract_smiles
 from CoScientist.paper_parser.s3_connection import s3_service
 
 logger = logging.getLogger(__name__)
 
 _PAPER_STATE_KEY = "uploaded_paper_s3_keys"
+
+# RAG/paper tools ResearchAgent can call that might surface molecule data —
+# everything else (websearch, task_tracker) is skipped without even trying.
+_SMILES_SOURCE_TOOLS = {
+    "explore_chemistry_database",
+    "explore_my_papers",
+    "search_papers",
+    "download_papers_from_search",
+}
+_LITERATURE_SMILES_STATE_KEY = "literature_smiles"
+_LITERATURE_SMILES_SUMMARY_STATE_KEY = "literature_smiles_summary"
 _USER_ID_ENV = "USER_ID"
 _SESSION_ID_ENV = "SESSION_ID"
 _UPLOADED_PAPERS_PATH_ENV = "STORAGE__UPLOADED_PAPERS"
@@ -173,6 +187,52 @@ def _resolve_local_papers_dir() -> Optional[Path]:
         return _DEFAULT_LOCAL_PAPERS_ROOT
 
     return None
+
+
+def capture_literature_smiles(
+    tool: BaseTool,
+    args: Dict[str, Any],
+    tool_context: ToolContext,
+    tool_response: Any,
+) -> None:
+    """ResearchAgent after_tool callback: pull SMILES out of RAG/paper-search
+    results and hand them to the design stage via session state.
+
+    ADK only keeps the LLM's paraphrase of a tool result under output_key —
+    the raw response is gone once the agent turn ends. Molecule-bearing
+    literature tools (explore_chemistry_database, explore_my_papers,
+    search_papers, download_papers_from_search) are prompted to copy SMILES
+    verbatim into their answer, but nothing marks which substring is one, and
+    a paraphrase could still drop or mangle it. Scanning the raw tool_response
+    here, at the tool-call boundary, catches it before that can happen.
+    """
+    if tool.name not in _SMILES_SOURCE_TOOLS:
+        return
+
+    try:
+        found = extract_smiles(str(tool_response))
+        if not found:
+            return
+
+        existing: List[str] = tool_context.state.get(_LITERATURE_SMILES_STATE_KEY, [])
+        merged = existing + [s for s in found if s not in existing]
+        tool_context.state[_LITERATURE_SMILES_STATE_KEY] = merged
+        tool_context.state[_LITERATURE_SMILES_SUMMARY_STATE_KEY] = _render_smiles_summary(merged)
+        logger.info(
+            "[ResearchAgent] captured %d new SMILES from %s (%d total in session)",
+            len(found),
+            tool.name,
+            len(merged),
+        )
+    except Exception as exc:
+        logger.warning("Failed to extract SMILES from %s result: %s", tool.name, exc)
+
+
+def _render_smiles_summary(smiles_list: List[str]) -> str:
+    if not smiles_list:
+        return ""
+    lines = "\n".join(f"- {s}" for s in smiles_list)
+    return f"SMILES молекул, найденных литературным RAG-поиском ({len(smiles_list)}):\n{lines}"
 
 
 def _get_user_id() -> str:

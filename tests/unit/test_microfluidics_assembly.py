@@ -178,17 +178,32 @@ def test_stub_tools_are_registered_and_documented(config, system):
     the swap to real implementations touches neither the YAML nor the graph."""
     from CoScientist.assembly.registry import REGISTRY
 
-    for key in ("molecular_design_stub", "retrosynthesis_stub", "economics_mcp_stub",
+    for key in ("molecular_design_stub", "retrosynthesis_stub",
                 "cfd_mcp_stub", "rig_mcp_stub", "finish_optimization"):
         entry = REGISTRY.tool(key)  # raises if unregistered
         assert entry.factory() is not None, f"{key}: not attachable"
         assert [d.name for d in entry.docs] == [key], f"{key}: doc name must match"
 
 
+def test_economics_tool_is_registered_and_documented():
+    """Economics (node 5) is real (chemquote MCP), not a stub — optional=True,
+    so entry.factory() legitimately returns None when MCP__ECONOMICS_URL is
+    unset (same degradation as paper_analysis / papers_search)."""
+    from CoScientist.assembly.registry import REGISTRY
+
+    entry = REGISTRY.tool("economics")
+    assert entry.optional is True
+    expected_tools = {
+        "search_reagents_by_name", "get_price", "search_by_structure",
+        "estimate_synthesis_cost", "rank_routes_by_cost",
+    }
+    assert {d.name for d in entry.docs} == expected_tools
+
+
 def test_design_nodes_call_their_stubs(config):
     assert config.agent("MolDesignAgent").tools == ["molecular_design_stub"]
     assert config.agent("SynthRouteAgent").tools == ["retrosynthesis_stub"]
-    assert config.agent("EconomicsAgent").tools == ["economics_mcp_stub"]
+    assert config.agent("EconomicsAgent").tools == ["economics"]
 
 
 # ── built system invariants ──────────────────────────────────────────────────

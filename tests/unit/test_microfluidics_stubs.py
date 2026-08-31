@@ -1,14 +1,16 @@
 """Unit tests for the microfluidics stage 3–11 stubs (no LLM, no services).
 
 Stages 3–11 are wired against STUBS: the external services (molecular design,
-retrosynthesis, economics, CFD, the rig) are not connected yet, so each stub
-returns a static, canonical answer. That keeps the graph runnable end to end.
-The point of these tests is the contract the graph depends on — the shape of
-the answer and its determinism — so that swapping a stub body for the real
-service later is a visible, testable change.
+retrosynthesis, CFD, the rig) are not connected yet, so each stub returns a
+static, canonical answer. That keeps the graph runnable end to end. The point
+of these tests is the contract the graph depends on — the shape of the answer
+and its determinism — so that swapping a stub body for the real service later
+is a visible, testable change.
 
-``finish_optimization`` is NOT a stub: it is the real escape hatch of the 7⇄8
-optimization loop and must survive the swap untouched.
+Economics (stage 5) has already graduated to the real chemquote MCP service
+(CoScientist/tools/economics_tools.py) and is NOT covered here — like
+``finish_optimization``, it is real wiring, not a placeholder, so it is out
+of scope for a stub-contract test.
 
 Run from the repo root:  pytest tests/unit/test_microfluidics_stubs.py -q
 """
@@ -19,7 +21,6 @@ load_dotenv()
 
 from CoScientist.microfluidics.stubs import (  # noqa: E402
     cfd_mcp_stub,
-    economics_mcp_stub,
     finish_optimization,
     molecular_design_stub,
     retrosynthesis_stub,
@@ -29,7 +30,6 @@ from CoScientist.microfluidics.stubs import (  # noqa: E402
 STUBS = (
     molecular_design_stub,
     retrosynthesis_stub,
-    economics_mcp_stub,
     cfd_mcp_stub,
     rig_mcp_stub,
 )
@@ -37,7 +37,6 @@ STUBS = (
 CALLS = {
     molecular_design_stub: {"requirements": "ПАВ для МУН, минерализованная вода"},
     retrosynthesis_stub: {"smiles": "CCCCCCCCCCCCOS(=O)(=O)[O-].[Na+]"},
-    economics_mcp_stub: {"route": "сульфатирование додеканола, нейтрализация"},
     cfd_mcp_stub: {"geometry": "T-junction, 200 мкм", "flow": "0.5 мл/мин"},
     rig_mcp_stub: {"command": "set_flow_rate(0.5)"},
 }
@@ -89,15 +88,6 @@ def test_retrosynthesis_returns_a_route_with_operating_conditions():
     for step in result["steps"]:
         assert step["operation"]
         assert step["conditions"]
-
-
-def test_economics_returns_cost_russian_availability_and_risks():
-    """Node 5: route + reagents → cost, availability in RU, risks."""
-    result = economics_mcp_stub(**CALLS[economics_mcp_stub])
-
-    assert result["cost_rub_per_kg"] > 0
-    assert result["availability_ru"]
-    assert result["risks"]
 
 
 def test_cfd_returns_simulation_results():

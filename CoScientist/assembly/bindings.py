@@ -36,6 +36,11 @@ def _papers_search():
     return papers_search_toolset_instance
 
 
+def _economics():
+    from CoScientist.tools import economics_toolset_instance
+    return economics_toolset_instance
+
+
 def _retrieval():
     from CoScientist.tools import retrieval_toolset_instance
     return retrieval_toolset_instance
@@ -231,16 +236,63 @@ REGISTRY.register_tool(ToolEntry(
     ),
 ))
 
+# chemquote — real MCP service (not a stub): Russian chemical-supplier price
+# lists, priced/matched by SMILES. Full tool reference: MCP_Economic_model.md.
 REGISTRY.register_tool(ToolEntry(
-    key="economics_mcp_stub",
-    factory=_microfluidics_stub("economics_mcp_stub"),
+    key="economics",
+    factory=_economics,
+    optional=True,  # built only when MCP__ECONOMICS_URL is configured
+    runtime_resolved=True,
     docs=(
         ToolDoc(
-            name="economics_mcp_stub",
-            signature="economics_mcp_stub(route)",
+            name="search_reagents_by_name",
+            signature="search_reagents_by_name(query, limit=20)",
             purpose=(
-                "(ЗАГЛУШКА) Costs a synthesis route: price per kg, reagent "
-                "availability in Russia, and supply risks."
+                "Fuzzy search for a reagent by its Russian trade name (typo-"
+                "tolerant). Returns reagents (folded offers), not raw price rows."
+            ),
+        ),
+        ToolDoc(
+            name="get_price",
+            signature="get_price(name, pack_unit=None, purity_grade=None, limit=50)",
+            purpose=(
+                "All offers for a reagent name — every supplier/pack size/grade, "
+                "sorted by unit price."
+            ),
+        ),
+        ToolDoc(
+            name="search_by_structure",
+            signature="search_by_structure(smiles, mode='exact', limit=50)",
+            purpose=(
+                "Find offers by molecule SMILES instead of name — reliable "
+                "regardless of how the price list names the substance. "
+                "mode='substructure' finds molecules containing a fragment."
+            ),
+        ),
+        ToolDoc(
+            name="estimate_synthesis_cost",
+            signature=(
+                "estimate_synthesis_cost(reagents, strategy='cheapest', "
+                "similarity='hard', preferred_currency='RUB')"
+            ),
+            purpose=(
+                "Costs a list of reagents ({smiles, qty, unit}). similarity="
+                "'hard' aborts on any unmatched reagent (no partial estimate); "
+                "'soft' matches what it can and lists the rest in `missing`."
+            ),
+        ),
+        ToolDoc(
+            name="rank_routes_by_cost",
+            signature=(
+                "rank_routes_by_cost(routes, target_qty=1, target_unit='g', "
+                "default_yield=1.0, similarity='soft', preferred_currency='RUB')"
+            ),
+            purpose=(
+                "Compares synthesis routes (ordered reaction-SMILES steps, "
+                "'reactants>agents>products') by the purchase cost of their "
+                "starting materials for the same target quantity. Set "
+                "default_yield to each route's real step yield — 1.0 (no "
+                "losses modelled) makes long routes look artificially cheap."
             ),
         ),
     ),
@@ -472,6 +524,11 @@ def _log_research_tool_calls():
     return print_research_agent_tool_call
 
 
+def _capture_literature_smiles():
+    from CoScientist.agents.callbacks import capture_literature_smiles
+    return capture_literature_smiles
+
+
 def _skip_retriever_context():
     from CoScientist.agents.callbacks import before_tool_reranker_model
     return before_tool_reranker_model
@@ -543,6 +600,9 @@ _cb("seed_coder_workspace", "before_model", factory=lambda ctx: _seed_coder_work
 _cb("inject_medical_artifacts", "before_model", factory=lambda ctx: _inject_medical_artifacts())
 _cb("inject_uploaded_papers", "before_model", factory=lambda ctx: _inject_uploaded_papers())
 _cb("log_research_tool_calls", "after_tool", factory=lambda ctx: _log_research_tool_calls())
+# Pull SMILES out of RAG/paper-search tool results (raw response, before the
+# LLM paraphrase) and stash them in state for the design stage to pick up.
+_cb("capture_literature_smiles", "after_tool", factory=lambda ctx: _capture_literature_smiles())
 _cb("skip_retriever_context", "before_model", factory=lambda ctx: _skip_retriever_context())
 _cb("collect_reranked_tools", "after_agent", factory=lambda ctx: _collect_reranked_tools())
 _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranked_mcps())

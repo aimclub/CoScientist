@@ -26,8 +26,10 @@
 #   └─ ReportAgent (llm)                      stage 11
 #
 # Stages 3–11 run on STUBS (see CoScientist/microfluidics/stubs.py): the
-# molecular design, retrosynthesis, economics, CFD and rig services are not
-# connected yet. Connecting one replaces a stub BODY — this file does not change.
+# molecular design, retrosynthesis, CFD and rig services are not connected
+# yet. Connecting one replaces a stub BODY — this file does not change.
+# Economics (node 5) is already real: chemquote, an MCP service, not a stub
+# body swap — see MCP_Economic_model.md.
 # Design: docs/superpowers/specs/2026-07-14-microfluidics-graph-modules-design.md
 #
 # Run a separate CoScientist instance with this profile:
@@ -174,7 +176,10 @@ agents:
       before_agent: [before_get_task]
       before_model: [inject_uploaded_papers]
       before_tool: [WebSearchLimiter]
-      after_tool: [log_research_tool_calls]
+      # capture_literature_smiles: pulls SMILES out of the raw RAG/paper-search
+      # result (before the LLM paraphrases it away) into state["literature_smiles"]
+      # for MolDesignAgent (stage 3) to build on.
+      after_tool: [log_research_tool_calls, capture_literature_smiles]
     hitl: true
 
   # ── Module B — stages 3–5: design ──────────────────────────────────────────
@@ -212,13 +217,17 @@ agents:
     output_key: synthesis_routes
 
   # Node 5 is a LEAF: nothing consumes `economics` until the report (11).
+  # Real service (not a stub): chemquote, Russian reagent price lists priced
+  # by SMILES — see MCP_Economic_model.md. Needs MCP__ECONOMICS_URL in .env;
+  # without it the tool is silently dropped (optional=True) and the agent
+  # runs tool-less.
   EconomicsAgent:
     class: llm
     description: >-
       экономика маршрутов — стоимость за кг, доступность реагентов в РФ, риски
       поставок.
     prompt: microfluidics_economics
-    tools: [economics_mcp_stub]
+    tools: [economics]
     output_key: economics
 
   # ── Module C — stages 6–10: experiment ─────────────────────────────────────

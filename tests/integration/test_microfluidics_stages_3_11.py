@@ -139,10 +139,21 @@ def test_stages_3_to_11_reach_the_report():
     assert state.get("experiment_plan"), "no experiment plan (node 6)"
     assert state.get("experiment_journal"), "the rig produced no journal (node 7)"
 
-    # The stubs behind nodes 3, 4, 5, 9, 10 were really called.
-    for stub in ("molecular_design_stub", "retrosynthesis_stub", "economics_mcp_stub"):
+    # The stubs behind nodes 3, 4, 9, 10 were really called.
+    for stub in ("molecular_design_stub", "retrosynthesis_stub"):
         assert stub in tool_calls, f"{stub} never called — module B faked its answer"
     assert "rig_mcp_stub" in tool_calls, "node 7 never touched the rig"
+
+    # Node 5 is real (chemquote MCP), not a stub — some chemquote tool must
+    # have been called, or EconomicsAgent silently faked the cost data.
+    _economics_tools = {
+        "search_reagents_by_name", "get_price", "search_by_structure",
+        "estimate_synthesis_cost", "rank_routes_by_cost",
+    }
+    assert any(name in _economics_tools for name in tool_calls), (
+        "EconomicsAgent never called the real chemquote service "
+        "(MCP__ECONOMICS_URL configured and reachable?)"
+    )
 
     # The 7⇄8 loop terminated deliberately, not by exhausting max_iterations.
     assert "finish_optimization" in tool_calls, (
