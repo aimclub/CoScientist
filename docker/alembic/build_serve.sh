@@ -31,7 +31,12 @@ docker build -f "$ROOT/docker/alembic/serve.Dockerfile" \
 
 echo "[build_serve] (re)starting container $CONTAINER on :$PORT…"
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+# S3 pass-through for served tool file I/O (helpers/s3_transfer.py) — unset =
+# no-op. Forwarded via -e so docker only sets what is actually in this shell's
+# env; keep this list in sync with start_chain.py's SERVE_ONLY_ENV.
 docker run -d --name "$CONTAINER" -p "$PORT:8000" -e MCP_PORT=8000 \
+    -e ENDPOINT_URL -e ACCESS_KEY -e SECRET_KEY -e BUCKET_NAME \
+    -e S3_REGION -e S3_PRESIGN_EXPIRATION -e S3_HTTP_TIMEOUT -e S3_HTTP_MAX_BYTES \
     "$IMAGE" serve "$REPO_URL" >/dev/null
 
 # Wait until the container is up (streamable-http server has no plain "/" route,

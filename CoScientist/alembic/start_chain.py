@@ -75,6 +75,18 @@ PASSTHROUGH_ENV = (
     "WANDB_API_KEY", "WANDB_MODE",
 )
 
+# S3 pass-through for served tool file I/O (helpers/s3_transfer.py). Unset =
+# generated server.py behaves exactly as before S3 support existed.
+#
+# Deliberately NOT in PASSTHROUGH_ENV: a build container runs arbitrary
+# repository code (setup.sh, coder-written tool functions), so these
+# credentials must never land in its environment at all — only the serve
+# container, which runs nothing but the generated server.py, gets them.
+SERVE_ONLY_ENV = (
+    "ENDPOINT_URL", "ACCESS_KEY", "SECRET_KEY", "BUCKET_NAME",
+    "S3_REGION", "S3_PRESIGN_EXPIRATION", "S3_HTTP_TIMEOUT", "S3_HTTP_MAX_BYTES",
+)
+
 
 def _redact_cmd(cmd: list[str]) -> str:
     """Render a command for logging with every ``-e KEY=VALUE`` value masked.
@@ -122,13 +134,23 @@ def _random_port() -> int:
     return random.randint(*PORT_RANGE)
 
 
-def _env_args(env_file: Path | None) -> list[str]:
+def _env_args(
+    env_file: Path | None,
+    exclude: tuple[str, ...] = (),
+    extra_env: tuple[str, ...] = (),
+) -> list[str]:
+    """``-e`` args for a container: every ``env_file`` entry not in
+    ``exclude``, plus every ``PASSTHROUGH_ENV`` (+ ``extra_env``) var that is
+    set in this process's own environment. ``exclude`` keeps a var out of a
+    container's env even when the ``.env`` file defines it (build_image uses
+    it for ``SERVE_ONLY_ENV`` — S3 credentials must never reach a container
+    that runs arbitrary repository code)."""
     args: list[str] = []
     if env_file and env_file.exists():
         for k, v in dotenv_values(env_file).items():
-            if v is not None:
+            if v is not None and k not in exclude:
                 args += ["-e", f"{k}={v}"]
-    for var in PASSTHROUGH_ENV:
+    for var in (*PASSTHROUGH_ENV, *extra_env):
         if var in os.environ:
             args += ["-e", f"{var}={os.environ[var]}"]
     return args
@@ -178,7 +200,7 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
     if ns.gpus:
         cmd += ["--gpus", ns.gpus]
     cmd += _mount_args(repo, ns)
-    cmd += _env_args(ns.env_file)
+    cmd += _env_args(ns.env_file, exclude=SERVE_ONLY_ENV)
     # A soft hint reaches the pipeline through the environment, like the rest of
     # the ALEMBIC_* settings.
     if getattr(ns, "hints", None):
@@ -215,7 +237,11 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
     #    `docker inspect <image>` exposes every key passed via -e or
     #    --env-file during build. Serve container still gets real
     #    values at run-time via its own --env-file.
-    keys_to_scrub: set[str] = set(PASSTHROUGH_ENV)
+    #    SERVE_ONLY_ENV is included too (defense in depth): _env_args(exclude=
+    #    SERVE_ONLY_ENV) already keeps these out of this container's actual
+    #    env, but a committed image's Config.Env should not expose the names
+    #    of S3 vars if they happen to already be blank/absent-but-set.
+    keys_to_scrub: set[str] = set(PASSTHROUGH_ENV) | set(SERVE_ONLY_ENV)
     if ns.env_file and Path(ns.env_file).exists():
         for line in Path(ns.env_file).read_text().splitlines():
             line = line.strip()
@@ -246,7 +272,7 @@ def serve_image(repo_url: str, tool_image: str, ns: argparse.Namespace) -> None:
     if ns.gpus:
         cmd += ["--gpus", ns.gpus]
     cmd += _mount_args(repo, ns)
-    cmd += _env_args(ns.env_file)
+    cmd += _env_args(ns.env_file, extra_env=SERVE_ONLY_ENV)
     cmd += [tool_image, "serve", repo_url]
 
     r = _run(cmd)

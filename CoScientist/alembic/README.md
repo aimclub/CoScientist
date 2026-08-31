@@ -214,3 +214,61 @@ All settings are passed through environment variables (`.env` or shell):
 | `TAVILY_API_KEY` | — | Optional; enables web search inside the Explorer |
 | `MCP_PORT` | `8000` | Port the FastMCP server listens on inside the container |
 | `ALEMBIC_WORKDIR` | `/work/.alembic` | In-container working directory for repos and reports |
+| `ENDPOINT_URL` | — | S3-compatible endpoint; set together with the three below to enable S3 file pass-through |
+| `ACCESS_KEY` | — | S3 access key |
+| `SECRET_KEY` | — | S3 secret key |
+| `BUCKET_NAME` | — | Default S3 bucket for uploaded output files |
+| `S3_REGION` | `us-east-1` | Region passed to boto3; botocore requires one even against a fully custom endpoint |
+| `S3_PRESIGN_EXPIRATION` | `3600` | Seconds a presigned URL for an uploaded output file stays valid (clamped to 1–604800) |
+| `S3_HTTP_TIMEOUT` | `300` | Seconds before an `http(s)://` input download times out |
+| `S3_HTTP_MAX_BYTES` | `1073741824` (1 GiB) | Size cap for an `http(s)://` input download; exceeding it aborts the call |
+
+### S3 file pass-through
+
+`ENDPOINT_URL`/`ACCESS_KEY`/`SECRET_KEY`/`BUCKET_NAME` are all-or-nothing: with
+all four set, the generated `server.py` (via `helpers/s3_transfer.py`) handles
+files at the served MCP boundary instead of requiring local paths that only
+exist inside the build container. With any of the four unset, `server.py`
+behaves exactly as it did before this existed. A missing or broken
+`helpers/s3_transfer.py` degrades the same way (S3 off) rather than breaking
+the server's import.
+
+- **Convention.** Any tool parameter or result field named `*_path` or
+  `*_file` (case-insensitive) is treated as a file reference.
+- **Input.** A `*_path`/`*_file` argument given as `s3://bucket/key` or
+  `http(s)://...` (scheme matched case-insensitively) is downloaded to its own
+  scratch subdirectory before the tool runs, and the tool sees a local path —
+  same as any other input. A plain local path is never intercepted. Two
+  different input URIs that happen to share a basename never collide — each
+  download gets an isolated subdirectory.
+- **Output.** A `*_path`/`*_file` result field that is an existing local file
+  outside the cloned repo is uploaded and presigned after the tool returns; the
+  original local field is kept, and `<field>_s3_key` / `<field>_presigned_url`
+  are added alongside it. Two output fields sharing a basename still get
+  distinct S3 keys — the field name is part of the key (see Key layout).
+- **Error asymmetry.** A failed *input* download raises and fails the whole
+  tool call — a tool must never silently run on the wrong or missing data. A
+  failed *output* upload only logs
+  `[s3] upload failed for <path>: <TypeName>: <message[:200]>` to stderr
+  (visible in `docker logs`) and is otherwise silent — an otherwise-successful
+  tool call is never turned into a failure just because publishing its result
+  to S3 didn't work.
+- **Key layout.**
+  `alembic/<user>/<session>/<repo>/<tool>/<call-id>/<field>/<file>` for an
+  uploaded output file. `<user>`/`<session>` come from the
+  `X-Coscientist-User` / `X-Coscientist-Session` request headers when the
+  transport exposes them, else both fall back to `local`/`default` — a shared
+  namespace, not a per-caller one.
+- **Not a security boundary.** The header-derived scoping is a namespacing
+  convenience only; a presigned URL grants access to anyone who holds it, and
+  nothing here authenticates the caller.
+- **`build_serve.sh`** forwards all eight S3 variables (`ENDPOINT_URL`/
+  `ACCESS_KEY`/`SECRET_KEY`/`BUCKET_NAME`/`S3_REGION`/`S3_PRESIGN_EXPIRATION`/
+  `S3_HTTP_TIMEOUT`/`S3_HTTP_MAX_BYTES`) to the serve container straight from
+  the calling shell's environment — it does **not** read `.env` (that's
+  `start_chain.py`'s job); export them yourself before invoking it.
+- **Serve-only, by design.** `start_chain.py` never forwards these into the
+  *build* container (it runs arbitrary repository code) — only into *serve*.
+  A consequence: a tool whose recorded `sample_args` references an `s3://`
+  URI will fail the validator's live-invocation check during the build
+  (S3 isn't configured there) even though the same call succeeds once served.

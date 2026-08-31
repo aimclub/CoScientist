@@ -15,7 +15,7 @@ import re
 import shutil
 from pathlib import Path
 
-from alembic.tools.paths import RUN_FUNCTION_SCRIPT, output_dir
+from alembic.tools.paths import RUN_FUNCTION_SCRIPT, S3_TRANSFER_SCRIPT, output_dir
 
 # Builtins + typing names the generated server is guaranteed to know (it does
 # ``from typing import *`` of these). Capitalised typing generics are included so
@@ -242,9 +242,19 @@ def render_server(repo_name: str, signatures: list[dict]) -> str:
 Each tool shells through the tools venv via helpers/run_function.py — the same
 runner that validated the tool functions, so serving and validation share one
 execution path (two-venv layouts work unchanged).
+
+When S3 is configured (ENDPOINT_URL/ACCESS_KEY/SECRET_KEY/BUCKET_NAME — see
+helpers/s3_transfer.py) a *_path/*_file kwarg given as an s3:// or http(s)://
+URI is downloaded to a per-call scratch dir before the tool runs, and any
+*_path/*_file the tool returns as an existing local file (outside the cloned
+repo) is uploaded and presigned after it. Without those four variables set
+this file behaves exactly as before S3 support existed.
 """
+import importlib.util
 import json
+import shutil
 import subprocess
+import uuid
 from pathlib import Path
 from typing import {typing_imports}
 
@@ -253,22 +263,83 @@ from fastmcp import FastMCP
 _OUT = Path(__file__).resolve().parent
 _PYTHON = str(_OUT / ".venv" / "bin" / "python")   # main venv: repo + deps
 _RUNNER = str(_OUT / "helpers" / "run_function.py")
+_REPOS_DIR = _OUT.parent / "repos"                  # deny_root for S3 publish
 _SENTINEL = "<<<ALEMBIC_RESULT>>>"
 
 mcp = FastMCP("{repo_name}")
 
 
+class _S3Unavailable:
+    """No-op stand-in for helpers/s3_transfer.py when it is missing or fails
+    to load — S3 support is simply off, exactly as if it were never
+    configured. A broken/absent helper must never take down the base
+    tool-calling path (which owes nothing to S3 at all)."""
+
+    @staticmethod
+    def s3_enabled() -> bool:
+        return False
+
+    @staticmethod
+    def scope_from_headers(headers):
+        return ("local", "default")
+
+
+# Stdlib-only at import time (boto3 lives inside its functions), so loading it
+# costs nothing on a server with S3 unconfigured — see helpers/s3_transfer.py.
+# Guarded: a missing/broken helper file degrades to S3-off rather than
+# breaking every tool call.
+try:
+    _s3_spec = importlib.util.spec_from_file_location(
+        "s3_transfer", _OUT / "helpers" / "s3_transfer.py")
+    _s3 = importlib.util.module_from_spec(_s3_spec)
+    _s3_spec.loader.exec_module(_s3)
+except Exception:
+    _s3 = _S3Unavailable()
+
+
+def _s3_scope() -> tuple[str, str]:
+    """(user, session) from the request's X-Coscientist-* headers, falling
+    back to ("local", "default") over stdio or on an old fastmcp with no
+    header access."""
+    headers = None
+    try:
+        from fastmcp.server.dependencies import get_http_headers
+        headers = get_http_headers()
+    except Exception:
+        pass
+    return _s3.scope_from_headers(headers)
+
+
 def _call(tool: str, kwargs: dict) -> dict:
-    r = subprocess.run([_PYTHON, _RUNNER, str(_OUT), tool, json.dumps(kwargs)],
-                       cwd=str(_OUT), capture_output=True, text=True)
-    parts = r.stdout.rsplit(_SENTINEL, 1)
-    if len(parts) == 2:
-        out = json.loads(parts[1].strip())
-        if out.get("ok"):
-            res = out.get("result")
-            return res if isinstance(res, dict) else {{"result": res}}
-        raise RuntimeError(out.get("error") or "tool failed")
-    raise RuntimeError((r.stderr or r.stdout)[-2000:] or "runner produced no output")
+    scratch = None
+    try:
+        # prepare_kwargs() runs INSIDE the try — a failed input download (S3
+        # unreachable, a typo'd URI, an S3_HTTP_MAX_BYTES overrun) must still
+        # hit the finally below, or every failed call leaks its scratch dir.
+        if _s3.s3_enabled():
+            scratch = _OUT / ".scratch" / uuid.uuid4().hex
+            kwargs = _s3.prepare_kwargs(kwargs, scratch)
+        r = subprocess.run([_PYTHON, _RUNNER, str(_OUT), tool, json.dumps(kwargs)],
+                           cwd=str(_OUT), capture_output=True, text=True)
+        parts = r.stdout.rsplit(_SENTINEL, 1)
+        if len(parts) == 2:
+            out = json.loads(parts[1].strip())
+            if out.get("ok"):
+                res = out.get("result")
+                result = res if isinstance(res, dict) else {{"result": res}}
+                if scratch is not None:
+                    prefix = _s3.call_prefix(_s3_scope(), "{repo_name}", tool)
+                    result = _s3.publish_result(result, prefix, _REPOS_DIR)
+                return result
+            raise RuntimeError(out.get("error") or "tool failed")
+        raise RuntimeError((r.stderr or r.stdout)[-2000:] or "runner produced no output")
+    finally:
+        # Runs after a successful publish_result() above (so its uploads see
+        # the file first) AND on every failure/timeout/exception path — a
+        # long-lived server must never accumulate scratch dirs from failed
+        # calls.
+        if scratch is not None:
+            shutil.rmtree(scratch, ignore_errors=True)
 
 
 {tools_src}
@@ -281,8 +352,9 @@ if __name__ == "__main__":
 def write_server(
     repo_name: str, tool_names: list[str], sample_args: dict | None = None
 ) -> dict:
-    """Generate output/server.py + output/helpers/run_function.py for every
-    tool whose signature extracts cleanly. Returns {written, tools, skipped}.
+    """Generate output/server.py + output/helpers/run_function.py and
+    output/helpers/s3_transfer.py for every tool whose signature extracts
+    cleanly. Returns {written, tools, skipped}.
 
     ``sample_args`` maps tool name → its recorded invocation args (the plan's
     ``ToolSpec.sample_args``); it types un-annotated params so the served MCP
@@ -296,6 +368,7 @@ def write_server(
     helpers = out / "helpers"
     helpers.mkdir(parents=True, exist_ok=True)
     shutil.copy(RUN_FUNCTION_SCRIPT, helpers / "run_function.py")
+    shutil.copy(S3_TRANSFER_SCRIPT, helpers / "s3_transfer.py")
     server = out / "server.py"
     server.write_text(render_server(out.parent.name, sigs), encoding="utf-8")
     return {

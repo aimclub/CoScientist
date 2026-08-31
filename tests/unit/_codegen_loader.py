@@ -28,6 +28,7 @@ def load_codegen():
     tools.__path__ = []
     paths = types.ModuleType("alembic.tools.paths")
     paths.RUN_FUNCTION_SCRIPT = Path("/nonexistent/run_function.py")
+    paths.S3_TRANSFER_SCRIPT = Path("/nonexistent/s3_transfer.py")
     paths.output_dir = lambda: Path("/nonexistent/output")
     sys.modules.update(
         {"alembic": pkg, "alembic.tools": tools, "alembic.tools.paths": paths}
