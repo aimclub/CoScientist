@@ -21,9 +21,22 @@ _PAPER_STATE_KEY = "uploaded_paper_s3_keys"
 
 # RAG/paper tools ResearchAgent can call that might surface molecule/reaction
 # data — everything else (websearch, task_tracker) is skipped without even trying.
+# The live paper-analysis/papers-search MCP servers are versioned independently
+# of this repo (`runtime_resolved=True` in assembly/bindings.py — their tool
+# surface is discovered live, not pinned here), so this set carries both the
+# current deployed names AND older ones we've seen, to survive a rename on
+# either side without silently going dark. Confirmed live 2026-08-31:
+# paper_analysis v3.1.1 exposes explore_scientific_database (renamed from
+# explore_chemistry_database) + explore_my_papers + find_papers_in_db +
+# find_relevant_data_in_db; papers_search v3.1.0 exposes search_entity +
+# search_papers + download_papers_from_search.
 _SMILES_SOURCE_TOOLS = {
-    "explore_chemistry_database",
+    "explore_chemistry_database",  # pre-3.x name — kept for older deployments
+    "explore_scientific_database",
     "explore_my_papers",
+    "find_papers_in_db",
+    "find_relevant_data_in_db",
+    "search_entity",
     "search_papers",
     "download_papers_from_search",
 }

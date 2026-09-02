@@ -118,15 +118,31 @@ REGISTRY.register_tool(ToolEntry(
     optional=True,  # built only when MCP__PAPER_ANALYSIS_URL is configured
     runtime_resolved=True,
     docs=(
+        # Confirmed live 2026-08-31 (server v3.1.1) — renamed from
+        # explore_chemistry_database; CoScientist/agents/callbacks/
+        # research_callbacks.py's _SMILES_SOURCE_TOOLS carries both names.
         ToolDoc(
-            name="explore_chemistry_database",
-            signature="explore_chemistry_database(question)",
+            name="explore_scientific_database",
+            signature="explore_scientific_database(task)",
             purpose="RAG search over an internal scientific literature database.",
         ),
         ToolDoc(
             name="explore_my_papers",
-            signature="explore_my_papers(question, s3_keys)",
+            signature="explore_my_papers(task, s3_keys)",
             purpose="Answers questions using user-uploaded or previously downloaded papers.",
+        ),
+        ToolDoc(
+            name="find_papers_in_db",
+            signature="find_papers_in_db(task)",
+            purpose="Finds relevant papers in the database for a task — metadata list, no answer synthesis.",
+        ),
+        ToolDoc(
+            name="find_relevant_data_in_db",
+            signature="find_relevant_data_in_db(task, search_images=False)",
+            purpose=(
+                "Retrieves relevant papers AND structured context (text chunks + figures) "
+                "in one call, without synthesizing an answer."
+            ),
         ),
     ),
 ))
@@ -139,7 +155,7 @@ REGISTRY.register_tool(ToolEntry(
     docs=(
         ToolDoc(
             name="search_papers",
-            signature="search_papers(query, filters)",
+            signature="search_papers(keywords, filters)",
             purpose=(
                 "Searches scientific papers in OpenAlex using metadata and "
                 "search filters. Does NOT download full paper files."
@@ -147,8 +163,14 @@ REGISTRY.register_tool(ToolEntry(
         ),
         ToolDoc(
             name="download_papers_from_search",
-            signature="download_papers_from_search(query)",
+            signature="download_papers_from_search(keywords, filters)",
             purpose="Searches and downloads papers for downstream analysis.",
+        ),
+        # Confirmed live 2026-08-31 (server v3.1.0) — not previously documented.
+        ToolDoc(
+            name="search_entity",
+            signature="search_entity(entity_type, entity_name)",
+            purpose="Looks up an OpenAlex entity (author/source/institution) ID for use in search_papers filters.",
         ),
     ),
 ))
@@ -560,8 +582,13 @@ def _before_get_task():
 
 
 def _web_search_limiter():
+    import os
     from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
-    return SearchLimiter(max_searches=2).limit_searches
+    # Default 2 keeps a normal delegated LIT-xx task cheap; bump via env when a
+    # domain's internal corpus (paper_analysis) doesn't cover the topic and
+    # ResearchAgent genuinely needs more OpenAlex attempts to find anything.
+    max_searches = int(os.getenv("RESEARCH_MAX_SEARCHES", "2"))
+    return SearchLimiter(max_searches=max_searches).limit_searches
 
 
 def _sanitize_json_output():

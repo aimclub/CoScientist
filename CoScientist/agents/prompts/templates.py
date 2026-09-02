@@ -81,18 +81,28 @@ def research(ctx: PromptContext) -> str:
             "have actual S3 keys — never invent S3 keys."
         )
         n += 1
-        # 2) Otherwise (or if no uploaded papers) always call explore_chemistry_database first
+        # 2) Otherwise (or if no uploaded papers) always call explore_scientific_database first
         steps.append(
-            f"{n}. If there are NO user-uploaded papers, ALWAYS call `explore_chemistry_database` before other literature tools. "
-            "Do this even if you plan to use `search_papers` or `download_papers_from_search` afterwards."
+            f"{n}. If there are NO user-uploaded papers, ALWAYS call `explore_scientific_database` before other literature tools. "
+            "Do this even if you plan to use `search_papers` or `download_papers_from_search` afterwards. "
+            "If its answer is already relevant and specific (e.g. names real structures/SMILES/routes), "
+            "that is usually enough — stop there. But `explore_scientific_database` is a FIXED internal "
+            "corpus that may simply not cover your topic — if it says the context/database does not "
+            "contain relevant information (not just a weak answer, an explicit miss), that is a real "
+            "signal to move to `download_papers_from_search` next (OpenAlex covers the live literature, "
+            "not just this corpus), not to retry the same tool or give up. `download_papers_from_search` "
+            "itself only returns paper metadata + S3 keys — cheap. The context-blowing tools are "
+            "`explore_my_papers` on MANY downloaded papers at once and `find_relevant_data_in_db` (both "
+            "pull full PDF/image content) — use them on a handful (2–3) of the most relevant results, "
+            "not the whole downloaded set."
         )
     n += 1
-    
+
     # 3) Use papers search
     if papers_search:
         steps.append(
             f"{n}. If evidence is still insufficient: use `download_papers_from_search`"
-        + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else ".")
+        + (", then analyze the 2–3 most relevant downloads with `explore_my_papers`." if paper_analysis else ".")
         + " When calling `download_papers_from_search`, aim to find at least *10* "
         "papers that might contain the answer. OpenAlex indexes n-grams: pass keywords "
         "as a single space-separated string, no quotes around phrases. "
@@ -105,8 +115,9 @@ def research(ctx: PromptContext) -> str:
     # 4) Final fallback to tavily
     if lit:
         steps.append(
-            f"{n}. If literature tools still cannot answer, fall back to `tavily_search`. "
-            "Never use Tavily before the literature tools."
+            f"{n}. Fall back to `tavily_search` only once BOTH the internal database AND "
+            "`download_papers_from_search` have been tried and came up short — it is the last "
+            "resort, not a shortcut past OpenAlex."
         )
     else:
         steps.append(
