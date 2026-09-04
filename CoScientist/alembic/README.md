@@ -229,9 +229,13 @@ All settings are passed through environment variables (`.env` or shell):
 all four set, the generated `server.py` (via `helpers/s3_transfer.py`) handles
 files at the served MCP boundary instead of requiring local paths that only
 exist inside the build container. With any of the four unset, `server.py`
-behaves exactly as it did before this existed. A missing or broken
-`helpers/s3_transfer.py` degrades the same way (S3 off) rather than breaking
-the server's import.
+behaves exactly as it did before this existed. Each of the four is also
+accepted under the main app's nested-settings spelling — `S3__ENDPOINT_URL`,
+`S3__ACCESS_KEY`, `S3__SECRET_KEY`, `S3__BUCKET_NAME` (see
+`config/settings.py:S3Settings`) — the bare name wins when both are set, so a
+`.env` that already configures S3 for CoScientist needs no duplicate entries.
+A missing or broken `helpers/s3_transfer.py` degrades the same way (S3 off)
+rather than breaking the server's import.
 
 - **Convention.** Any tool parameter or result field named `*_path` or
   `*_file` (case-insensitive) is treated as a file reference.
@@ -242,10 +246,13 @@ the server's import.
   different input URIs that happen to share a basename never collide — each
   download gets an isolated subdirectory.
 - **Output.** A `*_path`/`*_file` result field that is an existing local file
-  outside the cloned repo is uploaded and presigned after the tool returns; the
-  original local field is kept, and `<field>_s3_key` / `<field>_presigned_url`
-  are added alongside it. Two output fields sharing a basename still get
-  distinct S3 keys — the field name is part of the key (see Key layout).
+  outside the cloned repo and outside the per-call scratch dir is uploaded and
+  presigned after the tool returns; the original local field is kept, and
+  `<field>_s3_key` / `<field>_presigned_url` are added alongside it. Two
+  output fields sharing a basename still get distinct S3 keys — the field name
+  is part of the key (see Key layout). A tool that echoes a downloaded input
+  path back in its result gets no siblings for it: that file is the caller's
+  own input, and its local copy is deleted right after the call.
 - **Error asymmetry.** A failed *input* download raises and fails the whole
   tool call — a tool must never silently run on the wrong or missing data. A
   failed *output* upload only logs
@@ -262,11 +269,12 @@ the server's import.
 - **Not a security boundary.** The header-derived scoping is a namespacing
   convenience only; a presigned URL grants access to anyone who holds it, and
   nothing here authenticates the caller.
-- **`build_serve.sh`** forwards all eight S3 variables (`ENDPOINT_URL`/
+- **`build_serve.sh`** forwards all S3 variables (`ENDPOINT_URL`/
   `ACCESS_KEY`/`SECRET_KEY`/`BUCKET_NAME`/`S3_REGION`/`S3_PRESIGN_EXPIRATION`/
-  `S3_HTTP_TIMEOUT`/`S3_HTTP_MAX_BYTES`) to the serve container straight from
-  the calling shell's environment — it does **not** read `.env` (that's
-  `start_chain.py`'s job); export them yourself before invoking it.
+  `S3_HTTP_TIMEOUT`/`S3_HTTP_MAX_BYTES`, plus the four `S3__*` aliases) to the
+  serve container straight from the calling shell's environment — it does
+  **not** read `.env` (that's `start_chain.py`'s job); export them yourself
+  before invoking it.
 - **Serve-only, by design.** `start_chain.py` never forwards these into the
   *build* container (it runs arbitrary repository code) — only into *serve*.
   A consequence: a tool whose recorded `sample_args` references an `s3://`

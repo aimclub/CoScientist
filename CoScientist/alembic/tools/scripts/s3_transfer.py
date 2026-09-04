@@ -33,6 +33,10 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 # All four must be set (and non-empty) for S3 handling to switch on at all.
+# Each is read via _env(): the bare name first, then the project's
+# nested-settings spelling ``S3__<name>`` (pydantic env_nested_delimiter, see
+# config/settings.py:S3Settings) — so a .env that already configures S3 for
+# the main app needs no duplicate bare-name entries.
 S3_ENV = ("ENDPOINT_URL", "ACCESS_KEY", "SECRET_KEY", "BUCKET_NAME")
 # Case-insensitive convention a tool param name is checked against to decide
 # whether its value may be an input/output file reference.
@@ -49,9 +53,17 @@ _DEFAULT_HTTP_MAX_BYTES = 1024 * 1024 * 1024  # 1 GiB
 _HTTP_CHUNK_SIZE = 1024 * 1024
 
 
+def _env(name: str) -> str | None:
+    """Read an ``S3_ENV`` setting: bare name first, ``S3__<name>`` alias
+    second (never merged — the first spelling that is set and non-empty
+    wins)."""
+    return os.environ.get(name) or os.environ.get(f"S3__{name}")
+
+
 def s3_enabled() -> bool:
-    """True iff every ``S3_ENV`` variable is set and non-empty."""
-    return all(os.environ.get(name) for name in S3_ENV)
+    """True iff every ``S3_ENV`` variable is set and non-empty (under either
+    its bare or its ``S3__``-prefixed spelling, per variable)."""
+    return all(_env(name) for name in S3_ENV)
 
 
 def is_file_param(name: str) -> bool:
@@ -133,9 +145,9 @@ def _client_factory():
 
     return boto3.client(
         "s3",
-        endpoint_url=os.environ["ENDPOINT_URL"],
-        aws_access_key_id=os.environ["ACCESS_KEY"],
-        aws_secret_access_key=os.environ["SECRET_KEY"],
+        endpoint_url=_env("ENDPOINT_URL"),
+        aws_access_key_id=_env("ACCESS_KEY"),
+        aws_secret_access_key=_env("SECRET_KEY"),
         region_name=os.environ.get("S3_REGION", _DEFAULT_REGION),
         config=Config(signature_version="s3v4"),
     )
@@ -315,7 +327,7 @@ def maybe_upload(local_path: str, prefix: str, field_key: str) -> dict | None:
         return None
     try:
         client = _client_factory()
-        bucket = os.environ["BUCKET_NAME"]
+        bucket = _env("BUCKET_NAME")
         key = f"{prefix}/{safe_component(field_key)}/{Path(local_path).name}"
         client.upload_file(local_path, bucket, key)
         url = client.generate_presigned_url(
@@ -330,37 +342,44 @@ def maybe_upload(local_path: str, prefix: str, field_key: str) -> dict | None:
         return None
 
 
-def _is_publishable(key: str, value: object, deny_root: Path) -> bool:
+def _is_publishable(key: str, value: object, deny_roots: tuple) -> bool:
     """True iff ``value`` is an existing regular file, named like a file
-    param, and NOT inside ``deny_root`` (the cloned repo — publishing repo
-    source files would leak them into every result)."""
+    param, and NOT inside any of ``deny_roots``: the cloned repo (publishing
+    repo source files would leak them into every result) and the per-call
+    scratch dir (a tool that echoes its ``input_path`` back would otherwise
+    re-upload the caller's own input and hand back a local path that the
+    post-call scratch cleanup is about to delete)."""
     if not (is_file_param(key) and isinstance(value, str)):
         return False
     path = Path(value)
     if not path.is_file():
         return False
     try:
-        return not path.resolve().is_relative_to(deny_root.resolve())
+        resolved = path.resolve()
+        return not any(resolved.is_relative_to(root.resolve()) for root in deny_roots)
     except OSError:
         return False
 
 
-def publish_result(result: object, prefix: str, deny_root: Path) -> object:
+def publish_result(result: object, prefix: str, deny_roots) -> object:
     """Recursively walk a dict/list tool result. For every ``*_path``/
     ``*_file`` string entry that is an existing, publishable local file, upload
     it under ``prefix`` and add sibling ``<key>_s3_key`` /
     ``<key>_presigned_url`` entries — the original local path is left
-    untouched (it is still correct inside the build container)."""
+    untouched (it is still correct inside the build container). ``deny_roots``
+    is a single ``Path`` or an iterable of them; files under any deny root are
+    never uploaded (see ``_is_publishable``)."""
+    roots = (deny_roots,) if isinstance(deny_roots, Path) else tuple(deny_roots)
     if isinstance(result, dict):
         out = {}
         for key, value in result.items():
-            out[key] = publish_result(value, prefix, deny_root)
-            if _is_publishable(key, value, deny_root):
+            out[key] = publish_result(value, prefix, roots)
+            if _is_publishable(key, value, roots):
                 uploaded = maybe_upload(value, prefix, key)
                 if uploaded:
                     out[f"{key}_s3_key"] = uploaded["s3_key"]
                     out[f"{key}_presigned_url"] = uploaded["presigned_url"]
         return out
     if isinstance(result, list):
-        return [publish_result(item, prefix, deny_root) for item in result]
+        return [publish_result(item, prefix, roots) for item in result]
     return result

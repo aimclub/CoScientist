@@ -263,7 +263,7 @@ from fastmcp import FastMCP
 _OUT = Path(__file__).resolve().parent
 _PYTHON = str(_OUT / ".venv" / "bin" / "python")   # main venv: repo + deps
 _RUNNER = str(_OUT / "helpers" / "run_function.py")
-_REPOS_DIR = _OUT.parent / "repos"                  # deny_root for S3 publish
+_REPOS_DIR = _OUT.parent / "repos"                  # S3-publish deny root (per-call scratch joins it)
 _SENTINEL = "<<<ALEMBIC_RESULT>>>"
 
 mcp = FastMCP("{repo_name}")
@@ -329,7 +329,10 @@ def _call(tool: str, kwargs: dict) -> dict:
                 result = res if isinstance(res, dict) else {{"result": res}}
                 if scratch is not None:
                     prefix = _s3.call_prefix(_s3_scope(), "{repo_name}", tool)
-                    result = _s3.publish_result(result, prefix, _REPOS_DIR)
+                    # scratch is denied too: a tool echoing its downloaded
+                    # input_path must not re-upload it or return a local path
+                    # the finally below is about to delete.
+                    result = _s3.publish_result(result, prefix, (_REPOS_DIR, scratch))
                 return result
             raise RuntimeError(out.get("error") or "tool failed")
         raise RuntimeError((r.stderr or r.stdout)[-2000:] or "runner produced no output")

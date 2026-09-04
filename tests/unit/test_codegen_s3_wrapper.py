@@ -305,6 +305,49 @@ def test_call_with_s3_publishes_colliding_output_basenames_to_distinct_keys(tmp_
     assert len(set(uploaded_keys)) == 2
 
 
+def test_call_does_not_republish_an_echoed_input_path_from_scratch(tmp_path, monkeypatch):
+    """A tool that returns its own (downloaded) input_path must not get that
+    scratch file re-uploaded: the upload would duplicate the caller's own
+    input, and the sibling local path dies with the scratch cleanup."""
+    _set_s3_env(monkeypatch)
+    server_path = _write_rendered_server(
+        tmp_path, helper_source=_REAL_S3_TRANSFER.read_text(encoding="utf-8"))
+    mod = _load_server_module(server_path, monkeypatch)
+
+    uploaded = []
+
+    class _FakeClient:
+        def download_file(self, bucket, key, local_path):
+            Path(local_path).write_text("in", encoding="utf-8")
+
+        def upload_file(self, local_path, bucket, key):
+            uploaded.append(key)
+
+        def generate_presigned_url(self, method, Params, ExpiresIn):
+            return f"https://signed/{Params['Key']}"
+
+    monkeypatch.setattr(mod._s3, "_client_factory", lambda: _FakeClient())
+
+    out_file = tmp_path / "output" / "result.csv"
+    out_file.parent.mkdir(parents=True)
+    out_file.write_text("out", encoding="utf-8")
+
+    def _fake_run(cmd, **kw):
+        kwargs = json.loads(cmd[4])
+        # echo the downloaded input back alongside a genuine output file
+        return _FakeCompleted(_sentinel_stdout(
+            {"input_path": kwargs["input_path"], "result_path": str(out_file)}))
+
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run)
+
+    result = mod._call("predict", {"input_path": "s3://bucket/dir/data.csv"})
+
+    assert "input_path_s3_key" not in result
+    assert "input_path_presigned_url" not in result
+    assert "result_path_s3_key" in result
+    assert len(uploaded) == 1 and uploaded[0].endswith("/result_path/result.csv")
+
+
 def test_call_cleans_up_scratch_dir_on_success_and_on_failure(tmp_path, monkeypatch):
     """Regression for MAJOR 5."""
     _set_s3_env(monkeypatch)

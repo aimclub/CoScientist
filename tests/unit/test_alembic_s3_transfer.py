@@ -32,7 +32,7 @@ def _load():
 
 s3t = _load()
 
-_ALL_ENV = s3t.S3_ENV + (
+_ALL_ENV = s3t.S3_ENV + tuple(f"S3__{name}" for name in s3t.S3_ENV) + (
     "S3_PRESIGN_EXPIRATION", "S3_REGION", "S3_HTTP_TIMEOUT", "S3_HTTP_MAX_BYTES",
 )
 
@@ -93,6 +93,43 @@ def test_s3_enabled_true_with_all_four(monkeypatch):
     _clear_env(monkeypatch)
     _set_env(monkeypatch)
     assert s3t.s3_enabled() is True
+
+
+def test_s3_enabled_true_with_only_the_nested_settings_spelling(monkeypatch):
+    _clear_env(monkeypatch)
+    for name in s3t.S3_ENV:
+        monkeypatch.setenv(f"S3__{name}", f"aliased-{name.lower()}")
+    assert s3t.s3_enabled() is True
+
+
+def test_s3_enabled_true_with_a_mix_of_bare_and_aliased_names(monkeypatch):
+    _clear_env(monkeypatch)
+    _set_env(monkeypatch)
+    monkeypatch.delenv("BUCKET_NAME", raising=False)
+    monkeypatch.setenv("S3__BUCKET_NAME", "aliased-bucket")
+    assert s3t.s3_enabled() is True
+
+
+def test_env_prefers_the_bare_name_over_the_alias(monkeypatch):
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("BUCKET_NAME", "bare-bucket")
+    monkeypatch.setenv("S3__BUCKET_NAME", "aliased-bucket")
+    assert s3t._env("BUCKET_NAME") == "bare-bucket"
+
+
+def test_maybe_upload_uses_the_aliased_bucket_name(tmp_path, monkeypatch):
+    _clear_env(monkeypatch)
+    for name in s3t.S3_ENV:
+        monkeypatch.setenv(f"S3__{name}", f"aliased-{name.lower()}")
+    client = _FakeUploadClient()
+    monkeypatch.setattr(s3t, "_client_factory", lambda: client)
+
+    src = tmp_path / "data.csv"
+    src.write_text("x", encoding="utf-8")
+    uploaded = s3t.maybe_upload(str(src), "prefix", "input_path")
+
+    assert uploaded is not None
+    assert client.uploads[0]["bucket"] == "aliased-bucket_name"
 
 
 # ── is_file_param ─────────────────────────────────────────────────────────
@@ -674,6 +711,37 @@ def test_publish_result_ignores_a_file_inside_deny_root(tmp_path, monkeypatch):
     result = s3t.publish_result({"weights_path": str(repo_file)}, "prefix", deny_root)
 
     assert result == {"weights_path": str(repo_file)}
+
+
+def test_publish_result_ignores_a_file_inside_any_of_several_deny_roots(tmp_path, monkeypatch):
+    """A tool that echoes its downloaded input_path back (a common pattern)
+    must not get that scratch file re-uploaded — the local copy is deleted
+    right after the call, so the sibling keys would describe a dangling
+    path."""
+    _clear_env(monkeypatch)
+    _set_env(monkeypatch)
+    client = _FakeUploadClient()
+    monkeypatch.setattr(s3t, "_client_factory", lambda: client)
+
+    repos = tmp_path / "repos"
+    scratch = tmp_path / ".scratch" / "abc123"
+    echoed_input = scratch / "d1" / "input.csv"
+    echoed_input.parent.mkdir(parents=True)
+    echoed_input.write_text("in", encoding="utf-8")
+    out_file = tmp_path / "output" / "result.csv"
+    out_file.parent.mkdir(parents=True)
+    out_file.write_text("out", encoding="utf-8")
+
+    result = s3t.publish_result(
+        {"input_path": str(echoed_input), "result_path": str(out_file)},
+        "prefix",
+        (repos, scratch),
+    )
+
+    assert "input_path_s3_key" not in result
+    assert "input_path_presigned_url" not in result
+    assert result["result_path_s3_key"] == "prefix/result_path/result.csv"
+    assert [u["local_path"] for u in client.uploads] == [str(out_file)]
 
 
 def test_publish_result_ignores_a_missing_or_nonfile_path(tmp_path, monkeypatch):
