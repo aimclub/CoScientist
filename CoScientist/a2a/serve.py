@@ -17,11 +17,11 @@ def _should_use_remote_subagents(agent_cfg) -> bool:
     return bool(agent_cfg.root or agent_cfg.subordinates)
 
 
-def main() -> None:
+def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("key", help="a2a key of the agent to serve (see system.yaml)")
     parser.add_argument("--host", default="0.0.0.0")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Only the light-weight config is imported before env defaults are applied:
     # some agents need env set before their tool modules load (e.g. the coder's

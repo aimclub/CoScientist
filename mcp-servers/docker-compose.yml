@@ -92,6 +92,86 @@ services:
       retries: 12
       start_period: 30s
 
+  result-aggregator-mcp-server:
+    build:
+      context: ..
+      dockerfile: mcp-servers/result-aggregator-mcp-server/Dockerfile
+    ports:
+      - "7337:7331"
+    volumes:
+      - ../logs:/app/logs
+      - ../workspace:/app/workspace
+    restart: unless-stopped
+    networks:
+      - codesynapse-internal
+
+  # The file vault. Every other server hands files over through it.
+  vault-mcp-server:
+    build:
+      context: ..
+      dockerfile: mcp-servers/vault-mcp-server/Dockerfile
+      args:
+        - HTTP_PROXY=${PIP_PROXY}
+        - HTTPS_PROXY=${PIP_PROXY}
+    container_name: vault-mcp-server
+    env_file:
+      # Optional: defaults target the local-s3 profile. A production deployment
+      # supplies this file with its dedicated S3 credentials and endpoints.
+      - path: ./vault-mcp-server/.env
+        required: false
+    environment:
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "7338:7331"
+    restart: unless-stopped
+    networks:
+      - codesynapse-internal
+
+  # Local S3, for development only. The four servers above point at an endpoint
+  # this file does not define, so starting MinIO by default would move where
+  # they write. Start it on purpose:
+  #   docker compose --profile local-s3 up
+  minio:
+    profiles: ["local-s3"]
+    image: minio/minio
+    ports:
+      - "9000:9000"  # S3 API
+      - "9001:9001"  # Web console
+    environment:
+      MINIO_ROOT_USER: "admin"
+      MINIO_ROOT_PASSWORD: "password123"
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    restart: unless-stopped
+    networks:
+      - codesynapse-internal
+
+  # One-shot setup. It carries the retention model: without the lifecycle rule
+  # nothing under ephemeral/ ever expires, and without the anonymous policy the
+  # plain permanent/ URLs do not resolve. Against an external MinIO, run the
+  # same two mc commands once by hand.
+  minio-setup:
+    profiles: ["local-s3"]
+    image: minio/mc
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      until (/usr/bin/mc alias set myminio http://minio:9000 admin password123); do echo 'waiting for minio...'; sleep 2; done;
+      /usr/bin/mc mb myminio/agent-vault --ignore-existing;
+      /usr/bin/mc admin user add myminio agent-user agent-secret-key;
+      /usr/bin/mc admin policy attach myminio readwrite --user=agent-user;
+      /usr/bin/mc ilm rule add --expire-days ${EPHEMERAL_TTL_DAYS:-7} --prefix ephemeral/ myminio/agent-vault;
+      /usr/bin/mc anonymous set download myminio/agent-vault/permanent;
+      exit 0;
+      "
+    networks:
+      - codesynapse-internal
+
+volumes:
+  minio_data:
+
 networks:
   codesynapse-internal:
     external: true

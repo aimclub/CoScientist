@@ -78,74 +78,6 @@ The argument is the agent's `a2a.key` from `system.yaml`. Pre-import env
 defaults from the agent's `a2a.env` section (e.g. the coder's shared workspace
 id) are applied automatically.
 
-### Docker Compose
-
-```bash
-docker compose --env-file .env -f docker/docker-compose.a2a.yml up --build -d
-```
-
-This builds one shared `coscientist-a2a:latest` image and starts every agent
-with an `a2a:` section as an independent service:
-
-| A2A key | Compose service | Default port |
-|---------|-----------------|-------------:|
-| `orchestrator` | `a2a-orchestrator` | 8000 |
-| `planner` | `a2a-planner` | 8001 |
-| `hypotheses` | `a2a-hypotheses` | 8002 |
-| `research` | `a2a-research` | 8003 |
-| `task_execution` | `a2a-task-execution` | 8004 |
-| `medical` | `a2a-medical` | 8005 |
-| `coder` | `a2a-coder` | 8006 |
-| `init` | `a2a-init` | 8008 |
-
-The services have no startup dependencies on one another. Each becomes
-`healthy` after its `/.well-known/agent-card.json` endpoint responds, and a
-failure in one container does not stop the others. Console-based HITL is
-disabled in this non-interactive deployment so `planner` and `research` cannot
-block waiting for stdin. Opik tracing is also disabled by default to avoid its
-interactive first-run workspace prompt. To use an already configured Opik
-workspace, pass an explicitly empty value:
-
-```bash
-A2A_DISABLE_OPIK= \
-  docker compose --env-file .env -f docker/docker-compose.a2a.yml up -d
-```
-
-The stack creates a stable Docker network named `coscientist-a2a`. A delegator
-running in another Compose project can join it as an external network:
-
-```yaml
-networks:
-  coscientist-a2a:
-    external: true
-```
-
-By default, each AgentCard advertises its Compose DNS name, such as
-`http://a2a-research:8003/`; this is the recommended mode for a delegator on
-the `coscientist-a2a` network. For a delegator running on the Docker host or
-another machine, set `A2A_PUBLIC_HOST` to a hostname or IP address that the
-delegator can resolve:
-
-```bash
-A2A_PUBLIC_HOST=localhost \
-  docker compose --env-file .env -f docker/docker-compose.a2a.yml up -d
-```
-
-All ports are published. A `<KEY>_PORT` override changes the server listener,
-published port, healthcheck, and advertised AgentCard port together:
-
-```bash
-RESEARCH_PORT=9003 \
-  docker compose --env-file .env -f docker/docker-compose.a2a.yml up -d
-```
-
-Inspect readiness and retrieve cards:
-
-```bash
-docker compose --env-file .env -f docker/docker-compose.a2a.yml ps
-curl http://localhost:8003/.well-known/agent-card.json
-```
-
 ### The orchestrator with a web UI
 
 ```bash
@@ -164,9 +96,7 @@ HYPOTHESES_PORT=9002 A2A_HOST=0.0.0.0 python -m CoScientist.a2a.run_all
 
 Env vars: `ORCHESTRATOR_PORT`, `PLANNER_PORT`, `HYPOTHESES_PORT`,
 `RESEARCH_PORT`, `TASK_EXECUTION_PORT`, `MEDICAL_PORT`, `CODER_PORT`,
-`INIT_PORT`, `A2A_HOST`, `A2A_PUBLIC_HOST`, per-agent internal hosts such as
-`RESEARCH_HOST`/`CODER_HOST`, and `A2A_DISABLE_OPIK` (set to `1` to turn off
-tracing).
+`A2A_HOST`, `A2A_DISABLE_OPIK` (set to `1` to turn off tracing).
 
 > **Restart after edits.** A running `run_all` holds the old code (and the old
 > YAML) in memory. After changing `system.yaml`, an agent, or a prompt
@@ -319,56 +249,7 @@ That's it. `run_all` picks the agent up from the YAML; check it with
 
 ---
 
-## 5. Local MCP servers
-
-The local MCP stack is started separately:
-
-```powershell
-.\scripts\start-mcp.ps1
-uv run python scripts\check-local-mcp.py
-```
-
-Because A2A agents run in Docker, configure the two MCP toolsets that are
-directly attached to `ResearchAgent` with `host.docker.internal` in the root
-`.env`:
-
-```dotenv
-MCP__PAPERS_SEARCH_URL=http://host.docker.internal:7331/mcp
-MCP__PAPER_ANALYSIS_URL=http://host.docker.internal:7334/mcp
-```
-
-These values are read when the Python process starts. Recreate the A2A
-containers after changing them:
-
-```powershell
-.\scripts\start-a2a.ps1 -NoBuild
-```
-
-Chemical and Dataset Collection are available to A2A containers at:
-
-```text
-http://host.docker.internal:7332/mcp
-http://host.docker.internal:7333/mcp
-```
-
-They are not statically attached by the current `system.yaml`. A separate
-integration step must register their server metadata and tool descriptions in
-the `rag-tools` Postgres/vector catalog so that `retrieve_tools` and FEDOT.MAS
-can discover them. Do not add tools directly to `TaskExecutorAgent`: it is a
-sequential agent, and the configuration schema forbids tools on composite
-agents.
-
-Validate connectivity from the A2A runtime:
-
-```powershell
-docker compose -f docker\docker-compose.a2a.yml run --rm --no-deps `
-  -v "${PWD}:/workspace:ro" -w /workspace a2a-research `
-  python scripts/check-local-mcp.py --host host.docker.internal
-```
-
----
-
-## 6. Notes & gotchas
+## 5. Notes & gotchas
 
 - **AgentCard required fields:** `name`, `description`, `url`, `version`,
   `capabilities`, `defaultInputModes`, `defaultOutputModes`, `skills` —
@@ -382,7 +263,8 @@ docker compose -f docker\docker-compose.a2a.yml run --rm --no-deps `
   (`hypotheses`, `medical`). When HITL is off, the HITL tools AND the matching
   prompt section are both dropped automatically.
 - **`task_execution`** needs the RAG DB + FEDOT.MAS reachable for its
-  tool-discovery step.
+  tool-discovery step, and the sandbox for its coder path (it embeds the coder
+  in-process, pinned to the shared `a2a_shared` workspace).
 - **JSON-RPC errors return HTTP 200** with the error in the body (per spec) —
   don't treat 200 as unconditional success.
 - **Agent card endpoint:** prefer `/.well-known/agent-card.json`;

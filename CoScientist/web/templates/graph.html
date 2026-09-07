@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>CoScientist — Knowledge Graph</title>
+  <!-- Vendored locally (CoScientist/web/static) so it works offline / behind a VPN. -->
+  <script src="/static/vis-network.min.js"></script>
+  <style>
+    html, body { margin: 0; height: 100%; background: #1e1e1e; color: #eee;
+                 font-family: -apple-system, Segoe UI, Roboto, sans-serif; }
+    #bar { position: fixed; top: 0; left: 0; right: 0; min-height: 42px; display: flex;
+           align-items: center; gap: 14px; padding: 4px 14px; background: #252526;
+           border-bottom: 1px solid #333; z-index: 10; font-size: 13px; flex-wrap: wrap; }
+    #bar b { color: #fff; }
+    #net { position: absolute; top: 50px; bottom: 0; left: 0; right: 0; }
+    .legend { display: flex; gap: 12px; margin-left: auto; flex-wrap: wrap; align-items: center; }
+    .legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+    .dot { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
+    label { cursor: pointer; user-select: none; }
+    #status { color: #9aa; }
+    #detail { position: fixed; top: 50px; right: 0; width: 380px; bottom: 0; background: #252526;
+              border-left: 1px solid #333; padding: 16px; overflow-y: auto; z-index: 9;
+              display: none; font-size: 13px; box-shadow: -8px 0 24px rgba(0,0,0,0.3); }
+    #detail h3 { margin: 0 0 4px; color: #00daf3; font-size: 15px; word-break: break-word; }
+    #detail .k { color: #8ab; font-weight: 600; }
+    #detail .attr { margin: 3px 0; }
+    #detail pre { white-space: pre-wrap; word-break: break-word; background: #1b1b1c; padding: 9px;
+                  border-radius: 6px; color: #ddd; font-size: 12px; line-height: 1.45; margin: 4px 0 0; }
+    #detail .close { float: right; cursor: pointer; color: #999; font-size: 18px; }
+    #detail .badge { display: inline-block; padding: 1px 9px; border-radius: 10px; color: #111;
+                     font-weight: 700; font-size: 11px; }
+    #detail .sub { color: #888; font-size: 12px; margin-bottom: 8px; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <b>CoScientist Graph</b>
+    <span id="status">connecting…</span>
+    <label><input type="checkbox" id="auto" checked /> live (1.5s)</label>
+    <button id="refresh">refresh</button>
+    <label>view:
+      <select id="view">
+        <option value="research">research graph (blackboard)</option>
+        <option value="execution">execution (log)</option>
+        <option value="knowledge">knowledge (this session)</option>
+        <option value="memory">knowledge memory (global)</option>
+      </select>
+    </label>
+    <div class="legend" id="legend"></div>
+  </div>
+  <div id="net"></div>
+  <div id="detail"></div>
+
+  <script>
+    // ── execution / knowledge / memory views (unchanged) ──────────────────────
+    const STATUS_COLOR = { running: "#f1c40f", success: "#2ecc71", failed: "#e74c3c", interrupted: "#e67e22", pruned: "#7f8c8d" };
+    const IDENTITY_COLOR = { system: "#f4c542", agent: "#7eb6ff",
+      question: "#ff9f43", fact: "#f6c453", hypothesis: "#b388ff", finding: "#2ecc71", method: "#1abc9c" };
+    const SHAPE = { system: "hexagon", agent: "dot", goal: "diamond",
+                    agent_call: "ellipse", tool_call: "box", result: "star",
+                    question: "diamond", fact: "box", finding: "star" };
+    const ENTITY_COLOR = { target: "#e84393", molecule: "#00cec9", metric: "#fdcb6e",
+      property: "#fab1a0", paper: "#74b9ff", hypothesis: "#b388ff", method: "#1abc9c",
+      dataset: "#a29bfe", finding: "#2ecc71", gene: "#ffeaa7", organism: "#55efc4" };
+    const ENTITY_SHAPE = { target: "star", molecule: "dot", metric: "triangle", paper: "box",
+      hypothesis: "ellipse", method: "box", dataset: "database" };
+    const etype = n => (n.semantic && n.semantic.type) || "entity";
+    function hashColor(s){ let h=0; s=s||"x"; for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))>>>0;
+      const c=v=>(120+(v&0x5F)).toString(16).padStart(2,"0"); return "#"+c(h)+c(h>>6)+c(h>>12); }
+    const colorOf = n => n.kind === "entity" ? (ENTITY_COLOR[etype(n)] || hashColor(etype(n)))
+                       : (IDENTITY_COLOR[n.kind] || STATUS_COLOR[n.status] || "#dcdde1");
+    const shapeOf = n => n.kind === "entity" ? (ENTITY_SHAPE[etype(n)] || "dot") : (SHAPE[n.kind] || "box");
+    const labelOf = n => String(((["tool_call","result","goal","entity","fact","question"].includes(n.kind)) ? n.label : (n.executor_agent || n.label)) || n.id || "").slice(0, 40);
+
+    // ── research view — status colour, type icon, epistemic layering ──────────
+    // Colour carries STATUS (the thing you care about); the type is the icon + id
+    // in the label; the ROW (level) is the epistemic layer: question → hypotheses
+    // → methods/tools/criteria → evidence → conclusions → artifacts.
+    const R_STATUS_COLOR = {
+      confirmed:"#2ecc71", validated:"#2ecc71", met:"#2ecc71", available:"#2ecc71",
+      done:"#27ae60", approved:"#2ecc71",                                   // green: settled/positive
+      refuted:"#e74c3c", rejected:"#e74c3c", failed:"#e74c3c", creation_failed:"#e74c3c", // red: dead/negative
+      under_verification:"#f39c12", running:"#f39c12", obtained:"#f1c40f", draft:"#f39c12", // amber: in progress
+      open:"#3498db", formulated:"#3498db", planned:"#3498db", not_met:"#5dade2",  // blue: pending/open
+      postponed:"#7f8c8d", needs_adaptation:"#e67e22", being_created:"#e67e22",
+      exhausted:"#7f8c8d", decomposed:"#5d6d7e",                            // grey/orange: waiting/blocked
+      active:"#8e44ad", created:"#95a5a6", closed:"#566573" };              // constraint / neutral
+    const R_ICON = { researchquestion:"❓", hypothesis:"💡", evidence:"🔬",
+      verificationmethod:"⚙️", confirmationcriteria:"🎯", tool:"🔧", resource:"🔋",
+      empiricalbase:"🗄️", constraint:"⚖️", codeartifact:"💻", generateddata:"📦",
+      report:"📑", publication:"📰", spec:"📋", efficiencyjustification:"📈",
+      costmodel:"💰", efficiencymetric:"📊" };
+    const R_LEVEL = { researchquestion:0, constraint:0, hypothesis:1, empiricalbase:1,
+      verificationmethod:2, confirmationcriteria:2, tool:2,
+      evidence:3, resource:3, generateddata:3, codeartifact:3, conclusion:4,
+      report:5, publication:5, spec:5, efficiencyjustification:5, costmodel:5, efficiencymetric:5 };
+    const R_EDGE_COLOR = { supports:"#2ecc71", refutes:"#e74c3c", refines:"#f39c12" };
+    const RESEARCH_KINDS = new Set(Object.keys(R_LEVEL));
+
+    const isResearch = () => document.getElementById("view").value === "research";
+    function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+    function rText(n){ return String(n.output || n.label || "").replace(/\s+/g," ").trim(); }
+    function researchLabel(n){
+      const icon = R_ICON[n.kind] || "•";
+      const txt = rText(n); const short = txt.length > 64 ? txt.slice(0,64)+"…" : txt;
+      return `<b>${icon} ${esc(n.id)}</b>\n${esc(short)}`;   // vis html-multiline
+    }
+    function rColor(n){ return R_STATUS_COLOR[n.status] || "#95a5a6"; }
+
+    const titleOf = n => [
+      "id: " + n.id, "type: " + (n.kind||""),
+      n.executor_agent ? "source: " + n.executor_agent : "",
+      "status: " + (n.status || ""),
+      n.output ? String(n.output).slice(0,300) : "",
+    ].filter(Boolean).join("\n");
+
+    // ── network ───────────────────────────────────────────────────────────────
+    const nodes = new vis.DataSet([]);
+    const edges = new vis.DataSet([]);
+    let network = null;
+
+    function optsFor(r) {
+      // Toggling layout.hierarchical at runtime via setOptions is unreliable in
+      // vis-network (the physics solver gets stuck on 'hierarchicalRepulsion' and
+      // the non-tree views collapse to a point). So we REBUILD the network per
+      // view with a clean, complete options object instead.
+      return {
+        nodes: { font: { color: "#eee", strokeWidth: 3, strokeColor: "#1e1e1e" }, borderWidth: 2 },
+        edges: { arrows: "to", color: { color: "#888" }, font: { color: "#bbb", size: 10 },
+                 smooth: r ? { type: "cubicBezier", forceDirection: "vertical", roundness: 0.55 }
+                           : { type: "cubicBezier" } },
+        layout: r
+          ? { hierarchical: { enabled: true, direction: "UD", levelSeparation: 130,
+                              nodeSpacing: 170, treeSpacing: 210, blockShifting: true,
+                              edgeMinimization: true } }
+          : { hierarchical: false, randomSeed: 2 },
+        physics: r
+          ? { enabled: false }
+          : { enabled: true, solver: "barnesHut", stabilization: { iterations: 200 },
+              barnesHut: { gravitationalConstant: -8000, springLength: 130 } },
+        interaction: { hover: true, tooltipDelay: 100 },
+      };
+    }
+
+    function rebuildNetwork() {
+      if (network) { try { network.destroy(); } catch (e) {} }
+      network = new vis.Network(document.getElementById("net"), { nodes, edges }, optsFor(isResearch()));
+      network.on("click", params => {
+        if (!params.nodes.length) { closeDetail(); return; }
+        selectedId = params.nodes[0];
+        showDetail(nodeData[selectedId]);
+      });
+    }
+
+    const EX_LEGEND =
+      '<span><b>status:</b></span>'
+      + '<span><i class="dot" style="background:#f1c40f"></i>running</span>'
+      + '<span><i class="dot" style="background:#2ecc71"></i>success</span>'
+      + '<span><i class="dot" style="background:#e74c3c"></i>failed</span>'
+      + '<span style="margin-left:8px"><b>type:</b></span>'
+      + '<span>⬡ system</span><span>● agent</span><span>◆ goal</span>'
+      + '<span>▭ tool</span><span>★ result</span>';
+    const R_LEGEND =
+      '<span><b>status:</b></span>'
+      + '<span><i class="dot" style="background:#2ecc71"></i>confirmed / validated / done</span>'
+      + '<span><i class="dot" style="background:#f39c12"></i>in&nbsp;progress</span>'
+      + '<span><i class="dot" style="background:#e74c3c"></i>refuted / failed</span>'
+      + '<span><i class="dot" style="background:#3498db"></i>open / formulated / planned</span>'
+      + '<span><i class="dot" style="background:#e67e22"></i>needs&nbsp;tool / being&nbsp;built</span>'
+      + '<span><i class="dot" style="background:#7f8c8d"></i>postponed / exhausted</span>'
+      + '<span style="margin-left:6px"><b>edge:</b></span>'
+      + '<span><i class="dot" style="background:#2ecc71"></i>supports</span>'
+      + '<span><i class="dot" style="background:#e74c3c"></i>refutes</span>'
+      + '<span style="margin-left:6px"><b>type:</b> ❓question 💡hypothesis 🔬evidence ⚙️method 🎯criteria 🔧tool</span>';
+    function updateLegend(){ document.getElementById("legend").innerHTML = isResearch() ? R_LEGEND : EX_LEGEND; }
+
+    // ── polling ────────────────────────────────────────────────────────────────
+    const seenEdges = new Set();
+    const nodeData = {};   // id -> full node, for the click-to-inspect panel
+    async function poll() {
+      try {
+        const params = new URLSearchParams(location.search);
+        const userId = params.get("user_id") || "";
+        const sessionId = params.get("session_id") || "";
+        if (!userId || !sessionId) {
+          throw new Error("Open the graph from an active CoScientist session.");
+        }
+        const url = `/api/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/graph?view=${encodeURIComponent(document.getElementById("view").value)}`;
+        const r = await fetch(url, { cache: "no-store" });
+        const g = await r.json();
+        const research = isResearch();
+        (g.nodes || []).forEach(n => {
+          nodeData[n.id] = n;
+          const node = {
+            id: n.id, title: titleOf(n),
+            label: research ? researchLabel(n) : labelOf(n),
+            shape: research ? "box" : shapeOf(n),
+            color: { background: research ? rColor(n) : colorOf(n), border: "#20232a" },
+          };
+          if (research) {
+            node.level = R_LEVEL[n.kind] != null ? R_LEVEL[n.kind] : 3;
+            node.font = { color: "#fff", size: 14, multi: "html", face: "-apple-system, Segoe UI, sans-serif" };
+            node.widthConstraint = { maximum: 190 };
+            node.margin = 8; node.shapeProperties = { borderRadius: 6 };
+          } else {
+            node.font = { color: "#eee", strokeWidth: 3, strokeColor: "#1e1e1e" };
+          }
+          nodes.update(node);
+        });
+        if (selectedId && nodeData[selectedId]) showDetail(nodeData[selectedId]);  // live-refresh open panel
+        (g.edges || []).forEach(e => {
+          const id = e.src + "->" + e.dst + ":" + (e.type || "");
+          if (!seenEdges.has(id) && e.src && e.dst) {
+            seenEdges.add(id);
+            const edge = { id, from: e.src, to: e.dst, label: e.type || "" };
+            if (e.synthetic) {
+              // structural "context" tie for an orphan node — faint & dashed,
+              // no arrow, so it doesn't read as a real research relation.
+              edge.color = { color: "#3a3d44", highlight: "#555" };
+              edge.dashes = true; edge.width = 1; edge.arrows = "";
+              edge.font = { color: "#666", size: 8 };
+            } else if (research) {
+              const c = R_EDGE_COLOR[e.type];
+              edge.color = { color: c || "#5a5a5a", highlight: c || "#999" };
+              edge.width = c ? 2 : 1;
+              edge.font = { color: c || "#8a8a8a", size: 9, strokeWidth: 3, strokeColor: "#1e1e1e" };
+            }
+            edges.update(edge);
+          }
+        });
+        document.getElementById("status").textContent =
+          (g.nodes || []).length + " nodes · " + (g.edges || []).length + " edges";
+      } catch (err) {
+        document.getElementById("status").textContent = "error: " + err;
+      }
+    }
+
+    // ── click a node → detail panel ─────────────────────────────────────────────
+    let selectedId = null;
+    function showDetailResearch(n){
+      const attrs = (n.input && typeof n.input === "object") ? n.input : {};
+      const rows = Object.keys(attrs).map(k =>
+        `<div class="attr"><span class="k">${esc(k)}:</span> ${esc(attrs[k])}</div>`).join("");
+      document.getElementById("detail").innerHTML =
+        `<span class="close" onclick="closeDetail()">✕</span>`
+        + `<h3>${R_ICON[n.kind] || "•"} ${esc(n.id)}</h3>`
+        + `<div class="sub">${esc(n.kind || "")}</div>`
+        + `<div><span class="badge" style="background:${rColor(n)}">${esc(n.status || "")}</span></div>`
+        + (n.executor_agent ? `<div class="attr" style="margin-top:8px"><span class="k">source:</span> ${esc(n.executor_agent)}</div>` : "")
+        + (rows ? `<div class="k" style="margin-top:10px">attributes:</div>${rows}` : "");
+      document.getElementById("detail").style.display = "block";
+    }
+    function showDetail(n) {
+      if (!n) return;
+      if (isResearch()) { showDetailResearch(n); return; }
+      const row = (k, v) => (v || v === 0) ? `<div><span class="k">${k}:</span> ${esc(v)}</div>` : "";
+      const block = (k, v) => v ? `<div class="k" style="margin-top:10px">${k}:</div><pre>${esc(v)}</pre>` : "";
+      const dur = (n.t_start && n.t_end) ? (n.t_end - n.t_start).toFixed(2) + "s" : "";
+      const promptLabel = n.kind === "agent_call" ? "prompt the agent was called with"
+                        : (n.kind === "tool_call" ? "tool args" : "input");
+      document.getElementById("detail").innerHTML =
+        `<span class="close" onclick="closeDetail()">✕</span>`
+        + `<h3>${esc(labelOf(n))}</h3>`
+        + `<div><span class="badge" style="background:${colorOf(n)}">${esc(n.status || "")}</span></div>`
+        + row("kind", n.kind) + row("agent", n.executor_agent) + row("duration", dur) + row("id", n.id)
+        + block(promptLabel, typeof n.input === "object" ? JSON.stringify(n.input, null, 2) : n.input)
+        + block("output", n.output);
+      document.getElementById("detail").style.display = "block";
+    }
+    function closeDetail() { selectedId = null; document.getElementById("detail").style.display = "none"; }
+
+    document.getElementById("refresh").onclick = poll;
+    document.getElementById("view").onchange = () => {
+      nodes.clear(); edges.clear(); seenEdges.clear();
+      for (const k in nodeData) delete nodeData[k];
+      closeDetail(); rebuildNetwork(); updateLegend(); poll();
+    };
+    let timer = null;
+    function loop() { if (document.getElementById("auto").checked) poll(); timer = setTimeout(loop, 1500); }
+    rebuildNetwork(); updateLegend(); poll(); loop();
+  </script>
+</body>
+</html>

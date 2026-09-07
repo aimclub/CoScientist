@@ -106,6 +106,9 @@ agents:
       before_agent: []
       after_agent: []
     hitl: false             # see §4.5
+    critic: false           # LLM critic reviews my output once — see §4.5a
+                            # (custom:session only; bool or "${settings.path}")
+    report_output: false    # post my final answer to the chat (see below)
     output_key: my_results  # ADK session-state key for the agent's output
     output_schema: ...      # registered pydantic schema name (structured output)
     planner: plan_react     # registered ADK planner name
@@ -124,6 +127,15 @@ Semantics worth knowing:
   it disappears from rosters, routing, the planner's roster, and the critic's
   roster automatically.
 - `subordinates` order = roster order in the prompt = tool order.
+- **`report_output: true` puts the agent's final answer in the chat.** A
+  subordinate runs as an `AgentTool`, so its deliverable (the hypotheses, the
+  research summary) comes back inside the *caller's* function_response and is
+  never spoken in the event stream — the user only saw the orchestrator's
+  retelling of it. `AgentOutputPlugin` (`logging/agent_output.py`) closes that
+  gap: it reports the answer of every flagged agent to the web UI, which renders
+  it as a message authored by that agent. Reserve it for agents whose output IS
+  a deliverable — pipeline internals (rerankers, retrievers) would only add
+  noise.
 - A composite (`sequential`/`parallel`) cannot have `tools`, `prompt`, `model`
   or `subordinates` — the schema rejects it.
 - Unknown keys anywhere are rejected (`extra="forbid"`), so typos fail loudly.
@@ -261,6 +273,68 @@ Flipping the setting re-shapes every prompt that mentions the agent on the next
 build — e.g. the orchestrator's planning step switches between "call the
 PlannerAgent first" and "there is NO planner tool" automatically.
 
+To toggle a *single tool on a single agent*, register a gated alias of the tool
+whose factory returns `None` when the setting is off, and mark it `optional`:
+
+```python
+def _planner_retrieval():
+    if not get_settings().web.planner_retrieval_enabled:
+        return None
+    return _retrieval()
+
+REGISTRY.register_tool(ToolEntry(
+    key="planner_retrieval", factory=_planner_retrieval,
+    optional=True, docs=_RETRIEVAL_DOCS,
+))
+```
+
+The agent lists the alias (`tools: [planner_retrieval, ...]`) and the prompt
+template branches on `ctx.has_tool("planner_retrieval")`, so a disabled tool
+disappears from the agent AND from its prompt in one step. `planner_retrieval`
+and `planner_graph` (Settings → PlannerAgent in the web UI) work exactly this
+way; every other agent keeps the ungated `retrieval` / `graph` entries.
+
+To gate a tool **everywhere at once**, skip the alias and put the check in the
+entry's own factory, marking the entry `optional`. Three switches in the web UI
+work this way:
+
+| Switch | Setting | Effect when off |
+|--------|---------|-----------------|
+| Graphs → Knowledge Graph | `web.knowledge_graph_enabled` | `graph` drops off every agent, `inject_graph_root` yields nothing, and `GraphMemoryPlugin` stops recording |
+| Graphs → Research Graph | `research_graph.enabled` | `research_graph` / `research_graph_orchestrator` drop out with their prompt sections |
+| CoderAgent → Coder Execution Mode | `web.coder_mode` (`local`/`openhands`) | When set to `openhands`, `coder` local toolset drops out, leaving the coder family with OpenHands `sandbox` tools only |
+
+Prose that names specific tools has to branch too, or the prompt will advertise
+a tool the agent cannot call and `guard_unknown_tools` will fire on every
+attempt. The coder prompt swaps its whole persona on `ctx.has_tool("coder")` —
+with the local toolset it is an engineer with the full operating manual, without
+it a thin **sandbox relay** whose only job is to forward the incoming task
+verbatim to `run_sandbox_task` (attaching `dataset_url`, choosing
+`new_sandbox`) and pass the sandbox agent's report straight back; it is
+deliberately given no engineering guidance, since writing instructions for the
+sandbox agent is the sandbox agent's job. The orchestrator's KNOWLEDGE GRAPH
+section renders only under `ctx.has_tool("graph")`.
+
+When a tool's *documentation* depends on what else is configured, pass a
+callable as `docs` — `ToolEntry.resolved_docs()` calls it at build time. The
+`sandbox` entry uses this to stop cross-referencing `execute_bash` once the
+local coder tools are switched off.
+
+To make a **constructor kwarg** follow a setting, put the reference in
+`options` — values there take `"${settings.path}"` too (resolved at build time
+by `AgentConfig.resolved_options()`, keeping their own type):
+
+```yaml
+PlannerAgent:
+  options:
+    critic_max_rounds: ${web.planner_critic_rounds}   # Settings -> PlannerAgent
+```
+
+That is the whole path from a web-UI field to a runtime knob: the UI posts to
+`/api/settings` → `web/app.py` writes `settings.web` → the next system build
+resolves the reference. No code change per knob, and one place (`_settings_payload`)
+that a GET and the echo of a POST both answer from, so they cannot drift.
+
 ### 4.5 HITL
 
 `hitl: true` means "this agent uses human-in-the-loop *when HITL is globally
@@ -274,12 +348,54 @@ enabled*" (`HITL__ENABLED` in `.env`). What it does depends on the class:
 
 Your template must contain `<<HITL>>` (it renders empty when off).
 
+### 4.5a Critics
+
+Three critics exist, wired independently — you can run any subset:
+
+| Critic | Wiring | Judges |
+|---|---|---|
+| Pre-action | `callbacks.after_model: [pre_action_critique]` on the orchestrator | the delegation it is about to make (approve / revise args / reject) |
+| Post-action | `callbacks.after_tool: [post_action_critique]` | the result a sub-agent returned (annotates it with a `_critic` directive) |
+| Plan | `critic: true` on a `custom:session` agent (the planner) | the roadmap the planner registered |
+
+All three are LLM calls returning strict JSON, built by *context factories* so
+their prompts embed the roster they are judging against — the orchestrator's
+subordinates for the first two, the planner's siblings (the agents a plan may
+assign to) for the plan critic. Each prompt section that documents a critic is
+gated on that critic actually being wired, so a prompt never announces a review
+that cannot happen.
+
+The plan critic is not a callback: no callback can make the planner redo its
+roadmap. `make_plan_critique()` returns `async (task, plan) -> feedback | None`
+and the assembler hands it to `SessionAgent`, which already owns the
+generate → review → revise loop and feeds the critique back as a user turn — the
+same mechanism as a human rejection, so the planner replans instead of patching
+prose. Differences from HITL: it runs whether or not HITL is enabled (before the
+human sees anything), and its budget is **one round** (`critic_max_rounds`) — a
+reviewer that never tires would otherwise loop forever. After the rewrite the
+plan stands, reviewed or not. A critic that fails or cannot articulate an
+objection accepts the plan; the review must never take a run down with it.
+
+Both knobs live in the web UI under Settings → PlannerAgent (and in `.env` for
+headless runs):
+
+| UI control | Setting | `.env` |
+|---|---|---|
+| Plan Critic | `web.planner_critic_enabled` → `PlannerAgent.critic` | `PLANNER__CRITIC_ENABLED` |
+| Revision Rounds | `web.planner_critic_rounds` → `options.critic_max_rounds` | `PLANNER__CRITIC_ROUNDS` |
+
+The budget is settable but never absent: the UI floor is one round, and a
+rejected `criticRounds < 1` keeps the previous value — a zero-round critic is
+just a critic that never runs, which is what the switch is for. Both apply to
+new sessions (the system is built once per session), and the critic costs an
+extra LLM call per planning run plus a whole planning round whenever it objects.
+
 ### 4.6 Composite pipelines
 
 `sequential` / `parallel` agents list `children` in execution order:
 
 ```yaml
-TaskExecutorAgent:
+ToolPipelineAgent:
   class: sequential
   children: [ToolPreparerAgent, ExperimentAgent]
 ```
@@ -288,6 +404,13 @@ Children are full agents declared in the same file. Note that pipeline stages
 usually communicate through ADK session state: one agent's `output_key` is the
 next agent's `{state_key}` prompt injection (see §5) — renaming an
 `output_key` means updating the prompts and callbacks that read it.
+
+A composite can itself be a `subordinate`: listed that way it is attached as an
+AgentTool and an LLM agent above it decides *whether* to run the whole pipeline.
+That is how `TaskExecutorAgent` works — an LLM router whose subordinates are
+`ToolPipelineAgent` (the discover→deploy→run MCP pipeline) and `CoderAgent`, so
+the choice between "a ready tool exists" and "this needs engineering" is made
+inside the executor instead of by the orchestrator.
 
 ### 4.7 Custom agent classes
 
@@ -368,7 +491,7 @@ fully static text use `_static("name", '''...''')`.
 | `ctx.is_enabled("TaskExecutorAgent")` | gate on any agent's enabled flag |
 | `ctx.siblings()` | my parents' other enabled subordinates (e.g. coder's scope boundary) |
 | `ctx.render_sibling_roster()` | planner-style roster from each sibling's `planning` text |
-| `ctx.render_critic_roster()` | compact roster for critic prompts |
+| `ctx.render_critic_roster()` | compact roster for critic prompts (pass `ctx.siblings()` for a critic judging peers, as the plan critic does) |
 
 Two templating systems coexist — don't confuse them:
 
@@ -435,6 +558,9 @@ Debugging tips:
   from CoScientist.assembly.schema import get_config
   cfg = get_config()
   print(REGISTRY.prompt("pre_action_critic")(PromptContext(config=cfg.root, system=cfg)))
+  # the plan critic renders against the PLANNER's context, not the root's:
+  planner = PromptContext(config=cfg.agent("PlannerAgent"), system=cfg)
+  print(REGISTRY.prompt("plan_critic")(planner))
   ```
 
 - **Config is cached per process** (`get_config()` is `lru_cache`d): a running

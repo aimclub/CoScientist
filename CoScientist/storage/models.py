@@ -11,6 +11,10 @@ class RetrievalToolResult(BaseModel):
     tool: str
     server_id: str
     description: str
+    input_schema: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="JSON schema of the tool's accepted arguments (from the registry).",
+    )
     score: float
 
 class ToolScore(BaseModel):

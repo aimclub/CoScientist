@@ -11,6 +11,7 @@ from google.adk.models import LlmResponse, LlmRequest
 from google.genai.types import Part
 
 from CoScientist.paper_parser.s3_connection import s3_service
+from CoScientist.graph.session_scope import session_key
 
 logger = logging.getLogger(__name__)
 
@@ -30,11 +31,15 @@ async def papers_agent_before_model(
     await ensure_local_papers_uploaded(callback_context)
 
     s3_keys: List[str] = callback_context.state.get(_PAPER_STATE_KEY, [])
-    if not s3_keys:
+    downloaded_keys: List[str] = callback_context.state.get("downloaded_paper_s3_keys", [])
+    all_keys = s3_keys + downloaded_keys
+
+    if not all_keys:
         reminder = Part(
             text=(
-                "[Available uploaded papers] No uploaded papers are available for this session. "
-                "Do not call explore_my_papers and do not invent any S3 keys."
+                "[Available uploaded papers] No pre-uploaded papers are available for this session. "
+                "Do not invent S3 keys. "
+                "You may still call explore_my_papers if you have S3 keys from a previous download_papers_from_search result."
             )
         )
         for content in reversed(llm_request.contents):
@@ -43,10 +48,10 @@ async def papers_agent_before_model(
                 break
         return None
 
-    paper_list = ", ".join(s3_keys)
+    paper_list = ", ".join(all_keys)
     reminder = Part(
         text=(
-            "[Available uploaded papers] The following S3 keys are available for user-uploaded papers: "
+            "[Available papers] The following S3 keys are available: "
             f"{paper_list}. "
             "Use these s3_keys when calling explore_my_papers."
         )
@@ -62,10 +67,11 @@ async def papers_agent_before_model(
 
 async def ensure_local_papers_uploaded(callback_context: CallbackContext) -> None:
     """Upload local papers to S3 and register their keys in session state."""
-    session_key = f"{_get_user_id()}:{_get_session_id()}"
-    _upload_locks.setdefault(session_key, asyncio.Lock())
+    user_id, session_id = session_key(callback_context)
+    scope_key = f"{user_id}:{session_id}"
+    _upload_locks.setdefault(scope_key, asyncio.Lock())
 
-    async with _upload_locks[session_key]:
+    async with _upload_locks[scope_key]:
         if callback_context.state.get(_PAPER_STATE_KEY):
             return
 
@@ -85,7 +91,7 @@ async def ensure_local_papers_uploaded(callback_context: CallbackContext) -> Non
         else:
             logger.info("Found %d local PDF(s) for upload in %s", len(pdf_files), papers_dir)
 
-        prefix = f"{_get_user_id()}/{_get_session_id()}/uploaded_papers"
+        prefix = f"{user_id}/{session_id}/uploaded_papers"
         uploaded_keys: List[str] = []
 
         if pdf_files:

@@ -19,10 +19,19 @@ Two callback FACTORIES are wired onto the OrchestratorAgent via system.yaml:
         annotates it with a `_critic` directive when the result is
         insufficient or wrong, leaving the original payload intact.
 
-Both critics are themselves LLM calls returning strict JSON. They are
+A third factory is wired onto the PLANNER instead, independently of the two
+above (system.yaml -> ``PlannerAgent.critic``):
+
+  * `make_plan_critique(instruction)`         -> SessionAgent.plan_critic
+        Reviews the roadmap the planner just registered, BEFORE it is accepted
+        (and before the human sees it). Returns feedback text to send back for
+        one rewrite, or None to accept the plan. The revision budget lives in
+        the SessionAgent (`critic_max_rounds`, default 1), not here.
+
+All three critics are themselves LLM calls returning strict JSON. They are
 factories (not module-level callbacks) because their system prompts embed the
-orchestrator's CURRENT roster — the assembler renders the prompt from the same
-config that wires the sub-agents and passes it in.
+CURRENT roster — the assembler renders the prompt from the same config that
+wires the agents and passes it in.
 """
 
 from __future__ import annotations
@@ -62,6 +71,11 @@ class PostVerdict(str, Enum):
     SUFFICIENT = "sufficient"
     INSUFFICIENT = "insufficient"
     WRONG = "wrong"
+
+
+class PlanVerdict(str, Enum):
+    APPROVE = "approve"
+    REVISE = "revise"
 
 
 # ---------------------------------------------------------------------------
@@ -225,6 +239,10 @@ async def _invoke_critic_llm(system_prompt: str, user_prompt: str) -> Dict[str, 
             response_format={"type": "json_object"},
             temperature=0.0,
         )
+        # The critic bypasses the agent tree, so no model callback prices it —
+        # but it runs on every orchestrator turn and is not free.
+        from CoScientist.logging.metrics import record_completion
+        record_completion(resp, model=_CRITIC_MODEL, agent="Critic")
         raw = resp["choices"][0]["message"]["content"]
         return json.loads(raw)
     except Exception as e:
@@ -480,3 +498,45 @@ def make_post_action_critique(instruction: str) -> Callable:
         return None
 
     return post_action_critique
+
+
+# ---------------------------------------------------------------------------
+# Plan critic  (SessionAgent.plan_critic — the PLANNER's own critic)
+# ---------------------------------------------------------------------------
+def make_plan_critique(instruction: str) -> Callable:
+    """Build the planner's plan critic with the given critic prompt.
+
+    Not an ADK callback: an after_model/after_agent callback can only rewrite
+    or replace an output, and a plan critique is worthless unless the PLANNER
+    itself redoes the roadmap. The returned coroutine is handed to the
+    SessionAgent, which owns the generate → review → revise loop and caps it
+    (`critic_max_rounds`, default 1 — the critic gets one say).
+
+    Contract: ``await plan_critique(task, plan) -> feedback | None``. A None
+    (approve, empty feedback, or a failed LLM call) accepts the plan as-is.
+    """
+
+    @track(name="plan_critique")
+    async def plan_critique(task: str, plan: str) -> Optional[str]:
+        user_prompt = (
+            f"ORIGINAL TASK:\n{task or '(not available)'}\n\n"
+            f"PROPOSED PLAN (as registered, in execution order):\n{_truncate(plan, 6000)}\n\n"
+            "Decide whether to approve this plan or send it back for its one "
+            "revision. Respond as strict JSON."
+        )
+
+        print(f"plan critic invoked with such prompt: {user_prompt}")
+
+        payload = await _invoke_critic_llm(instruction, user_prompt)
+        verdict_raw = (payload.get("verdict") or "approve").lower().strip()
+        feedback = (payload.get("feedback") or "").strip()
+
+        print(f"plan critic returned: {payload}")
+
+        # Anything but an explicit, substantiated "revise" accepts the plan:
+        # a revision round the critic cannot justify only costs a rewrite.
+        if verdict_raw != PlanVerdict.REVISE.value or not feedback:
+            return None
+        return feedback
+
+    return plan_critique

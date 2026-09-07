@@ -14,11 +14,21 @@ The YAML declares every agent of the system in one place. Per agent:
   callbacks:    {before_model|after_model|before_tool|after_tool|before_agent|after_agent: [names]}
   hitl:         whether the agent uses human-in-the-loop (tools + prompt section
                 for llm agents, review-loop handler for session agents)
+  critic:       an LLM critic reviews the agent's output once and it rewrites
+                on request (session agents only; bool or "${settings.path}")
+  report_output: the agent's final answer is a deliverable — show it in the chat
   output_key / output_schema / planner / options: passthrough constructor config
+                (an ``options`` value may be "${settings.path}" too)
   a2a:          how the agent is exposed as an A2A service (key, port, skill, env)
+
+A config may also start with ``extends: <name-or-path>``, inheriting another
+config and overriding only the agents and fields it names — so a variant of the
+system (a limited profile, a deployment with one agent off) is a short overlay
+rather than a copy that drifts from the original. See :func:`_merge_raw`.
 """
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -26,24 +36,59 @@ from typing import Any, Dict, List, Optional, Union
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent.parent / "agents" / "system.yaml"
+CONFIG_DIR = Path(__file__).resolve().parent.parent / "agents"
+DEFAULT_CONFIG_PATH = CONFIG_DIR / "system.yaml"
+
+# Env var selecting an alternative system profile for the whole process.
+# Accepts a bare profile name ("microfluidics" -> CoScientist/agents/
+# microfluidics.yaml) or a filesystem path to a YAML file. Every entry point
+# that builds the system through get_config() (CLI, web server, A2A serving)
+# honours it, so one deployment can run a differently-shaped CoScientist
+# without touching the default system.yaml.
+CONFIG_ENV_VAR = "COSCIENTIST_CONFIG"
+
+
+def resolve_config_path(ref: Optional[str] = None) -> Path:
+    """Resolve a config reference: explicit ref, $COSCIENTIST_CONFIG, or default."""
+    ref = ref or os.environ.get(CONFIG_ENV_VAR)
+    if not ref:
+        return DEFAULT_CONFIG_PATH
+    path = Path(ref)
+    if path.suffix in (".yaml", ".yml"):
+        return path
+    return CONFIG_DIR / f"{ref}.yaml"
+
+
+def _is_setting_ref(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and value.strip().startswith("${")
+        and value.strip().endswith("}")
+    )
+
+
+def _setting_value(ref: str) -> Any:
+    """The live value behind a "${dotted.settings.path}" reference."""
+    # Schema-only callers (A2A discovery and tooling) must not initialize the
+    # full application settings stack. Resolve settings only for a value that
+    # actually references one.
+    from CoScientist.config import get_settings
+
+    obj: Any = get_settings()
+    for part in ref.strip()[2:-1].split("."):
+        obj = getattr(obj, part)
+    return obj
 
 
 def _resolve_setting_ref(value: Union[bool, str]) -> bool:
     """Resolve an ``enabled`` value: a bool, or "${dotted.settings.path}"."""
     if isinstance(value, bool):
         return value
-    text = value.strip()
-    if not (text.startswith("${") and text.endswith("}")):
+    if not _is_setting_ref(value):
         raise ValueError(
             f"enabled must be a bool or '${{settings.path}}', got {value!r}"
         )
-    from CoScientist.config import get_settings
-
-    obj: Any = get_settings()
-    for part in text[2:-1].split("."):
-        obj = getattr(obj, part)
-    return bool(obj)
+    return bool(_setting_value(value))
 
 
 class SkillConfig(BaseModel):
@@ -103,6 +148,15 @@ class AgentConfig(BaseModel):
     children: List[str] = Field(default_factory=list)
     callbacks: CallbacksConfig = Field(default_factory=CallbacksConfig)
     hitl: bool = False
+    # An LLM critic reviews my proposed output once before it is accepted, and
+    # I rewrite it if the critic asks (session-style custom agents only — the
+    # review loop is theirs). Independent of the orchestrator's pre/post-action
+    # critic callbacks. Accepts "${settings.path}" like `enabled`.
+    critic: Union[bool, str] = False
+    # My final answer is a deliverable in its own right (hypotheses, a research
+    # summary): report it to the chat instead of leaving it buried in the
+    # delegation's function_response. See logging/agent_output.py.
+    report_output: bool = False
     include_contents: Optional[str] = "default"
     mode: Optional[str] = None
     output_key: Optional[str] = None
@@ -139,6 +193,22 @@ class AgentConfig(BaseModel):
     def is_enabled(self) -> bool:
         return _resolve_setting_ref(self.enabled)
 
+    def uses_critic(self) -> bool:
+        return _resolve_setting_ref(self.critic)
+
+    def resolved_options(self) -> Dict[str, Any]:
+        """``options`` with every "${settings.path}" value replaced by the value.
+
+        Lets a constructor kwarg follow a runtime setting the way ``enabled``
+        and ``critic`` do — e.g. the plan critic's round budget, which the web
+        UI writes to settings — instead of being frozen in the YAML. Values
+        keep their own type (int stays int); only strings are inspected.
+        """
+        return {
+            key: _setting_value(value) if _is_setting_ref(value) else value
+            for key, value in self.options.items()
+        }
+
 
 class DefaultsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -146,10 +216,32 @@ class DefaultsConfig(BaseModel):
     model: str = "main"
 
 
+class PipelineConfig(BaseModel):
+    """System lifecycle flow around the root orchestrator.
+
+    ``pre`` stages run (in order) BEFORE the root agent, ``post`` stages run
+    AFTER it — each as its own pass over the SAME session, so state flows
+    between them. Stage agents are ordinary agents declared in ``agents``; they
+    need not be attached to any parent (the assembler builds every declared
+    agent regardless). This keeps the delegation tree (root + subordinates)
+    separate from the run lifecycle instead of forcing flow through a
+    ``SequentialAgent`` root.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    pre: List[str] = Field(default_factory=list)
+    post: List[str] = Field(default_factory=list)
+
+    def stage_names(self) -> List[str]:
+        return list(self.pre) + list(self.post)
+
+
 class SystemConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
+    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
     agents: Dict[str, AgentConfig]
 
     @model_validator(mode="after")
@@ -163,7 +255,23 @@ class SystemConfig(BaseModel):
         if len(roots) != 1:
             raise ValueError(f"Exactly one agent must have root: true, got {roots}")
 
+        for stage in self.pipeline.stage_names():
+            if stage not in self.agents:
+                raise ValueError(f"pipeline references unknown agent {stage!r}")
+            if stage == roots[0]:
+                raise ValueError(
+                    f"pipeline stage {stage!r} is the root — the root runs on its "
+                    "own, do not list it as a pre/post stage"
+                )
+
         for agent in self.agents.values():
+            # The critic's review→revise round needs an agent that can re-run
+            # itself; only the session-style custom classes have that loop.
+            if agent.critic and not agent.cls.startswith("custom:"):
+                raise ValueError(
+                    f"{agent.name}: critic: is supported only by custom "
+                    f"session agents, not by a {agent.cls!r} agent"
+                )
             for ref in agent.subordinates + agent.children:
                 if ref not in self.agents:
                     raise ValueError(f"{agent.name}: unknown agent reference {ref!r}")
@@ -230,6 +338,13 @@ class SystemConfig(BaseModel):
         """Names of every agent that some agent delegates to via AgentTool."""
         return {s for a in self.agents.values() for s in a.subordinates}
 
+    def reported_output_agents(self) -> frozenset:
+        """Enabled agents whose final answer is shown in the chat."""
+        return frozenset(
+            a.name for a in self.agents.values()
+            if a.report_output and a.is_enabled()
+        )
+
     def a2a_agents(self) -> List[AgentConfig]:
         return [a for a in self.agents.values() if a.a2a]
 
@@ -241,16 +356,61 @@ class SystemConfig(BaseModel):
         raise KeyError(f"No agent with a2a key {key!r}. Known: {known}")
 
 
-def load_config(path: Optional[Path] = None) -> SystemConfig:
-    path = Path(path) if path else DEFAULT_CONFIG_PATH
+def _merge_raw(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
+    """Lay an overlay config's raw dict over a base's.
+
+    ``defaults`` merges shallowly. ``agents`` merges per agent — a named
+    agent's fields update the base agent's, so a profile can flip only
+    ``enabled`` without re-declaring the agent, and an agent the base does not
+    have is added whole. Every other top-level section (``pipeline``, and
+    anything added later) is taken from the overlay when it declares one, so a
+    new section can never be silently dropped on the way through an overlay.
+    """
+    merged: Dict[str, Any] = {
+        **base,
+        **{k: v for k, v in overlay.items() if k not in ("defaults", "agents")},
+    }
+    if "defaults" in overlay:
+        merged["defaults"] = {**(base.get("defaults") or {}), **overlay["defaults"]}
+    agents = dict(base.get("agents") or {})
+    for name, cfg in (overlay.get("agents") or {}).items():
+        if isinstance(cfg, dict) and isinstance(agents.get(name), dict):
+            agents[name] = {**agents[name], **cfg}
+        else:
+            agents[name] = cfg
+    merged["agents"] = agents
+    return merged
+
+
+def _load_raw(path: Path, _seen: frozenset = frozenset()) -> Dict[str, Any]:
+    """Load a config's raw dict, resolving an optional ``extends`` overlay.
+
+    A profile sets ``extends: <name-or-path>`` to inherit another config and
+    override only what it names (see :func:`_merge_raw`) instead of copying the
+    whole system — a copy starts drifting from the original the day it is made.
+    ``extends`` chains are followed; a cycle is an error.
+    """
+    path = Path(path).resolve()
+    if path in _seen:
+        raise ValueError(f"Config 'extends' cycle involving {path}")
     with open(path, encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
-    return SystemConfig.model_validate(raw)
+        raw = yaml.safe_load(f) or {}
+    base_ref = raw.pop("extends", None)
+    if base_ref is None:
+        return raw
+    base = _load_raw(resolve_config_path(str(base_ref)), _seen | {path})
+    return _merge_raw(base, raw)
+
+
+def load_config(path: Optional[Path] = None) -> SystemConfig:
+    path = Path(path) if path else resolve_config_path()
+    return SystemConfig.model_validate(_load_raw(path))
 
 
 @lru_cache(maxsize=1)
 def get_config() -> SystemConfig:
-    """The default system config, loaded once per process."""
+    """The process-wide system config ($COSCIENTIST_CONFIG or the default),
+    loaded once per process."""
     return load_config()
 
 
@@ -258,10 +418,13 @@ __all__ = [
     "A2AConfig",
     "AgentConfig",
     "CallbacksConfig",
+    "CONFIG_ENV_VAR",
     "DEFAULT_CONFIG_PATH",
     "DefaultsConfig",
+    "PipelineConfig",
     "SkillConfig",
     "SystemConfig",
     "get_config",
     "load_config",
+    "resolve_config_path",
 ]

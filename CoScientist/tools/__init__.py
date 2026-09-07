@@ -1,34 +1,47 @@
 """Toolset module."""
-from importlib import import_module
-from typing import Any
-
 # Must run before any MCP toolset is used: fail-fast backport for truncated SSE
 # frames from remote MCP servers (see mcp_patches docstring).
 import CoScientist.tools.mcp_patches  # noqa: F401
 
-_EXPORTS = {
-    "FedotMASToolset": ("CoScientist.tools.fedotmas_tools", "FedotMASToolset"),
-    "fedot_toolset_instance": ("CoScientist.tools.fedotmas_tools", "fedot_toolset_instance"),
-    "websearch_toolset_instance": ("CoScientist.tools.research_tools", "websearch_toolset_instance"),
-    "paper_analysis_toolset_instance": ("CoScientist.tools.research_tools", "paper_analysis_toolset_instance"),
-    "papers_search_toolset_instance": ("CoScientist.tools.research_tools", "papers_search_toolset_instance"),
-    "RetrievalToolSet": ("CoScientist.tools.retrieval_tools", "RetrievalToolSet"),
-    "retrieval_toolset_instance": ("CoScientist.tools.retrieval_tools", "retrieval_toolset_instance"),
-    "search_mcp_servers": ("CoScientist.tools.servers_web_search", "search_mcp_servers"),
-    "med_toolset_instance": ("CoScientist.tools.med_tools", "med_toolset_instance"),
-    "CoderToolset": ("CoScientist.tools.coder_tools", "CoderToolset"),
-    "coder_toolset_instance": ("CoScientist.tools.coder_tools", "coder_toolset_instance"),
-    "TaskTrackerToolset": ("CoScientist.tools.task_tracker", "TaskTrackerToolset"),
-    "task_tracker_instance": ("CoScientist.tools.task_tracker", "task_tracker_instance"),
-}
+from CoScientist.tools.fedotmas_tools import FedotMASToolset, fedot_toolset_instance
+from CoScientist.tools.research_tools import (
+    websearch_toolset_instance,
+    paper_analysis_toolset_instance,
+    papers_search_toolset_instance,
+    vault_toolset_instance,
+)
+from CoScientist.tools.retrieval_tools import RetrievalToolSet, retrieval_toolset_instance
+from CoScientist.tools.servers_web_search import search_mcp_servers
+from CoScientist.tools.med_tools import med_toolset_instance
+from CoScientist.tools.coder_tools.coder_tools import CoderToolset, coder_toolset_instance
+from CoScientist.tools.task_tracker import TaskTrackerToolset, task_tracker_instance
+from CoScientist.tools.result_formatter_tool import (
+    ResultFormatterToolset,
+    result_formatter_tool,
+    result_formatter_toolset_instance,
+)
+from CoScientist.tools.dynamic_tools import DynamicMCPToolset, dynamic_mcp_toolset_instance
+from CoScientist.tools.alembic_tools import ALEMBIC_TOOLS
 
-__all__ = list(_EXPORTS)
-
-
-def __getattr__(name: str) -> Any:
-    if name not in _EXPORTS:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    module_name, attr_name = _EXPORTS[name]
-    value = getattr(import_module(module_name), attr_name)
-    globals()[name] = value
-    return value
+__all__ = [
+    "FedotMASToolset",
+    "fedot_toolset_instance",
+    "DynamicMCPToolset",
+    "dynamic_mcp_toolset_instance",
+    "websearch_toolset_instance",
+    "paper_analysis_toolset_instance",
+    "papers_search_toolset_instance",
+    "vault_toolset_instance",
+    "RetrievalToolSet",
+    "retrieval_toolset_instance",
+    "search_mcp_servers",
+    "med_toolset_instance",
+    "CoderToolset",
+    "coder_toolset_instance",
+    "TaskTrackerToolset",
+    "task_tracker_instance",
+    "ResultFormatterToolset",
+    "result_formatter_tool",
+    "result_formatter_toolset_instance",
+    "ALEMBIC_TOOLS",
+]

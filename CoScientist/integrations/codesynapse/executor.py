@@ -84,6 +84,6 @@ class ManagerPipelineExecutor:
             plugins=plugins,
         )
         try:
-            return await manager.run(request.research_request, verbose=False)
+            return str(await manager.run(request.research_request, verbose=False))
         finally:
             await manager.close()

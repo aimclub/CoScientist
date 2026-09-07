@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Build — CoScientist</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         background: #0f1115; color: #e6e6e6; }
+  header { padding: 18px 28px; border-bottom: 1px solid #262a33; display: flex; align-items: baseline; gap: 14px; }
+  header h1 { font-size: 18px; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  header a { color: #6ea8fe; text-decoration: none; font-size: 13px; }
+  main { padding: 22px 28px; max-width: 1040px; display: grid; gap: 22px; }
+  .repo { color: #9aa0b0; font-size: 13px; word-break: break-all; margin: -8px 0 0; }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; vertical-align: middle; }
+  .running { background: #143a52; color: #58b6f0; }
+  .done    { background: #123d24; color: #4ade80; }
+  .failed  { background: #4a1620; color: #f87171; }
+  .idle    { background: #23262e; color: #7b818f; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .05em; color: #8a90a0; margin: 0 0 12px; }
+  /* stage rail */
+  .stages { display: flex; flex-wrap: wrap; gap: 10px; }
+  .stage { flex: 1 1 150px; border: 1px solid #262a33; border-radius: 10px; padding: 12px 14px; background: #14171e; }
+  .stage .name { font-weight: 600; text-transform: capitalize; }
+  .stage .st { font-size: 12px; margin-top: 4px; }
+  .stage.running { border-color: #2a6f9e; box-shadow: 0 0 0 1px #2a6f9e33 inset; }
+  .stage.done { border-color: #256b3d; }
+  .stage.failed { border-color: #7a2434; }
+  .stage .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: #40454f; }
+  .stage.running .dot { background: #58b6f0; animation: pulse 1.1s infinite; }
+  .stage.done .dot { background: #4ade80; }
+  .stage.failed .dot { background: #f87171; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+  /* result box */
+  .result { border: 1px solid #262a33; border-radius: 10px; padding: 14px 16px; background: #14171e; }
+  .result.done { border-color: #256b3d; }
+  .result.failed { border-color: #7a2434; }
+  .result code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; background: #0c0e12;
+                 padding: 2px 6px; border-radius: 5px; word-break: break-all; }
+  .kv { display: grid; grid-template-columns: 90px 1fr; gap: 4px 12px; font-size: 13px; }
+  .kv .k { color: #8a90a0; }
+  /* validation */
+  .tools { display: grid; gap: 6px; }
+  .tool { display: flex; align-items: center; gap: 10px; font-size: 13px; padding: 6px 10px;
+          border: 1px solid #21242c; border-radius: 7px; background: #14171e; }
+  .tool .tn { font-family: ui-monospace, monospace; font-weight: 600; }
+  .tool .err { color: #f0a0a0; font-size: 12px; margin-left: auto; max-width: 55%; overflow: hidden;
+               text-overflow: ellipsis; white-space: nowrap; }
+  .pass { color: #4ade80; } .fail { color: #f87171; }
+  /* log console */
+  #log { background: #0a0b0e; border: 1px solid #21242c; border-radius: 10px; padding: 12px 14px;
+         font: 12.5px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; color: #b9c0cc;
+         height: 340px; overflow-y: auto; white-space: pre-wrap; word-break: break-word; }
+  #log .ev { color: #6ea8fe; }
+  .muted { color: #6b7080; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="jobid">…</h1>
+  <span id="statusBadge" class="badge idle">connecting</span>
+  <a href="/builds">← all builds</a>
+</header>
+<main>
+  <p class="repo" id="repo"></p>
+
+  <section>
+    <h2>Pipeline</h2>
+    <div class="stages" id="stages"></div>
+  </section>
+
+  <section id="resultSection" style="display:none">
+    <h2>Result</h2>
+    <div class="result" id="result"></div>
+  </section>
+
+  <section id="valSection" style="display:none">
+    <h2>Tool validation</h2>
+    <div class="tools" id="tools"></div>
+  </section>
+
+  <section>
+    <h2>Live log</h2>
+    <div id="log"></div>
+  </section>
+</main>
+
+<script>
+const JOB_ID = decodeURIComponent(location.pathname.split('/builds/')[1] || '');
+document.getElementById('jobid').textContent = JOB_ID;
+
+const STAGES = ['explorer', 'environment', 'coder', 'validator', 'wrapper'];
+const stageState = {};
+const stagesEl = document.getElementById('stages');
+function renderStages() {
+  stagesEl.innerHTML = STAGES.map(s => {
+    const st = stageState[s] || 'idle';
+    const label = ({idle:'pending', running:'running…', done:'done', failed:'failed'})[st];
+    return '<div class="stage ' + st + '"><div class="name"><span class="dot"></span>' + s + '</div>'
+      + '<div class="st muted">' + label + '</div></div>';
+  }).join('');
+}
+renderStages();
+
+const badgeEl = document.getElementById('statusBadge');
+function setBadge(text, cls) { badgeEl.textContent = text; badgeEl.className = 'badge ' + cls; }
+
+const logEl = document.getElementById('log');
+function appendLog(text, isEvent) {
+  const atBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight < 40;
+  const span = document.createElement('span');
+  if (isEvent) span.className = 'ev';
+  span.textContent = text + '\n';
+  logEl.appendChild(span);
+  if (atBottom) logEl.scrollTop = logEl.scrollHeight;
+}
+
+const toolState = {};
+const toolsEl = document.getElementById('tools');
+const valSection = document.getElementById('valSection');
+function renderTools() {
+  const names = Object.keys(toolState);
+  if (!names.length) return;
+  valSection.style.display = '';
+  toolsEl.innerHTML = names.map(n => {
+    const t = toolState[n];
+    const icon = t.passed ? '<span class="pass">✓</span>' : '<span class="fail">✗</span>';
+    const err = (!t.passed && t.error) ? '<span class="err" title="' + escapeAttr(t.error) + '">' + escapeHtml(t.error) + '</span>' : '';
+    return '<div class="tool">' + icon + '<span class="tn">' + escapeHtml(n) + '</span>'
+      + '<span class="muted">' + (t.status || '') + '</span>' + err + '</div>';
+  }).join('');
+}
+function escapeHtml(s){ return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
+function escapeAttr(s){ return escapeHtml(s).replace(/"/g,'&quot;'); }
+
+function handleEvent(ev) {
+  if (ev.type === 'pipeline') {
+    if (ev.repo_url) document.getElementById('repo').textContent = ev.repo_url;
+    if (ev.status === 'start') setBadge('running', 'running');
+    if (ev.status === 'complete') { setBadge('done', 'done'); }
+    appendLog('● pipeline ' + ev.status, true);
+  } else if (ev.type === 'stage') {
+    stageState[ev.stage] = ev.status === 'done' ? 'done' : (ev.status === 'failed' ? 'failed' : 'running');
+    renderStages();
+    let extra = '';
+    if (ev.resets) extra = ' (after ' + ev.resets + ' reset(s))';
+    if (ev.counts) extra = ' ' + JSON.stringify(ev.counts);
+    appendLog('● stage ' + ev.stage + ' → ' + ev.status + extra, true);
+  } else if (ev.type === 'validation') {
+    toolState[ev.tool] = { passed: ev.passed, status: ev.status, error: ev.error };
+    renderTools();
+    appendLog('● tool ' + ev.tool + ' → ' + (ev.passed ? 'pass' : 'fail'), true);
+  }
+}
+
+function showResult(snap) {
+  const sec = document.getElementById('resultSection');
+  const box = document.getElementById('result');
+  sec.style.display = '';
+  if (snap.status === 'done') {
+    box.className = 'result done';
+    box.innerHTML = '<div class="kv">'
+      + (snap.mcp_url ? '<div class="k">MCP URL</div><div><code>' + escapeHtml(snap.mcp_url) + '</code></div>' : '')
+      + (snap.image ? '<div class="k">image</div><div><code>' + escapeHtml(snap.image) + '</code></div>' : '')
+      + (snap.container ? '<div class="k">container</div><div><code>' + escapeHtml(snap.container) + '</code></div>' : '')
+      + '</div>'
+      + (!snap.mcp_url ? '<p class="muted">Build finished but no MCP URL was printed — check the log.</p>' : '');
+  } else {
+    box.className = 'result failed';
+    box.innerHTML = '<p class="fail" style="margin-top:0">Build failed.</p>'
+      + '<pre class="muted" style="white-space:pre-wrap">' + escapeHtml(snap.error || 'see log') + '</pre>';
+  }
+}
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(proto + '://' + location.host + '/builds/ws/' + encodeURIComponent(JOB_ID));
+  ws.onopen = () => setBadge('running', 'running');
+  ws.onmessage = (m) => {
+    const msg = JSON.parse(m.data);
+    if (msg.type === 'event') handleEvent(msg.event);
+    else if (msg.type === 'log') appendLog(msg.line, false);
+    else if (msg.type === 'status') {
+      setBadge(msg.status, msg.status === 'done' ? 'done' : 'failed');
+      // mark unfinished stages
+      for (const s of STAGES) if (stageState[s] === 'running') stageState[s] = msg.status === 'done' ? 'done' : 'failed';
+      renderStages();
+      showResult(msg);
+    } else if (msg.type === 'error') {
+      appendLog('[error] ' + msg.message, false);
+      setBadge('unknown', 'failed');
+    }
+  };
+  ws.onclose = () => { if (badgeEl.classList.contains('running')) setBadge('disconnected', 'idle'); };
+  ws.onerror = () => setBadge('error', 'failed');
+}
+connect();
+</script>
+</body>
+</html>

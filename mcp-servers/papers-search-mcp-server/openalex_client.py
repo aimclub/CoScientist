@@ -81,7 +81,9 @@ class OpenAlexClient:
         filters = []
 
         if keywords:
-            filters.append(f"title.search:{keywords.replace(' ', '+')}")
+            keywords = keywords.translate(str.maketrans(",:|!+><*?~", "          "))
+            keywords = " ".join(keywords.split())
+            filters.append(f"fulltext.search:{keywords.replace(' ', '+')}")
         if author_id:
             filters.append(f"author.id:{author_id}")
         if institution_id:
@@ -103,7 +105,9 @@ class OpenAlexClient:
         
         params["per-page"] = limit
 
-        return self.request_with_retry(endpoint="works", params=params).json()
+        response = self.request_with_retry(endpoint="works", params=params).json()
+
+        return response
 
     def search_entity(
         self,

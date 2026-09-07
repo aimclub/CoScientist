@@ -15,7 +15,7 @@ plus helpers for conditional sections (``has_tool``, ``is_enabled``,
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 from CoScientist.assembly.registry import ToolDoc, ToolEntry, render_tool_docs
 from CoScientist.assembly.schema import AgentConfig, SystemConfig
@@ -85,7 +85,7 @@ class PromptContext:
 
     @property
     def docs(self) -> List[ToolDoc]:
-        return [d for e in self.tool_entries for d in e.docs]
+        return [d for e in self.tool_entries for d in e.resolved_docs()]
 
     # ── section renderers ────────────────────────────────────────────────────
     def render_tools(self) -> str:
@@ -108,8 +108,16 @@ class PromptContext:
             f"    - {a.name} — {a.routing}" for a in self.subordinates if a.routing
         )
 
-    def render_critic_roster(self) -> str:
-        return "\n".join(f"  - {a.name}: {a.description}" for a in self.subordinates)
+    def render_critic_roster(self, agents: Optional[List[AgentConfig]] = None) -> str:
+        """Compact `name: description` roster for a critic prompt.
+
+        Defaults to the agent's own subordinates — the orchestrator's critics
+        judge which sub-agent it picked. Pass an explicit roster for a critic
+        that judges someone else's targets: the plan critic checks assignees,
+        which are the planner's SIBLINGS (`ctx.siblings()`), not its own.
+        """
+        roster = self.subordinates if agents is None else agents
+        return "\n".join(f"  - {a.name}: {a.description}" for a in roster)
 
     def render_hitl(self) -> str:
         return _HITL_SECTION if self.hitl_attached else ""

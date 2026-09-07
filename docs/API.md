@@ -124,7 +124,8 @@ from CoScientist.agents import orchestrator_agent
 **Tools Available:**
 - HypothesesAgent
 - ResearchAgent
-- TaskExecutorAgent
+- TaskExecutorAgent (routes execution to the MCP tool pipeline or the CoderAgent)
+- MedicalAgent
 
 **Purpose:** Coordinates the entire workflow by delegating to specialized agents.
 
@@ -204,19 +205,22 @@ from CoScientist.agents import tool_retriever_agent
 
 ### task_execution_agent
 
-Sequential agent combining tool retrieval and experiment execution.
+Execution router over the two ways a task can actually be run.
 
 ```python
 from CoScientist.agents import task_execution_agent
 ```
 
-**Type:** `SequentialAgent`
+**Type:** `LlmAgent`
 
-**Sub-agents:**
-1. `tool_retriever_agent`
-2. `fedot_agent`
+**Subordinates (AgentTools):**
+1. `ToolPipelineAgent` — `SequentialAgent`: tool preparation (retrieve → rerank →
+   deploy) followed by `ExperimentAgent`, which runs the deployed MCP tools
+2. `coder_agent` — writes and runs code in the sandbox
 
-**Purpose:** Complete experiments by retrieving tools and executing them.
+**Purpose:** Deliver a task's result, choosing between ready-made MCP tools and
+engineering work; on a `NO_MATCHING_TOOL` abstention it re-issues the task to the
+coder itself.
 
 ---
 

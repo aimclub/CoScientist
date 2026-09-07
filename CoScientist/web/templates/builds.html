@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MCP Builds — CoScientist</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         background: #0f1115; color: #e6e6e6; }
+  header { padding: 20px 28px; border-bottom: 1px solid #262a33; display: flex;
+           align-items: baseline; gap: 14px; }
+  header h1 { font-size: 20px; margin: 0; }
+  header a { color: #6ea8fe; text-decoration: none; font-size: 13px; }
+  main { padding: 24px 28px; max-width: 980px; }
+  .empty { color: #8a90a0; padding: 40px 0; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 10px 12px; border-bottom: 1px solid #21242c; }
+  th { color: #8a90a0; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  tr:hover td { background: #161922; }
+  a.job { color: #e6e6e6; text-decoration: none; font-weight: 600; }
+  a.job:hover { color: #6ea8fe; }
+  .repo { color: #9aa0b0; font-size: 13px; word-break: break-all; }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .running { background: #143a52; color: #58b6f0; }
+  .done    { background: #123d24; color: #4ade80; }
+  .failed  { background: #4a1620; color: #f87171; }
+  .error   { background: #3a2410; color: #fbbf24; }
+  .muted { color: #6b7080; font-size: 12px; }
+  button.refresh { background: #1b1f27; color: #cfd3dc; border: 1px solid #2b303a;
+                   border-radius: 7px; padding: 6px 12px; cursor: pointer; font-size: 13px; }
+  button.refresh:hover { border-color: #6ea8fe; }
+</style>
+</head>
+<body>
+<header>
+  <h1>MCP Builds</h1>
+  <a href="/">← chat</a>
+  <span style="flex:1"></span>
+  <button class="refresh" onclick="load()">Refresh</button>
+</header>
+<main>
+  <div id="content"><div class="empty">Loading…</div></div>
+</main>
+<script>
+function badge(status) {
+  const cls = ({running:'running', done:'done', failed:'failed', error:'error'})[status] || 'muted';
+  return '<span class="badge ' + cls + '">' + status + '</span>';
+}
+async function load() {
+  const box = document.getElementById('content');
+  try {
+    const r = await fetch('/api/builds');
+    const data = await r.json();
+    const builds = data.builds || [];
+    if (!builds.length) {
+      box.innerHTML = '<div class="empty">No builds yet. Ask the MCP Builder agent to build a repo, '
+        + 'e.g. “build an MCP server from https://github.com/whitead/synspace”.</div>';
+      return;
+    }
+    let rows = '';
+    for (const b of builds) {
+      const stage = b.stage ? '<div class="muted">stage ' + b.stage + '</div>' : '';
+      const extra = b.mcp_url ? '<div class="muted">' + b.mcp_url + '</div>'
+                  : (b.error ? '<div class="muted">error</div>' : '');
+      rows += '<tr>'
+        + '<td><a class="job" href="/builds/' + encodeURIComponent(b.job_id) + '">' + b.job_id + '</a>' + stage + '</td>'
+        + '<td class="repo">' + (b.repo_url || '—') + '</td>'
+        + '<td>' + badge(b.status) + extra + '</td>'
+        + '</tr>';
+    }
+    box.innerHTML = '<table><thead><tr><th>Job</th><th>Repository</th><th>Status</th></tr></thead>'
+      + '<tbody>' + rows + '</tbody></table>';
+  } catch (e) {
+    box.innerHTML = '<div class="empty">Failed to load builds: ' + e + '</div>';
+  }
+}
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>

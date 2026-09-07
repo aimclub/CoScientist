@@ -2,33 +2,62 @@ import os
 
 from CoScientist.config import get_settings
 
-settings = get_settings()
+_tracers = {}
 
-# Only set the env var when a key is actually present — assigning None raises
-# TypeError and would crash importing this module (and most of the app).
-if settings.opik.api_key:
-    os.environ["OPIK_API_KEY"] = settings.opik.api_key
+def get_multi_agent_tracer():
+    settings = get_settings()
 
-import opik
+    # Read from WebSettings (runtime mutable) for enabled, standard settings for keys
+    enabled = settings.web.opik_enabled
+    api_key = settings.opik.api_key
+    project_name = settings.opik.opik_project_name or "adk-coscientist"
 
-# Don't let an opik misconfiguration (no key, no network) take down the app on
-# import — tracing is best-effort.
-try:
-    opik.configure(use_local=False)
-except Exception as e:  # pragma: no cover - best-effort tracing setup
-    print(f"[opik] configure failed, tracing may be disabled: {e!r}")
+    if not enabled:
+        os.environ["OPIK_TRACK_DISABLE"] = "true"
+        return None
 
-from opik.integrations.adk import OpikTracer
+    # Clear trace disable flag if tracking is active
+    os.environ.pop("OPIK_TRACK_DISABLE", None)
 
-# Avoid dumping the full settings (which include API keys/passwords) into trace
-# metadata — only expose non-secret descriptors.
-_safe_metadata = {
-    "main_model": settings.llm.main_model,
-    "coder_model": settings.llm.coder_model or settings.llm.main_model,
-}
+    main_model = settings.llm.main_model
+    coder_model = settings.llm.coder_model or settings.llm.main_model
 
-multi_agent_tracer = OpikTracer(
-    name="multi-agent-orchestrator",
-    metadata=_safe_metadata,
-    project_name="adk-coscientist",
-)
+    # Cache key based on settings to avoid recreating if settings didn't change
+    cache_key = (api_key, project_name, main_model, coder_model)
+    if cache_key in _tracers:
+        return _tracers[cache_key]
+
+    if api_key:
+        os.environ["OPIK_API_KEY"] = api_key
+    else:
+        os.environ.pop("OPIK_API_KEY", None)
+
+    import opik
+
+    # Don't let an opik misconfiguration (no key, no network) take down the app
+    # on import — tracing is best-effort.
+    try:
+        opik.configure(use_local=False)
+    except Exception as e:  # pragma: no cover - best-effort tracing setup
+        print(f"[opik] configure failed, tracing may be disabled: {e!r}")
+
+    from opik.integrations.adk import OpikTracer
+
+    # Avoid dumping the full settings (which include API keys/passwords) into
+    # trace metadata — only expose non-secret descriptors.
+    _safe_metadata = {
+        "main_model": settings.llm.main_model,
+        "coder_model": settings.llm.coder_model or settings.llm.main_model,
+    }
+
+    tracer = OpikTracer(
+        name="multi-agent-orchestrator",
+        metadata=_safe_metadata,
+        project_name=project_name,
+    )
+    _tracers[cache_key] = tracer
+    return tracer
+
+
+# Import-time initialization for CLI and module-level backwards compatibility
+multi_agent_tracer = get_multi_agent_tracer()

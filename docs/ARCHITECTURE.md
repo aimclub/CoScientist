@@ -52,12 +52,14 @@ CoScientist is a multi-agent system designed for scientific discovery and resear
 │                       │              │                                  │
 │                       │              │     ┌──────────────────────┐     │
 │                       │              │────▶│ TaskExecutorAgent    │     │
+│                       │              │     │      (router)        │     │
 │                       │              │     │  ┌──────────────┐    │     │
-│                       │              │     │  │ToolRetriever │    │     │
+│                       │              │     │  │ ToolPipeline │    │     │
+│                       │              │     │  │  Agent       │    │     │
+│                       │              │     │  │ (prep → run) │    │     │
 │                       │              │     │  └──────────────┘    │     │
 │                       │              │     │  ┌──────────────┐    │     │
-│                       │              │     │  │ Experiment   │    │     │
-│                       │              │     │  │  Agent       │    │     │
+│                       │              │     │  │ CoderAgent   │    │     │
 │                       │              │     │  └──────────────┘    │     │
 │                       └──────────────┘     └──────────────────────┘     │
 │                                                                         │
@@ -87,9 +89,13 @@ CoScientist Agents
 ├── OrchestratorAgent (Root)
 │   ├── HypothesesAgent
 │   ├── ResearchAgent
-│   └── TaskExecutorAgent (Sequential)
-│       ├── ToolRetrieverAgent
-│       └── ExperimentAgent (FEDOT)
+│   ├── MedicalAgent
+│   └── TaskExecutorAgent (LLM router)
+│       ├── ToolPipelineAgent (Sequential)
+│       │   ├── ToolPreparerAgent (retrieve → rerank → deploy MCP servers)
+│       │   └── ExperimentAgent (runs the deployed MCP tools)
+│       └── CoderAgent
+│           └── DatasetCollectorAgent
 ```
 
 ### Agent Specifications
@@ -178,11 +184,20 @@ if task_needs_computation:
 
 #### 6. TaskExecutorAgent
 
-**Purpose**: Sequential execution of tool retrieval and experiments
+**Purpose**: Route a task to the execution path that can deliver it
 
 **Architecture**:
-- Type: `SequentialAgent`
-- Sub-agents: [ToolRetrieverAgent, ExperimentAgent]
+- Type: `LlmAgent` (router — no tools of its own)
+- Output Key: `executor_results`
+- Subordinates (AgentTools):
+  - `ToolPipelineAgent` (`SequentialAgent`: [ToolPreparerAgent, ExperimentAgent])
+    — runs the task with EXISTING MCP tools
+  - `CoderAgent` — writes and runs code in the sandbox when no tool matches
+
+**Routing**: engineering work goes straight to the coder; tool-shaped work goes
+to the pipeline. If the pipeline abstains with `NO_MATCHING_TOOL` (see
+`redirect_when_no_tools`), the router re-issues the same task to the coder
+instead of bubbling the abstention up to the orchestrator.
 
 ---
 

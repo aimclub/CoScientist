@@ -15,6 +15,8 @@ dependencies = [
     "motor>=3.3.2",
     "opik>=2.0.70",
     "pymongo>=4.6.3",
+    "json-repair>=0.30.0",
+    "networkx>=3.4",
     "rag-tools",
     "rank-bm25>=0.2.2",
 ]
@@ -26,3 +28,9 @@ fedotmas = { git = "https://github.com/ITMO-NSS-team/FEDOT.MAS.git", subdirector
 
 [tool.setuptools]
 packages = ["CoScientist"]
+
+[tool.pytest.ini_options]
+# Put the repo root on sys.path so `pytest` works the same as `python -m pytest`
+# (CoScientist is imported in-place, not installed).
+pythonpath = ["."]
+testpaths = ["tests"]

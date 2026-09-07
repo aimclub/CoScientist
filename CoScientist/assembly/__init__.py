@@ -16,26 +16,22 @@ Typical use:
     system = build_system()                       # in-process sub-agents
     system = build_system(remote_subagents=True)  # sub-agents over A2A
 """
-from importlib import import_module
+from __future__ import annotations
+
 from typing import Any
 
-_EXPORTS = {
-    "AgentSystem": ("CoScientist.assembly.assembler", "AgentSystem"),
-    "build_system": ("CoScientist.assembly.assembler", "build_system"),
-    "delegatable_agent_names": (
-        "CoScientist.assembly.assembler",
-        "delegatable_agent_names",
-    ),
-    "load_config": ("CoScientist.assembly.schema", "load_config"),
-}
-
-__all__ = list(_EXPORTS)
+__all__ = [
+    "AgentSystem",
+    "build_system",
+    "delegatable_agent_names",
+    "load_config",
+]
 
 
 def __getattr__(name: str) -> Any:
-    if name not in _EXPORTS:
-        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-    module_name, attr_name = _EXPORTS[name]
-    value = getattr(import_module(module_name), attr_name)
-    globals()[name] = value
-    return value
+    """Avoid constructing the registry when only ``assembly.schema`` is read."""
+    if name in __all__:
+        from CoScientist.assembly import assembler
+
+        return getattr(assembler, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

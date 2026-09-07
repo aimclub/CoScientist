@@ -12,6 +12,7 @@ x-a2a-environment: &a2a-environment
   TASK_EXECUTION_HOST: a2a-task-execution
   MEDICAL_HOST: a2a-medical
   CODER_HOST: a2a-coder
+  MCP_BUILDER_HOST: a2a-mcp-builder
 
 x-a2a-service: &a2a-service
   image: coscientist-a2a:latest
@@ -173,6 +174,27 @@ services:
       start_period: 30s
     volumes:
       - a2a-coder-workspace:/app/workspace
+
+  a2a-mcp-builder:
+    <<: *a2a-service
+    environment:
+      <<: *a2a-environment
+      MCP_BUILDER_PORT: "${MCP_BUILDER_PORT:-8007}"
+      A2A_PUBLIC_HOST: "${A2A_PUBLIC_HOST:-a2a-mcp-builder}"
+    command: ["python", "-m", "CoScientist.a2a.serve", "mcp_builder"]
+    ports:
+      - "${MCP_BUILDER_PORT:-8007}:${MCP_BUILDER_PORT:-8007}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --show-error
+          "http://localhost:$${MCP_BUILDER_PORT}/.well-known/agent-card.json"
+          > /dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   a2a-init:
     <<: *a2a-service
