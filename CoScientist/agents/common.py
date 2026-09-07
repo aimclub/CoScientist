@@ -43,9 +43,6 @@ _RETRYABLE_SUBSTRINGS = (
 _RETRYABLE_TYPES = (
     "RateLimitError",
     "Timeout",
-    # asyncio's deadline (see RetryingLiteLlm.deadline_s) raises the builtin
-    # TimeoutError, whose str() is EMPTY — so the substring ladder below can
-    # never see it. It has to be matched by type name or the retry is skipped.
     "TimeoutError",
     "APIConnectionError",
     "ServiceUnavailableError",

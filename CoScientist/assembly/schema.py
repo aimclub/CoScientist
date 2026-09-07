@@ -184,7 +184,9 @@ class AgentConfig(BaseModel):
                     raise ValueError(
                         f"{self.cls} agent cannot have {forbidden} (got {getattr(self, forbidden)!r})"
                     )
-        elif self.children:
+        elif self.children and not self.cls.startswith("custom:"):
+            # custom: classes may take children too (e.g. an executor switch that
+            # runs exactly one of them); everything else is a leaf.
             raise ValueError(f"{self.cls} agent cannot have children")
         return self
 

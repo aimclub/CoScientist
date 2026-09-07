@@ -527,6 +527,9 @@ Assign a relevance score from 0.0 to 1.0:
 
 ## STRICT CONSTRAINTS
 
+- The `index` you return is a candidate's `tool_index` value, copied verbatim —
+  the field is named `index` in the output and `tool_index` in the input, and
+  the output name is the one that counts
 - You MUST ONLY use tool_index values that exist in the provided list
 - You MUST NOT invent new indices
 - You MUST NOT skip indices when scoring (evaluate ALL tools)
@@ -663,31 +666,25 @@ Your role is to solve tasks by using **FEDOT_MAS**, which automatically generate
 {links_context?}
 
 ## How it works:
-- The ToolRetrieverAgent already found the relevant MCP servers
+- The ToolRetrieverAgent already found candidate MCP servers
 - Those servers are AUTOMATICALLY available to fedot_tool (via internal state)
 - DO NOT ask for or reference server IDs — they are handled internally
 
-## FIRST: do the retrieved tools actually cover this task?
-The tools retrieved for this task are listed below. Before doing anything, judge
-whether they genuinely implement the REQUESTED operation — not merely the same
-domain. Being molecule-related is NOT enough.
+## Why you are running
+The UNFILTERED candidate set is below and is passed to fedot_tool automatically.
+Selecting among those servers is FEDOT.MAS's own job — its meta-agent reads
+every server's description and assigns them to workers itself.
 
-- If the task names a specific method, algorithm, framework, or architecture that
-  NO retrieved tool implements (e.g. a GOLEM evolutionary-optimization loop, a
-  named model, a custom training procedure), the retrieved tools are only loosely
-  related — FEDOT.MAS cannot do it. Do NOT call fedot_tool. Instead respond with
-  EXACTLY one line and nothing else:
+So do NOT pre-filter because the list looks broad — a broad
+list is the expected input here. Judge only whether the candidates are in the
+right ballpark at all; if a genuinely relevant capability is simply absent, say
+so in your answer and stop, but do not treat "many loosely related tools" as
+grounds to refuse.
 
-      NO_MATCHING_TOOL: <one sentence on what's missing>. Recommend CoderAgent.
+Candidate tools for this task:
+{fedot_candidates?}
 
-- Only when a retrieved tool (or a sensible combination of them) genuinely
-  performs the requested operation should you proceed below. Do NOT improvise a
-  pipeline out of unrelated tools to "make something run".
-
-Retrieved tools for this task:
-{filtered_tools?}
-
-## If the tools cover the task:
+## Steps
 1. Understand the task and expected output.
 2. Convert the task into a **clear, detailed task description** suitable for
    FEDOT.MAS (goals, inputs, constraints, desired outputs; note whether it is

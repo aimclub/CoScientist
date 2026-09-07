@@ -849,6 +849,11 @@ def _redirect_when_no_tools():
     return redirect_when_no_tools
 
 
+def _inject_fedot_candidates():
+    from CoScientist.agents.callbacks import inject_fedot_candidates
+    return inject_fedot_candidates
+
+
 def _before_get_task():
     from CoScientist.agents.callbacks import before_get_task
     return before_get_task
@@ -1004,6 +1009,8 @@ _cb("collect_reranked_tools", "after_agent", factory=lambda ctx: _collect_rerank
 _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranked_mcps())
 # Coder↔Executor redirect: abstain to CoderAgent when no tool matched the task.
 _cb("redirect_when_no_tools", "before_agent", factory=lambda ctx: _redirect_when_no_tools())
+# Reranker fallback: show FedotAgent the candidate pool fedot_tool will receive.
+_cb("inject_fedot_candidates", "before_agent", factory=lambda ctx: _inject_fedot_candidates())
 # Load active tasks into agent state before the agent runs.
 _cb("before_get_task", "before_agent", factory=lambda ctx: _before_get_task())
 _cb("inject_original_query", "before_model", factory=lambda ctx: _inject_original_query())
@@ -1048,13 +1055,18 @@ _cb("post_action_critique", "after_tool", factory=_post_action_critique)
 # ── Agent classes / output schemas / planners ────────────────────────────────
 
 def _register_classes() -> None:
-    from CoScientist.agents.custom_agents import WebToolsDeployerAgent
+    from CoScientist.agents.custom_agents import (
+        ExecutorSwitchAgent,
+        WebToolsDeployerAgent,
+    )
     from CoScientist.hitl.session_agent import SessionAgent
     from CoScientist.microfluidics.tz_agent import TZSessionAgent
     from CoScientist.context_init.agent import ContextInitSessionAgent
 
     REGISTRY.register_agent_class("session", SessionAgent)
     REGISTRY.register_agent_class("web_tools_deployer", WebToolsDeployerAgent)
+    # Runs ONE of its children: the normal executor, or the reranker fallback.
+    REGISTRY.register_agent_class("executor_switch", ExecutorSwitchAgent)
     # Microfluidics ТЗ stage: the review loop shows the RENDERED ТЗ document.
     REGISTRY.register_agent_class("tz_session", TZSessionAgent)
     # Context-init pre-stage: the review shows a STRUCTURED FORM (research frame)

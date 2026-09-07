@@ -331,7 +331,7 @@ agents:
     routing: >-
       when the result can be obtained by RUNNING AN EXISTING tool/service.
       Hallmark: "compute/run X using tools we already have."
-    children: [ToolPreparerAgent, ExperimentAgent]
+    children: [ToolPreparerAgent, ExecutorSwitchAgent]
 
   CoderAgent:
     class: llm
@@ -513,11 +513,6 @@ agents:
     description: Agent to rerank retrieved MCP servers from RAG database of MCP tools for given task.
     prompt: tool_reranker
     output_key: reranked_tools
-    # No `output_schema:` on purpose. It makes ADK send a *strict* json_schema
-    # response_format, which OpenRouter hands to the provider as a constrained
-    # decode — the call has been observed to hang there with no timeout. The
-    # prompt asks for the same JSON, `sanitize_json_output` strips any fences,
-    # and `collect_reranked_tools` parses + shape-checks it.
     llm_timeout: 45
     callbacks:
       before_agent: [shortlist_reranker_tools]
@@ -539,10 +534,7 @@ agents:
     description: Agent to score found web MCP servers given already available local MCP servers for given task.
     prompt: tool_scoring
     output_key: reranked_web_servers
-    output_schema: mcp_ranking
     callbacks:
-      # Not every provider honours response_format: strip prose/```json fences
-      # around the JSON before ADK's strict output_schema validation.
       after_model: [sanitize_json_output]
       after_agent: [collect_reranked_mcps]
 
@@ -574,18 +566,36 @@ agents:
       # so the report collector downloads them. Two different jobs, same hook.
       after_tool: [register_tool_result_links, capture_mcp_artifacts]
 
-  # Disabled for now — FEDOT.MAS isn't reliable yet. Kept (built, not attached)
-  # so the agent, its prompt and the `fedot` tool stay available; re-enable by
-  # setting enabled: true and making it (instead of ExperimentAgent) the child.
+  # Picks ONE of its children per task. ExperimentAgent normally; FedotAgent only
+  # when the tool reranker never actually judged the retrieved candidates (an
+  # unreadable reply, and the local cross-encoder could not stand in either) —
+  # `filtered_tools` is then empty for a reason that says nothing about
+  # relevance, and FEDOT.MAS's meta-agent can do the selection itself over the
+  # whole unfiltered pool. A switch rather than two siblings in the sequence
+  # because AgentTool returns the LAST content event of the agent it wraps, so a
+  # sibling standing down after the real executor ran would overwrite its answer.
+  ExecutorSwitchAgent:
+    class: custom:executor_switch
+    description: >-
+      Runs the task's executor: the ReAct MCP executor normally, or the
+      FEDOT.MAS fallback when the tool reranker produced no usable ranking.
+    children: [ExperimentAgent, FedotAgent]
+
+  # FEDOT.MAS is not reliable enough to be the primary executor, but it does
+  # cope with a large, unfiltered set of MCP servers — which is exactly what the
+  # reranker-failure path has to hand somebody. Gated by the same setting
+  # ExecutorSwitchAgent routes on, so one switch turns the whole path off.
   FedotAgent:
     class: llm
-    enabled: false
+    enabled: "${web.fedot_fallback_enabled}"
     description: Agent to invoke FEDOT.MAS for solving given task. Uses MCP tools
     prompt: fedot
     tools: [fedot, task_tracker, graph]
     output_key: fedot_results
     callbacks:
-      before_agent: [redirect_when_no_tools, before_get_task, user_links]
+      # No redirect_when_no_tools here: this agent IS the no-usable-ranking path,
+      # and abstaining to CoderAgent is precisely what it exists to avoid.
+      before_agent: [inject_fedot_candidates, before_get_task, user_links]
       before_model: [redact_link_urls]
       before_tool: [resolve_link_refs]
       after_tool: [register_tool_result_links]

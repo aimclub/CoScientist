@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 from pydantic import BaseModel, Field
 
 class RetrievalFinalResult(BaseModel):
@@ -27,7 +27,10 @@ class ToolRanking(BaseModel):
 
 class MCPScore(BaseModel):
     index: int
-    score: bool
+    # Nominally a binary deploy flag, but the prompt sits next to a reranker that
+    # asks for 0.0-1.0 relevance and models do drift between the two. Accept
+    # either; the callback that consumes it takes truthiness anyway.
+    score: Union[bool, float]
 
 class MCPRanking(BaseModel):
     mcp_scores: List[MCPScore]

@@ -104,8 +104,6 @@ def _resolve_model(cfg: AgentConfig, system: SystemConfig):
     from CoScientist.agents.common import make_coder_llm, make_llm
 
     ref = cfg.model or system.defaults.model
-    # Per-agent first-response deadline; None for every agent that doesn't ask
-    # for one, so nothing else changes behaviour.
     deadline_s = cfg.llm_timeout
     if ref == "main":
         return make_llm(deadline_s=deadline_s)
@@ -266,10 +264,17 @@ def _subordinate_instance(
 
 
 def _build_custom_agent(
-    cfg: AgentConfig, system: SystemConfig, class_key: str
+    cfg: AgentConfig,
+    system: SystemConfig,
+    class_key: str,
+    built: Optional[Dict[str, BaseAgent]] = None,
 ) -> BaseAgent:
     cls = REGISTRY.agent_class(class_key)
     kwargs = dict(name=cfg.name, description=cfg.description)
+    if cfg.children and built is not None:
+        kwargs["sub_agents"] = [
+            built[c] for c in cfg.children if system.agent(c).is_enabled()
+        ]
     if issubclass(cls, LlmAgent):
         tool_entries = _resolve_tools(cfg)
         ctx = PromptContext(config=cfg, system=system, tool_entries=tool_entries)
@@ -325,11 +330,6 @@ def build_system(
         elif cfg.cls in ("sequential", "parallel"):
             cls = SequentialAgent if cfg.cls == "sequential" else ParallelAgent
             sub_agents = [built[c] for c in cfg.children] if cfg.is_enabled() else []
-            # Composites carry callbacks too: `before_agent_callback` is a
-            # BaseAgent field, not an LlmAgent one. A composite that is the
-            # system root (start_mode=planner makes PlanningPipelineAgent the
-            # root) is the only agent positioned to run a root-only callback,
-            # so skipping callbacks here silently disabled them.
             ctx = PromptContext(config=cfg, system=config)
             agent = cls(
                 name=cfg.name,
@@ -339,7 +339,9 @@ def build_system(
                 **cfg.resolved_options(),
             )
         else:  # custom:<key>
-            agent = _build_custom_agent(cfg, config, cfg.cls.split(":", 1)[1])
+            agent = _build_custom_agent(
+                cfg, config, cfg.cls.split(":", 1)[1], built
+            )
         built[name] = agent
 
     return AgentSystem(config=config, agents=built)

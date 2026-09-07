@@ -94,79 +94,34 @@ from google.adk.tools.tool_context import ToolContext
 
 logger = logging.getLogger(__name__)
 
-# The registry itself, and the prompt block rendered from it. The block is a
-# separate key because instructions carry `{links_context?}` rather than the raw
-# structure — a request with no links then gets nothing at all, instead of a
-# heading announcing an empty table.
 USER_LINKS_STATE_KEY = "user_links"
 LINKS_CONTEXT_STATE_KEY = "links_context"
 
 # How much of the user's sentence to keep on each side of a link.
 MENTION_RADIUS = 110
 
-# Characters that end a URL in prose but are not part of it. `)` is handled
-# separately: it closes a markdown link `[x](url)` but also belongs inside
-# `…/wiki/Foo_(bar)`, so it is only dropped when it is unbalanced.
 _TRAILING_PUNCT = ".,;:!?…»«\"'“”„<>"
-
 _URL_CHARS = r"[^\s<>\"'`\[\]{}\\^|]"
-
-# ── bucket-style URI schemes ─────────────────────────────────────────────────
-# Self-contained on purpose: a tool can hand back a dataset location as a raw
-# `s3://bucket/key` rather than a signed https url (the dataset-collection MCP
-# server the CoderAgent delegates to does exactly this), and that scheme was
-# invisible to the http(s)/www regex below — a link that skipped the registry
-# entirely rather than failing loudly.
-#
-# Kept as one block, toggleable without touching a single regex character, so
-# it can be switched off with zero code diff if it ever collides with work
-# elsewhere on the sandbox/dataset tooling: set LINK_REGISTRY_EXTRA_SCHEMES=0.
 _EXTRA_URL_SCHEMES = (
     () if os.getenv("LINK_REGISTRY_EXTRA_SCHEMES", "1") == "0" else ("s3", "gs")
 )
 _EXTRA_SCHEME_SRC = (
     r"(?:%s)://" % "|".join(_EXTRA_URL_SCHEMES) if _EXTRA_URL_SCHEMES else r"(?!)"
 )
-# ─────────────────────────────────────────────────────────────────────────────
-
 _SCHEMED_SRC = r"\b(?:https?://|%s|www\.)" % _EXTRA_SCHEME_SRC + _URL_CHARS + "+"
-
-# A person does not type a scheme. "проверь ссылку example.com" is the ordinary
-# way a link arrives in a request, and matching only `http://` / `www.` left
-# exactly that link unregistered — no id, nothing for `redact_link_urls` to
-# swap out — so the model read the raw URL in its own message and retyped it,
-# which is the failure this whole module exists to prevent.
-#
-# Two TLD lists, because in THIS system a dotted token is as likely to be code
-# as a link: `scipy.io`, `self.net`, `df.at`, `df.info()` all read as
-# `host.tld`. A TLD in `_BARE_TLDS` is safe standing on its own — nothing in a
-# Python namespace is called `com` or `org`. The collision-prone rest only
-# count as a link when a path or query follows, which is the line that keeps
-# `scipy.io` code while `huggingface.co/datasets/x` becomes a link.
 _BARE_TLDS = (
     "com", "org", "edu", "gov", "mil", "int",
     "ru", "ua", "kz", "uk", "de", "fr", "es", "pt", "br", "mx", "jp", "cn",
     "kr", "ca", "au", "nz", "tr", "gr", "dk", "fi", "cz", "hu", "ro",
     "xyz", "cloud", "tech", "online", "wiki", "science", "software", "рф",
 )
-# A punycode TLD is unambiguous — `-` cannot appear in an identifier, so
-# `xn--p1ai` can only ever be a domain. It goes in the standalone tier as a
-# pattern rather than a literal, since the list of them is open-ended.
 _PUNYCODE_TLD = r"xn--[a-z0-9]{2,}"
 _PATHED_TLDS = _BARE_TLDS + (
     "io", "ai", "co", "net", "dev", "app", "me", "info", "biz", "site",
     "us", "in", "it", "is", "be", "at", "no", "se", "nl", "ch", "pl", "eu",
     "sh", "run", "page", "tv", "cc", "id", "to", "ly", "one", "live",
 )
-# One host label. Written against Unicode classes rather than `[a-z0-9]` so an
-# IDN host reaches the same rules as any other: `[^\W_]` is a letter or digit
-# in any script, which is what a label may start and end with, and `_` is
-# excluded because a hostname cannot contain one.
 _LABEL = r"[^\W_](?:[\w-]{0,61}[^\W_])?"
-# `(?<![\w@.+-])` keeps the match off the tail of something longer — an email's
-# domain, the second half of `scipy.io.loadmat`. `(?!\.?\w)` is what ends a
-# standalone host: it lets through `example.com.` at the end of a sentence but
-# not `scipy.io.loadmat`.
 _BARE_HOST_SRC = (
     r"(?<![\w@.+-])(?:%s\.)+"
     r"(?:(?:%s|%s)(?!\.?\w)|(?:%s)(?=[/?#]))(?:[/?#]%s*)?"
@@ -176,40 +131,8 @@ _BARE_HOST_SRC = (
 
 _URL_RE = re.compile("(?i)" + _SCHEMED_SRC)
 _URL_RE_BARE = re.compile("(?i)(?:%s)|(?:%s)" % (_SCHEMED_SRC, _BARE_HOST_SRC))
-
-# Ids are `link7f3a` — the prefix plus a short digest OF THE URL ITSELF — and a
-# model refers to one as `[[link7f3a]]`.
-#
-# The `link` word and the `[[…]]` brackets are both load-bearing. The word says
-# what the token IS, so a model reaches for it where a bare `L1` reads as a
-# layer, a ligand or a cache level. The brackets make the reference safe to
-# expand ANYWHERE in a string, prose included — which is required, because the
-# text of a delegated task is exactly where a link has to survive. A bare
-# `l1`/`L2` could not be: it collides head-on with `penalty="l1"` and "L2
-# regularization", and the coder family passes those constantly.
-#
-# The digest replaces what used to be a per-registry counter (`link1`, `link2`,
-# …). A counter reads better, but it is assigned from `max(existing) + 1`, and
-# that is only correct while one writer at a time is looking at the registry.
-# ADK runs a turn's tool calls concurrently (`asyncio.gather` in
-# flows/llm_flows/functions.py), each with its OWN isolated state delta, and
-# then merges those deltas key-by-key. Two branches that each discover a new
-# link therefore both compute the same next number, and the merge silently
-# keeps one entry and drops the other — a lost link, with nothing left to
-# detect afterwards. Deriving the id from the URL removes the shared counter
-# the race was over: distinct URLs cannot claim the same id, so there is
-# nothing to collide.
-#
-# It also buys agreement for free. The same URL yields the same id in every
-# agent that meets it, with no coordination at all — including across an A2A
-# process boundary, where session state does not travel.
 LINK_ID_PREFIX = "link"
-# Hex chars of digest in an id. Four gives ~1-in-65k odds that two DIFFERENT
-# urls in one registry collide; `link_id_for` resolves that deterministically
-# by lengthening, so this is a readability knob, not a correctness one.
 _ID_HEX_LEN = 4
-# Tolerant on input (`[[ Link7F3A ]]`), exact on output — models drift on case
-# and spacing far more than on the token itself.
 _LINK_REF_RE = re.compile(r"\[\[\s*(link[0-9a-f]{%d,})\s*\]\]" % _ID_HEX_LEN,
                           re.IGNORECASE)
 
@@ -240,9 +163,6 @@ def link_id_for(url: str, taken: Optional[Dict[str, Any]] = None) -> str:
     return f"{LINK_ID_PREFIX}{digest}"
 
 
-# Dropped when building the dedup key. Everything else in the query string is
-# kept: a presigned URL's signature lives there, and normalising it away would
-# merge two genuinely different links into one id.
 _TRACKING_PARAMS = frozenset({
     "utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content",
     "fbclid", "gclid", "yclid", "_ga", "ref_src",

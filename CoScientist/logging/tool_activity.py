@@ -32,21 +32,8 @@ logger = logging.getLogger("CoScientist.logging.tool_activity")
 
 ToolActivitySink = Callable[[SessionKey, dict], Awaitable[None]]
 
-# The live broadcast only ever carries a compact preview of each value — a raw
-# result can be megabytes (search dumps, file contents), and every connected
-# tab would otherwise pay for that on every call. The full value is rendered
-# too (see `_FULL_LIMIT`) but only handed to the web app for on-demand
-# storage/retrieval (the ToolsViewer's "Show full result"), never broadcast.
 _PREVIEW_LIMIT = 1500
-# Ceiling on the *full* value kept for on-demand fetch — generous enough to
-# cover virtually any real tool output, but still bounded so one pathological
-# call (a multi-MB dump) can't be pulled whole into a session's memory.
 _FULL_LIMIT = 2_000_000
-# A tool's own one-liner, carried on the `call` record so an observer can say
-# what a tool *does* when its name means nothing. MCP servers are built at
-# runtime here (see ``McpBuilderAgent``), so their tool names are whatever the
-# source repository happened to call them — the description is the only stable
-# thing about a tool nobody has ever seen before.
 _DESCRIPTION_LIMIT = 200
 
 _sink: Optional[ToolActivitySink] = None
