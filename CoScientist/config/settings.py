@@ -3,7 +3,7 @@ Application configuration using Pydantic Settings.
 """
 import os as _os
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
 from dotenv import find_dotenv as _find_dotenv, load_dotenv as _load_dotenv
 from pydantic import BaseModel, model_validator
@@ -330,6 +330,12 @@ class CriticSettings(BaseModel):
     max_attempts: int = 2
     max_tokens: int = 7000
     model: Optional[str] = None  # Dedicated model for the Critic callbacks; falls back to llm.main_model if unset
+    # Model "thinking" for the critic, in system.yaml's vocabulary: False/"off",
+    # or "minimal"|"low"|"medium"|"high". A verdict is a short judgement against
+    # an explicit checklist, and reasoning tokens are spent from `max_tokens` —
+    # thinking too hard truncates the JSON it was supposed to return. None
+    # leaves the provider's default alone.
+    reasoning: Optional[Union[bool, str]] = "low"
 
     @property
     def http_timeout(self) -> float:

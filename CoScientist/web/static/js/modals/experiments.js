@@ -275,12 +275,38 @@
       return `<span class="tv-string">${escHtml(String(v))}</span>`;
     }
 
+    // A string value that is itself JSON text (a tool that returns, say, a
+    // dict field pre-serialized to a string) parses the same way a top-level
+    // result does — see `tvRenderAny` — so it renders as a tree instead of
+    // an escaped one-line blob of braces and quotes.
+    function tvTryParseJsonString(str) {
+      const trimmed = str.endsWith(' …') ? str.slice(0, -2).trim() : str.trim();
+      if (trimmed.length < 2 || (trimmed[0] !== '{' && trimmed[0] !== '[')) return null;
+      try {
+        return { value: JSON.parse(trimmed), truncated: false };
+      } catch {
+        const repaired = tvRepairTruncatedJson(trimmed);
+        return repaired !== null ? { value: repaired, truncated: true } : null;
+      }
+    }
+
+    function tvRenderNested(parsed, depth) {
+      const note = parsed.truncated
+        ? `<div style="padding-left:${depth * 16}px" class="tv-empty">… truncated (server preview cap)</div>`
+        : '';
+      return tvRender(parsed.value, depth) + note;
+    }
+
     function tvRender(value, depth) {
       depth = depth || 0;
       const pad = depth ? ` style="padding-left:${depth * 16}px"` : '';
       if (Array.isArray(value)) {
         if (value.length === 0) return `<div${pad} class="tv-empty">(empty list)</div>`;
         return value.map(item => {
+          const parsed = typeof item === 'string' ? tvTryParseJsonString(item) : null;
+          if (parsed) {
+            return `<div${pad} class="tv-row"><span class="tv-bullet">–</span>${tvRenderNested(parsed, depth + 1)}</div>`;
+          }
           const nested = tvIsPlainObject(item) || Array.isArray(item);
           return `<div${pad} class="tv-row"><span class="tv-bullet">–</span>${nested ? tvRender(item, depth + 1) : tvScalarHtml(item)}</div>`;
         }).join('');
@@ -290,6 +316,10 @@
         if (keys.length === 0) return `<div${pad} class="tv-empty">(empty)</div>`;
         return keys.map(k => {
           const v = value[k];
+          const parsed = typeof v === 'string' ? tvTryParseJsonString(v) : null;
+          if (parsed) {
+            return `<div${pad} class="tv-row"><span class="tv-key">${escHtml(k)}</span>:</div>${tvRenderNested(parsed, depth + 1)}`;
+          }
           const nested = (tvIsPlainObject(v) && Object.keys(v).length > 0) || (Array.isArray(v) && v.length > 0);
           if (nested) {
             return `<div${pad} class="tv-row"><span class="tv-key">${escHtml(k)}</span>:</div>${tvRender(v, depth + 1)}`;
@@ -346,17 +376,9 @@
     // or a JSON-ish dict/list truncated by the server's preview cap.
     function tvRenderAny(value) {
       if (typeof value === 'string') {
-        const trimmed = value.endsWith(' …') ? value.slice(0, -2).trim() : value.trim();
-        if (trimmed.length > 1 && (trimmed[0] === '{' || trimmed[0] === '[')) {
-          try {
-            return tvRender(JSON.parse(trimmed), 0);
-          } catch {
-            const repaired = tvRepairTruncatedJson(trimmed);
-            if (repaired !== null) {
-              return tvRender(repaired, 0) + '<div class="tv-empty">… truncated (server preview cap)</div>';
-            }
-          }
-        }
+        const parsed = tvTryParseJsonString(value);
+        if (parsed) return tvRenderNested(parsed, 0);
+        const trimmed = value.trim();
         return trimmed ? `<div class="tv-text">${escHtml(value)}</div>` : '<div class="tv-empty">(empty)</div>';
       }
       if (value === null || value === undefined || (tvIsPlainObject(value) && Object.keys(value).length === 0)) {
@@ -634,7 +656,6 @@
         running ? `<span class="text-tertiary">${running} running</span>` : (node.status === 'running' ? `<span class="text-tertiary">running</span>` : ''),
         failed ? `<span class="text-error">${failed} failed</span>` : '',
         (!running && calls.length) ? `<span class="text-secondary">${done - failed}/${calls.length} ok</span>` : '',
-        (!calls.length && node.agentClass) ? `<span class="text-outline-variant/60 lowercase">${escHtml(node.agentClass)}</span>` : '',
       ].filter(Boolean).join('<span class="text-outline-variant/30">·</span>');
       const collapsed = collapsedAgents.has(name);
       const lastActive = calls.length

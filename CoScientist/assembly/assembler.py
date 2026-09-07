@@ -105,11 +105,14 @@ def _resolve_model(cfg: AgentConfig, system: SystemConfig):
 
     ref = cfg.model or system.defaults.model
     deadline_s = cfg.llm_timeout
+    # An agent that says nothing about reasoning inherits `defaults.reasoning`;
+    # an unset default sends no reasoning kwargs at all.
+    reasoning = cfg.reasoning if cfg.reasoning is not None else system.defaults.reasoning
     if ref == "main":
-        return make_llm(deadline_s=deadline_s)
+        return make_llm(deadline_s=deadline_s, reasoning=reasoning)
     if ref == "coder":
-        return make_coder_llm(deadline_s=deadline_s)
-    return make_llm(ref, deadline_s=deadline_s)
+        return make_coder_llm(deadline_s=deadline_s, reasoning=reasoning)
+    return make_llm(ref, deadline_s=deadline_s, reasoning=reasoning)
 
 
 def _resolve_tools(cfg: AgentConfig) -> List[ToolEntry]:

@@ -255,10 +255,17 @@ async def _invoke_critic_llm(system_prompt: str, user_prompt: str) -> Dict[str, 
     # Shares the agent tree's notion of a retryable upstream fault, and its
     # proxy pre-flight. Imported lazily to keep this module out of
     # `agents.common`'s import graph.
-    from CoScientist.agents.common import RetryingLiteLlm, _is_transient
+    from CoScientist.agents.common import (
+        RetryingLiteLlm,
+        _is_transient,
+        _reasoning_kwargs,
+    )
 
     cfg = settings.critic
     model = cfg.model or settings.llm.main_model
+    # The critic builds its model here rather than through the assembler, so
+    # system.yaml's `reasoning:` never reaches it — it follows settings.critic.
+    reasoning = _reasoning_kwargs(model, cfg.reasoning)
 
     for attempt in range(1, cfg.max_attempts + 1):
         started = time.perf_counter()
@@ -276,6 +283,7 @@ async def _invoke_critic_llm(system_prompt: str, user_prompt: str) -> Dict[str, 
                     max_tokens=cfg.max_tokens,
                     timeout=cfg.http_timeout,
                     num_retries=0,
+                    **reasoning,
                 )
 
             from CoScientist.logging.metrics import record_completion

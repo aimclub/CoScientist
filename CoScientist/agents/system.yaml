@@ -12,6 +12,12 @@
 #                 and disappears from their prompts
 #   root:         exactly one agent is the system root (the orchestrator)
 #   model:        main | coder | <literal litellm model string>  (default: main)
+#   reasoning:    model "thinking" for this agent: false (or "off") switches it
+#                 off entirely — the fastest setting for agents that only route,
+#                 reformat or fill a schema; "minimal"|"low"|"medium"|"high"
+#                 turns it down instead. Unset inherits `defaults.reasoning`,
+#                 and an unset default leaves the provider alone. Works on
+#                 hybrid models; one that always reasons ignores it.
 #   description:  THE one description — used in parents' prompt rosters, in the
 #                 AgentTool/RemoteA2aAgent declaration, and on the A2A card
 #   routing:      "when to pick me" bullet in the parent's prompt
@@ -42,6 +48,12 @@
 
 defaults:
   model: main
+  # Reasoning is OFF by default and switched back ON per agent below. Most of
+  # the roster routes, reformats or fills a fixed shape — thinking before each
+  # of those turns costs seconds per call and buys nothing there. The agents
+  # that actually reason declare `reasoning:` for themselves. Set this to
+  # `medium` to restore the previous system-wide behaviour in one line.
+  reasoning: off
 
 # ─────────────────────────────────────────────────────────────────────────────
 # System lifecycle flow (separate from the delegation tree).
@@ -65,6 +77,9 @@ agents:
     root: true
     include_contents: none
     description: Main CoScientist Orchestrator — coordinates specialized agents to solve scientific tasks.
+    # Picks who works next out of the whole roster and reads back what they
+    # returned; a wrong delegation costs an entire sub-agent run.
+    #reasoning: low
     prompt: orchestrator
     tools: [retrieval, graph, research_graph_orchestrator]
     subordinates:
@@ -128,6 +143,9 @@ agents:
     routing: >-
       for a complex multi-step task, call this FIRST to produce a roadmap,
       then follow it step by step.
+    # The roadmap is the shape of the whole run — the one place worth thinking
+    # hard, and it is produced once.
+    reasoning: medium
     prompt: planner
     tools: [planner_retrieval, create_plan_tool, planner_graph, research_graph_readonly]
     output_key: planner_roadmap
@@ -166,6 +184,9 @@ agents:
       структурированную рамку (вопрос, профиль, ограничения, бюджеты,
       инструменты, эмпирическая база, условия подтверждения, модель стоимости),
       согласует её с оператором и заполняет граф исследования до старта.
+    # Interprets a free-form question, but into a fixed schema, and the operator
+    # reviews the result before it is seeded — some thinking, not a lot.
+    reasoning: off
     prompt: context_init
     output_key: research_frame
     output_schema: research_frame
@@ -191,6 +212,9 @@ agents:
       Reads the finished Research Context Graph (conclusions, evidence,
       hypotheses with their status) and the run's figures/tables, and synthesizes
       a single, complete, visually-rich Markdown report grounded in the graph.
+    # Writing from an already-decided graph, and it runs last, with the user
+    # waiting on the report — enough reasoning to organize it, no more.
+    reasoning: low
     prompt: result_aggregator
     tools: [result_formatter, research_graph_readonly]
     # Graph-primary grounding: no conversation history — the report is built from
@@ -218,6 +242,9 @@ agents:
       Use this to generate hypotheses when the solution is unclear or approaches need to be proposed.
       It picks the single most relevant hypothesis to test first, so plan ONE verification branch after it.
       Decision-making and compatibility assessment based on gathered facts.
+    # Ideation plus choosing what to test first: the most reasoning-bound job
+    # in the system.
+    reasoning: high
     prompt: hypotheses
     output_key: hypotheses
     report_output: true
@@ -259,6 +286,8 @@ agents:
       Use it to gather extra information about the scientific field and literature.
       Use it when information cannot be computed or retrieved via tools, and specifically 
       requires searching information from the web or literature.  
+    # Decides how to search, then judges and synthesizes what comes back.
+    reasoning: medium
     prompt: research
     tools: [websearch, paper_analysis, papers_search, task_tracker, graph, research_graph]
     output_key: search_results
@@ -298,6 +327,8 @@ agents:
           evaluation, shell and git operations, collecting/processing data
       It routes between those two paths internally, so assign it the OUTCOME and
       let it choose how to reach it.
+    # A two-way switch (run a ready tool vs. write code): reasoning stays off
+    # (the default) — the thinking belongs to whichever branch it picks.
     prompt: task_router
     subordinates: [ToolPipelineAgent, CoderAgent]
     output_key: executor_results
@@ -359,6 +390,8 @@ agents:
           * environment setup and running long jobs
           → Use whenever no existing tool covers the objective and the step requires
             doing software/data engineering rather than calling a ready service
+    # Multi-step engineering: plans edits, reads failures, adapts.
+    reasoning: medium
     prompt: coder
     tools: [coder, sandbox, research_graph, vault]
     subordinates: [DatasetCollectorAgent]
@@ -405,6 +438,8 @@ agents:
       when a step needs raw data gathered/assembled from external sources before
       building or training on it (e.g. "collect a dataset of BTK inhibitors with
       IC50"). It downloads into the shared workspace and writes a MANIFEST.
+    # The same sandbox work as the coder, on a narrower, more mechanical job.
+    reasoning: low
     prompt: dataset_collector
     tools: [coder, sandbox, websearch, research_graph, vault]
     output_key: dataset_results
@@ -428,6 +463,8 @@ agents:
           - the step involves clinical or biomedical questions
           - medical literature evidence (PubMed, PICO, study taxonomy) is required
           - an uploaded medical image (DICOM/scan) must be analyzed
+    # Clinical judgement over retrieved evidence.
+    reasoning: medium
     prompt: medical
     tools: [medical, task_tracker, graph, research_graph]
     output_key: medical_results
@@ -467,6 +504,9 @@ agents:
           → Use ONLY to produce a reusable tool server; a single run of the
             code belongs to CoderAgent, and calling an already-built MCP tool
             belongs to TaskExecutorAgent.
+    # Drives the Alembic pipeline tool by tool; the hard reasoning lives inside
+    # that pipeline's own agents, not in this caller.
+    reasoning: low
     prompt: mcp_builder
     tools: [alembic]
     output_key: mcp_build_results
@@ -547,6 +587,7 @@ agents:
     description: >-
       Runs computational/experimental sub-tasks by directly using the
       dynamically-provisioned MCP tools (ReAct: think → call tool → observe).
+    reasoning: low
     prompt: experiment_react
     # dynamic_tools surfaces the task's selected MCP servers (filtered_tools /
     # deployed_mcps) as native tools, resolved per turn — the same servers

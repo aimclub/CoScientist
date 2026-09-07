@@ -7,6 +7,8 @@ The YAML declares every agent of the system in one place. Per agent:
                 a disabled agent is still BUILT (so it can be served standalone
                 over A2A) but is not attached to / advertised by its parents
   model:        "main" | "coder" | a literal litellm model string
+  reasoning:    model "thinking" for this agent — false/"off" to switch it off,
+                or "minimal"|"low"|"medium"|"high"; unset inherits defaults
   prompt:       name of a registered prompt template
   tools:        registered tool names
   subordinates: agents attached as AgentTool (and rendered into <<AGENTS>>/<<ROUTING>>)
@@ -88,6 +90,26 @@ def _resolve_setting_ref(value: Union[bool, str]) -> bool:
     return bool(_setting_value(value))
 
 
+# Accepted ``reasoning:`` values (mirrors CoScientist.agents.common, which
+# turns them into provider kwargs — validated here so a typo fails at config
+# load, not on the first model call).
+REASONING_EFFORTS = ("minimal", "low", "medium", "high")
+REASONING_OFF = ("off", "none", "disabled")
+
+
+def _validate_reasoning(value: Any) -> Any:
+    """A ``reasoning:`` declaration: unset, a bool, or an effort/off keyword."""
+    if value is None or isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in REASONING_OFF or normalized in REASONING_EFFORTS:
+        return normalized
+    raise ValueError(
+        f"reasoning must be a bool, one of {REASONING_OFF} or {REASONING_EFFORTS}, "
+        f"got {value!r}"
+    )
+
+
 class SkillConfig(BaseModel):
     """One A2A AgentSkill advertised on the agent card."""
 
@@ -135,6 +157,12 @@ class AgentConfig(BaseModel):
     root: bool = False
     model: Optional[str] = None
     llm_timeout: Optional[float] = None
+    # Model reasoning ("thinking") for THIS agent: false / "off" to switch it
+    # off entirely (fastest), or "minimal"|"low"|"medium"|"high" to turn it
+    # down. Unset inherits `defaults.reasoning`, and an unset default leaves the
+    # provider's own behaviour alone. Only hybrid models can be silenced — one
+    # that always reasons (deepseek-r1, o-series) ignores the request.
+    reasoning: Optional[Union[bool, str]] = None
     description: str = ""
     # How a PARENT's prompt routes work to this agent (one routing bullet).
     routing: str = ""
@@ -164,6 +192,10 @@ class AgentConfig(BaseModel):
     options: Dict[str, Any] = Field(default_factory=dict)
     a2a: Optional[A2AConfig] = None
 
+    _check_reasoning = field_validator("reasoning")(
+        classmethod(lambda cls, v: _validate_reasoning(v))
+    )
+
     @field_validator("cls")
     @classmethod
     def _known_class(cls, v: str) -> str:
@@ -184,6 +216,12 @@ class AgentConfig(BaseModel):
                     raise ValueError(
                         f"{self.cls} agent cannot have {forbidden} (got {getattr(self, forbidden)!r})"
                     )
+            # Checked separately: `reasoning: false` is a real declaration but
+            # a falsy one, so the truthiness loop above would let it through.
+            if self.reasoning is not None:
+                raise ValueError(
+                    f"{self.cls} agent cannot have reasoning (it has no model of its own)"
+                )
         elif self.children and not self.cls.startswith("custom:"):
             # custom: classes may take children too (e.g. an executor switch that
             # runs exactly one of them); everything else is a leaf.
@@ -214,6 +252,12 @@ class DefaultsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model: str = "main"
+    # System-wide reasoning default; per-agent `reasoning:` overrides it.
+    reasoning: Optional[Union[bool, str]] = None
+
+    _check_reasoning = field_validator("reasoning")(
+        classmethod(lambda cls, v: _validate_reasoning(v))
+    )
 
 
 class PipelineConfig(BaseModel):
