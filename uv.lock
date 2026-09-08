@@ -524,6 +524,7 @@ dependencies = [
     { name = "json-repair" },
     { name = "langchain-text-splitters" },
     { name = "metapub" },
+    { name = "networkx" },
     { name = "opik" },
     { name = "rag-tools" },
     { name = "rank-bm25" },
@@ -538,6 +539,7 @@ requires-dist = [
     { name = "json-repair", specifier = ">=0.30.0" },
     { name = "langchain-text-splitters", specifier = ">=1.1.2" },
     { name = "metapub", specifier = ">=0.7.4" },
+    { name = "networkx", specifier = ">=3.4" },
     { name = "opik", specifier = ">=2.0.70" },
     { name = "rag-tools", git = "https://github.com/fiestaxxl/rag_tools.git" },
     { name = "rank-bm25", specifier = ">=0.2.2" },
@@ -1860,6 +1862,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/73/05/e9c80d2ad57066bca9f609dbe46d74586058c906ee488ca6698ca5020473/mypy_boto3_bedrock_runtime-1.43.30.tar.gz", hash = "sha256:e7f50e6cb125da7a0807c364ba6a8fcac67e01e5268aee97c62b92f75fd77049", size = 31280, upload-time = "2026-06-15T21:23:45.951Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/59/3e/f20d90c8b130dbd88cf12ec5b58cad075339ce70afac72105c1d8a353718/mypy_boto3_bedrock_runtime-1.43.30-py3-none-any.whl", hash = "sha256:bc73e6f824b87fca7e40528e272b119b12e770fc848db80f44567691f2aa136f", size = 37623, upload-time = "2026-06-15T21:23:39.868Z" },
+]
+
+[[package]]
+name = "networkx"
+version = "3.6.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/6a/51/63fe664f3908c97be9d2e4f1158eb633317598cfa6e1fc14af5383f17512/networkx-3.6.1.tar.gz", hash = "sha256:26b7c357accc0c8cde558ad486283728b65b6a95d85ee1cd66bafab4c8168509", size = 2517025, upload-time = "2025-12-08T17:02:39.908Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9e/c9/b2622292ea83fbb4ec318f5b9ab867d0a28ab43c5717bb85b0a5f6b3b0a4/networkx-3.6.1-py3-none-any.whl", hash = "sha256:d47fbf302e7d9cbbb9e2555a0d267983d2aa476bac30e90dfbe5669bd57f3762", size = 2068504, upload-time = "2025-12-08T17:02:38.159Z" },
 ]
 
 [[package]]

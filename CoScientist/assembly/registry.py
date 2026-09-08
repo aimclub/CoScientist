@@ -14,7 +14,7 @@ agent does not have (and vice versa).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Union
 
 # Callback kinds exactly as the LlmAgent constructor names them (minus `_callback`).
 CALLBACK_KINDS = (
@@ -54,7 +54,11 @@ class ToolEntry:
         toolset), or None when the tool is not available in this deployment
         (e.g. an optional MCP URL is unset). The factory is called once per
         system build.
-    docs: prompt documentation for every tool the entry contributes.
+    docs: prompt documentation for every tool the entry contributes. May be a
+        zero-argument callable instead, for entries whose guidance depends on
+        what else is configured (e.g. the sandbox docs cross-reference the local
+        coder tools only while those are switched on). Read it via
+        ``resolved_docs()``, never off the attribute.
     optional: when True, a None from the factory silently drops the entry;
         otherwise None is a configuration error.
     runtime_resolved: True for MCP toolsets whose real tool surface is fetched
@@ -64,9 +68,13 @@ class ToolEntry:
 
     key: str
     factory: Callable[[], Any]
-    docs: Sequence[ToolDoc] = ()
+    docs: Union[Sequence[ToolDoc], Callable[[], Sequence[ToolDoc]]] = ()
     optional: bool = False
     runtime_resolved: bool = False
+
+    def resolved_docs(self) -> Sequence[ToolDoc]:
+        """The entry's docs, calling the factory form when there is one."""
+        return self.docs() if callable(self.docs) else self.docs
 
 
 @dataclass(frozen=True)

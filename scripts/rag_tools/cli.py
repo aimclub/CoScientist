@@ -15,6 +15,29 @@ from rag_tools.retrieval import APIEmbedder, APIReranker, BM25Reranker, HybridRe
 load_dotenv()
 
 
+def _exc_detail(e: BaseException) -> str:
+    """Readable detail of an exception, EXPANDING ExceptionGroup/TaskGroup and
+    cause chains — so 'unhandled errors in a TaskGroup (1 sub-exception)' turns
+    into the actual underlying error (connection refused / timeout / 401 / …)."""
+    parts: list[str] = []
+
+    def walk(exc: BaseException, depth: int) -> None:
+        pad = "    " * depth
+        parts.append(f"{pad}{type(exc).__name__}: {exc}")
+        subs = getattr(exc, "exceptions", None)  # ExceptionGroup
+        if subs:
+            for s in subs:
+                walk(s, depth + 1)
+            return
+        cause = exc.__cause__ or exc.__context__
+        if cause is not None:
+            parts.append(f"{pad}  ↳ caused by:")
+            walk(cause, depth + 1)
+
+    walk(e, 0)
+    return "\n".join(parts)
+
+
 async def init_manager():
     settings = get_settings()
 
@@ -75,9 +98,68 @@ async def cmd_sync_all(args):
 
     results = await manager.sync_all_servers()
 
-    print("🔄 Sync results:")
+    ok = [r for r in results if r.success]
+    bad = [r for r in results if not r.success]
+    print(f"🔄 Sync results: {len(ok)} ok, {len(bad)} failed\n")
     for r in results:
-        print(f" - {r.server_id}: {r.status}")
+        mark = "✅" if r.success else "❌"
+        line = (f"{mark} {r.server_name} ({r.server_id}) "
+                f"+{r.tools_added} ~{r.tools_updated} -{r.tools_removed}")
+        if r.errors:
+            line += f"   errors: {r.errors}"
+        print(line)
+
+    # The manager only kept str(ExceptionGroup) ('unhandled errors in a
+    # TaskGroup …'), which hides the real cause. Re-run the sync STEP BY STEP
+    # (connect → list_tools → postgres add → embed+qdrant index) and print the
+    # EXPANDED exception, so we see WHICH step fails and why.
+    if bad:
+        from rag_tools.tools.sync_mcp import MCPSyncer
+        from rag_tools.ingestion.parser import mcp_tool_info_to_model
+        from mcp import ClientSession
+        pg = getattr(manager, "postgres", None) or getattr(manager, "_postgres", None)
+        indexer = getattr(manager, "_indexer", None) or getattr(manager, "indexer", None)
+
+        async def _step(label, coro):
+            try:
+                res = await coro
+                print(f"      ✓ {label}: OK")
+                return res, None
+            except BaseException as e:  # noqa: BLE001 — diagnostic
+                print(f"      ✖ {label} FAILED:")
+                print("        " + _exc_detail(e).replace("\n", "\n        "))
+                return None, e
+
+        print("\n🔎 Diagnosing failures (per step, ExceptionGroup expanded):")
+        for r in bad:
+            server = await pg.get_server(r.server_id)
+            if not server:
+                print(f"  ✖ {r.server_id}: not found in DB")
+                continue
+            print(f"  • {server.name}  url={server.url}")
+            existing, err = await _step("postgres.get_tools_by_server", pg.get_tools_by_server(server.server_id))
+            if err:
+                continue
+            existing_names = {t.name for t in (existing or [])}
+            try:
+                client = MCPSyncer.get_transport(server)
+                async with client as (read, write, _):
+                    async with ClientSession(read, write) as session:
+                        await _step("session.initialize", session.initialize())
+                        resp, err = await _step("session.list_tools", session.list_tools())
+                        if err:
+                            continue
+                        new_tools = [mcp_tool_info_to_model(t, server.server_id)
+                                     for t in resp.tools if t.name not in existing_names]
+                        print(f"      new tools to index: {len(new_tools)}")
+                        if new_tools:
+                            _, err = await _step("postgres.bulk_add_tools", pg.bulk_add_tools(new_tools))
+                            if not err and indexer is not None:
+                                await _step("indexer.index_tools_batch (embed+qdrant)",
+                                            indexer.index_tools_batch(new_tools))
+            except BaseException as e:  # noqa: BLE001 — connection/teardown level
+                print("      ✖ connection/teardown:")
+                print("        " + _exc_detail(e).replace("\n", "\n        "))
 
     await manager.close()
 
@@ -124,6 +206,45 @@ async def cmd_list(args):
     await manager.close()
 
 
+async def cmd_export_csv(args):
+    import csv
+
+    def _v(x):
+        return getattr(x, "value", x) if x is not None else ""
+
+    manager = await init_manager()
+    pg = getattr(manager, "postgres", None) or getattr(manager, "_postgres", None)
+
+    servers = await pg.list_servers()
+    out = args.out or "mcp_servers_tools.csv"
+    n_rows = 0
+    with open(out, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow([
+            "server_id", "server_name", "server_url", "server_protocol",
+            "server_status", "server_description",
+            "tool_name", "tool_description", "tool_tags", "tool_input_schema",
+        ])
+        for s in servers:
+            base = [s.server_id, s.name, s.url, _v(getattr(s, "protocol", "")),
+                    _v(getattr(s, "status", "")), s.description or ""]
+            tools = await pg.get_tools_by_server(s.server_id)
+            if not tools:
+                w.writerow(base + ["", "", "", ""])
+                n_rows += 1
+            for t in tools:
+                w.writerow(base + [
+                    t.name,
+                    (t.description or ""),
+                    ",".join(getattr(t, "tags", None) or []),
+                    json.dumps(getattr(t, "input_schema", None) or {}, ensure_ascii=False),
+                ])
+                n_rows += 1
+
+    print(f"📄 Exported {len(servers)} servers, {n_rows} rows → {out}")
+    await manager.close()
+
+
 # -----------------------
 # CLI
 # -----------------------
@@ -165,6 +286,11 @@ def main():
     # list
     p_list = subparsers.add_parser("list", help="List all servers")
     p_list.set_defaults(func=cmd_list)
+
+    # export-csv
+    p_csv = subparsers.add_parser("export-csv", help="Export all servers + tools (with descriptions) to CSV")
+    p_csv.add_argument("--out", default="mcp_servers_tools.csv", help="output CSV path")
+    p_csv.set_defaults(func=cmd_export_csv)
 
     args = parser.parse_args()
 

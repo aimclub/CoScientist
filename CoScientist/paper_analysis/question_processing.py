@@ -1,36 +1,70 @@
-import asyncio
+# TODO: get rid of redundant functions and imports
 import base64
-import os
 import time
 import pikepdf
 
 from langchain_core.messages import SystemMessage, HumanMessage
+# from langchain_openai import ChatOpenAI
 from protollm.connectors import create_llm_connector
 from pydantic import BaseModel, Field, field_validator, model_validator
 from pypdf import PdfReader, PdfWriter
 from io import BytesIO
 
 from CoScientist.paper_analysis.chroma_db_operations import ChromaDBPaperStore
-from CoScientist.paper_analysis.prompts import sys_prompt, explore_my_papers_prompt, extract_query_filters_prompt
+from CoScientist.paper_analysis.prompts import sys_prompt, extract_query_filters_prompt
 from CoScientist.paper_analysis.research_taxonomy import (
-    DOMAIN_TO_SUBDOMAINS,
     ResearchDomain,
     get_sub_domains_for_domain,
 )
 from CoScientist.paper_analysis.settings import allowed_providers
-from CoScientist.paper_parser.utils import convert_to_base64, prompt_func, load_image_as_binary
+from CoScientist.paper_parser.utils import convert_to_base64, prompt_func
 from CoScientist.chemical_utils.chemical_functions import *
 from CoScientist.paper_analysis.domain_metadata import format_domain_metadata, add_domain_metadata_to_img_info
 
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
 
-VISION_LLM_URL = os.getenv("LLM__VISION_URL")
+VISION_LLM_URL = os.getenv("LLM__VISION_URL", "")
+
+
+class ResearchDomainFilter(BaseModel):
+    """A domain and the fields that must be matched within it."""
+
+    domain: ResearchDomain = Field(description="One OpenAlex research domain")
+    fields: list[str] | None = Field(
+        description="Up to three fields that belong to this domain",
+        default=None,
+        max_length=3,
+    )
+
+    @field_validator("fields", mode="before")
+    @classmethod
+    def normalize_fields(cls, value):
+        if value is None or isinstance(value, list):
+            return value
+        return [value]
+
+    @model_validator(mode="after")
+    def validate_fields(self):
+        if not self.fields:
+            return self
+
+        allowed_fields = get_sub_domains_for_domain(self.domain)
+        invalid_fields = [
+            field for field in self.fields
+            if field not in allowed_fields
+        ]
+        if invalid_fields:
+            raise ValueError(
+                "fields must belong to the selected domain: "
+                f"{', '.join(invalid_fields)}"
+            )
+        return self
 
 
 class QueryFilters(BaseModel):
-    """Metadata filters extracted from user question."""
-    paper_authors: list[str] | None = Field(
+    """Metadata filters extracted from a user question."""
+    authors: list[str] | None = Field(
         description="Author names mentioned in the question",
         default=None
     )
@@ -46,22 +80,20 @@ class QueryFilters(BaseModel):
         description="Exact publication year when specified",
         default=None
     )
-    publication_source: str | None = Field(
+    source: str | None = Field(
         description="Journal or publication source name",
         default=None
     )
-    research_domain: list[ResearchDomain] | None = Field(
-        description="Broad research domains",
-        default=None
-    )
-    research_sub_domain: list[str] | None = Field(
-        description="Specific research sub-domains within the selected research domains"
-        " Must match the selected research_domain based on this mapping:\n"
-        f"{DOMAIN_TO_SUBDOMAINS}\n",
-        default=None
+    domains: list[ResearchDomainFilter] | None = Field(
+        description=(
+            "Up to two research-domain selections. Each selection keeps its "
+            "fields paired with its domain."
+        ),
+        default=None,
+        max_length=2,
     )
 
-    @field_validator("paper_authors", "research_domain", "research_sub_domain", mode="before")
+    @field_validator("authors", mode="before")
     def normalize_list_fields(cls, v):
         if v is None:
             return None
@@ -69,27 +101,8 @@ class QueryFilters(BaseModel):
             return v
         return [v]
 
-    @model_validator(mode="after")
-    def validate_domain_sub_domain_pair(self):
-        if not self.research_sub_domain:
-            return self
 
-        if not self.research_domain:
-            raise ValueError("research_domain must be set when research_sub_domain is provided")
-
-        allowed_sub_domains = []
-        for domain in self.research_domain:
-            allowed_sub_domains.extend(get_sub_domains_for_domain(domain))
-
-        invalid_sub_domains = [sd for sd in self.research_sub_domain if sd not in allowed_sub_domains]
-        if invalid_sub_domains:
-            raise ValueError(
-                "research_sub_domain must belong to one of the selected research_domain values"
-            )
-        return self
-
-
-def extract_metadata_filters(question: str) -> QueryFilters:
+def extract_metadata_filters(question: str, llm_url: str, extraction_prompt: str) -> QueryFilters:
     """
     Uses LLM to extract metadata filters from user question.
     
@@ -104,16 +117,22 @@ def extract_metadata_filters(question: str) -> QueryFilters:
     for attempt in range(max_retries):
         try:
             llm = create_llm_connector(
-                VISION_LLM_URL,
-                extra_body={"provider": {"only": allowed_providers}},
+                llm_url,
                 temperature=0.1
             )
+            # base_url, model_name = llm_url.split(";")
+            # llm = ChatOpenAI(
+            #     model=model_name,
+            #     base_url=base_url,
+            #     api_key=os.getenv("LLM__SERVICE_KEY"),  # noqa
+            #     temperature=0.1
+            # )
             
             struct_llm = llm.with_structured_output(schema=QueryFilters)
             
-            prompt = extract_query_filters_prompt + f"\n\nUSER QUESTION: {question}"
+            prompt = extraction_prompt + f"\n\nUSER QUESTION: {question}"
             
-            filters: QueryFilters = struct_llm.invoke([HumanMessage(content=prompt)])
+            filters: QueryFilters = struct_llm.invoke([HumanMessage(content=prompt)])  # noqa
             return filters
         except Exception as e:
             print(f"Error extracting metadata filters (attempt {attempt + 1}/{max_retries}): {str(e)}")
@@ -150,8 +169,8 @@ def build_chroma_where_filter(filters: QueryFilters) -> dict | None:
     """
     conditions = []
     
-    if filters.paper_authors is not None:
-        conditions.append({"paper_authors": {"$in": filters.paper_authors}})
+    if filters.authors is not None:
+        conditions.append({"authors": {"$in": filters.authors}})
     
     if filters.publication_year_exact is not None:
         conditions.append({"publication_year": {"$eq": filters.publication_year_exact}})
@@ -164,14 +183,28 @@ def build_chroma_where_filter(filters: QueryFilters) -> dict | None:
         if year_condition:
             conditions.append({"publication_year": year_condition})
     
-    if filters.publication_source is not None:
-        conditions.append({"publication_source": {"$eq": filters.publication_source}})
+    if filters.source is not None:
+        conditions.append({"source": {"$eq": filters.source}})
     
-    if filters.research_domain is not None:
-        conditions.append({"research_domain": {"$in": filters.research_domain}})
-    
-    if filters.research_sub_domain is not None:
-        conditions.append({"research_sub_domain": {"$in": filters.research_sub_domain}})
+    if filters.domains:
+        domain_conditions = []
+        for selection in filters.domains:
+            domain_condition = {"domain": {"$eq": selection.domain}}
+            if selection.fields:
+                domain_conditions.append({
+                    "$and": [
+                        domain_condition,
+                        {"field": {"$in": selection.fields}},
+                    ]
+                })
+            else:
+                domain_conditions.append(domain_condition)
+
+        conditions.append(
+            domain_conditions[0]
+            if len(domain_conditions) == 1
+            else {"$or": domain_conditions}
+        )
     
     if not conditions:
         return None
@@ -179,6 +212,19 @@ def build_chroma_where_filter(filters: QueryFilters) -> dict | None:
     if len(conditions) == 1:
         return conditions[0]
     return {"$and": conditions}
+
+
+def get_domain_metadata_type(filters: QueryFilters) -> str | None:
+    """Return the domain-specific metadata handler relevant to the query."""
+    if not filters.domains:
+        return None
+
+    if any(
+        "Chemistry" in (selection.fields or [])
+        for selection in filters.domains
+    ):
+        return "Chemistry"
+    return None
 
 
 def query_llm(
@@ -343,8 +389,9 @@ def process_question(
                 'image_context' - the set of image paths identified as relevant to the question;
                 'metadata' - Additional metadata returned by the LLM query.
     """
-    meta_filter = extract_metadata_filters(question)
+    meta_filter = extract_metadata_filters(question, VISION_LLM_URL, extract_query_filters_prompt)
     meta_filter_chroma = build_chroma_where_filter(meta_filter)
+    domain_metadata_type = get_domain_metadata_type(meta_filter)
     
     txt_data, img_data = store.retrieve_context(question, meta_filter=meta_filter_chroma)
     txt_context = ""
@@ -377,7 +424,7 @@ def process_question(
                     {"image_path": img_path}
                 )
             img_meta = image_data["metadatas"][0][0]
-            img_info = add_domain_metadata_to_img_info(meta_filter.research_domain, img_meta, img_info)
+            img_info = add_domain_metadata_to_img_info(domain_metadata_type, img_meta, img_info)
             img_paths.append(img_info)
     
     for img_meta in img_data["metadatas"][0]:
@@ -394,12 +441,12 @@ def process_question(
                     {"image_path": img_meta['image_path']}
                 )
             img_meta = image_data["metadatas"][0][0]
-            img_info = add_domain_metadata_to_img_info(meta_filter.research_domain, img_meta, img_info)
+            img_info = add_domain_metadata_to_img_info(domain_metadata_type, img_meta, img_info)
             img_paths.append(img_info)
 
     img_paths_list = set([d['path'] for d in img_paths])
     
-    domain_metadata = format_domain_metadata(meta_filter.research_domain, img_paths)
+    domain_metadata = format_domain_metadata(domain_metadata_type, img_paths)
     if domain_metadata != "":
         txt_context += f"Domain metadata\n{domain_metadata}\n\n"
     else:
@@ -428,6 +475,320 @@ def process_question(
         "explanation": ans['explanation'],
         "chunk_explanation": ans.get('chunk_explanation', ''),
         "img_explanation": ans.get('img_explanation', ''),
+        "metadata": {
+            "text_context": relevant_txt_context,
+            "image_context": relevant_img_context,
+        },
+    }
+
+
+def query_llm_with_context(
+    model_url: str,
+    question: str,
+    system_prompt: str,
+    txt_context: str,
+    images_base64: list[str],
+) -> dict:
+    """
+    Queries a vision-capable LLM with textual context and base64-encoded
+    images.  Returns a structured dict with the answer, explanations and
+    indices of relevant chunks / images.
+    """
+    llm = create_llm_connector(
+        model_url,
+        extra_body={"provider": {"only": allowed_providers}},
+        temperature=0.05,
+    )
+    # base_url, model_name = model_url.split(";")
+    # llm = ChatOpenAI(
+    #     model=model_name,
+    #     base_url=base_url,
+    #     api_key=os.getenv("LLM__SERVICE_KEY"),  # noqa
+    #     temperature=0.1
+    # )
+
+    class ResScheme(BaseModel):
+        answer: str = Field(
+            description="The answer to the query", default=""
+        )
+        explanation: str = Field(
+            description="The logical reasoning for the answer", default=""
+        )
+        chunk_explanation: str = Field(
+            description=(
+                "The explanation why the chosen chunk/chunks "
+                "are relevant to the answer"
+            ),
+            default="",
+        )
+        img_explanation: str = Field(
+            description=(
+                "The explanation why the chosen image/images "
+                "are relevant to the answer"
+            ),
+            default="",
+        )
+        relevant_text: list[int] = Field(
+            description=(
+                "A list of integers representing the relevant text chunk "
+                "numbers, numeration of chunks starts with 1"
+            ),
+            default=[],
+        )
+        relevant_images: list[int] = Field(
+            description=(
+                "A list of integers representing the relevant image "
+                "numbers, numeration of images starts with 1"
+            ),
+            default=[],
+        )
+
+    structured_llm = llm.with_structured_output(schema=ResScheme)
+
+    messages = [
+        SystemMessage(content=system_prompt),
+        prompt_func(
+            {
+                "text": f"USER QUESTION: {question}\n\nCONTEXT: {txt_context}",
+                "image": images_base64,
+            }
+        ),
+    ]
+
+    last_error: Exception | None = None
+    for _attempt in range(3):
+        try:
+            res = structured_llm.invoke(messages)
+            return {
+                "answer": res.answer,
+                "explanation": res.explanation,
+                "chunk_explanation": res.chunk_explanation,
+                "img_explanation": res.img_explanation,
+                "relevant_text": res.relevant_text,
+                "relevant_images": res.relevant_images,
+            }
+        except Exception as e:
+            last_error = e
+            messages.append(
+                HumanMessage(
+                    content=(
+                        "Previous response was invalid JSON. "
+                        "Respond with ONLY valid JSON."
+                    )
+                )
+            )
+    raise RuntimeError(
+        f"Failed to get valid structured response after 3 attempts. "
+        f"Last error: {last_error}"
+    ) from last_error
+
+
+logger = logging.getLogger(__name__)
+
+
+def process_scientific_question(
+    question: str,
+    system_prompt: str,
+    retriever,
+    simple_retriever,
+    s3_store,
+    llm_url: str,
+    initial_number_of_papers: int = 30,
+    number_of_papers_after_rerank: int = 10,
+    top_k: int = 60,
+    rerank_k: int = 20,
+) -> dict:
+    """
+    End-to-end pipeline: metadata filters → two-stage retrieval →
+    image loading from S3 → LLM answer generation.
+    """
+
+    # ── 1. Extracting meta filters from a question ────────────────────
+    meta_filter = extract_metadata_filters(
+        question, llm_url, extract_query_filters_prompt
+    )
+    meta_filter_chroma = build_chroma_where_filter(meta_filter)
+    domain_metadata_type = get_domain_metadata_type(meta_filter) or ""
+    
+    # ── 2. Filter for summary chunks ──────────────────────────────
+    summary_filters: dict = {"role": {"$eq": "summary"}}
+    if meta_filter_chroma:
+        summary_filters = {
+            "$and": [meta_filter_chroma, {"role": {"$eq": "summary"}}]
+        }
+
+    # ── 3. Stage 1: search for articles by summary ────────────────────────
+    try:
+        summary_chunks = retriever.retrieve(
+            query=question,
+            top_k=initial_number_of_papers,
+            rerank_k=number_of_papers_after_rerank,
+            filters=summary_filters,
+        )
+    except Exception as e:
+        logger.error(f"Failed to retrieve papers: {e}")
+        return {"answer": f"Failed to retrieve papers. Error: {e}"}
+
+    papers: list[dict] = []
+    titles: dict[str, str] = {}
+    article_ids: list[str] = []
+    seen_articles: set[str] = set()
+
+    for c in summary_chunks:
+        if c.article_id in seen_articles:
+            continue
+        seen_articles.add(c.article_id)
+        article_ids.append(c.article_id)
+        title = (c.metadata or {}).get("paper_title", "")
+        titles[c.article_id] = title
+        papers.append(
+            {
+                "article_id": c.article_id,
+                "title": title,
+                "summary": c.content,
+                "domain": c.domain,
+                "field": c.field,
+            }
+        )
+    if not article_ids:
+        return {"answer": "No relevant papers found in the database."}
+
+    # ── 4. Stage 2: Search for body chunks of selected articles ─────────────
+    try:
+        body_chunks = retriever.retrieve(
+            query=question,
+            top_k=top_k,
+            rerank_k=rerank_k,
+            filters={
+                "$and": [
+                    {"article_id": {"$in": article_ids}},
+                    {"role": {"$eq": "body"}},
+                ]
+            },
+        )
+    except Exception as e:
+        logger.error(f"Failed to retrieve body chunks: {e}")
+        return {"answer": f"Failed to retrieve text chunks. Error: {e}"}
+
+    # ── 5. Collecting image names and uploading captions ──────────────
+    raw_image_names: set[str] = set()
+    for chunk in body_chunks:
+        raw_image_names.update(chunk.images_in_chunk or [])
+
+    captions: dict[tuple[str, str], object] = {}
+    if raw_image_names:
+        image_ids = [n.split(".")[0] for n in raw_image_names]
+        try:
+            for c in simple_retriever.retrieve(
+                query=question,
+                top_k=1000,
+                filters={
+                    "$and": [
+                        {"article_id": {"$in": article_ids}},
+                        {"role": {"$eq": "image_caption"}},
+                        {"image_id": {"$in": image_ids}},
+                    ]
+                },
+            ):
+                img_id = (c.metadata or {}).get("image_id", "")
+                captions[(c.article_id, img_id + ".jpeg")] = c
+        except Exception as e:
+            logger.warning(f"Failed to retrieve image captions: {e}")
+
+    # ── 6. Downloading images from S3 (base64) ────────────────────
+    images_base64: list[str] = []
+    images_meta: list[dict] = []
+    seen_images: set[tuple[str, str]] = set()
+
+    for chunk in body_chunks:
+        for img_name in chunk.images_in_chunk or []:
+            key = (chunk.article_id, img_name)
+            if key in seen_images:
+                continue
+            seen_images.add(key)
+            try:
+                img_bytes = s3_store.get_image_bytes_from_s3(
+                    chunk.domain, chunk.article_id, img_name
+                )
+                if isinstance(img_bytes, (bytes, bytearray)) and img_bytes:
+                    images_base64.append(base64.b64encode(img_bytes).decode())
+                    caption_obj = captions.get(key)
+                    img_info = {
+                        "image_name": img_name,
+                        "caption": (
+                            caption_obj.content if caption_obj else ""
+                        ),
+                        "article_id": chunk.article_id,
+                        "title": titles.get(chunk.article_id, ""),
+                    }
+                    caption_meta = (caption_obj.metadata or {}) if caption_obj else {}
+                    img_info = add_domain_metadata_to_img_info(
+                        domain_metadata_type, caption_meta, img_info
+                    )
+                    images_meta.append(img_info)
+            except Exception:
+                logger.warning(
+                    "Could not load image %s for article %s",
+                    img_name,
+                    chunk.article_id,
+                )
+
+    # ── 7. Formation of the text context ──────────────────────
+    txt_parts: list[str] = []
+    for idx, chunk in enumerate(body_chunks, start=1):
+        txt_parts.append(
+            f"{idx}. Paper: {titles.get(chunk.article_id, 'Unknown')}\n"
+            f"Chunk: {chunk.content}"
+        )
+    txt_context = "\n\n".join(txt_parts)
+
+    # Image captions are added to the text so that the LLM can refer to them by number
+    if images_meta:
+        img_lines = ["\nImages:"]
+        for idx, img in enumerate(images_meta, start=1):
+            img_lines.append(
+                f"Image {idx}: {img['caption'] or 'No caption'} "
+                f"(Paper: {img['title']})"
+            )
+        txt_context += "\n" + "\n".join(img_lines)
+
+    # Domain meta-information (chemistry, etc.), if applicable
+    domain_metadata = format_domain_metadata(domain_metadata_type, images_meta)
+    if domain_metadata != "":
+        txt_context += f"Domain metadata\n{domain_metadata}\n\n"
+    else:
+        txt_context += "No domain metadata found for context."
+
+    # ── 8. Query LLM ───────────────────────────────────────────
+    ans = query_llm_with_context(
+        llm_url, question, system_prompt, txt_context, images_base64
+    )
+
+    # ── 9. Compose a response with a relevant context ───────────
+    relevant_txt_context: list[dict] = []
+    for num in ans.get("relevant_text", []):
+        if 1 <= num <= len(body_chunks):
+            chunk = body_chunks[num - 1]
+            relevant_txt_context.append(
+                {
+                    "chunk": f"Chunk {num}:\n{chunk.content}\n",
+                    "Source": (chunk.metadata or {}).get("source", ""),
+                    "Paper": titles.get(chunk.article_id, ""),
+                    "Year": (chunk.metadata or {}).get("publication_year", ""),
+                }
+            )
+
+    relevant_img_context: list[dict] = []
+    for num in ans.get("relevant_images", []):
+        if 1 <= num <= len(images_meta):
+            relevant_img_context.append(images_meta[num - 1])
+
+    return {
+        "papers": papers,
+        "answer": ans["answer"],
+        "explanation": ans["explanation"],
+        "chunk_explanation": ans.get("chunk_explanation", ""),
+        "img_explanation": ans.get("img_explanation", ""),
         "metadata": {
             "text_context": relevant_txt_context,
             "image_context": relevant_img_context,

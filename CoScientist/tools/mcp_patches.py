@@ -1,5 +1,5 @@
 """Backport of modelcontextprotocol/python-sdk PR #2005 (merged upstream, not
-yet in any release as of mcp 1.27.2).
+yet in the installed mcp 1.28.0 release).
 
 Problem: when a remote MCP server emits a truncated/invalid SSE frame (observed
 with the hosted Tavily server on large search results — the JSON-RPC payload is
@@ -32,7 +32,7 @@ _PARSE_ERROR_CODE = -32700
 
 # Last mcp version known to ship WITHOUT the upstream fix. Bump after verifying
 # a newer release still lacks it; drop this module once the fix is released.
-_LAST_BROKEN_VERSION = (1, 27)
+_LAST_BROKEN_VERSION = (1, 28)
 
 
 class _InvalidSSEPayload(Exception):

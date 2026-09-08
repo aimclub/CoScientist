@@ -19,10 +19,19 @@ Two callback FACTORIES are wired onto the OrchestratorAgent via system.yaml:
         annotates it with a `_critic` directive when the result is
         insufficient or wrong, leaving the original payload intact.
 
-Both critics are themselves LLM calls returning strict JSON. They are
+A third factory is wired onto the PLANNER instead, independently of the two
+above (system.yaml -> ``PlannerAgent.critic``):
+
+  * `make_plan_critique(instruction)`         -> SessionAgent.plan_critic
+        Reviews the roadmap the planner just registered, BEFORE it is accepted
+        (and before the human sees it). Returns feedback text to send back for
+        one rewrite, or None to accept the plan. The revision budget lives in
+        the SessionAgent (`critic_max_rounds`, default 1), not here.
+
+All three critics are themselves LLM calls returning strict JSON. They are
 factories (not module-level callbacks) because their system prompts embed the
-orchestrator's CURRENT roster — the assembler renders the prompt from the same
-config that wires the sub-agents and passes it in.
+CURRENT roster — the assembler renders the prompt from the same config that
+wires the agents and passes it in.
 """
 
 from __future__ import annotations
@@ -30,7 +39,11 @@ from google.adk.agents import callback_context
 
 from opik import track
 
+import asyncio
 import json
+import logging
+import os
+import time
 from copy import deepcopy
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
@@ -42,11 +55,12 @@ from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
+from CoScientist.agents.callbacks.json_output import _extract_json
 from CoScientist.config import get_settings
 
+logger = logging.getLogger(__name__)
 
-_settings = get_settings()
-_CRITIC_MODEL = _settings.llm.main_model
+settings = get_settings()
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +76,11 @@ class PostVerdict(str, Enum):
     SUFFICIENT = "sufficient"
     INSUFFICIENT = "insufficient"
     WRONG = "wrong"
+
+
+class PlanVerdict(str, Enum):
+    APPROVE = "approve"
+    REVISE = "revise"
 
 
 # ---------------------------------------------------------------------------
@@ -206,30 +225,111 @@ def _format_pending_calls(calls: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _usage_note(resp: Any) -> str:
+    """`completion=N (reasoning=M) of cap` — what the answer actually spent."""
+    cap = settings.critic.max_tokens
+    usage = getattr(resp, "usage", None)
+    if usage is None:
+        return f"no usage reported, cap={cap}"
+    details = getattr(usage, "completion_tokens_details", None)
+    reasoning = getattr(details, "reasoning_tokens", None)
+    return (
+        f"completion_tokens={getattr(usage, 'completion_tokens', '?')}"
+        + (f" (reasoning={reasoning})" if reasoning else "")
+        + f" of cap={cap}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # LLM critic invocation
 # ---------------------------------------------------------------------------
 async def _invoke_critic_llm(system_prompt: str, user_prompt: str) -> Dict[str, Any]:
-    """Returns parsed JSON dict; on any failure returns {} (permissive default).
+    """Returns the critic's parsed JSON verdict; on any failure approves.
 
     Uses the async litellm API so the critic's network call does not block the
-    orchestrator's event loop (the callbacks run inside it).
+    orchestrator's event loop (the callbacks run inside it), under a hard
+    wall-clock deadline so a stalled provider cannot park the run forever. 
+    A timed-out or otherwise failed critic approves:
+    a verdict nobody could produce must not hold up the work.
     """
-    try:
-        resp = await litellm.acompletion(
-            model=_CRITIC_MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.0,
-        )
-        raw = resp["choices"][0]["message"]["content"]
-        return json.loads(raw)
-    except Exception as e:
-        print(f"[Critic] LLM call failed ({e!r}); defaulting to permissive verdict.")
-        return {"verdict": "approve"}
+    # Shares the agent tree's notion of a retryable upstream fault, and its
+    # proxy pre-flight. Imported lazily to keep this module out of
+    # `agents.common`'s import graph.
+    from CoScientist.agents.common import (
+        RetryingLiteLlm,
+        _is_transient,
+        _reasoning_kwargs,
+    )
+
+    cfg = settings.critic
+    model = cfg.model or settings.llm.main_model
+    # The critic builds its model here rather than through the assembler, so
+    # system.yaml's `reasoning:` never reaches it — it follows settings.critic.
+    reasoning = _reasoning_kwargs(model, cfg.reasoning)
+
+    for attempt in range(1, cfg.max_attempts + 1):
+        started = time.perf_counter()
+        try:
+            # `timeout=` is only httpx's per-read budget; `asyncio.timeout` is
+            # what actually caps a provider that stalls mid-response.
+            async with asyncio.timeout(cfg.timeout):
+                resp = await litellm.acompletion(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=0.0,
+                    max_tokens=cfg.max_tokens,
+                    timeout=cfg.http_timeout,
+                    num_retries=0,
+                    **reasoning,
+                )
+
+            from CoScientist.logging.metrics import record_completion
+            record_completion(resp, model=model, agent="Critic")
+
+            choice = resp["choices"][0]
+            raw = choice["message"]["content"]
+            payload = _extract_json(raw or "")
+            if isinstance(payload, dict):
+                return payload
+            logger.warning(
+                "[Critic] unparseable verdict (%r); finish_reason=%r, %s; defaulting to permissive verdict.",
+                _truncate(raw, 300),
+                choice.get("finish_reason"),
+                _usage_note(resp),
+            )
+            return {"verdict": "approve"}
+        except Exception as e:  # noqa: BLE001 — a critic never takes the run down
+            deadline_blown = isinstance(e, TimeoutError)
+            retryable = (
+                attempt < cfg.max_attempts
+                and not deadline_blown
+                and _is_transient(e)
+            )
+            # Elapsed time and route are what tell a stalled provider apart from
+            # a stalled transport after the fact: the deadline reports a bare
+            # `TimeoutError()`, which on its own names neither.
+            route = (
+                f"via proxy {settings.services.proxy_url}"
+                if settings.web.use_proxy
+                else "direct"
+            )
+            logger.warning(
+                "[Critic] LLM call failed after %.1fs (%s, attempt %d/%d, %r); %s",
+                time.perf_counter() - started,
+                route,
+                attempt,
+                cfg.max_attempts,
+                e,
+                "retrying." if retryable else "defaulting to permissive verdict.",
+            )
+            if not retryable:
+                return {"verdict": "approve"}
+            await asyncio.sleep(min(1.5 ** attempt, 8.0))
+
+    return {"verdict": "approve"}
 
 
 # ---------------------------------------------------------------------------
@@ -265,9 +365,10 @@ def _apply_revisions(
         overrides = {k: v for k, v in new_args.items() if k in original}
         ignored = [k for k in new_args if k not in original]
         if ignored:
-            print(
-                f"[Critic] ignoring revision keys not in original args for "
-                f"{call.get('tool')}: {ignored}"
+            logger.info(
+                "[Critic] ignoring revision keys not in original args for %s: %s",
+                call.get("tool"),
+                ignored,
             )
         safe_args = {**original, **overrides}
         if safe_args == original:
@@ -331,14 +432,8 @@ def make_pre_action_critique(instruction: str) -> Callable:
         # Auto-approve task management tools to save LLM calls and prevent false rejections.
         MANAGEMENT_TOOLS = {"update_task_status", "request_approval"}
         if all(call.get("tool") in MANAGEMENT_TOOLS for call in pending):
-            print(f"pre_action_critique auto-approved management tools: {[c.get('tool') for c in pending]}")
+            logger.info("pre_action_critique auto-approved management tools: %s", [c.get("tool") for c in pending])
             return None
-
-        contents = _session_contents(callback_context)
-        # user_content may be absent or start with a non-text part (image/DICOM upload).
-        user_task = _first_text(getattr(callback_context, "user_content", None))
-        trajectory = _extract_completed_trajectory(contents)
-        #####
 
         contents = _session_contents(callback_context)
         # user_content may be absent or start with a non-text part (image/DICOM upload).
@@ -362,8 +457,6 @@ def make_pre_action_critique(instruction: str) -> Callable:
             "Respond as strict JSON."
         )
 
-        print(f"pre action critic invoked with such prompt: {user_prompt}")
-
         payload = await _invoke_critic_llm(instruction, user_prompt)
         verdict_raw = (payload.get("verdict") or "approve").lower().strip()
         feedback = (payload.get("feedback") or "").strip()
@@ -381,9 +474,8 @@ def make_pre_action_critique(instruction: str) -> Callable:
         )
         state["critic_pre_history"] = history
 
-        print(f"pre action critic returned: {payload}")
         if verdict_raw == PreVerdict.APPROVE.value:
-            print(f"pre action critic returned None")
+            logger.info("pre action critic approved proposed action(s)")
             return None
 
         if verdict_raw == PreVerdict.REVISE.value:
@@ -394,7 +486,6 @@ def make_pre_action_critique(instruction: str) -> Callable:
                     0,
                     types.Part(text=f"[CRITIC REVISION]: {feedback}", thought=True),
                 )
-            print(f"pre action critic returned revision: {feedback}")
             return None
 
         if verdict_raw == PreVerdict.REJECT.value:
@@ -404,7 +495,6 @@ def make_pre_action_critique(instruction: str) -> Callable:
                 "I will reconsider which agent to call and with what arguments, "
                 "given the original task and the completed trajectory so far."
             )
-            print(f"pre action critic rejected with msg {msg}")
             return LlmResponse(
                 content=types.Content(role="model", parts=[types.Part(text=msg)])
             )
@@ -436,11 +526,9 @@ def make_post_action_critique(instruction: str) -> Callable:
             "needs refinement, or is wrong. Respond as strict JSON."
         )
 
-        print(f'Post action critic invoked with {user_prompt}')
         payload = await _invoke_critic_llm(instruction, user_prompt)
         verdict_raw = (payload.get("verdict") or "sufficient").lower().strip()
         feedback = (payload.get("feedback") or "").strip()
-        print(f'Post action critic returned with {payload}')
         state = tool_context.state
         history = state.get("critic_post_history", [])
         history.append(
@@ -464,7 +552,6 @@ def make_post_action_critique(instruction: str) -> Callable:
                 "feedback": feedback
                 or "Result is incomplete; refine the query or call a different agent.",
             }
-            print(f'post action critic returned insufficient {annotated}')
             return annotated
 
         if verdict_raw == PostVerdict.WRONG.value:
@@ -474,9 +561,48 @@ def make_post_action_critique(instruction: str) -> Callable:
                 "feedback": feedback
                 or "Result does not address the task; re-plan from scratch.",
             }
-            print(f'post action critic returned wrong {annotated}')
             return annotated
 
         return None
 
     return post_action_critique
+
+
+# ---------------------------------------------------------------------------
+# Plan critic  (SessionAgent.plan_critic — the PLANNER's own critic)
+# ---------------------------------------------------------------------------
+def make_plan_critique(instruction: str) -> Callable:
+    """Build the planner's plan critic with the given critic prompt.
+
+    Not an ADK callback: an after_model/after_agent callback can only rewrite
+    or replace an output, and a plan critique is worthless unless the PLANNER
+    itself redoes the roadmap. The returned coroutine is handed to the
+    SessionAgent, which owns the generate → review → revise loop and caps it
+    (`critic_max_rounds`, default 1 — the critic gets one say).
+
+    Contract: ``await plan_critique(task, plan) -> feedback | None``. A None
+    (approve, empty feedback, or a failed LLM call) accepts the plan as-is.
+    """
+
+    @track(name="plan_critique")
+    async def plan_critique(task: str, plan: str) -> Optional[str]:
+        user_prompt = (
+            f"ORIGINAL TASK:\n{task or '(not available)'}\n\n"
+            f"PROPOSED PLAN (as registered, in execution order):\n{_truncate(plan, 6000)}\n\n"
+            "Decide whether to approve this plan or send it back for its one "
+            "revision. Respond as strict JSON."
+        )
+
+
+        payload = await _invoke_critic_llm(instruction, user_prompt)
+        verdict_raw = (payload.get("verdict") or "approve").lower().strip()
+        feedback = (payload.get("feedback") or "").strip()
+
+
+        # Anything but an explicit, substantiated "revise" accepts the plan:
+        # a revision round the critic cannot justify only costs a rewrite.
+        if verdict_raw != PlanVerdict.REVISE.value or not feedback:
+            return None
+        return feedback
+
+    return plan_critique

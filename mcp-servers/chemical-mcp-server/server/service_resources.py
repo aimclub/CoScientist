@@ -1,7 +1,8 @@
+from CoScientist.paper_parser.s3_connection import S3BucketService
+
 from .clients.chemical_client import ChemServiceClient
 from .clients.retrosynthesis_client import RetrosynthesisServiceClient
 from .config import get_settings
-from .utils.s3_utils import S3BucketService
 
 settings = get_settings()
 

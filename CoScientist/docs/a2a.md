@@ -263,7 +263,8 @@ That's it. `run_all` picks the agent up from the YAML; check it with
   (`hypotheses`, `medical`). When HITL is off, the HITL tools AND the matching
   prompt section are both dropped automatically.
 - **`task_execution`** needs the RAG DB + FEDOT.MAS reachable for its
-  tool-discovery step.
+  tool-discovery step, and the sandbox for its coder path (it embeds the coder
+  in-process, pinned to the shared `a2a_shared` workspace).
 - **JSON-RPC errors return HTTP 200** with the error in the body (per spec) —
   don't treat 200 as unconditional success.
 - **Agent card endpoint:** prefer `/.well-known/agent-card.json`;
