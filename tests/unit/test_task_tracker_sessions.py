@@ -241,3 +241,32 @@ def test_before_get_task_filters_active_tasks_per_agent():
     assert "description" not in exec_ctx.state["active_tasks"][0]
     assert exec_ctx.state["active_tasks"][1]["description"] == "Desc B"
 
+
+def test_create_plan_and_create_task_preserves_description_and_notes():
+    tracker = TaskTrackerToolset()
+    ctx = _context("PlannerAgent")
+
+    res = tracker.create_plan([
+        {"title": "Task 1", "description": "Full details for task 1", "notes": "Initial note", "assignee": "HypothesesAgent"},
+        {"title": "Task 2", "description": "Full details for task 2", "assignee": "TaskExecutorAgent", "parent_id": "TASK-1"},
+    ], ctx)
+
+    # create_plan response must include description and notes for web UI / callers
+    assert res["plan"][0]["description"] == "Full details for task 1"
+    assert res["plan"][0]["notes"] == "Initial note"
+    assert res["plan"][1]["description"] == "Full details for task 2"
+
+    # _master_active_tasks must retain full description and notes
+    master = ctx.state.get("_master_active_tasks")
+    assert master is not None
+    assert master[0]["description"] == "Full details for task 1"
+    assert master[0]["notes"] == "Initial note"
+
+    # create_task should also populate _master_active_tasks
+    t_res = tracker.create_task("Task 3", "Description 3", ctx, assignee="HypothesesAgent")
+    assert t_res["result"] == "success"
+    master_after = ctx.state.get("_master_active_tasks")
+    assert len(master_after) == 3
+    assert master_after[2]["description"] == "Description 3"
+
+

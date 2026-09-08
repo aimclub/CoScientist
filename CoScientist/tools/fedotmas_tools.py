@@ -11,6 +11,7 @@ from fedotmas import MAS, HttpMCPServer
 from fedotmas.plugins import LoggingPlugin, WebSearchLimitPlugin
 
 from CoScientist.tools.fedot_artifact_plugin import ArtifactCapturePlugin
+from CoScientist.logging.metrics import UsageMetricsPlugin
 from rag_tools import MCPServer
 from rag_tools.storage import PostgresClient
 from rag_tools.config.settings import get_settings
@@ -46,14 +47,14 @@ class FedotMASToolset(BaseToolset):
             Result of the executed MAS pipeline.
         """
         state = tool_context.state if tool_context is not None else {}
+        candidates = state.get('filtered_tools') or state.get('accumulated_tools') or []
 
         servers = []
         postgres = PostgresClient(settings.postgres)
         try:
             await postgres.initialize()
             try:
-                filtered_tools = state.get('filtered_tools', [])
-                server_ids = set([t['server_id'] for t in filtered_tools])
+                server_ids = {t['server_id'] for t in candidates if t.get('server_id')}
                 servers = [await postgres.get_server(server_id) for server_id in server_ids]
             finally:
                 # Always release the DB connection, even if a lookup raised.
@@ -85,13 +86,25 @@ class FedotMASToolset(BaseToolset):
         # CORRECT results first, optimize stage latency later. timeout=None = unbounded.
         # The except branch below still returns captured artifacts on a FEDOT error, so a
         # link produced before a failure is never lost.
+        #
+        # The ONE exception is the reranker-fallback path: nobody chose to run
+        # FEDOT there, a malformed model reply did, so it gets a bounded budget.
         FEDOT_TIMEOUT_S = None
+        if not state.get('filtered_tools') and candidates:
+            try:
+                from CoScientist.config import get_settings as _cs_settings
+                FEDOT_TIMEOUT_S = _cs_settings().web.fedot_fallback_timeout_s or None
+            except Exception:  # noqa: BLE001 — no budget is better than no run
+                FEDOT_TIMEOUT_S = None
         result = None
         status, err = "success", None
         try:
             mas = MAS(
                 mcp_servers=servers_payload,
-                plugins=[LoggingPlugin(), WebSearchLimitPlugin(max_calls_per_agent=4), cap],
+                # UsageMetricsPlugin bills FEDOT.MAS sub-agents' own LLM traffic
+                # against them, same as any other AgentTool sub-runner — without
+                # it their model calls are invisible to the cost ledger.
+                plugins=[LoggingPlugin(), WebSearchLimitPlugin(max_calls_per_agent=4), cap, UsageMetricsPlugin()],
             )
             result = await mas.run(task_description, timeout=FEDOT_TIMEOUT_S)
         except (asyncio.TimeoutError, TimeoutError):

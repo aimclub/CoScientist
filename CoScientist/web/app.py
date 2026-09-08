@@ -3,7 +3,7 @@ import asyncio
 import json
 import logging
 import os
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +31,7 @@ from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.config import get_settings
 from CoScientist.tools.coder_tools.coder_tools import coder_toolset
 from CoScientist.agents.common import sync_proxy_session
+from CoScientist.utils.text import strip_thinking
 
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
@@ -75,6 +76,11 @@ SOCKET_SEND_TIMEOUT_SECONDS = 5.0
 # log and are never dropped, so only the tool stream is capped.
 MAX_TOOL_ACTIVITY_EVENTS = 600
 TOOL_ACTIVITY_TRIM_SLACK = 200
+# Untruncated tool args/results kept for on-demand fetch (ToolsViewer's "Show
+# full result"), keyed by call_id. Independent of MAX_TOOL_ACTIVITY_EVENTS
+# since most calls never need an entry here at all — only ones whose preview
+# was actually truncated get one.
+MAX_TOOL_FULL_VALUES = 300
 DATASET_URL_MAX_LENGTH = 2048
 # Graph stores the Settings modal can wipe. The derived ``knowledge`` view is
 # absent on purpose: it is a projection of ``execution`` plus ``memory``.
@@ -272,6 +278,11 @@ class WebRuntime:
         self.stopping_runs: set[SessionKey] = set()
         self._closing = False
         self.agent_events: dict[SessionKey, list[dict[str, Any]]] = defaultdict(list)
+        # Full (untruncated) tool args/results, keyed by call_id — see
+        # MAX_TOOL_FULL_VALUES. Never broadcast; only served on demand.
+        self.tool_full_values: dict[SessionKey, "OrderedDict[str, dict[str, Any]]"] = (
+            defaultdict(OrderedDict)
+        )
         # Latest usage/cost snapshot per session — cumulative, so one entry is
         # the whole history and a reconnecting tab needs nothing older.
         self.metrics: dict[SessionKey, dict[str, Any]] = {}
@@ -699,6 +710,30 @@ def _wire_sandbox_links(runtime: WebRuntime) -> None:
     sandbox_tools.set_sandbox_start_sink(deliver)
 
 
+def _wire_sandbox_plan(runtime: WebRuntime) -> None:
+    """Relay the sandbox agent's own plan to the tabs watching the session.
+
+    A sandbox task is the longest single thing the system does — one tool call
+    that can run for hours — and it reports nothing until it is over. The agent
+    in the container does keep a task list, though, and rewrites it as it goes;
+    the client relays each new revision here, which is what lets the status
+    line say *which step* is running instead of "writing and running code" for
+    the whole job.
+
+    Live-only, deliberately: the plan describes what is happening right now, a
+    replayed one would describe a container that is already gone. A tab that
+    reconnects mid-run picks the current revision up on the next poll.
+    """
+    from CoScientist.tools.coder_tools import sandbox_tools
+
+    async def deliver(key: SessionKey | None, info: dict[str, Any]) -> None:
+        if key is None or (key not in runtime.sockets and key not in runtime.active_runs):
+            return
+        await runtime.send(key, {"type": "sandbox_plan", **_json_safe(info)})
+
+    sandbox_tools.set_sandbox_plan_sink(deliver)
+
+
 def _wire_metrics(runtime: WebRuntime) -> None:
     """Stream the running cost of a session to the tabs watching it.
 
@@ -746,11 +781,32 @@ def _wire_tool_activity(runtime: WebRuntime) -> None:
             event for index, event in enumerate(events) if index not in dropped
         ]
 
+    def stash_full_values(key: SessionKey, event: dict[str, Any]) -> None:
+        """Pull the untruncated `*_full` fields out of the broadcast event and
+        keep them server-side under the call's id, so a client can fetch the
+        whole thing later without it ever going out over every tab's socket.
+        """
+        call_id = event.get("call_id")
+        full_fields = {
+            field: event.pop(key_name)
+            for field, key_name in (("args", "args_full"), ("result", "result_full"), ("error", "error_full"))
+            if key_name in event
+        }
+        if not call_id or not full_fields:
+            return
+        store = runtime.tool_full_values[key]
+        entry = store.setdefault(call_id, {})
+        entry.update(full_fields)
+        store.move_to_end(call_id)
+        while len(store) > MAX_TOOL_FULL_VALUES:
+            store.popitem(last=False)
+
     async def deliver(key: SessionKey, payload: dict[str, Any]) -> None:
         if key not in runtime.sockets and key not in runtime.active_runs:
             # A key we never served (e.g. the CLI default scope) has nowhere to go.
             return
         event = {"type": "tool_activity", **_json_safe(payload)}
+        stash_full_values(key, event)
         events = runtime.agent_events[key]
         events.append(event)
         trim(events)
@@ -774,6 +830,10 @@ def _wire_agent_output(runtime: WebRuntime) -> None:
         if key not in runtime.sockets and key not in runtime.active_runs:
             # A key we never served (e.g. the CLI default scope) has nowhere to go.
             return
+        if "content" in payload and isinstance(payload["content"], str):
+            payload["content"] = strip_thinking(payload["content"])
+            if not payload["content"].strip():
+                return
         event = {"type": "agent_output", **_json_safe(payload)}
         runtime.agent_events[key].append(event)
         await runtime.send(key, event)
@@ -857,6 +917,7 @@ def create_app() -> FastAPI:
     runtime = WebRuntime()
     _wire_hitl(runtime)
     _wire_sandbox_links(runtime)
+    _wire_sandbox_plan(runtime)
     _wire_tool_activity(runtime)
     _wire_agent_output(runtime)
     _wire_metrics(runtime)
@@ -1097,23 +1158,50 @@ def create_app() -> FastAPI:
         filename = save_to_disk(bundle_bytes, title, user_id, session_id)
         return JSONResponse({"status": "success", "filename": filename})
 
-    @app.post("/api/users/{user_id}/import-session")
-    async def import_session_endpoint(user_id: str, request: Request):
-        """Import a session from an uploaded .cossession.zip bundle.
+    @app.post("/api/import-session/preview")
+    async def preview_import_endpoint(request: Request):
+        """Inspect a .cossession.zip bundle without importing it.
 
-        Accepts ``multipart/form-data`` with a ``file`` field, OR raw bytes
-        with ``application/zip``/``application/octet-stream``.
+        Returns manifest info and whether MCP builds are included.
         """
-        from CoScientist.web.session_bundle import import_session
+        from CoScientist.web.session_bundle import preview_bundle
 
         content_type = (request.headers.get("content-type") or "").lower()
         if "multipart" in content_type:
-            from fastapi import UploadFile
             form = await request.form()
             upload = form.get("file")
             if upload is None:
                 raise HTTPException(status_code=400, detail="No file uploaded.")
             bundle_bytes = await upload.read()
+        else:
+            bundle_bytes = await request.body()
+        if not bundle_bytes:
+            raise HTTPException(status_code=400, detail="Empty file.")
+        try:
+            result = preview_bundle(bundle_bytes)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(result)
+
+    @app.post("/api/users/{user_id}/import-session")
+    async def import_session_endpoint(user_id: str, request: Request):
+        """Import a session from an uploaded .cossession.zip bundle.
+
+        Accepts ``multipart/form-data`` with a ``file`` field (and an optional
+        ``rebuild_mcp`` field), OR raw bytes with
+        ``application/zip``/``application/octet-stream``.
+        """
+        from CoScientist.web.session_bundle import import_session
+
+        rebuild_mcp = False
+        content_type = (request.headers.get("content-type") or "").lower()
+        if "multipart" in content_type:
+            form = await request.form()
+            upload = form.get("file")
+            if upload is None:
+                raise HTTPException(status_code=400, detail="No file uploaded.")
+            bundle_bytes = await upload.read()
+            rebuild_mcp = str(form.get("rebuild_mcp", "")).lower() in ("true", "1", "yes")
         else:
             bundle_bytes = await request.body()
 
@@ -1123,7 +1211,8 @@ def create_app() -> FastAPI:
         # Always import into the ITMO_DEV user, ignoring the URL user_id
         target_nickname = "ITMO_DEV"
         try:
-            result = await import_session(runtime, target_nickname, bundle_bytes)
+            result = await import_session(runtime, target_nickname, bundle_bytes,
+                                          rebuild_mcp=rebuild_mcp)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse(result, status_code=201)
@@ -1148,12 +1237,29 @@ def create_app() -> FastAPI:
             bundle_bytes = read_saved_bundle(filename)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        rebuild_mcp = bool(data.get("rebuild_mcp", False))
         target_nickname = "ITMO_DEV"
         try:
-            result = await import_session(runtime, target_nickname, bundle_bytes)
+            result = await import_session(runtime, target_nickname, bundle_bytes,
+                                          rebuild_mcp=rebuild_mcp)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse(result, status_code=201)
+
+    @app.get("/api/saved-sessions/{filename}/events")
+    async def saved_session_events_endpoint(filename: str):
+        """The event log of a saved bundle, for replaying a run in the UI.
+
+        Feeds the status indicator's `?demo=<filename>` mode: the frontend can
+        drive its state machine off a real recorded run instead of costing a
+        live one.
+        """
+        from CoScientist.web.session_bundle import read_saved_events
+        try:
+            events = read_saved_events(filename)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"events": events})
 
     @app.delete("/api/saved-sessions/{filename}")
     async def delete_saved_session_endpoint(filename: str):
@@ -1416,7 +1522,7 @@ def create_app() -> FastAPI:
         )
         if adk_session is None:
             raise HTTPException(status_code=404, detail="ADK session not found.")
-        tasks = adk_session.state.get("active_tasks", [])
+        tasks = adk_session.state.get("_master_active_tasks") or adk_session.state.get("active_tasks", [])
         return JSONResponse({
             "content": json.dumps(tasks, ensure_ascii=False, indent=2),
             "tasks": _json_safe(tasks),
@@ -1449,7 +1555,7 @@ def create_app() -> FastAPI:
             Event(
                 invocation_id=f"roadmap_{uuid4().hex}",
                 author="user",
-                actions=EventActions(state_delta={"active_tasks": tasks}),
+                actions=EventActions(state_delta={"active_tasks": tasks, "_master_active_tasks": tasks}),
             ),
         )
         runtime.registry.touch_session(user_id, session_id)
@@ -1499,20 +1605,28 @@ def create_app() -> FastAPI:
     # --- Agent info ---
     @app.get("/api/agents")
     async def get_agents():
-        """Return list of registered agents."""
+        """Return list of registered agents and system hierarchy."""
+        from CoScientist.assembly.schema import get_config
+        cfg = get_config()
+        hierarchy = cfg.agent_hierarchy_map()
+        agents_list = []
+        for name in cfg.build_order():
+            ac = cfg.agent(name)
+            agents_list.append({
+                "name": ac.name,
+                "class": ac.cls,
+                "role": ac.cls,
+                "description": ac.description,
+                "enabled": ac.is_enabled(),
+                "tools": list(ac.tools),
+                "subordinates": list(ac.subordinates),
+                "children": list(ac.children),
+                "is_root": bool(ac.root),
+            })
         return JSONResponse({
-            "agents": [
-                {"name": "OrchestratorAgent", "role": "orchestrator", "status": "idle"},
-                {"name": "PlannerAgent", "role": "planner", "status": "idle"},
-                {"name": "CoderAgent", "role": "coder", "status": "idle"},
-                {"name": "HypothesesAgent", "role": "hypothesis", "status": "idle"},
-                {"name": "ResearchAgent", "role": "research", "status": "idle"},
-                {"name": "ToolRetrieverAgent", "role": "tool_retriever", "status": "idle"},
-                {"name": "ToolRerankerAgent", "role": "tool_reranker", "status": "idle"},
-                {"name": "ToolWebSearcherAgent", "role": "tool_websearcher", "status": "idle"},
-                {"name": "ToolSearcherAgent", "role": "tool_searcher", "status": "idle"},
-                {"name": "ExperimentAgent", "role": "experiment", "status": "idle"},
-            ]
+            "agents": agents_list,
+            "hierarchy": hierarchy,
+            "delegatable_names": list(cfg.delegatable_names()),
         })
 
     # --- Events log ---
@@ -1523,6 +1637,22 @@ def create_app() -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse({"events": runtime.agent_events[(user_id, session_id)][-100:]})
+
+    # --- Full (untruncated) tool args/results, for the ToolsViewer's "Show
+    # full result" — the live socket stream only ever carries a preview.
+    @app.get("/api/users/{user_id}/sessions/{session_id}/tool-activity/{call_id}")
+    async def get_tool_activity_full(user_id: str, session_id: str, call_id: str):
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        entry = runtime.tool_full_values.get((user_id, session_id), {}).get(call_id)
+        if entry is None:
+            raise HTTPException(
+                status_code=404,
+                detail="No stored full result for this call (it may have expired or was never truncated)",
+            )
+        return JSONResponse({"call_id": call_id, **entry})
 
     # --- Usage and cost ---
     @app.get("/api/users/{user_id}/sessions/{session_id}/metrics")
@@ -1572,7 +1702,7 @@ def create_app() -> FastAPI:
             user=user,
             session=session_meta,
             active_tasks=(
-                adk_session.state.get("active_tasks", [])
+                (adk_session.state.get("_master_active_tasks") or adk_session.state.get("active_tasks", []))
                 if adk_session else []
             ),
         )
@@ -1833,10 +1963,17 @@ async def _run_chat_invocation(
                     # A model turn that only carries a function call often still
                     # ships a blank text part. Requiring real characters keeps
                     # it from surfacing as an empty message bubble.
-                    text_parts = [
-                        p.text for p in event.content.parts
-                        if p.text and p.text.strip()
-                    ]
+                    # Skip thinking/reasoning parts and strip inline thinking tags.
+                    text_parts = []
+                    for p in event.content.parts:
+                        if getattr(p, "thought", False):
+                            continue
+                        t = getattr(p, "text", None)
+                        if not t or not t.strip():
+                            continue
+                        cleaned = strip_thinking(t)
+                        if cleaned:
+                            text_parts.append(cleaned)
                     if text_parts:
                         event_data["content"] = "\n".join(text_parts)
 

@@ -97,6 +97,11 @@ def _create_plan_tool():
     from CoScientist.tools.task_tracker import create_plan_tool
     return [create_plan_tool()]
 
+def _sleep_tool():
+    from google.adk.tools import FunctionTool
+    from CoScientist.tools.sleep_tool import sleep_tool
+    return [FunctionTool(sleep_tool)]
+
 def _web_flag(field: str) -> bool:
     """Read a per-tool switch off ``settings.web`` (set from the web UI)."""
     try:
@@ -448,6 +453,24 @@ REGISTRY.register_tool(ToolEntry(
                 "Replace all tasks with a new plan. Each task needs title, "
                 "description and assignee, plus `id` and `parent_id` to state "
                 "which task must run first. Tasks are stored in execution order."
+            ),
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="sleep",
+    factory=_sleep_tool,
+    docs=(
+        ToolDoc(
+            name="sleep_tool",
+            signature="sleep_tool(minutes)",
+            purpose=(
+                "Pause before your next tool call instead of checking again "
+                "immediately — use this to space out status/log checks on a "
+                "long-running job (e.g. one that takes hours) instead of "
+                "polling it every turn. Capped at 10 minutes per call; call it "
+                "again afterwards if you need to wait longer."
             ),
         ),
     ),
@@ -806,6 +829,11 @@ def _skip_retriever_context():
     return before_tool_reranker_model
 
 
+def _shortlist_reranker_tools():
+    from CoScientist.agents.callbacks import shortlist_reranker_tools
+    return shortlist_reranker_tools
+
+
 def _collect_reranked_tools():
     from CoScientist.agents.callbacks import after_tool_reranker_agent
     return after_tool_reranker_agent
@@ -819,6 +847,11 @@ def _collect_reranked_mcps():
 def _redirect_when_no_tools():
     from CoScientist.agents.callbacks import redirect_when_no_tools
     return redirect_when_no_tools
+
+
+def _inject_fedot_candidates():
+    from CoScientist.agents.callbacks import inject_fedot_candidates
+    return inject_fedot_candidates
 
 
 def _before_get_task():
@@ -842,6 +875,31 @@ def _inject_dataset_context():
 def _inject_report_language():
     from CoScientist.agents.callbacks import inject_report_language
     return inject_report_language
+
+
+def _user_links():
+    from CoScientist.agents.callbacks import user_links
+    return user_links
+
+
+def _resolve_link_refs():
+    from CoScientist.agents.callbacks import resolve_link_refs
+    return resolve_link_refs
+
+
+def _register_tool_result_links():
+    from CoScientist.agents.callbacks import register_tool_result_links
+    return register_tool_result_links
+
+
+def _expand_link_refs():
+    from CoScientist.agents.callbacks import expand_link_refs
+    return expand_link_refs
+
+
+def _redact_link_urls():
+    from CoScientist.agents.callbacks import redact_link_urls
+    return redact_link_urls
 
 
 def _inject_research_context(ctx):
@@ -945,10 +1003,14 @@ _cb("inject_uploaded_papers", "before_model", factory=lambda ctx: _inject_upload
 _cb("log_research_tool_calls", "after_tool", factory=lambda ctx: _log_research_tool_calls())
 _cb("capture_mcp_artifacts", "after_tool", factory=lambda ctx: _capture_mcp_artifacts())
 _cb("skip_retriever_context", "before_model", factory=lambda ctx: _skip_retriever_context())
+# Cross-encoder pre-pass: hand the LLM reranker a short list, not everything.
+_cb("shortlist_reranker_tools", "before_agent", factory=lambda ctx: _shortlist_reranker_tools())
 _cb("collect_reranked_tools", "after_agent", factory=lambda ctx: _collect_reranked_tools())
 _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranked_mcps())
 # Coder↔Executor redirect: abstain to CoderAgent when no tool matched the task.
 _cb("redirect_when_no_tools", "before_agent", factory=lambda ctx: _redirect_when_no_tools())
+# Reranker fallback: show FedotAgent the candidate pool fedot_tool will receive.
+_cb("inject_fedot_candidates", "before_agent", factory=lambda ctx: _inject_fedot_candidates())
 # Load active tasks into agent state before the agent runs.
 _cb("before_get_task", "before_agent", factory=lambda ctx: _before_get_task())
 _cb("inject_original_query", "before_model", factory=lambda ctx: _inject_original_query())
@@ -962,6 +1024,11 @@ _cb("inject_dataset_context", "before_agent", factory=lambda ctx: _inject_datase
 # Report language the user picked for this session: inject the whole block
 # (headings, substitution rule, glossary), not a bare language name.
 _cb("inject_report_language", "before_agent", factory=lambda ctx: _inject_report_language())
+_cb("user_links", "before_agent", factory=lambda ctx: _user_links())
+_cb("redact_link_urls", "before_model", factory=lambda ctx: _redact_link_urls())
+_cb("resolve_link_refs", "before_tool", factory=lambda ctx: _resolve_link_refs())
+_cb("register_tool_result_links", "after_tool", factory=lambda ctx: _register_tool_result_links())
+_cb("expand_link_refs", "after_model", factory=lambda ctx: _expand_link_refs())
 # Human-In-The-Loop approval callback before model/agent execution.
 _cb("hitl_before_model", "before_model", factory=lambda ctx: _hitl_before_model())
 _cb("hitl_before_agent", "before_agent", factory=lambda ctx: _hitl_before_model())
@@ -988,13 +1055,18 @@ _cb("post_action_critique", "after_tool", factory=_post_action_critique)
 # ── Agent classes / output schemas / planners ────────────────────────────────
 
 def _register_classes() -> None:
-    from CoScientist.agents.custom_agents import WebToolsDeployerAgent
+    from CoScientist.agents.custom_agents import (
+        ExecutorSwitchAgent,
+        WebToolsDeployerAgent,
+    )
     from CoScientist.hitl.session_agent import SessionAgent
     from CoScientist.microfluidics.tz_agent import TZSessionAgent
     from CoScientist.context_init.agent import ContextInitSessionAgent
 
     REGISTRY.register_agent_class("session", SessionAgent)
     REGISTRY.register_agent_class("web_tools_deployer", WebToolsDeployerAgent)
+    # Runs ONE of its children: the normal executor, or the reranker fallback.
+    REGISTRY.register_agent_class("executor_switch", ExecutorSwitchAgent)
     # Microfluidics ТЗ stage: the review loop shows the RENDERED ТЗ document.
     REGISTRY.register_agent_class("tz_session", TZSessionAgent)
     # Context-init pre-stage: the review shows a STRUCTURED FORM (research frame)

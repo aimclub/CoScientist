@@ -33,6 +33,7 @@ from CoScientist.hitl import (
     HITLRequest,
     HITLResponse,
 )
+from CoScientist.utils.text import strip_thinking
 
 settings = get_settings()
 
@@ -274,7 +275,10 @@ class CoScientistManager:
             p.text for p in parts
             if getattr(p, "text", None) and not getattr(p, "thought", False)
         )
-        return answer or "\n".join(p.text for p in parts if getattr(p, "text", None)) or None
+        final = answer or "\n".join(p.text for p in parts if getattr(p, "text", None)) or None
+        if final:
+            final = strip_thinking(final)
+        return final or None
 
     async def run(
         self,
