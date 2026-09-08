@@ -13,8 +13,10 @@ from CoScientist.storage import RetrievalToolResult
 from rag_tools import create_manager, MCPServer
 from rag_tools.storage import PostgresClient
 from rag_tools.config.settings import get_settings
-from rag_tools.retrieval import APIEmbedder, APIReranker, BM25Reranker, HybridReranker
+from rag_tools.retrieval import APIReranker, BM25Reranker, HybridReranker
 from rag_tools.storage.models import RetrievalResult
+
+from CoScientist.tools.embedder_shim import SafeAPIEmbedder
 
 settings = get_settings()
 _logger = logging.getLogger(__name__)
@@ -103,7 +105,7 @@ class RetrievalToolSet(BaseToolset):
         """
         manager = None
         try:
-            embedder = APIEmbedder(settings.api_embedding)
+            embedder = SafeAPIEmbedder(settings.api_embedding)
             api_reranker = APIReranker(settings.api_reranker)
             bm2_reranker = BM25Reranker(settings.bm_reranker)
             reranker = HybridReranker([api_reranker, bm2_reranker], settings.hybrid_reranker)

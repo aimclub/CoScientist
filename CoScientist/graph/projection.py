@@ -56,6 +56,83 @@ def orchestrator_summary(full: dict) -> str:
     return "\n\n".join(blocks)
 
 
+# Toolset bindings that decide which path an agent is on. Derived from the
+# config rather than hardcoded agent names, so renaming or reshaping the agent
+# tree cannot silently break the signal.
+_MCP_TOOLSETS = frozenset({"dynamic_tools"})
+_CODER_TOOLSETS = frozenset({"coder", "sandbox"})
+
+
+def _agents_bound_to(toolsets: frozenset) -> set:
+    from CoScientist.assembly.schema import get_config
+
+    return {
+        name
+        for name, agent in get_config().agents.items()
+        if toolsets & set(agent.tools or ())
+    }
+
+
+def tool_vs_coder(
+    full: dict,
+    *,
+    mcp_agents: Optional[set] = None,
+    coder_agents: Optional[set] = None,
+) -> dict:
+    """Was the work done by a tool from the catalogue, or written from scratch?
+
+    The system is meant to look for an existing tool first and only fall back to
+    writing code. Whether that actually happened is not otherwise recorded
+    anywhere, so a catalogue that has quietly stopped being used looks exactly
+    like one that is working.
+
+    Read off the execution graph the plugin already emits. The two sides are not
+    symmetric, deliberately: for the tool path only a ``tool_call`` counts,
+    because delegating to the executor proves nothing — the catalogue lookup may
+    have come up empty. For the coder, the delegation itself is the evidence
+    that code was written.
+
+    Returns ``{"path", "mcp_tool_calls", "coder_calls"}``, where ``path`` is
+    ``"mcp" | "coder" | "mixed" | "none"``. Works on any run's ``full()`` dict,
+    including a re-loaded snapshot. The agent sets can be passed in for callers
+    that project a graph produced by a different configuration.
+
+    .. note::
+
+       Checked against the 29 recorded runs under ``graph_runs/sessions``: 25
+       came out ``coder``, 2 ``mcp``, 2 ``none``. No run mixed the two, and no
+       run reached the catalogue by way of a built tool, which is the signal
+       this is here to expose.
+    """
+    mcp_agents = _agents_bound_to(_MCP_TOOLSETS) if mcp_agents is None else mcp_agents
+    coder_agents = (
+        _agents_bound_to(_CODER_TOOLSETS) if coder_agents is None else coder_agents
+    )
+
+    mcp_tool_calls: List[str] = []
+    coder_calls: List[str] = []
+    for n in full.get("nodes", []):
+        kind, who = n.get("kind"), n.get("executor_agent")
+        if kind == "tool_call" and who in mcp_agents:
+            mcp_tool_calls.append(n.get("label") or "")
+        elif kind in ("agent_call", "tool_call") and who in coder_agents:
+            coder_calls.append(n.get("label") or "")
+
+    if mcp_tool_calls and coder_calls:
+        path = "mixed"
+    elif mcp_tool_calls:
+        path = "mcp"
+    elif coder_calls:
+        path = "coder"
+    else:
+        path = "none"
+    return {
+        "path": path,
+        "mcp_tool_calls": mcp_tool_calls,
+        "coder_calls": coder_calls,
+    }
+
+
 def _index(full: dict) -> Dict[str, dict]:
     return {n["id"]: n for n in full.get("nodes", []) if "id" in n}
 

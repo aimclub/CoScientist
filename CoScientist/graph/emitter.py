@@ -17,6 +17,7 @@ from typing import Any, Optional
 from google.adk.plugins.base_plugin import BasePlugin
 
 from CoScientist.graph import client
+from CoScientist.utils.s3_refs import find_s3_uris
 
 # A tool call whose name is one of our delegatable agents is a delegation, not
 # a leaf tool. The roster comes from system.yaml (every agent that appears as a
@@ -38,7 +39,10 @@ def _agent_names() -> set:
 _RUN_ID_STATE_KEY = "deg_run_id"
 
 
-def _short(value: Any, limit: int = 300) -> str:
+def _short(value: Any, limit: int = 800) -> str:
+    """Trim a value for display. See the note on the same helper in plugin.py:
+    the old 300-character cut removed the file references at the end of a result.
+    The references now travel in their own fields, so this stays modest."""
     s = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
     return s if len(s) <= limit else s[:limit] + "…"
 
@@ -89,7 +93,8 @@ class GraphEmitterPlugin(BasePlugin):
             kind="agent_call" if is_delegation else "tool_call",
             label=f"{tool.name}: {_short(tool_args, 200)}",
             executor_agent=tool.name if is_delegation else agent,
-            status="running", parent_ids=[root], input=_short(tool_args), t_start=time.time(),
+            status="running", parent_ids=[root], input=_short(tool_args),
+            input_files=find_s3_uris(tool_args), t_start=time.time(),
         )
         await client.emit_edge(run_id=run_id, src=root, dst=nid,
                                type="delegated_to" if is_delegation else "caused_by")
@@ -101,7 +106,8 @@ class GraphEmitterPlugin(BasePlugin):
         await client.set_status(
             run_id=run_id, node_id=f"{run_id}:{fcid}",
             status="failed" if _is_error(result) else "success",
-            output=_short(result, 400), t_end=time.time(),
+            output=_short(result, 1500), output_files=find_s3_uris(result),
+            t_end=time.time(),
         )
         return None
 

@@ -37,9 +37,16 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
         attr_docs={
             "formulation": "the question itself",
             "domain": "subject area",
+            "specificity": "how narrow/precise the question is",
             "gap": "the knowledge gap it addresses",
+            "decomposition": "sub-questions it breaks into",
             "target_setting": "целевая постановка (what kind of answer is sought)",
-            "research_form": "fundamental / exploratory / applied (+ TRL)",
+            "research_form": "fundamental / exploratory / applied",
+            "trl": "УГТ — technology readiness level",
+            "completion_criteria": "when the research is done: exhaustive / "
+                                   "pragmatic / resource / economic",
+            "ai_application_model": "autonomy level: lab-assistant / assistant / "
+                                    "copilot / architect",
         },
     ),
     NodeTypeSpec(
@@ -176,7 +183,8 @@ STATUS_TRANSITIONS: Dict[str, FrozenSet[Tuple[str, str]]] = {
                                      ("running", "done"), ("running", "failed"),
                                      ("failed", "planned")}),
     "ConfirmationCriteria": frozenset({("not_met", "met"), ("met", "not_met")}),
-    "Tool": frozenset({("needs_adaptation", "being_created"),
+    "Tool": frozenset({("needs_adaptation", "available"),
+                       ("needs_adaptation", "being_created"),
                        ("being_created", "available"),
                        ("being_created", "creation_failed"),
                        ("creation_failed", "being_created")}),
@@ -357,7 +365,8 @@ def _transitions(*specs) -> FrozenSet[Tuple[str, str, str]]:
 # seeding — the agent is not choosing types freely, the tool constructs them), so
 # they are absent from the orchestrator's mid-run create-set above.
 INIT_SEED_TYPES = frozenset({"ResearchQuestion", "Tool", "Resource",
-                             "EmpiricalBase", "Constraint"})
+                             "EmpiricalBase", "Constraint",
+                             "ConfirmationCriteria", "CostModel"})
 
 
 # Spec §2 roles mapped onto the agents that actually exist in system.yaml:
@@ -374,11 +383,14 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         # postpones verification, approves conclusions, and wires constraints. The
         # VERDICT (under_verification→confirmed/refuted) and the Conclusion belong
         # to the ValidatorAgent, so they are absent here.
-        create=frozenset({"ResearchQuestion", "Report", "Publication", "Spec",
+        create=frozenset({"ResearchQuestion", "Evidence", "Report", "Publication", "Spec",
                           "EfficiencyJustification", "CostModel", "EfficiencyMetric"}),
-        update_attrs=frozenset({"Resource", "ResearchQuestion"}),
+        update_attrs=frozenset({"Resource", "ResearchQuestion", "EmpiricalBase", "Tool"}),
         transitions=_transitions(
             "ResearchQuestion", "Resource",
+            ("Tool", "needs_adaptation", "available"),
+            ("Tool", "needs_adaptation", "being_created"),
+            ("Tool", "being_created", "available"),
             ("Conclusion", "draft", "approved"),               # approval
             ("Hypothesis", "formulated", "under_verification"),  # start verification
             ("Hypothesis", "formulated", "postponed"),
@@ -386,6 +398,7 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
             ("Hypothesis", "postponed", "formulated")),          # scheduling only
         edges=_edges("contextualizes", "defines_scope", "derived_from", "applies_to",
                      "motivates", "regulates", "constrains",
+                     "relates_to", "supports", "refutes", "refines",
                      ("produces", "Conclusion", "ResearchQuestion")),
     ),
     # Spec Module 4 — the judge. Given ONE hypothesis's evidence slice it weighs
@@ -449,6 +462,18 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         edges=_edges("uses", "consumes", "supports", "refutes", "refines",
                      "relates_to", "derived_from",
                      ("produces", "VerificationMethod", "Evidence")),
+    ),
+    # The pre-stage context-initialization agent seeds the framing frame at the
+    # start of a run. It writes the whole context star through the PRIVILEGED
+    # init path (store.init_research, enforce_permissions=False), so these rights
+    # matter only if it ever writes through research_commit directly; they are
+    # kept aligned with INIT_SEED_TYPES for clarity and for schema tests.
+    "ContextInitAgent": AgentPerm(
+        create=frozenset({"ResearchQuestion", "Constraint", "Tool", "Resource",
+                          "EmpiricalBase", "ConfirmationCriteria", "CostModel"}),
+        update_attrs=frozenset({"ResearchQuestion"}),
+        transitions=frozenset(),
+        edges=_edges("contextualizes", "defines_scope", "applies_to"),
     ),
     # The human writes through the HITL bridge (web endpoint / approval flow),
     # never through an LLM toolset.

@@ -176,7 +176,6 @@ PaperAnalysis/
 
 .DS_Store
 
-
 tools/models
 
 *.tif
@@ -189,7 +188,7 @@ ChemCoScientist/tests/integration/parse_results
 ChemCoScientist/tests/integration/data/.last_activity
 *db.json
 
-roadmap.txt
+session_snapshots/
 workspace/
 # Execution-graph run snapshots
 graph_runs/
@@ -209,5 +208,13 @@ trace_manifest.jsonl
 
 # Auxiliary test scaffolding for ported features (not architecture)
 CoScientist/tests/unit/test_llm_repair.py
+
 tz_documents/
 TZ_*.md
+
+# Alembic output & testing
+.alembic
+.test
+benchmarks/alembic/runs/
+benchmarks/alembic/tmbench_salvage/
+benchmarks/alembic/pre_comparison

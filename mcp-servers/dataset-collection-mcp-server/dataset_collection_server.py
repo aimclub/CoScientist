@@ -20,11 +20,17 @@ from prompt import extract_mol_properties_prompt
 IMG_STORAGE_PATH = os.getenv("IMG_STORAGE_PATH")
 DATASETS_LLM_URL = os.getenv("DATASETS_LLM_URL")
 
+def _s3_env(primary: str, fallback: str) -> str | None:
+    """S3__* is the name every server and the main app use. The bare names stay
+    as a fallback for one release, so an existing deployment keeps working."""
+    return os.getenv(primary) or os.getenv(fallback)
+
+
 s3_service = S3BucketService(
-    endpoint=os.getenv("ENDPOINT_URL"),
-    access_key=os.getenv("ACCESS_KEY"),
-    secret_key=os.getenv("SECRET_KEY"),
-    bucket_name=os.getenv("BUCKET_NAME"),
+    endpoint=_s3_env("S3__ENDPOINT_URL", "ENDPOINT_URL"),
+    access_key=_s3_env("S3__ACCESS_KEY", "ACCESS_KEY"),
+    secret_key=_s3_env("S3__SECRET_KEY", "SECRET_KEY"),
+    bucket_name=_s3_env("S3__BUCKET_NAME", "BUCKET_NAME"),
 )
 
 mcp = FastMCP("DatasetCollection")
@@ -144,14 +150,17 @@ def extract_mols_prop_dataset(
         session_id (str): Session ID.
         user_id (str): User ID.
     Returns:
-        (str, str): Path to the file containing the extracted dataset,
-                    path to the processed PDF pages with bounding boxes around extracted
-                    molecular structures..
+        dict: ``answer`` describes the dataset. ``metadata.dataset`` and each entry
+        of ``metadata.annotated_images`` carry ``bucket``, ``s3_key`` and
+        ``presigned_url``. The bucket and the key are the durable reference. The
+        URL expires in one hour.
     """
     run_id = str(uuid.uuid4())
     s3_client = s3_service.create_s3_client()
-    images_prefix = f"{user_id}/{session_id}/dataset_collection/annotated_images/{run_id}"
-    annotated_images_paths = []
+    # The ephemeral/ top segment is what the bucket lifecycle rule filters on.
+    # Objects written at the old prefix matched no rule and never expired.
+    images_prefix = f"ephemeral/{user_id}/{session_id}/dataset_collection/annotated_images/{run_id}"
+    annotated_images = []
 
     all_datasets = []
     for s3_key in s3_keys:
@@ -163,7 +172,11 @@ def extract_mols_prop_dataset(
             for file_name, file_bytes in rendered_files:
                 image_key = f"{images_prefix}/{Path(s3_key).stem}/{file_name}"
                 s3_client.upload_fileobj(BytesIO(file_bytes), s3_service.bucket_name, image_key)
-                annotated_images_paths.append(f"s3://{s3_service.bucket_name}/{image_key}")
+                annotated_images.append({
+                    "bucket": s3_service.bucket_name,
+                    "s3_key": image_key,
+                    "presigned_url": s3_service.generate_presigned_url(image_key, expiration=3600),
+                })
             mols_df = mols_to_csv(results)
             mols_df['id'] = mols_df['id'].astype(str)
             props_df = extract_props(model_url, question, [(Path(s3_key).name, pdf_bytes)])
@@ -184,14 +197,20 @@ def extract_mols_prop_dataset(
     csv_buffer = StringIO()
     final_dataset.to_csv(csv_buffer, sep="\t", index=False)
 
-    s3_key = f"{user_id}/{session_id}/dataset_collection/final_dataset_{run_id}.csv"
+    s3_key = f"ephemeral/{user_id}/{session_id}/dataset_collection/final_dataset_{run_id}.csv"
     s3_client.upload_fileobj(BytesIO(csv_buffer.getvalue().encode("utf-8")), s3_service.bucket_name, s3_key)
 
     answer = f"Dataset extracted with {len(final_dataset)} molecules and properties"
     return {
         "answer": answer,
-        "metadata": {"dataset_s3_path": f"s3://{s3_service.bucket_name}/{s3_key}",
-                     "annotated_images_paths": annotated_images_paths}
+        "metadata": {
+            "dataset": {
+                "bucket": s3_service.bucket_name,
+                "s3_key": s3_key,
+                "presigned_url": s3_service.generate_presigned_url(s3_key, expiration=3600),
+            },
+            "annotated_images": annotated_images,
+        },
     }
 
 if __name__ == "__main__":

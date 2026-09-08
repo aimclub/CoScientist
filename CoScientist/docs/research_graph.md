@@ -13,7 +13,9 @@ the scientific process). Lives in `CoScientist/graph/research/`.
 > **Not** the execution graph. `CoScientist/graph/*` (see `execution_graph.md`)
 > is an *auto-recorded observational trace* of what agents did. This graph is a
 > *generative blackboard* the agents author on purpose. They coexist; both are
-> visible in the web `/graph` viewer.
+> visible in the web `/graph` viewer. Both are scoped to one `(user_id,
+> session_id)`. The semantic Knowledge Memory is intentionally different: it is
+> global and accumulates reusable facts from every session and local user.
 
 ## Why
 
@@ -115,12 +117,34 @@ with instructive per-item messages so the model self-corrects and retries.
 
 Before each step the orchestrator consults `research_triggers`, which evaluates
 named queries over the graph (`queries.py`): **READY** hypotheses (all their
-tools available), **BLOCKED**, **REFUTE SIGNAL**, **CLOSABLE** (evidence in +
-criteria met → write a Conclusion), **PENDING** conclusions, **TOOLS** not
-ready, **RESOURCES LOW**, open **QUESTIONS**, **PROGRESS**. Moving a hypothesis
-to `under_verification` **locks the branch** (a second start is rejected) so two
-agents don't verify the same hypothesis. Refuted/postponed branches are never
-deleted — they stay as negative results so work isn't repeated.
+tools available), **BLOCKED**, **BACKLOG**, **REFUTE SIGNAL**, **CLOSABLE**
+(evidence in + criteria met → write a Conclusion), **PENDING** conclusions,
+**TOOLS** not ready, **RESOURCES LOW**, open **QUESTIONS**, **PROGRESS**. Moving
+a hypothesis to `under_verification` **locks the branch** (a second start is
+rejected) so two agents don't verify the same hypothesis. Refuted/postponed
+branches are never deleted — they stay as negative results so work isn't
+repeated.
+
+### One hypothesis at a time
+
+A generator agent proposes several hypotheses; the run verifies **one**. Two
+mechanisms enforce it, so no single LLM decision can start a parallel batch:
+
+* **Commit invariant** (`store._normalize_hypothesis_selection`): if one commit
+  creates several hypotheses as `formulated`, only the picked one
+  (`attrs.selected`, else the highest `attrs.priority`, else the first) stays
+  active — the rest are created `postponed` and the commit returns a warning
+  saying so. Nothing is dropped: they are the ranked backlog.
+* **Trigger serialization** (`queries.ready_hypotheses`): `items` holds at most
+  ONE hypothesis (the same ranking), the others come back under `queued` and are
+  rendered as "do NOT verify in parallel"; anything already
+  `under_verification` is rendered first as the active branch. When nothing is
+  ready or active, `postponed_hypotheses` surfaces the **BACKLOG** so the
+  orchestrator revives the next one (`postponed`→`formulated`).
+
+`HypothesesAgent` is prompted to make that choice itself and to answer with a
+`SELECTED HYPOTHESIS: <id> — …` line plus the backlog; the two mechanisms above
+are the deterministic net under it.
 
 ## Context slices (spec §3)
 
@@ -135,27 +159,31 @@ with `research_context_slice`/`research_overview`/`research_provenance`.
 Phases follow the spec: init (root + context star) → reconnaissance (literature
 Evidence) → branching (Hypotheses + Methods + Criteria) → deepening (Tools built,
 Evidence produced) → synthesis (Conclusions) → codification (artifacts). The
-graph is snapshotted atomically to `graph_runs/research_active.json` after every
-write and **loaded on startup** — it survives restarts and the web Stop button
-(a research spans many chat prompts). `research_init` archives the previous
-graph to `graph_runs/research_<root>_<timestamp>.json`. Nodes are never deleted.
+graph is snapshotted atomically to
+`graph_runs/sessions/<user>/<session>/research_active.json` after every write
+and **loaded when that scope is opened**. It survives the Web Stop button and
+accumulates across all prompts in one session, so a session can contain one
+complete research. `research_init` archives the previous graph inside the same
+session directory. Nodes are never deleted.
 
 ## Web viewer
 
-`/graph` → view selector → **research graph (blackboard)**. Served by
-`/api/graph?view=research` (`store.to_view()`), nodes colored by type and
-shaped by kind, click a node for its attributes.
+The active session opens `/graph?user_id=...&session_id=...`; the view selector
+loads its **research graph (blackboard)** from
+`/api/users/{user_id}/sessions/{session_id}/graph?view=research`. Nodes are
+colored by type and shaped by kind; click a node for its attributes.
 
 ## Settings (`RESEARCH_GRAPH__*`)
 
 `enabled` (default true — when false the tools and prompt sections vanish
 entirely), `dir` (`./graph_runs`), `active_file` (`research_active.json`),
 `slice_depth_max` (2), `slice_char_budget` (4000), `context_char_budget` (4000),
-`reset_on_session` (false — keep the graph across sessions).
+`reset_on_session` (false — keep the graph across prompts in its session).
 
 ## Limitation: A2A
 
-The store is an in-process singleton, so the shared blackboard works in the
-default in-process web/cli deployment. Under A2A (`remote_subagents=True`) each
-agent is a separate process and would need the HTTP-service pattern used by the
-execution graph (`graph/service.py`); that is out of scope here.
+The default Web/CLI deployment uses a thread-safe in-process registry keyed by
+the public `(user_id, session_id)`. ADK `AgentTool` child sessions inherit that
+scope through session state, so delegated agents use the same blackboard. Under
+A2A (`remote_subagents=True`) each agent is a separate process and needs a shared
+external scoped backend; that remains out of scope here.

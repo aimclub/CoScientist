@@ -19,9 +19,24 @@ The legacy entry modules (``CoScientist.main``, ``CoScientist.web.server``,
 here, so existing commands and muscle memory keep working.
 """
 import argparse
+import sys
 from typing import Optional
 
 from dotenv import load_dotenv
+
+
+def _configure_utf8_stdio() -> None:
+    """Keep scientific Unicode readable on Windows and in redirected output."""
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8")
+        except (AttributeError, OSError, ValueError):
+            # Captured/test streams and already-closed streams may not support
+            # reconfiguration. Output should remain best-effort in that case.
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -44,6 +59,7 @@ def run_web(host: str = "127.0.0.1", port: int = 8000, reload: bool = False) -> 
 
 def run_repl() -> None:
     """Interactive terminal REPL against the in-process agent system."""
+    _configure_utf8_stdio()
     import asyncio
 
     from CoScientist.main import create_manager
@@ -92,8 +108,16 @@ def _run_a2a(a2a_cmd: str, rest: list) -> None:
         asyncio.run(benchmark.main(rest))
 
 
-def _run_graph(graph_cmd: str, run_id: str, out: Optional[str], view: str = "execution") -> None:
-    """Knowledge-graph utilities over a snapshot (./graph_runs/<run>.json).
+def _run_graph(
+    graph_cmd: str,
+    run_id: str,
+    out: Optional[str],
+    view: str = "execution",
+    *,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> None:
+    """Knowledge-graph utilities over legacy or user/session snapshots.
 
     view=execution → the raw log graph; view=knowledge → the projected
     knowledge graph (Question/Finding/Hypothesis/Method).
@@ -101,23 +125,47 @@ def _run_graph(graph_cmd: str, run_id: str, out: Optional[str], view: str = "exe
     from CoScientist.graph import viz
 
     if view == "memory":
-        from CoScientist.graph.memory_store import knowledge_memory
-        full = knowledge_memory.full()
+        from CoScientist.graph.memory_store import get_global_knowledge_memory
+        full = get_global_knowledge_memory().full()
     else:
-        full = viz.load_snapshot(run_id)
+        if bool(user_id) != bool(session_id):
+            raise ValueError("--user-id and --session-id must be provided together")
+        if user_id and session_id:
+            import os
+
+            from CoScientist.graph.session_scope import storage_dir
+
+            directory = storage_dir(
+                os.getenv("GRAPH_SNAPSHOT_DIR", "./graph_runs"),
+                (user_id, session_id),
+            )
+            full = viz.load_snapshot("execution", snapshot_dir=str(directory))
+        else:
+            full = viz.load_snapshot(run_id)
         if view == "knowledge":
             from CoScientist.graph.knowledge import to_knowledge_graph
-            full = to_knowledge_graph(full)
+            full = to_knowledge_graph(
+                full,
+                user_id=user_id,
+                session_id=session_id,
+            )
+
+    graph_label = session_id or run_id
 
     if graph_cmd == "viz":
-        out = out or f"knowledge_graph_{run_id}_{view}.html"
+        out = out or f"knowledge_graph_{graph_label}_{view}.html"
         path = viz.render_html(full, out)
         print(f"Graph ({view}) written to {path}")
     elif graph_cmd == "dot":
         print(viz.to_dot(full))
     else:  # show
         nodes, edges = full.get("nodes", []), full.get("edges", [])
-        print(f"run={run_id} view={view}  nodes={len(nodes)}  edges={len(edges)}")
+        scope = (
+            f"user={user_id} session={session_id}"
+            if user_id and session_id
+            else f"run={run_id}"
+        )
+        print(f"{scope} view={view}  nodes={len(nodes)}  edges={len(edges)}")
         for n in nodes:
             label = (n.get("label") or "")[:80]
             print(f"  [{n.get('kind'):<10}] {n.get('id'):<30} {label}  ({n.get('status')})")
@@ -159,13 +207,16 @@ def build_parser() -> argparse.ArgumentParser:
     graph = sub.add_parser("graph", help="Knowledge-graph utilities.")
     graph.add_argument("graph_cmd", choices=["viz", "show", "dot"], help="viz=HTML, show=text, dot=Graphviz.")
     graph.add_argument("--run", default="session", help="run_id snapshot to load (default: session).")
+    graph.add_argument("--user-id", default=None, help="user id for a scoped Web/CLI snapshot.")
+    graph.add_argument("--session-id", default=None, help="session id for a scoped Web/CLI snapshot.")
     graph.add_argument("--out", default=None, help="output file (viz writes HTML here).")
     graph.add_argument("--view", choices=["execution", "knowledge", "memory"], default="execution",
-                       help="execution=raw log graph; knowledge=projection; memory=cross-run knowledge memory.")
+                       help="execution=session log; knowledge=session projection; memory=global knowledge memory.")
     return parser
 
 
 def main(argv=None) -> int:
+    _configure_utf8_stdio()
     load_dotenv()
     parser = build_parser()
     args, rest = parser.parse_known_args(argv)
@@ -180,7 +231,16 @@ def main(argv=None) -> int:
     elif args.cmd == "a2a":
         _run_a2a(args.a2a_cmd, rest)
     elif args.cmd == "graph":
-        _run_graph(args.graph_cmd, args.run, args.out, args.view)
+        if bool(args.user_id) != bool(args.session_id):
+            parser.error("--user-id and --session-id must be provided together")
+        _run_graph(
+            args.graph_cmd,
+            args.run,
+            args.out,
+            args.view,
+            user_id=args.user_id,
+            session_id=args.session_id,
+        )
     return 0
 
 

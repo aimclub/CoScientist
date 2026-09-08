@@ -552,7 +552,7 @@ requires-dist = [
     { name = "langchain-text-splitters", specifier = ">=1.1.2" },
     { name = "langfuse", specifier = ">=4.14.0" },
     { name = "metapub", specifier = ">=0.7.4" },
-    { name = "networkx", specifier = ">=3.6.1" },
+    { name = "networkx", specifier = ">=3.4" },
     { name = "opik", specifier = ">=2.0.70" },
     { name = "rag-tools", git = "https://github.com/fiestaxxl/rag_tools.git" },
     { name = "rank-bm25", specifier = ">=0.2.2" },

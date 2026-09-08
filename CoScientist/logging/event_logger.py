@@ -53,7 +53,9 @@ def _get_log_fh():
         return None
     if _log_fh is None:
         try:
-            _log_fh = open(_LOG_FILE, "a", buffering=1)  # line-buffered
+            # Do not inherit the Windows console code page (often cp1251): the
+            # trace intentionally contains emoji markers and scientific Unicode.
+            _log_fh = open(_LOG_FILE, "a", buffering=1, encoding="utf-8")
         except OSError:
             _log_disabled = True
             return None

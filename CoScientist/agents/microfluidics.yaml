@@ -140,6 +140,9 @@ agents:
     prompt: research
     tools: [websearch, paper_analysis, papers_search, task_tracker]
     output_key: search_results
+    # What each LIT-xx task actually found is the deliverable — post it to the
+    # chat instead of leaving it inside the orchestrator's function_response.
+    report_output: true
     callbacks:
       before_agent: [before_get_task]
       before_model: [inject_uploaded_papers]

@@ -1,4 +1,4 @@
-"""In-process knowledge graph shared by every agent (web / cli).
+"""Session-scoped in-process execution graph shared by agents in one session.
 
 Reuses the Dynamic Execution Graph data layer (GraphStore + Node/Edge) but, for
 the single-process web/cli runs, exposes it directly (no HTTP service) so:
@@ -11,8 +11,9 @@ the single-process web/cli runs, exposes it directly (no HTTP service) so:
   (``CoScientist.graph.agent_tools``), so an agent can check the history and the
   info about all other agents.
 
-One process-wide store keyed by a single session ``run_id`` (KG_RUN_ID), so the
-whole session accumulates into one graph that can be snapshotted and visualised.
+Each ``(user_id, session_id)`` receives its own graph. The graph accumulates
+across all prompts in that session and can be snapshotted and visualised without
+leaking activity from another user's work.
 """
 from __future__ import annotations
 
@@ -22,6 +23,12 @@ import time
 from typing import Any, Dict, List, Optional
 
 from CoScientist.graph.models import Edge, Node, StatusUpdate
+from CoScientist.graph.session_scope import (
+    DEFAULT_SESSION_KEY,
+    SessionKey,
+    session_key,
+    storage_dir,
+)
 from CoScientist.graph.store import GraphStore
 
 SESSION_RUN_ID = os.getenv("KG_RUN_ID", "session")
@@ -110,9 +117,11 @@ class KnowledgeGraph:
             self._seeded = True
 
     def reset_session(self) -> None:
-        """Clear this session's execution graph and re-seed the root/roster.
-        Called on a fresh start / interrupt so a new run begins with a clean
-        trace. Does NOT touch the cross-run knowledge memory."""
+        """Explicitly clear one session's trace and re-seed its root/roster.
+
+        Normal prompts, browser refresh and Web Stop append/preserve the trace.
+        This maintenance reset never touches global cross-run knowledge.
+        """
         with self._lock:
             self._store.clear(self.run_id)
             self._seeded = False
@@ -133,6 +142,13 @@ class KnowledgeGraph:
     def full(self) -> dict:
         self.ensure_seeded()
         return self._store.full(self.run_id)
+
+    def tool_vs_coder(self) -> Dict[str, Any]:
+        """Whether this run used a tool from the catalogue or wrote code from
+        scratch. See :func:`CoScientist.graph.projection.tool_vs_coder`."""
+        from CoScientist.graph.projection import tool_vs_coder
+
+        return tool_vs_coder(self.full())
 
     def agents_info(self) -> List[Dict[str, Any]]:
         """Structured info about every agent in the system (the roster)."""
@@ -195,5 +211,44 @@ def _short(value: Any, n: int = 200) -> str:
     return s if len(s) <= n else s[:n] + "…"
 
 
-# Process-wide shared instance (like task_tracker_instance).
+# Legacy/default graph used by standalone helpers and tests without an ADK
+# context. Web and agent callbacks resolve through ``get_knowledge_graph``.
 knowledge_graph = KnowledgeGraph()
+_knowledge_graphs: Dict[SessionKey, KnowledgeGraph] = {
+    DEFAULT_SESSION_KEY: knowledge_graph,
+}
+_registry_lock = threading.RLock()
+
+
+def get_knowledge_graph(
+    context: Any = None,
+    *,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> KnowledgeGraph:
+    """Return the execution graph belonging to one ADK user/session."""
+    key = session_key(context, user_id=user_id, session_id=session_id)
+    with _registry_lock:
+        graph = _knowledge_graphs.get(key)
+        if graph is None:
+            directory = storage_dir(
+                os.getenv("GRAPH_SNAPSHOT_DIR", "./graph_runs"),
+                key,
+            )
+            graph = KnowledgeGraph(run_id="execution", snapshot_dir=str(directory))
+            _knowledge_graphs[key] = graph
+        return graph
+
+
+def reset_knowledge_graph(
+    context: Any = None,
+    *,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> None:
+    """Clear only the selected session's execution trace."""
+    get_knowledge_graph(
+        context,
+        user_id=user_id,
+        session_id=session_id,
+    ).reset_session()

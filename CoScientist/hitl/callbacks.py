@@ -2,8 +2,10 @@ import re
 from typing import Optional
 from google.genai import types as genai_types
 
+from CoScientist.config import get_settings
 from CoScientist.hitl.models import HITLRequest, HITLAction
 from CoScientist.hitl.handler import AbstractHITLHandler
+from CoScientist.graph.session_scope import session_key
 
 
 def _parse_options(text: str) -> list[str]:
@@ -39,6 +41,9 @@ def make_hitl_after_callback(handler: AbstractHITLHandler, action_type: HITLActi
     """
 
     async def after_agent_callback(callback_context) -> Optional[genai_types.Content]:
+        if not get_settings().web.hitl_enabled:
+            return None
+
         agent_name = callback_context.agent_name
         # In ADK Context, agent is accessible via _invocation_context.agent
         agent = getattr(callback_context, "_invocation_context", None).agent if hasattr(callback_context, "_invocation_context") else None
@@ -55,11 +60,18 @@ def make_hitl_after_callback(handler: AbstractHITLHandler, action_type: HITLActi
         if not agent_output:
             return None  # No output to review
 
+        user_id, session_id = session_key(callback_context)
         request = HITLRequest(
             agent_name=agent_name,
             action_type=action_type,
             message=f"[CALLBACK: AFTER_AGENT] Agent '{agent_name}' proposes the following output. Please review.",
-            context={"output": str(agent_output)},
+            context={
+                "output": str(agent_output),
+                "_session": {
+                    "user_id": user_id,
+                    "session_id": session_id,
+                },
+            },
             options=_parse_options(str(agent_output)) if action_type == HITLAction.SELECT else [],
             invoked_via="callback"
         )
@@ -111,7 +123,10 @@ def make_hitl_before_callback(handler: AbstractHITLHandler):
         )
     """
 
-    async def before_agent_callback(callback_context) -> Optional[genai_types.Content]:
+    async def before_agent_callback(callback_context, llm_request=None) -> Optional[genai_types.Content]:
+        if not get_settings().web.hitl_enabled:
+            return None
+
         agent_name = callback_context.agent_name
 
         # Add more context for the human
@@ -127,10 +142,17 @@ def make_hitl_before_callback(handler: AbstractHITLHandler):
             msg += f"\nContext (User Query): {user_query}"
         msg += "\nApprove?"
 
+        user_id, session_id = session_key(callback_context)
         request = HITLRequest(
             agent_name=agent_name,
             action_type=HITLAction.APPROVE,
             message=f"[CALLBACK: BEFORE_AGENT] {msg}",
+            context={
+                "_session": {
+                    "user_id": user_id,
+                    "session_id": session_id,
+                }
+            },
             invoked_via="callback"
         )
 

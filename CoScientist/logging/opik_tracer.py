@@ -2,29 +2,64 @@ import os
 
 from CoScientist.config import get_settings
 
-settings = get_settings()
+_tracers = {}
 
-# Opik tracing is gated behind a single env flag (OPIK__ENABLED). When it is
-# off we make opik's own ``@track`` decorators no-ops process-wide and skip all
-# tracer setup, so nothing is ever shipped to the Opik backend (avoids the free
-# account span-limit 402s) and the app stays fully functional without it.
-if not settings.opik.enabled:
-    os.environ.setdefault("OPIK_TRACK_DISABLE", "true")
-    multi_agent_tracer = None
-else:
-    # Only set the env var when a key is actually present — assigning None raises
-    # TypeError and would crash importing this module (and most of the app).
-    if settings.opik.api_key:
-        os.environ["OPIK_API_KEY"] = settings.opik.api_key
+def get_multi_agent_tracer():
+    settings = get_settings()
+
+    # Read from WebSettings (runtime mutable) for enabled, standard settings for keys
+    enabled = settings.web.opik_enabled
+    api_key = settings.opik.api_key
+    project_name = settings.opik.opik_project_name or "adk-coscientist"
+
+    if not enabled:
+        os.environ["OPIK_TRACK_DISABLE"] = "true"
+        return None
+
+    # Clear trace disable flag if tracking is active
+    os.environ.pop("OPIK_TRACK_DISABLE", None)
+
+    main_model = settings.llm.main_model
+    coder_model = settings.llm.coder_model or settings.llm.main_model
+
+    # Cache key based on settings to avoid recreating if settings didn't change
+    cache_key = (api_key, project_name, main_model, coder_model)
+    if cache_key in _tracers:
+        return _tracers[cache_key]
+
+    url_override = settings.opik.url_override
+
+    if api_key:
+        os.environ["OPIK_API_KEY"] = api_key
+    else:
+        os.environ.pop("OPIK_API_KEY", None)
+    if url_override:
+        os.environ["OPIK_URL_OVERRIDE"] = url_override
+    else:
+        os.environ.pop("OPIK_URL_OVERRIDE", None)
+    os.environ["OPIK_PROJECT_NAME"] = project_name
 
     import opik
 
     # Don't let an opik misconfiguration (no key, no network) take down the app
     # on import — tracing is best-effort.
     try:
-        opik.configure(use_local=False)
+        opik.configure(
+            api_key=api_key or None,
+            url_override=url_override or None,
+            project_name=project_name,
+            use_local=False,
+            install_mcp=False,
+            #automatic_approvals=True,
+        )
     except Exception as e:  # pragma: no cover - best-effort tracing setup
         print(f"[opik] configure failed, tracing may be disabled: {e!r}")
+
+    if api_key:
+        os.environ["OPIK_API_KEY"] = api_key
+    if url_override:
+        os.environ["OPIK_URL_OVERRIDE"] = url_override
+    os.environ["OPIK_PROJECT_NAME"] = project_name
 
     from opik.integrations.adk import OpikTracer
 
@@ -35,8 +70,14 @@ else:
         "coder_model": settings.llm.coder_model or settings.llm.main_model,
     }
 
-    multi_agent_tracer = OpikTracer(
+    tracer = OpikTracer(
         name="multi-agent-orchestrator",
         metadata=_safe_metadata,
-        project_name=settings.opik.opik_project_name or "adk-coscientist",
+        project_name=project_name,
     )
+    _tracers[cache_key] = tracer
+    return tracer
+
+
+# Import-time initialization for CLI and module-level backwards compatibility
+multi_agent_tracer = get_multi_agent_tracer()

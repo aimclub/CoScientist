@@ -14,7 +14,7 @@ dependencies = [
     "langchain-text-splitters>=1.1.2",
     "langfuse>=4.14.0",
     "metapub>=0.7.4",
-    "networkx>=3.6.1",
+    "networkx>=3.4",
     "opik>=2.0.70",
     "rag-tools",
     "rank-bm25>=0.2.2",

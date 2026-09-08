@@ -24,7 +24,7 @@ from typing import Any, Callable, Dict, List, Optional
 from google.adk.plugins.base_plugin import BasePlugin
 
 from CoScientist.graph.research import queries
-from CoScientist.graph.research.store import research_graph
+from CoScientist.graph.research.store import get_research_graph, research_graph
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +70,10 @@ async def _complete(system: str, user: str) -> str:
                   {"role": "user", "content": user}],
         temperature=0,
     )
+    # Judged in the background, off the agent tree: the ambient session binding
+    # is what keeps this call attached to the run that triggered it.
+    from CoScientist.logging.metrics import record_completion
+    record_completion(resp, model=model, agent="ResearchValidator")
     return resp.choices[0].message.content or ""
 
 
@@ -81,6 +85,14 @@ def _parse_json(raw: str) -> Optional[Dict[str, Any]]:
         return json.loads(m.group(0))
     except Exception:  # noqa: BLE001
         return None
+
+
+def _research_id(graph: Any) -> str:
+    """Return the current research generation for validator isolation."""
+    full = graph.full()
+    if not isinstance(full, dict):
+        return ""
+    return str(full.get("research_id") or "")
 
 
 def _build_user(slice_: Dict[str, Any], hid: str) -> str:
@@ -108,13 +120,21 @@ def _build_user(slice_: Dict[str, Any], hid: str) -> str:
     return "\n".join(lines)
 
 
-async def judge_hypothesis(hid: str,
-                           complete: Optional[Callable] = None) -> Optional[Dict[str, Any]]:
+async def judge_hypothesis(
+    hid: str,
+    complete: Optional[Callable] = None,
+    graph=None,
+    expected_research_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """Judge one hypothesis and commit the verdict + Conclusion. Best-effort;
     returns the CommitResult dict, or None if it could not judge/commit.
     `complete` is injectable for tests (bypasses the real LLM)."""
     try:
-        sl = research_graph.get_context_slice(hid, depth=2)
+        graph = graph or research_graph
+        if expected_research_id is not None \
+                and _research_id(graph) != expected_research_id:
+            return None
+        sl = graph.get_context_slice(hid, depth=2)
         if "error" in sl:
             return None
         by_id = {n["id"]: n for n in sl.get("nodes", [])}
@@ -130,6 +150,18 @@ async def judge_hypothesis(hid: str,
             return None
         verdict = str(data.get("verdict", "")).strip().lower()
         if verdict not in ("confirmed", "refuted", "postponed"):
+            return None
+
+        # The LLM call yields control for long enough that the same store may
+        # have been reset to a new research. Never commit an old verdict into
+        # that new research generation.
+        if expected_research_id is not None \
+                and _research_id(graph) != expected_research_id:
+            logger.info(
+                "[validator] discarding stale judgment for %s from research %s",
+                hid,
+                expected_research_id,
+            )
             return None
 
         status_updates: List[Dict[str, Any]] = [
@@ -179,8 +211,12 @@ async def judge_hypothesis(hid: str,
             edges += [{"type": "determines_sufficiency", "from": ccid, "to": "#cl"}
                       for ccid in sorted(crit_ids)]
 
-        result = research_graph.commit(source=SOURCE, nodes=nodes, edges=edges,
-                                       status_updates=status_updates)
+        result = graph.commit(
+            source=SOURCE,
+            nodes=nodes,
+            edges=edges,
+            status_updates=status_updates,
+        )
         if result.ok:
             logger.info("[validator] %s → %s%s", hid, verdict,
                         " (+Conclusion)" if concl else "")
@@ -197,25 +233,79 @@ class BackgroundValidatorPlugin(BasePlugin):
 
     The callback NEVER awaits the LLM — it schedules `judge_hypothesis` on the
     event loop and returns immediately, so the orchestration loop is never
-    blocked (full asynchrony). Dedup keyed by (hypothesis, evidence-count) so a
-    hypothesis is re-judged when new evidence arrives but not spun repeatedly."""
+    blocked (full asynchrony). Dedup includes the research generation and exact
+    evidence identities/polarities, so a hypothesis is re-judged when its
+    evidence changes without leaking state into a later research."""
 
     def __init__(self) -> None:
         super().__init__(name="background_validator")
-        self._seen: set = set()
+        self._completed: set[tuple] = set()
+        self._inflight: set[tuple] = set()
+        self._research_by_graph: Dict[int, str] = {}
+
+    @staticmethod
+    def _key(graph: Any, research_id: str, item: Dict[str, Any]) -> tuple:
+        evidence = tuple(
+            tuple(sorted(str(value) for value in (item.get(kind) or [])))
+            for kind in ("supporting", "refuting", "related")
+        )
+        return id(graph), research_id, str(item["hypothesis"]), evidence
+
+    def _activate_research(self, graph: Any, research_id: str) -> None:
+        """Drop completed dedup entries when a store starts a new research."""
+        graph_id = id(graph)
+        previous = self._research_by_graph.get(graph_id)
+        if previous == research_id:
+            return
+        self._research_by_graph[graph_id] = research_id
+        self._completed = {key for key in self._completed if key[0] != graph_id}
+
+    async def _run_validation(
+        self,
+        *,
+        key: tuple,
+        graph: Any,
+        hypothesis: str,
+        research_id: str,
+    ) -> None:
+        try:
+            result = await judge_hypothesis(
+                hypothesis,
+                graph=graph,
+                expected_research_id=research_id,
+            )
+            if result and result.get("ok") and _research_id(graph) == research_id:
+                self._completed.add(key)
+        except Exception as exc:  # noqa: BLE001 -- background work is best-effort
+            logger.warning("[validator] background judgment for %s failed: %s",
+                           hypothesis, exc)
+        finally:
+            # A failed or rejected validation remains retryable on the next
+            # research_commit callback.
+            self._inflight.discard(key)
 
     async def after_tool_callback(self, *, tool, tool_args, tool_context, result) -> None:
         if not _enabled() or getattr(tool, "name", "") != "research_commit":
             return None
         try:
-            for item in queries.unresolved_hypotheses(research_graph)["items"]:
-                key = f"{item['hypothesis']}:{len(item['supporting']) + len(item['refuting'])}"
-                if key in self._seen:
+            graph = get_research_graph(tool_context)
+            research_id = _research_id(graph)
+            self._activate_research(graph, research_id)
+            for item in queries.unresolved_hypotheses(graph)["items"]:
+                key = self._key(graph, research_id, item)
+                if key in self._completed or key in self._inflight:
                     continue
-                self._seen.add(key)
+                self._inflight.add(key)
                 logger.info("[validator] scheduling background judgment for %s",
                             item["hypothesis"])
-                task = asyncio.create_task(judge_hypothesis(item["hypothesis"]))
+                task = asyncio.create_task(
+                    self._run_validation(
+                        key=key,
+                        graph=graph,
+                        hypothesis=item["hypothesis"],
+                        research_id=research_id,
+                    )
+                )
                 _TASKS.add(task)
                 task.add_done_callback(_TASKS.discard)
         except Exception:  # noqa: BLE001

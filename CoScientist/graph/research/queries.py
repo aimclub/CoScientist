@@ -10,7 +10,11 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from CoScientist.graph.research.store import ResearchGraphStore, research_graph
+from CoScientist.graph.research.store import (
+    ResearchGraphStore,
+    priority_rank,
+    research_graph,
+)
 
 _EVIDENCE_EDGES = ("supports", "refutes", "refines")
 
@@ -58,22 +62,73 @@ def _hypothesis_tools(g, hyp_id: str) -> List[str]:
 
 # ── individual triggers ──────────────────────────────────────────────────────
 
+def _id_order(node_id: str) -> tuple:
+    """H2 before H10 (numeric suffix), unknown shapes fall back to the string."""
+    digits = "".join(c for c in str(node_id) if c.isdigit())
+    return (int(digits) if digits else 0, str(node_id))
+
+
 def ready_hypotheses(store: Optional[ResearchGraphStore] = None) -> Dict[str, Any]:
-    """Formulated hypotheses whose referenced Tools are all available
-    (vacuously ready when no tools are referenced) → start verification."""
+    """The ONE hypothesis to verify next.
+
+    Every `formulated` hypothesis whose referenced Tools are available (vacuously
+    ready when it references none) is a candidate, but only the most relevant one
+    — the agent's pick (`attrs.selected`) / highest `attrs.priority`, ties broken
+    by id order — is offered as actionable in `items`. The rest are reported as
+    `queued` so the orchestrator sees the backlog without starting it: one branch
+    at a time, otherwise a batch of hypotheses gets verified in parallel and the
+    evidence of one contaminates the verdict of another.
+    """
     g = _graph(store).full_graph()
-    items = []
+    candidates = []
     for h in _nodes_of(g, "Hypothesis"):
         if _status(g, h) != "formulated":
             continue
         tools = _hypothesis_tools(g, h)
         if all(_status(g, t) == "available" for t in tools):
-            items.append({"hypothesis": h, "label": _label(g, h),
-                          "methods": _out(g, h, "tested_by"), "tools": tools})
-    lines = [f"READY: {i['hypothesis']} \"{i['label']}\" — "
-             f"{'tools available' if i['tools'] else 'no tools needed'} "
-             f"→ start verification" for i in items]
-    return {"items": items, "rendered": "\n".join(lines)}
+            candidates.append({"hypothesis": h, "label": _label(g, h),
+                               "methods": _out(g, h, "tested_by"), "tools": tools})
+    candidates.sort(key=lambda i: (priority_rank(g.nodes[i["hypothesis"]].get("attrs")),
+                                   _id_order(i["hypothesis"])))
+    items, queued = candidates[:1], candidates[1:]
+    active = [h for h in _nodes_of(g, "Hypothesis")
+              if _status(g, h) == "under_verification"]
+
+    lines = [f"IN VERIFICATION: {h} \"{_label(g, h)}\" — this branch is active; "
+             f"finish it (gather evidence → verdict) before starting another"
+             for h in sorted(active, key=_id_order)]
+    lines += [f"READY (verify this ONE next): {i['hypothesis']} \"{i['label']}\" — "
+              f"{'tools available' if i['tools'] else 'no tools needed'} "
+              f"→ research_set_focus({i['hypothesis']}) then delegate evidence "
+              f"gathering for it" for i in items]
+    if queued:
+        lines.append(
+            "QUEUED (do NOT verify in parallel): "
+            + ", ".join(f"{i['hypothesis']} \"{i['label']}\"" for i in queued)
+            + " → take the next one only after the active branch has a verdict")
+    return {"items": items, "queued": queued, "in_verification": active,
+            "rendered": "\n".join(lines)}
+
+
+def postponed_hypotheses(store: Optional[ResearchGraphStore] = None) -> Dict[str, Any]:
+    """The backlog: alternatives set aside while one hypothesis is verified.
+
+    Rendered only when nothing is ready or under verification — i.e. exactly when
+    reviving one (postponed→formulated) is the sensible next move; otherwise the
+    backlog is noise the orchestrator must not act on."""
+    g = _graph(store).full_graph()
+    items = [{"hypothesis": h, "label": _label(g, h)}
+             for h in sorted(_nodes_of(g, "Hypothesis"), key=_id_order)
+             if _status(g, h) == "postponed"]
+    idle = not ready_hypotheses(store)["items"] and not any(
+        _status(g, h) == "under_verification" for h in _nodes_of(g, "Hypothesis"))
+    rendered = ""
+    if items and idle:
+        rendered = ("BACKLOG: " + ", ".join(f"{i['hypothesis']} \"{i['label']}\""
+                                            for i in items)
+                    + " → no hypothesis is active; revive the most relevant one "
+                      "(postponed→formulated) and verify it next")
+    return {"items": items, "rendered": rendered}
 
 
 def blocked_hypotheses(store: Optional[ResearchGraphStore] = None) -> Dict[str, Any]:
@@ -276,6 +331,7 @@ def _num(value) -> Optional[float]:
 TRIGGERS = {
     "ready_hypotheses": ready_hypotheses,
     "blocked_hypotheses": blocked_hypotheses,
+    "postponed_hypotheses": postponed_hypotheses,
     "refuting_evidence": refuting_evidence,
     "unresolved_hypotheses": unresolved_hypotheses,
     "closable_hypotheses": closable_hypotheses,

@@ -84,7 +84,25 @@ class S3BucketService:
         
         buffer = BytesIO(content)
         client.upload_fileobj(buffer, self.bucket_name, destination_path)
-    
+
+    def upload_bytes(self, prefix: str, source_file_name: str, data: bytes) -> str:
+        """
+        Uploads bytes to S3 bucket with specified prefix and file name.
+
+        Args:
+            prefix: The prefix/folder path in the S3 bucket where the file will be stored
+            source_file_name: The name of the file to be stored in S3
+            data: Raw bytes to upload
+
+        Returns:
+            S3 key (path) of the uploaded object, for use with generate_presigned_url
+        """
+        client = self.create_s3_client()
+        destination_path = (Path(prefix, source_file_name)).as_posix()
+        buffer = BytesIO(data)
+        client.upload_fileobj(buffer, self.bucket_name, destination_path)
+        return destination_path
+
     def list_objects(self, prefix: str) -> list[str]:
         """
         Lists all objects in the S3 bucket with the given prefix.

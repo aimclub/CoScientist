@@ -1,11 +1,11 @@
 """Persistent, schema-validated store for the Research Context Graph.
 
-One active research per process (spec: one graph = one root question), held in
-a NetworkX MultiDiGraph (parallel typed edges like E1-supports→H1 plus
+One active research per user/session scope (one graph = one root question), held
+in a NetworkX MultiDiGraph (parallel typed edges like E1-supports→H1 plus
 E1-relates_to→H1 must coexist) and snapshotted atomically to JSON after every
-write — the blackboard survives restarts and session resets. Re-initializing a
-research archives the previous graph file; nothing is ever deleted from a
-graph (refuted branches stay as negative results).
+write — the blackboard survives restarts, browser refresh and Web Stop. An
+explicit reset or re-initialization archives the previous active graph first;
+refuted branches remain available as negative results in that archive.
 
 Writes go through ``commit`` — the transactional API from spec §5.3: ALL nodes,
 edges and status changes of one agent step are validated together against the
@@ -23,11 +23,18 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import uuid4
 
 import networkx as nx
 
 from CoScientist.graph.research import schema
 from CoScientist.graph.research.models import CommitResult, ResearchEdge, ResearchNode
+from CoScientist.graph.session_scope import (
+    DEFAULT_SESSION_KEY,
+    SessionKey,
+    session_key,
+    storage_dir,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +46,36 @@ _COMMIT_HINT = ("Fix the listed items and call research_commit again. "
 # Attrs consulted (in order) when a short human-readable label is needed.
 _LABEL_ATTRS = ("formulation", "content", "synthesis", "name", "title",
                 "description", "rule", "threshold", "path")
+
+# Priority words accepted in attrs.priority, most important first.
+_PRIORITY_WORDS = {"critical": 0, "highest": 0, "high": 1, "primary": 0,
+                   "medium": 2, "normal": 2, "moderate": 2, "low": 3, "lowest": 4}
+
+
+def _is_truthy(value: Any) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "y", "да", "selected",
+                                         "primary")
+    return bool(value)
+
+
+def priority_rank(attrs: Dict[str, Any]) -> Tuple[float, float]:
+    """Sort key for hypothesis selection: lower = more important.
+
+    An explicit ``attrs.selected`` (the agent's own pick) always wins; otherwise
+    ``attrs.priority`` is read both as a word (high/medium/low) and as a number
+    (1 = most important, the spec's 1..5 scale). Unspecified sorts last but keeps
+    the commit order among equals.
+    """
+    attrs = attrs or {}
+    selected = 0 if _is_truthy(attrs.get("selected") or attrs.get("primary")) else 1
+    raw = str(attrs.get("priority", "")).strip().lower()
+    if raw in _PRIORITY_WORDS:
+        return (selected, float(_PRIORITY_WORDS[raw]))
+    try:
+        return (selected, float(raw))
+    except ValueError:
+        return (selected, 99.0)
 
 
 def _default_dir() -> str:
@@ -99,47 +136,71 @@ class ResearchGraphStore:
                       constraints: Optional[List[Dict[str, Any]]] = None,
                       tools: Optional[List[Dict[str, Any]]] = None,
                       resources: Optional[List[Dict[str, Any]]] = None,
-                      empirical_bases: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+                      empirical_bases: Optional[List[Dict[str, Any]]] = None,
+                      confirmation_criteria: Optional[List[Dict[str, Any]]] = None,
+                      cost_models: Optional[List[Dict[str, Any]]] = None,
+                      question_source: Optional[str] = None) -> Dict[str, Any]:
         """Start a NEW research: root ResearchQuestion + the context star
         (Constraints —contextualizes→ Q, Q —defines_scope→ EmpiricalBases,
-        standalone Tool/Resource nodes). The previous graph, if any, is
-        archived to a timestamped file — only after the new one validates.
+        CostModels —applies_to→ Q, standalone Tool/Resource/ConfirmationCriteria
+        nodes). The previous graph, if any, is archived to a timestamped file —
+        only after the new one validates.
+
+        Each seed item may carry its own ``source`` (e.g. "human" for a field the
+        operator set, "ContextInitAgent" for one the agent drafted) so the graph
+        records the automation-vs-human split; items without it fall back to the
+        top-level ``source``. ``question_source`` sets the root question's source.
         """
         if not (question or "").strip():
             return CommitResult(ok=False, errors=["question must be a non-empty string"],
                                 hint=_COMMIT_HINT).model_dump()
 
-        nodes: List[Dict[str, Any]] = [{
+        root: Dict[str, Any] = {
             "type": "ResearchQuestion", "ref": "q",
             "attrs": {"formulation": question.strip(), **(attrs or {})},
-        }]
+        }
+        if question_source:
+            root["source"] = question_source
+        nodes: List[Dict[str, Any]] = [root]
         edges: List[Dict[str, Any]] = []
 
         def _star(items, node_type, ref_prefix):
             for i, item in enumerate(dict(it) for it in (items or []) if isinstance(it, dict)):
                 status = item.pop("status", None)
+                node_source = item.pop("source", None)
                 a = item.pop("attrs", None) or item  # accept flat or {"attrs": …}
                 draft = {"type": node_type, "ref": f"{ref_prefix}{i}", "attrs": a}
                 if status:
                     draft["status"] = status
+                if node_source:
+                    draft["source"] = node_source
                 nodes.append(draft)
 
         _star(constraints, "Constraint", "c")
         _star(tools, "Tool", "t")
         _star(resources, "Resource", "r")
         _star(empirical_bases, "EmpiricalBase", "eb")
+        _star(confirmation_criteria, "ConfirmationCriteria", "cc")
+        _star(cost_models, "CostModel", "cm")
         for draft in nodes:
             ref = draft["ref"]
             if draft["type"] == "Constraint":
                 edges.append({"type": "contextualizes", "from": f"#{ref}", "to": "#q"})
             elif draft["type"] == "EmpiricalBase":
                 edges.append({"type": "defines_scope", "from": "#q", "to": f"#{ref}"})
+            elif draft["type"] == "CostModel":
+                edges.append({"type": "applies_to", "from": f"#{ref}", "to": "#q"})
 
         with self._lock:
             old_graph, old_meta = self._g, (self._research_id, self._created_at, self._root_id)
             old_data = self._serialize() if old_graph.number_of_nodes() else None
             self._g = nx.MultiDiGraph()
-            self._research_id = "research-" + datetime.now().strftime("%Y%m%d-%H%M%S")
+            self._research_id = (
+                "research-"
+                + datetime.now().strftime("%Y%m%d-%H%M%S")
+                + "-"
+                + uuid4().hex[:8]
+            )
             self._created_at = time.time()
             self._root_id = None
             # Privileged seeding: the context star (Question/Tool/Resource/
@@ -375,7 +436,11 @@ class ResearchGraphStore:
                     ref = None
                 else:
                     refs[ref] = len(creates)
-            creates.append({"ref": ref, "type": ntype, "status": status, "attrs": attrs})
+            creates.append({"ref": ref, "type": ntype, "status": status,
+                            "attrs": attrs, "source": d.get("source")})
+
+        # -- one active hypothesis per commit --------------------------------
+        self._normalize_hypothesis_selection(creates, warnings)
 
         # -- edges: resolve endpoints against existing nodes + this commit ---
         staged_edges: List[Dict[str, Any]] = []
@@ -445,11 +510,14 @@ class ResearchGraphStore:
         for c in creates:
             nid = self._next_id(c["type"])
             attrs = self._truncate_attrs(c["attrs"], warnings)
+            # A per-node source (e.g. "human" for an operator-set frame field)
+            # overrides the commit's default source; edges/status keep the default.
+            node_source = c.get("source") or source
             node = ResearchNode(
                 id=nid, type=c["type"], attrs=attrs, status=c["status"],
-                source=source, created_at=now, updated_at=now,
+                source=node_source, created_at=now, updated_at=now,
                 status_history=[{"from": None, "to": c["status"],
-                                 "source": source, "at": now}],
+                                 "source": node_source, "at": now}],
             )
             self._g.add_node(nid, **node.model_dump())
             if c["ref"]:
@@ -561,6 +629,54 @@ class ResearchGraphStore:
                 committed["status_updates"].append(
                     {"id": hid, "from": "formulated", "to": "under_verification",
                      "auto": True})
+
+    def _normalize_hypothesis_selection(self, creates: List[Dict[str, Any]],
+                                        warnings: List[str]) -> None:
+        """Store invariant: at most N hypotheses enter the run as active per commit.
+
+        N = ``settings.web.max_active_hypotheses`` (default 1).
+
+        A generator agent naturally proposes several hypotheses at once; if they
+        all land as ``formulated``, every one of them shows up as READY and the
+        orchestrator starts verifying them — which may not be desired. So
+        exactly N (the agent's own picks: ``attrs.selected``, else the highest
+        ``attrs.priority``, else the first N) stay ``formulated`` and the rest
+        are created as ``postponed``: they remain in the graph as the ranked
+        backlog, invisible to the READY trigger, and the orchestrator can revive
+        one (postponed→formulated) once an active branch has a verdict.
+
+        Deterministic and mechanical — it never drops or rewrites a hypothesis,
+        only decides which ones are offered for verification next.
+        """
+        from CoScientist.config import get_settings
+        max_active = max(1, min(5, get_settings().web.max_active_hypotheses))
+
+        active = [c for c in creates
+                  if c["type"] == "Hypothesis" and c["status"] == "formulated"]
+        if len(active) <= max_active:
+            return
+        # Sort by priority_rank (lower = higher priority) and keep top N.
+        ranked = sorted(active, key=lambda c: priority_rank(c["attrs"]))
+        primary_set = set(id(c) for c in ranked[:max_active])
+        for c in active:
+            if id(c) in primary_set:
+                continue
+            c["status"] = "postponed"
+            c["attrs"].setdefault(
+                "postponed_reason",
+                "alternative hypothesis — kept as backlog while the selected "
+                "ones are verified")
+        kept_labels = ", ".join(
+            f'"{self._label(c, 60) or c.get("ref") or "?"}"'
+            for c in ranked[:max_active])
+        warnings.append(
+            f"{len(active)} hypotheses were proposed as active at once; only "
+            f"{max_active} may be verified at a time, so {kept_labels} "
+            f"stay 'formulated' and the other "
+            f"{len(active) - max_active} were created as 'postponed' (backlog). "
+            f"To choose which ones are verified, mark them with "
+            f"attrs.selected=true or a higher attrs.priority; the orchestrator "
+            f"can revive a postponed one later.")
 
     def _stage_merge(self, source: str, i: int, draft: Dict[str, Any],
                      merges: List[Dict[str, Any]]) -> List[str]:
@@ -767,7 +883,9 @@ class ResearchGraphStore:
             self._dir.mkdir(parents=True, exist_ok=True)
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
             root = data.get("root_id") or "graph"
-            path = self._dir / f"research_{root}_{stamp}.json"
+            path = self._dir / (
+                f"research_{root}_{stamp}_{uuid4().hex[:8]}.json"
+            )
             with path.open("w", encoding="utf-8") as f:
                 json.dump(data, f, ensure_ascii=False, default=str)
             return str(path)
@@ -797,5 +915,29 @@ class ResearchGraphStore:
             self._g = nx.MultiDiGraph()
 
 
-# Process-wide shared instance (mirrors knowledge_graph / task_tracker_instance).
+# Legacy/default graph for standalone utilities and unit tests.
 research_graph = ResearchGraphStore()
+_research_graphs: Dict[SessionKey, ResearchGraphStore] = {
+    DEFAULT_SESSION_KEY: research_graph,
+}
+_registry_lock = threading.RLock()
+
+
+def get_research_graph(
+    context: Any = None,
+    *,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> ResearchGraphStore:
+    """Return the typed research blackboard for one ADK user/session."""
+    key = session_key(context, user_id=user_id, session_id=session_id)
+    with _registry_lock:
+        graph = _research_graphs.get(key)
+        if graph is None:
+            directory = storage_dir(_default_dir(), key)
+            graph = ResearchGraphStore(
+                directory=str(directory),
+                active_file=_default_file(),
+            )
+            _research_graphs[key] = graph
+        return graph

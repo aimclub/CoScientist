@@ -1,0 +1,135 @@
+{"domain": "Scientific community and society", "subdiscipline": "Agriculture", "repo_name": "agml", "github_url": "https://github.com/Project-AgML/AgML"}
+{"domain": "Physical sciences", "subdiscipline": "Chemistry", "repo_name": "aizynthfinder", "github_url": "https://github.com/MolecularAI/aizynthfinder"}
+{"domain": "Health sciences", "subdiscipline": "Diseases", "repo_name": "Analyse_stroke", "github_url": "https://github.com/ghh1125/Analyze-stroke"}
+{"domain": "Physical sciences", "subdiscipline": "Physics", "repo_name": "ase", "github_url": "https://github.com/yfyh2013/ase"}
+{"domain": "Physical sciences", "subdiscipline": "Astronomy and planetary science", "repo_name": "astroML", "github_url": "https://github.com/astroML/astroML"}
+{"domain": "Earth and environmental sciences", "subdiscipline": "Planetary science", "repo_name": "astronomy", "github_url": "https://github.com/cosinekitty/astronomy"}
+{"domain": "Earth and environmental sciences", "subdiscipline": "Planetary science", "repo_name": "Astropy", "github_url": "https://github.com/astropy/astropy"}
+{"domain": "Physical sciences", "subdiscipline": "Astronomy and planetary science", "repo_name": "astroquery", "github_url": "https://github.com/astropy/astroquery"}
+{"domain": "Physical sciences", "subdiscipline": "Physics", "repo_name": "atomman", "github_url": "https://github.com/usnistgov/atomman"}
+{"domain": "Computer Science", "subdiscipline": "Machine Learning", "repo_name": "auto-sklearn", "github_url": "https://github.com/automl/auto-sklearn"}
+{"domain": "Physical sciences", "subdiscipline": "Chemistry", "repo_name": "autodE", "github_url": "https://github.com/duartegroup/autodE"}
+{"domain": "Scientific community and society", "subdiscipline": "Business and industry", "repo_name": "backtrader", "github_url": "https://github.com/mementum/backtrader"}
+{"domain": "Biological sciences", "subdiscipline": "Biochemistry", "repo_name": "Biopython", "github_url": "https://github.com/biopython/biopython"}
+{"domain": "Health sciences", "subdiscipline": "Signs and symptoms", "repo_name": "biosppy", "github_url": "https://github.com/scientisst/BioSPPy"}
+{"domain": "Biological sciences", "subdiscipline": "Structural biology", "repo_name": "biotite", "github_url": "https://github.com/biotite-dev/biotite"}
+{"domain": "Biological sciences", "subdiscipline": "Neuroscience", "repo_name": "BPt", "github_url": "https://github.com/sahahn/BPt"}
+{"domain": "Scientific community and society", "subdiscipline": "Social sciences", "repo_name": "causalml", "github_url": "https://github.com/uber/causalml"}
+{"domain": "Physical sciences", "subdiscipline": "Chemistry", "repo_name": "cclib", "github_url": "https://github.com/cclib/cclib"}
+{"domain": "Physical sciences", "subdiscipline": "Chemistry", "repo_name": "Chemlib", "github_url": "https://github.com/harirakul/chemlib"}
+{"domain": "Physical sciences", "subdiscipline": "Chemistry", "repo_name": "ChemPy", "github_url": "https://github.com/bjodah/chempy"}
+{"domain": "Earth and environmental sciences", "subdiscipline": "Climate sciences", "repo_name": "climlab", "github_url": "https://github.com/climlab/climlab"}
+{"domain": "Physical sciences", "subdiscipline": "Mathematics and computing", "repo_name": "cvxopt", "github_url": "https://github.com/cvxopt/cvxopt"}
+{"domain": "Physical sciences", "subdiscipline": "Mathematics and computing", "repo_name": "CVXPY", "github_url": "https://github.com/cvxpy/cvxpy"}
+{"domain": "Computer Science", "subdiscipline": "Data Processing", "repo_name": "dalle-mini", "github_url": "https://github.com/borisdayma/dalle-mini"}
+{"domain": "Computer Science", "subdiscipline": "Data Processing", "repo_name": "dateutil", "github_url": "https://github.com/dateutil/dateutil"}
+{"domain": "Computer Science", "subdiscipline": "Data Processing", "repo_name": "dedupe", "github_url": "https://github.com/dedupeio/dedupe"}
+{"domain": "Computer Science", "subdiscipline": "Agent", "repo_name": "deep-searcher", "github_url": "https://github.com/zilliztech/deep-searcher"}
+{"domain": "Biological sciences", "subdiscipline": "Computational biology and bioinformatics", "repo_name": "DeepChem", "github_url": "https://github.com/deepchem/deepchem"}
+{"domain": "Biological sciences", "subdiscipline": "Genetics", "repo_name": "deeptools", "github_url": "https://github.com/deeptools/deepTools"}
+{"domain": "Scientific community and society", "subdiscipline": "Business and industry", "repo_name": "EigenLedger", "github_url": "https://github.com/santoshlite/EigenLedger"}
+{"domain": "Biological sciences", "subdiscipline": "Molecular biology", "repo_name": "esm", "github_url": "https://github.com/facebookresearch/esm"}
+{"domain": "Computer Science", "subdiscipline": "NLP", "repo_name": "Flair", "github_url": "https://github.com/flairNLP/flair"}
+{"domain": "Physical sciences", "subdiscipline": "Physics", "repo_name": "Foam-Agent", "github_url": "https://github.com/csml-rpi/Foam-Agent"}
+{"domain": "Physical sciences", "subdiscipline": "Astronomy and planetary science", "repo_name": "gala", "github_url": "https://github.com/adrn/gala"}
+{"domain": "Physical sciences", "subdiscipline": "Astronomy and planetary science", "repo_name": "galpy", "github_url": "https://github.com/jobovy/galpy"}
+{"domain": "Computer Science", "subdiscipline": "NLP", "repo_name": "Gensim", "github_url": "https://github.com/RaRe-Technologies/gensim"}
+{"domain": "Scientific community and society", "subdiscipline": "Geography", "repo_name": "GeoPandas", "github_url": "https://github.com/geopandas/geopandas"}
+{"domain": "Computer Science", "subdiscipline": "Machine Learning", "repo_name": "gmatch4py", "github_url": "https://github.com/Jacobe2169/GMatch4py"}
+{"domain": "Computer Science", "subdiscipline": "Graph & Network", "repo_name": "graph-theory", "github_url": "https://github.com/root-11/graph-theory"}
+{"domain": "Earth and environmental sciences", "subdiscipline": "Solid Earth sciences", "repo_name": "gstools", "github_url": "https://github.com/GeoStat-Framework/GStools"}
+{"domain": "Computer Science", "subdiscipline": "Agent", "repo_name": "langgraph", "github_url": "https://github.com/langchain-ai/langgraph"}
+{"domain": "Health sciences", "subdiscipline": "Diseases", "repo_name": "lifelines", "github_url": "https://github.com/CamDavidsonPilon/lifelines"}
+{"domain": "Physical sciences", "subdiscipline": "Astronomy and planetary science", "repo_name": "Lightkurve", "github_url": "https://github.com/lightkurve/lightkurve"}
+{"domain": "Health sciences", "subdiscipline": "Diseases", "repo_name": "medpy", "github_url": "https://github.com/loli/medpy"}
+{"domain": "Earth and environmental sciences", "subdiscipline": "Climate sciences", "repo_name": "MetPy", "github_url": "https://github.com/Unidata/MetPy"}
+{"domain": "Health sciences", "subdiscipline": "Neurology", "repo_name": "MNE-Python", "github_url": "https://github.com/mne-tools/mne-python"}
+{"domain": "Scientific community and society", "subdiscipline": "Agriculture", "repo_name": "mobile-pest-identification", "github_url": "https://github.com/wikilimo/mobile-pest-identification"}
+{"domain": "Physical sciences", "subdiscipline": "Chemistry", "repo_name": "molmass", "github_url": "https://github.com/cgohlke/molmass"}
+{"domain": "Health sciences", "subdiscipline": "Medical imaging", "repo_name": "MONAI", "github_url": "https://github.com/Project-MONAI/MONAI"}
+{"domain": "Physical sciences", "subdiscipline": "Mathematics and computing", "repo_name": "mpmath", "github_url": "https://github.com/fredrik-johansson/mpmath"}
+{"domain": "Scientific community and society", "subdiscipline": "Social sciences", "repo_name": "NetworKit", "github_url": "https://github.com/networkit/networkit"}
+{"domain": "Scientific community and society", "subdiscipline": "Social sciences", "repo_name": "NetworkX", "github_url": "https://github.com/networkx/networkx"}
+{"domain": "Health sciences", "subdiscipline": "Signs and symptoms", "repo_name": "NeuroKit", "github_url": "https://github.com/neuropsychology/NeuroKit"}
+{"domain": "Biological sciences", "subdiscipline": "Physiology", "repo_name": "NeuroKit2", "github_url": "https://github.com/neuropsychology/NeuroKit"}
+{"domain": "Health sciences", "subdiscipline": "Neurology", "repo_name": "nilearn", "github_url": "https://github.com/nilearn/nilearn"}
+{"domain": "Computer Science", "subdiscipline": "NLP", "repo_name": "NLTK", "github_url": "https://github.com/nltk/nltk"}
+{"domain": "Earth and environmental sciences", "subdiscipline": "Solid Earth sciences", "repo_name": "ObsPy", "github_url": "https://github.com/obspy/obspy"}
+{"domain": "Scientific community and society", "subdiscipline": "Energy and society", "repo_name": "oemof", "github_url": "https://github.com/oemof/oemof"}
+{"domain": "Physical sciences", "subdiscipline": "Chemistry", "repo_name": "Open Babel", "github_url": "https://github.com/openbabel/openbabel"}
+{"domain": "Physical sciences", "subdiscipline": "Physics", "repo_name": "openmc", "github_url": "https://github.com/openmc-dev/openmc"}
+{"domain": "Scientific community and society", "subdiscipline": "Geography", "repo_name": "osmnx", "github_url": "https://github.com/gboeing/osmnx"}
+{"domain": "Physical sciences", "subdiscipline": "Mathematics and computing", "repo_name": "phonopy", "github_url": "https://github.com/phonopy/phonopy"}
+{"domain": "Scientific community and society", "subdiscipline": "Agriculture", "repo_name": "plantcv", "github_url": "https://github.com/danforthcenter/plantcv"}
+{"domain": "Physical sciences", "subdiscipline": "Physics", "repo_name": "PlasmaPy", "github_url": "https://github.com/PlasmaPy/PlasmaPy"}
+{"domain": "Computer Science", "subdiscipline": "Machine Learning", "repo_name": "pmdarima", "github_url": "https://github.com/alkaline-ml/pmdarima"}
+{"domain": "Earth and environmental sciences", "subdiscipline": "Planetary science", "repo_name": "poliastro", "github_url": "https://github.com/poliastro/poliastro"}
+{"domain": "Earth and environmental sciences", "subdiscipline": "Ecology", "repo_name": "Prophet", "github_url": "https://github.com/facebook/prophet"}
+{"domain": "Physical sciences", "subdiscipline": "Chemistry", "repo_name": "psi4", "github_url": "https://github.com/psi4/psi4"}
+{"domain": "Biological sciences", "subdiscipline": "Psychology", "repo_name": "PsychoPy", "github_url": "https://github.com/psychopy/psychopy"}
+{"domain": "Physical sciences", "subdiscipline": "Physics", "repo_name": "PyAbel", "github_url": "https://github.com/PyAbel/PyAbel"}
+{"domain": "Biological sciences", "subdiscipline": "Genetics", "repo_name": "pybedtools", "github_url": "https://github.com/daler/pybedtools"}
+{"domain": "Physical sciences", "subdiscipline": "Physics", "repo_name": "PyDy", "github_url": "https://github.com/pydy/pydy"}
+{"domain": "Earth and environmental sciences", "subdiscipline": "Planetary science", "repo_name": "pyephem", "github_url": "https://github.com/brandon-rhodes/pyephem"}
+{"domain": "Scientific community and society", "subdiscipline": "Business and industry", "repo_name": "pyfolio", "github_url": "https://github.com/quantopian/pyfolio"}
+{"domain": "Scientific community and society", "subdiscipline": "Geography", "repo_name": "pygeos", "github_url": "https://github.com/pygeos/pygeos"}
+{"domain": "Physical sciences", "subdiscipline": "Physics", "repo_name": "pymatgen", "github_url": "https://github.com/materialsproject/pymatgen"}
+{"domain": "Biological sciences", "subdiscipline": "Psychology", "repo_name": "PyMC", "github_url": "https://github.com/pymc-devs/pymc"}
+{"domain": "Scientific community and society", "subdiscipline": "Social sciences", "repo_name": "pymc-marketing", "github_url": "https://github.com/pymc-labs/pymc-marketing"}
+{"domain": "Physical sciences", "subdiscipline": "Mathematics and computing", "repo_name": "pyomo", "github_url": "https://github.com/Pyomo/pyomo"}
+{"domain": "Earth and environmental sciences", "subdiscipline": "Ocean sciences", "repo_name": "pyPDAF", "github_url": "https://github.com/yumengch/pyPDAF"}
+{"domain": "Physical sciences", "subdiscipline": "Mathematics and computing", "repo_name": "PyProj", "github_url": "https://github.com/pyproj4/pyproj"}
+{"domain": "Scientific community and society", "subdiscipline": "Energy and society", "repo_name": "PyPSA", "github_url": "https://github.com/PyPSA/PyPSA"}
+{"domain": "Computer Science", "subdiscipline": "Machine Learning", "repo_name": "pyro", "github_url": "https://github.com/pyro-ppl/pyro"}
+{"domain": "Earth and environmental sciences", "subdiscipline": "Solid Earth sciences", "repo_name": "pyrocko", "github_url": "https://github.com/pyrocko/pyrocko"}
+{"domain": "Biological sciences", "subdiscipline": "Biological techniques", "repo_name": "pysam", "github_url": "https://github.com/pysam-developers/pysam"}
+{"domain": "Physical sciences", "subdiscipline": "Chemistry", "repo_name": "PySCF", "github_url": "https://github.com/pyscf/pyscf"}
+{"domain": "Earth and environmental sciences", "subdiscipline": "Ecology", "repo_name": "pySDM", "github_url": "https://github.com/atmos-cloud-sim-uj/PySDM"}
+{"domain": "Physical sciences", "subdiscipline": "Physics", "repo_name": "pysph", "github_url": "https://github.com/pypr/pysph"}
+{"domain": "Scientific community and society", "subdiscipline": "Social sciences", "repo_name": "python-igraph", "github_url": "https://github.com/igraph/python-igraph"}
+{"domain": "Scientific community and society", "subdiscipline": "Business and industry", "repo_name": "qlib", "github_url": "https://github.com/microsoft/qlib"}
+{"domain": "Physical sciences", "subdiscipline": "Mathematics and computing", "repo_name": "Quadratic", "github_url": "https://github.com/qpsolvers/qpsolvers"}
+{"domain": "Physical sciences", "subdiscipline": "Physics", "repo_name": "qutip", "github_url": "https://github.com/qutip/qutip"}
+{"domain": "Scientific community and society", "subdiscipline": "Geography", "repo_name": "Rasterio", "github_url": "https://github.com/rasterio/rasterio"}
+{"domain": "Physical sciences", "subdiscipline": "Chemistry", "repo_name": "RDKit", "github_url": "https://github.com/rdkit/rdkit"}
+{"domain": "Physical sciences", "subdiscipline": "Astronomy and planetary science", "repo_name": "rebound", "github_url": "https://github.com/hannorein/rebound"}
+{"domain": "Physical sciences", "subdiscipline": "Mathematics and computing", "repo_name": "SageMath", "github_url": "https://github.com/sagemath/sage"}
+{"domain": "Biological sciences", "subdiscipline": "Cell biology", "repo_name": "Scanpy", "github_url": "https://github.com/scverse/scanpy"}
+{"domain": "Biological sciences", "subdiscipline": "Cell biology", "repo_name": "scCellFie", "github_url": "https://github.com/earmingol/scCellFie"}
+{"domain": "Biological sciences", "subdiscipline": "Microbiology", "repo_name": "scikit-bio", "github_url": "https://github.com/biocore/scikit-bio"}
+{"domain": "Physical sciences", "subdiscipline": "Physics", "repo_name": "scikit-hep", "github_url": "https://github.com/scikit-hep/scikit-hep"}
+{"domain": "Physical sciences", "subdiscipline": "Mathematics and computing", "repo_name": "SciPy", "github_url": "https://github.com/scipy/scipy"}
+{"domain": "Biological sciences", "subdiscipline": "Computational biology and bioinformatics", "repo_name": "scvelo", "github_url": "https://github.com/theislab/scvelo"}
+{"domain": "Computer Science", "subdiscipline": "Machine Learning", "repo_name": "sktime", "github_url": "https://github.com/sktime/sktime"}
+{"domain": "Scientific community and society", "subdiscipline": "Social sciences", "repo_name": "SNAP", "github_url": "https://github.com/snap-stanford/snap-python"}
+{"domain": "Scientific community and society", "subdiscipline": "Social sciences", "repo_name": "SocialSim", "github_url": "https://github.com/pnnl/socialsim"}
+{"domain": "Computer Science", "subdiscipline": "NLP", "repo_name": "spaCy", "github_url": "https://github.com/explosion/spaCy"}
+{"domain": "Biological sciences", "subdiscipline": "Molecular biology", "repo_name": "SPM", "github_url": "https://github.com/YanLab-Westlake/SPM"}
+{"domain": "Computer Science", "subdiscipline": "NLP", "repo_name": "Stanza", "github_url": "https://github.com/stanfordnlp/stanza"}
+{"domain": "Scientific community and society", "subdiscipline": "Social sciences", "repo_name": "statsmodels", "github_url": "https://github.com/statsmodels/statsmodels"}
+{"domain": "Physical sciences", "subdiscipline": "Astronomy and planetary science", "repo_name": "SunPy", "github_url": "https://github.com/sunpy/sunpy"}
+{"domain": "Physical sciences", "subdiscipline": "Mathematics and computing", "repo_name": "sympy", "github_url": "https://github.com/sympy/sympy"}
+{"domain": "Biological sciences", "subdiscipline": "Systems biology", "repo_name": "tellurium", "github_url": "https://github.com/sys-bio/tellurium"}
+{"domain": "Physical sciences", "subdiscipline": "Chemistry", "repo_name": "TenCirChem", "github_url": "https://github.com/tencent-quantum-lab/TenCirChem"}
+{"domain": "Computer Science", "subdiscipline": "NLP", "repo_name": "TextBlob", "github_url": "https://github.com/sloria/TextBlob"}
+{"domain": "Computer Science", "subdiscipline": "Machine Learning", "repo_name": "tsfresh", "github_url": "https://github.com/blue-yonder/tsfresh"}
+{"domain": "Physical sciences", "subdiscipline": "Physics", "repo_name": "UFL", "github_url": "https://github.com/FEniCS/ufl"}
+{"domain": "Computer Science", "subdiscipline": "NLP", "repo_name": "vaderSentiment", "github_url": "https://github.com/cjhutto/vaderSentiment"}
+{"domain": "Physical sciences", "subdiscipline": "Chemistry", "repo_name": "VULCAN", "github_url": "https://github.com/exoclime/VULCAN"}
+{"domain": "Computer Science", "subdiscipline": "Machine Learning", "repo_name": "whoosh", "github_url": "https://github.com/mchaput/whoosh"}
+{"domain": "Earth and environmental sciences", "subdiscipline": "Climate sciences", "repo_name": "xarray", "github_url": "https://github.com/pydata/xarray"}
+{"domain": "Earth and environmental sciences", "subdiscipline": "Ocean sciences", "repo_name": "xmitgcm", "github_url": "https://github.com/MITgcm/xmitgcm"}
+{"domain": "Physical sciences", "subdiscipline": "Physics", "repo_name": "yt", "github_url": "https://github.com/yt-project/yt"}
+{"domain": "Health sciences", "subdiscipline": "Medical imaging", "repo_name": "CONCH", "github_url": "https://github.com/mahmoodlab/CONCH"}
+{"domain": "Health sciences", "subdiscipline": "Medical imaging", "repo_name": "MUSK", "github_url": "https://github.com/lilab-stanford/MUSK"}
+{"domain": "Health sciences", "subdiscipline": "Medical imaging", "repo_name": "MedSAM", "github_url": "https://github.com/bowang-lab/MedSAM"}
+{"domain": "Health sciences", "subdiscipline": "Diseases", "repo_name": "MedSSS", "github_url": "https://github.com/pixas/MedSSS"}
+{"domain": "Computer Science", "subdiscipline": "NLP", "repo_name": "ModernBERT", "github_url": "https://github.com/AnswerDotAI/ModernBERT"}
+{"domain": "Health sciences", "subdiscipline": "Diseases", "repo_name": "PathFinderCRC", "github_url": "https://github.com/LiangJunhao-THU/PathFinderCRC"}
+{"domain": "Health sciences", "subdiscipline": "Medical imaging", "repo_name": "RETFound_MAE", "github_url": "https://github.com/rmaphoh/RETFound_MAE"}
+{"domain": "Health sciences", "subdiscipline": "Diseases", "repo_name": "STAMP", "github_url": "https://github.com/KatherLab/STAMP"}
+{"domain": "Computer Science", "subdiscipline": "Machine Learning", "repo_name": "TabPFN", "github_url": "https://github.com/PriorLabs/TabPFN"}
+{"domain": "Health sciences", "subdiscipline": "Medical imaging", "repo_name": "UNI", "github_url": "https://github.com/mahmoodlab/UNI"}
+{"domain": "Biological sciences", "subdiscipline": "Cell biology", "repo_name": "cytopus", "github_url": "https://github.com/wallet-maker/cytopus"}
+{"domain": "Computer Science", "subdiscipline": "Machine Learning", "repo_name": "flowmap", "github_url": "https://github.com/dcharatan/flowmap"}
+{"domain": "Health sciences", "subdiscipline": "Medical imaging", "repo_name": "nnUNet", "github_url": "https://github.com/MIC-DKFZ/nnUNet"}
