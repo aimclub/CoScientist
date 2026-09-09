@@ -51,11 +51,13 @@ agents:
       - MedicalAgent
     callbacks:
       before_model: [save_uploaded_artifacts, seed_coder_workspace]
-      before_agent: [before_get_task, inject_graph_root, inject_research_context]
+      before_agent: [ask_pipeline_scope, before_get_task, inject_graph_root, inject_research_context]
       after_model:
+        - enforce_pipeline_scope_hops
         - coalesce_experiment_module_calls
         - suppress_experiment_module_after_completed
         - guard_unknown_tools
+      after_tool: [mark_pipeline_scope_lane]
     hitl: true
     a2a:
       key: orchestrator

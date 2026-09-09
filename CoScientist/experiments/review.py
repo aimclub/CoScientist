@@ -528,6 +528,7 @@ class ExperimentReviewSessionAgent(SessionAgent):
                 hypothesis_refs=context.get("hypothesis_refs") or [],
                 repo_candidates=context.get("repo_candidates") or [],
                 operations=context.get("operations") or [],
+                pipeline_scope=context.get("pipeline_scope"),
             )
             if errs := _context_invariant_errors(plan, context):
                 raise PlanValidationError("ExperimentPlan context invariants failed", errors=errs)
