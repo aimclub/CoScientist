@@ -6,7 +6,7 @@
       { name: "PlannerAgent", icon: "map", desc: "Roadmap Planner" },
       { name: "ToolsViewer", icon: "science", desc: "Tools Viewer" },
       { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Knowledge Graph", id: "graph-link", href: "/graph" },
-      { name: "MCPBuilds", icon: "build", desc: "MCP Builds", href: "/builds" },
+      { name: "MCPBuilder", icon: "build", desc: "MCP Builder", href: "/alembic/" },
       { name: "CoderSandbox", icon: "terminal", desc: "CoderSandbox", id: "coder-sandbox-link", href: "http://localhost:8884/" },
       { name: "__settings__", icon: "settings", desc: "Settings" },
     ];
@@ -58,8 +58,8 @@
         } else {
           window.open('/graph', '_blank');
         }
-      } else if (name === "MCPBuilds") {
-        window.open('/builds', '_blank');
+      } else if (name === "MCPBuilder") {
+        window.open('/alembic/', '_blank');
       } else if (name === "CoderSandbox") {
         const link = document.getElementById('coder-sandbox-link');
         const url = (link && link.href) ? link.href : (activeSandboxWatchUrl || getBaseSandboxUrl());

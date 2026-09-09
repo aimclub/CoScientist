@@ -101,6 +101,12 @@ class _Ctx:
 _DONE_LOG = """\
   image     : alembic-tool:gget
   container : alembic-serve-gget-b29990
+  url       : http://build-host:20162/mcp
+"""
+
+_LOOPBACK_DONE_LOG = """\
+  image     : alembic-tool:gget
+  container : alembic-serve-gget-b29990
   url       : http://localhost:20162/mcp
 """
 
@@ -133,6 +139,7 @@ def _fake_build(monkeypatch, tmp_path, *, log=_DONE_LOG, returncode=0):
         "status": "running",
         "started_at": 0.0,
         "log_file": str(tmp_path / "build.log"),
+        "workdir": str(tmp_path / "work"),
     }
     monkeypatch.setattr(alembic_tools, "_JOBS", {"gget-938c68": rec})
     return alembic_tools, rec
@@ -168,7 +175,7 @@ def test_a_finished_build_registers_itself_with_nobody_watching(monkeypatch, tmp
     alembic_tools._runner(rec)  # the build thread's body, run inline
 
     assert rec["status"] == "done"
-    assert calls == [{"url": "http://localhost:20162/mcp", "name": "gget"}]
+    assert calls == [{"url": "http://build-host:20162/mcp", "name": "gget"}]
     assert rec["registered"] is True
 
 
@@ -209,7 +216,7 @@ def test_polling_a_registered_build_reports_it_and_makes_it_callable(
     assert len(calls) == 1  # the poll does not register a second time
     assert out["registered"] is True
     assert ctx.state["deployed_mcps"] == [
-        {"url": "http://localhost:20162/mcp", "name": "gget"}
+        {"url": "http://build-host:20162/mcp", "name": "gget"}
     ]
 
 
@@ -236,12 +243,34 @@ def test_a_build_that_never_ran_the_thread_is_registered_on_its_first_poll(
     alembic_tools, rec = _fake_build(monkeypatch, tmp_path)
     _stub_registry(monkeypatch, calls)
     (tmp_path / "build.log").write_text(_DONE_LOG, encoding="utf-8")
-    rec.update(status="done", finished_at=1.0, mcp_url="http://localhost:20162/mcp")
+    rec.update(status="done", finished_at=1.0, mcp_url="http://build-host:20162/mcp")
 
     out = asyncio.run(alembic_tools.check_mcp_build("gget-938c68", _Ctx()))
 
-    assert calls == [{"url": "http://localhost:20162/mcp", "name": "gget"}]
+    assert calls == [{"url": "http://build-host:20162/mcp", "name": "gget"}]
     assert out["registered"] is True
+
+
+def test_a_loopback_build_is_not_pushed_to_the_shared_catalogue(monkeypatch, tmp_path):
+    """A localhost URL in a shared registry is a broken entry — other machines
+    resolve it to their own loopback. The build is still callable in-process,
+    just kept out of the catalogue with a hint on how to opt in."""
+    calls = []
+    alembic_tools, rec = _fake_build(monkeypatch, tmp_path, log=_LOOPBACK_DONE_LOG)
+    _stub_registry(monkeypatch, calls)
+    ctx = _Ctx()
+
+    alembic_tools._runner(rec)
+    out = asyncio.run(alembic_tools.check_mcp_build("gget-938c68", ctx))
+
+    assert calls == []  # nothing pushed to the shared catalogue
+    assert rec["registered"] is False
+    assert "A2A_HOST" in rec["registration_error"]
+    assert out["registration_error"] == rec["registration_error"]
+    # still callable this run — the executor uses deployed_mcps directly
+    assert ctx.state["deployed_mcps"] == [
+        {"url": "http://localhost:20162/mcp", "name": "gget"}
+    ]
 
 
 def test_a_server_whose_tools_could_not_be_indexed_is_not_called_registered(

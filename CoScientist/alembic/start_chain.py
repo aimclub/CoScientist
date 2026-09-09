@@ -178,6 +178,14 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
     if ns.gpus:
         cmd += ["--gpus", ns.gpus]
     cmd += _mount_args(repo, ns)
+    # Bind-mount a host-side workdir into the container's ALEMBIC_WORKDIR so
+    # the pipeline's on-disk artifacts (exploration.md, plan.json, output/*)
+    # survive after the build container exits. Used by the web UI to render
+    # per-job reports; opt-in via env so nothing changes when unset.
+    host_workdir = os.environ.get("ALEMBIC_HOST_WORKDIR")
+    if host_workdir:
+        Path(host_workdir).mkdir(parents=True, exist_ok=True)
+        cmd += ["-v", f"{host_workdir}:/work/.alembic"]
     cmd += _env_args(ns.env_file)
     # A soft hint reaches the pipeline through the environment, like the rest of
     # the ALEMBIC_* settings.

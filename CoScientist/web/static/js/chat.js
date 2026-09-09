@@ -44,8 +44,8 @@
       const raw = typeof text === 'string' ? stripThinking(text) : String(text == null ? '' : text);
       const withLocalLinks = raw
         .replace(/(^|\s)(\/api\/tz-document[^\s)]*)/g, '$1[$2]($2)')
-        // Live MCP build page: /builds/<job_id> (agent surfaces it as progress_page).
-        .replace(/(^|\s)(\/builds\/[A-Za-z0-9._-]+)/g, '$1[$2]($2)');
+        // Live MCP build page: /alembic/builds/<job_id> (agent surfaces it as progress_page).
+        .replace(/(^|\s)(\/alembic\/builds\/[A-Za-z0-9._-]+)/g, '$1[$2]($2)');
       const html = marked.parse(withLocalLinks);
       const clean = DOMPurify.sanitize(html, { ADD_ATTR: ['target'] });
       return clean.replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" class="text-primary underline" ');

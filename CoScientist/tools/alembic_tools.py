@@ -26,10 +26,15 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from dotenv import load_dotenv
 from google.adk.tools import ToolContext
 
 # /<root>/CoScientist/tools/alembic_tools.py -> /<root>
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+# Hydrate os.environ from the project .env so subprocess builds inherit vars
+# like A2A_HOST (advertise host for the served MCP). Idempotent; a no-op when
+# the main app already called load_dotenv earlier.
+load_dotenv(PROJECT_ROOT / ".env")
 START_CHAIN = PROJECT_ROOT / "CoScientist" / "alembic" / "start_chain.py"
 # Host-side stdout logs of the build subprocesses (the pipeline's own logs live
 # inside the build container; this is the start_chain wrapper output).
@@ -47,6 +52,38 @@ _WEB_BASE_URL = os.environ.get("COSCIENTIST_WEB_BASE_URL", "").rstrip("/")
 
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _LOCK = threading.Lock()
+
+# Per-job identity file, alongside the log. Persisted so a process restart can
+# rebuild `_JOBS` without reparsing docker chatter out of the log.
+_META_FIELDS = ("job_id", "repo_url", "status", "started_at", "finished_at",
+                "log_file", "workdir", "pid", "mcp_url", "image", "container",
+                "error")
+
+
+def _meta_path(job_id: str) -> Path:
+    return LOG_DIR / f"{job_id}.json"
+
+
+def _write_job_meta(rec: Dict[str, Any]) -> None:
+    """Snapshot the fields we care about to <log_dir>/<job_id>.json."""
+    try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        payload = {k: rec.get(k) for k in _META_FIELDS if rec.get(k) is not None}
+        _meta_path(rec["job_id"]).write_text(
+            json.dumps(payload, ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError as exc:  # noqa: BLE001 — best effort
+        logger.warning("job meta write failed for %s: %s", rec.get("job_id"), exc)
+
+
+def _read_job_meta(job_id: str) -> Optional[Dict[str, Any]]:
+    p = _meta_path(job_id)
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
 
 # Patterns over start_chain.py / alembic.main output.
 _URL_RE = re.compile(r"url\s*:\s*(http://\S+/mcp)")
@@ -99,11 +136,28 @@ def _finalize(rec: Dict[str, Any], returncode: int) -> None:
 def _runner(rec: Dict[str, Any]) -> None:
     log_path = Path(rec["log_file"])
     log_path.parent.mkdir(parents=True, exist_ok=True)
+    # Per-job workdir: every build gets its own <job_id>/workdir so artifacts of
+    # earlier builds of the same repo are not overwritten. Alembic reads
+    # ALEMBIC_WORKDIR at process start; each subprocess is fresh.
+    workdir = Path(rec["workdir"])
+    workdir.mkdir(parents=True, exist_ok=True)
+    # Persist the record's identity to disk so a restart of the web/agent
+    # process can rebuild the registry from scratch. ``_JOBS`` is in-memory
+    # only; without this file, the log alone cannot always tell us the repo
+    # URL a job was launched against.
+    _write_job_meta(rec)
+    env = os.environ.copy()
+    env["ALEMBIC_WORKDIR"] = str(workdir)
+    # start_chain.py bind-mounts this dir into the build container at
+    # /work/.alembic, so the pipeline's artifacts (exploration.md, plan.json,
+    # generated tools/, server.py, setup.sh) land on the host for the web UI
+    # to render — instead of dying with the container.
+    env["ALEMBIC_HOST_WORKDIR"] = str(workdir)
     try:
         with open(log_path, "w", encoding="utf-8") as log:
             proc = subprocess.Popen(
                 [sys.executable, str(START_CHAIN), rec["repo_url"]],
-                stdout=log, stderr=subprocess.STDOUT, cwd=PROJECT_ROOT,
+                stdout=log, stderr=subprocess.STDOUT, cwd=PROJECT_ROOT, env=env,
             )
             with _LOCK:
                 rec["pid"] = proc.pid
@@ -116,6 +170,7 @@ def _runner(rec: Dict[str, Any]) -> None:
         return
     with _LOCK:
         _finalize(rec, returncode)
+    _write_job_meta(rec)
     # The catalogue entry is made here, when the build finishes, and not when
     # someone asks about it. An agent that starts a build and reports the job_id
     # back (which is what its prompt tells it to do) may never poll, and a tool
@@ -141,13 +196,15 @@ def _snapshot(rec: Dict[str, Any], with_log_tail: bool = True) -> Dict[str, Any]
         "repo_url": rec["repo_url"],
         "status": rec["status"],
         "elapsed_seconds": round((rec.get("finished_at") or time.time()) - rec["started_at"]),
+        "started_at": rec["started_at"],
         # Live build page in the CoScientist web UI (tails this build's log and
         # renders the streamed pipeline events). ``progress_page`` is relative
         # and always present, since the web layer resolves it itself.
-        "progress_page": f"/builds/{rec['job_id']}",
+        "progress_page": f"/alembic/builds/{rec['job_id']}",
+        "workdir": rec.get("workdir"),
     }
     if _WEB_BASE_URL:
-        out["progress_url"] = f"{_WEB_BASE_URL}/builds/{rec['job_id']}"
+        out["progress_url"] = f"{_WEB_BASE_URL}/alembic/builds/{rec['job_id']}"
     text = _read_log(rec) if (with_log_tail or rec["status"] != "running") else ""
     stages = _STAGE_RE.findall(text)
     if stages:
@@ -224,6 +281,7 @@ async def build_mcp_server(
             "status": "running",
             "started_at": time.time(),
             "log_file": str(LOG_DIR / f"{job_id}.log"),
+            "workdir": str(LOG_DIR / job_id / "workdir"),
         }
         _evict_finished_jobs()
         _JOBS[job_id] = rec
@@ -282,6 +340,21 @@ async def _register_in_catalogue(rec: Dict[str, Any]) -> None:
     if rec.get("status") != "done" or not rec.get("mcp_url") or "registered" in rec:
         return
     rec["registered"] = True  # one attempt per build, however often it is polled
+
+    # Loopback URL in a shared catalogue is a broken entry — other machines
+    # resolve it to their own localhost. Skip registration and tell the user
+    # how to opt in.
+    from urllib.parse import urlparse
+
+    from CoScientist.alembic.remote import _LOCAL_HOSTS
+
+    if urlparse(rec["mcp_url"]).hostname in _LOCAL_HOSTS:
+        rec["registered"] = False
+        rec["registration_error"] = (
+            "работает локально, в каталог не добавлен, "
+            "задай A2A_HOST в .env если нужна регистрация"
+        )
+        return
 
     from CoScientist.tools.registry_bridge import register_mcp_server
 
@@ -367,6 +440,23 @@ ALEMBIC_TOOLS = [build_mcp_server, check_mcp_build, list_mcp_builds]
 # present, and disk is the fallback (status re-derived from the log).
 _EVENT_PREFIX = "ALEMBIC_EVENT "
 
+_REPO_URL_RE = re.compile(
+    r"(https?://[^\s\"'<>]+?(?:\.git|/[^\s\"'<>]+?))(?=[\s\"'<>]|$)"
+)
+
+
+def _recover_repo_url(text: str) -> Optional[str]:
+    """Best-effort repo URL recovery from a build log. Docker echoes the run
+    args with the URL near the end; the ``pipeline start`` ALEMBIC_EVENT also
+    embeds it as ``\"repo_url\"``. Try the structured event first."""
+    m = re.search(r'"repo_url"\s*:\s*"([^"]+)"', text)
+    if m:
+        return m.group(1)
+    m = _REPO_URL_RE.search(text)
+    if m:
+        return m.group(1)
+    return None
+
 
 def _status_from_log(text: str) -> str:
     """Best-effort status for a build we only know from its on-disk log (started
@@ -390,22 +480,76 @@ def web_build_log_file(job_id: str) -> Optional[Path]:
     return p if p.exists() else None
 
 
+def web_build_workdir(job_id: str) -> Optional[Path]:
+    """The alembic workdir for a build, or None if it never ran / never
+    persisted one (pre-per-job-workdir legacy builds)."""
+    with _LOCK:
+        rec = _JOBS.get(job_id)
+    if rec is not None and rec.get("workdir"):
+        p = Path(rec["workdir"])
+        return p if p.exists() else None
+    p = LOG_DIR / job_id / "workdir"
+    return p if p.exists() else None
+
+
+def web_build_repo_url(job_id: str) -> Optional[str]:
+    """Best-effort repo_url for a build: in-memory record → persisted meta →
+    parse the log's first ``start_chain`` invocation line."""
+    with _LOCK:
+        rec = _JOBS.get(job_id)
+    if rec is not None:
+        return rec.get("repo_url")
+    meta = _read_job_meta(job_id)
+    if meta and meta.get("repo_url"):
+        return meta["repo_url"]
+    log = LOG_DIR / f"{job_id}.log"
+    if not log.exists():
+        return None
+    try:
+        head = log.read_text(encoding="utf-8", errors="replace")[:4000]
+    except OSError:
+        return None
+    url = _recover_repo_url(head)
+    if url:
+        # Backfill the meta file so subsequent lookups skip the regex.
+        _write_job_meta({"job_id": job_id, "repo_url": url,
+                         "log_file": str(log),
+                         "workdir": str(LOG_DIR / job_id / "workdir")})
+    return url
+
+
 def web_build_snapshot(job_id: str) -> Optional[Dict[str, Any]]:
     """Status/result view of one build for the web page. In-memory record wins;
-    otherwise reconstruct a minimal snapshot from the on-disk log."""
+    otherwise reconstruct from the on-disk meta file + log tail."""
     with _LOCK:
         rec = _JOBS.get(job_id)
         if rec is not None:
             return _snapshot(rec)
     log = LOG_DIR / f"{job_id}.log"
-    if not log.exists():
+    meta = _read_job_meta(job_id) or {}
+    if not log.exists() and not meta:
         return None
-    text = log.read_text(encoding="utf-8", errors="replace")
-    status = _status_from_log(text)
-    out: Dict[str, Any] = {"job_id": job_id, "status": status,
-                           "progress_page": f"/builds/{job_id}"}
+    text = log.read_text(encoding="utf-8", errors="replace") if log.exists() else ""
+    status = meta.get("status") or _status_from_log(text)
+    workdir_p = Path(meta["workdir"]) if meta.get("workdir") else LOG_DIR / job_id / "workdir"
+    out: Dict[str, Any] = {
+        "job_id": job_id,
+        "status": status,
+        "progress_page": f"/alembic/builds/{job_id}",
+        "workdir": str(workdir_p) if workdir_p.exists() else None,
+        "started_at": meta.get("started_at") or (log.stat().st_mtime if log.exists() else None),
+    }
+    if meta.get("repo_url"):
+        out["repo_url"] = meta["repo_url"]
+    else:
+        # Legacy fallback: recover repo_url from the log body.
+        url = _recover_repo_url(text)
+        if url:
+            out["repo_url"] = url
+    if meta.get("started_at") and meta.get("finished_at"):
+        out["elapsed_seconds"] = round(meta["finished_at"] - meta["started_at"])
     if _WEB_BASE_URL:
-        out["progress_url"] = f"{_WEB_BASE_URL}/builds/{job_id}"
+        out["progress_url"] = f"{_WEB_BASE_URL}/alembic/builds/{job_id}"
     if status == "done":
         url = _URL_RE.search(text)
         image = _IMAGE_RE.search(text)
@@ -422,23 +566,29 @@ def web_build_snapshot(job_id: str) -> Optional[Dict[str, Any]]:
 
 
 def web_list_builds() -> list:
-    """Every build the web UI can show: in-memory records merged with any
-    on-disk logs from other processes/sessions, newest first."""
+    """Every build the web UI can show: in-memory records merged with all
+    persisted on-disk builds (meta files + raw logs), newest first."""
     seen: Dict[str, Dict[str, Any]] = {}
     with _LOCK:
         for rec in _JOBS.values():
             seen[rec["job_id"]] = _snapshot(rec, with_log_tail=False)
     if LOG_DIR.exists():
-        for log in LOG_DIR.glob("*.log"):
-            jid = log.stem
+        # Every persisted job identity — survives a process restart even
+        # when no log file was written (very short-lived failure, wipe, etc.).
+        job_ids = {p.stem for p in LOG_DIR.glob("*.log")}
+        job_ids |= {p.stem for p in LOG_DIR.glob("*.json")}
+        for jid in job_ids:
             if jid in seen:
                 continue
             snap = web_build_snapshot(jid)
             if snap is not None:
-                snap["mtime"] = log.stat().st_mtime
+                log = LOG_DIR / f"{jid}.log"
+                if log.exists():
+                    snap["mtime"] = log.stat().st_mtime
+                    snap.setdefault("started_at", snap["mtime"])
                 seen[jid] = snap
     return sorted(seen.values(),
-                  key=lambda s: s.get("mtime", s.get("elapsed_seconds", 0)),
+                  key=lambda s: s.get("started_at") or s.get("mtime") or 0,
                   reverse=True)
 
 
@@ -489,6 +639,6 @@ def import_jobs_snapshot(jobs: list) -> None:
 
 
 __all__ = ["ALEMBIC_TOOLS", "build_mcp_server", "check_mcp_build", "list_mcp_builds",
-           "web_build_log_file", "web_build_snapshot", "web_list_builds",
-           "parse_event_line", "export_jobs_snapshot", "import_jobs_snapshot",
-           "LOG_DIR"]
+           "web_build_log_file", "web_build_snapshot", "web_build_workdir",
+           "web_build_repo_url", "web_list_builds", "parse_event_line",
+           "export_jobs_snapshot", "import_jobs_snapshot", "LOG_DIR"]

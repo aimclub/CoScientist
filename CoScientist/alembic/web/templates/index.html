@@ -119,13 +119,14 @@
 
   <!-- ── Header ─────────────────────────────────────────────────────── -->
   <header class="flex items-center gap-5 px-6 min-h-16 py-2 border-b border-outline-variant/20 bg-surface-lowest shrink-0">
-    <div class="flex items-center gap-2.5 shrink-0">
+    <a id="home-link" href="#" class="flex items-center gap-2.5 shrink-0 hover:opacity-80 transition"
+       title="New build (paste a repo)">
       <span class="material-symbols-outlined text-primary text-[26px]">experiment</span>
       <div class="leading-none">
         <div class="font-head text-lg font-bold tracking-[0.2em] text-primary uppercase">Alembic</div>
         <div class="text-[9px] font-mono text-outline tracking-[0.25em] uppercase mt-1">repo → mcp</div>
       </div>
-    </div>
+    </a>
 
     <div class="flex-1 flex flex-col gap-1.5 max-w-3xl">
       <div class="flex items-center gap-2">
@@ -142,6 +143,19 @@
           class="hidden items-center gap-1.5 bg-error/15 text-error font-head font-semibold text-sm px-4 h-10 rounded-control hover:bg-error/25 active:scale-[.98] transition">
           <span class="material-symbols-outlined text-[19px]">stop</span> Stop
         </button>
+        <a id="builds-link" href="#"
+          class="flex items-center gap-1.5 bg-surface text-on-surface-dim font-head font-semibold text-sm px-4 h-10 rounded-control border border-outline-variant/30 hover:border-primary/60 hover:text-primary transition">
+          <span class="material-symbols-outlined text-[19px]">history</span> Builds
+        </a>
+        <a id="chat-link" href="/"
+          class="flex items-center gap-1.5 bg-surface text-on-surface-dim font-head font-semibold text-sm px-4 h-10 rounded-control border border-outline-variant/30 hover:border-primary/60 hover:text-primary transition"
+          title="Back to CoScientist chat">
+          <span class="material-symbols-outlined text-[19px]">chat</span> Chat
+        </a>
+        <a id="new-build-link" href="#"
+          class="hidden items-center gap-1.5 bg-primary text-on-primary font-head font-semibold text-sm px-4 h-10 rounded-control hover:brightness-110 active:scale-[.98] transition">
+          <span class="material-symbols-outlined text-[19px]">add</span> New MCP from repo
+        </a>
       </div>
       <div class="flex items-center gap-2 bg-surface/60 rounded-control border border-outline-variant/20 px-3 h-7 focus-within:border-primary/40 transition-colors">
         <span class="material-symbols-outlined text-outline text-[15px]">target</span>
@@ -216,9 +230,28 @@
     // Color Lock: idle=outline, running=accent, done=green, failed/timeout=error.
     const C = { idle: "#8c90a1", running: "#00daf3", done: "#40e56c", failed: "#ffb4ab", timeout: "#ffb4ab" };
 
+    // ─── mode + mount base ──────────────────────────────────────────
+    // Two mount points:
+    //   (a) Standalone alembic app at root: "/" (live) + "/builds[/{jid}]" (history).
+    //   (b) Common web UI mounts the same alembic app under "/alembic": paths
+    //       become "/alembic/", "/alembic/builds[/{jid}]" — everything the
+    //       template fetches must be prefixed with BASE.
+    // The common UI ALSO renders this template at its own top-level "/builds*"
+    // (history index / per-job) using its own shared router — no BASE there.
+    const _p = location.pathname;
+    const IS_MOUNTED_ALEMBIC = _p === "/alembic" || _p.startsWith("/alembic/");
+    const BASE = IS_MOUNTED_ALEMBIC ? "/alembic" : "";
+    // Path within the mount ("/", "/builds", "/builds/{jid}").
+    const SUB = IS_MOUNTED_ALEMBIC ? _p.slice(BASE.length) || "/" : _p;
+    const BUILD_MATCH = SUB.match(/^\/builds\/([^/]+)\/?$/);
+    const JOB_ID = BUILD_MATCH ? decodeURIComponent(BUILD_MATCH[1]) : null;
+    // Live mode: only the mount root drives a fresh pipeline over /ws.
+    const MODE = (SUB === "/" || SUB === "") ? "live" : "history";
+
     // ─── state ──────────────────────────────────────────────────────
     let ws;
     let lastRepo = "";               // repo of the most recent run (for artefacts / serve)
+    let currentJobId = JOB_ID;       // set from snapshot event in live mode
     const stageState = {};
     // left panel = an accumulating column, filled as the run progresses
     const left = { exploration: null, files: null, setup: null, examples: null };
@@ -597,6 +630,24 @@
     }
 
     // ─── activity feed ──────────────────────────────────────────────
+    // Whitelist for the raw-log stream: keep only lines that clearly carry
+    // pipeline / user-visible signal. Everything else (docker layer chatter,
+    // per-write DEBUG dumps, ANSI-coded log-level noise) is silent — the raw
+    // .log file on disk is still authoritative.
+    function isImportantLog(line) {
+      if (!line) return false;
+      // Strip ANSI escapes for the match.
+      const s = line.replace(/\x1b\[[0-9;]*m/g, "").trim();
+      if (!s) return false;
+      if (/^\[start-chain\]/.test(s)) return true;
+      if (/^\[alembic\]/.test(s)) return true;
+      if (/pipeline failed/i.test(s)) return true;
+      if (/^Traceback/.test(s)) return true;
+      if (/^ERROR/i.test(s)) return true;
+      if (s.startsWith("url:") || s.startsWith("image:") || s.startsWith("container:")) return true;
+      return false;
+    }
+
     function pushFeed(stage, name, args) {
       const feed = document.getElementById("feed");
       const argStr = args && Object.keys(args).length ? JSON.stringify(args) : "";
@@ -628,10 +679,14 @@
 
     // ─── websocket ──────────────────────────────────────────────────
     function connect() {
+      // Live entry page has no WS: click "New MCP from repo" POSTs and
+      // redirects to the per-job page. Only per-job history mode connects.
+      if (MODE !== "history" || !JOB_ID) return;
       const proto = location.protocol === "https:" ? "wss" : "ws";
-      ws = new WebSocket(`${proto}://${location.host}/ws`);
+      const path = `${BASE}/builds/ws/${encodeURIComponent(JOB_ID)}`;
+      ws = new WebSocket(`${proto}://${location.host}${path}`);
       ws.onopen = () => { };
-      ws.onclose = () => { setRunning(false); setTimeout(connect, 1500); };
+      ws.onclose = () => setRunning(false);
       ws.onmessage = e => handle(JSON.parse(e.data));
     }
 
@@ -676,6 +731,34 @@
           if (expandedTools.has(nm)) renderRuns(nm);
           break;
         }
+        // per-job WS: initial snapshot + terminal status + raw log lines
+        case "snapshot":
+          if (m.repo_url) { lastRepo = m.repo_url; document.getElementById("repo-input").value = m.repo_url; }
+          if (m.job_id) currentJobId = m.job_id;
+          if (m.status === "running") setRunning(true);
+          break;
+        case "status":
+          setRunning(false);
+          if (m.status === "done") {
+            setNow("build complete", "#40e56c");
+            STAGES.forEach(s => { if (stageState[s.key] === "running") stageState[s.key] = "done"; });
+            if (m.mcp_url) setServeStatus("ready", "MCP ▸ " + m.mcp_url, m.mcp_url);
+          } else {
+            setNow(m.error ? ("failed: " + m.error.split("\n")[0]) : "failed", "#ffb4ab");
+            STAGES.forEach(s => { if (stageState[s.key] === "running") stageState[s.key] = "failed"; });
+          }
+          buildRail();
+          break;
+        case "log":
+          // Raw pipeline log is high-volume and duplicates the structured
+          // tool_call/tool_result events. Kept server-side in the .log file;
+          // silent in the feed unless it is clearly a pipeline / docker /
+          // error signal worth surfacing.
+          if (isImportantLog(m.line)) pushFeed("log", "log", { line: m.line });
+          break;
+        case "error":
+          setNow("error: " + (m.message || ""), "#ffb4ab");
+          break;
       }
     }
     function patchValidation(m) {
@@ -724,12 +807,30 @@
       document.getElementById("stop-btn").classList.toggle("hidden", !on);
       document.getElementById("stop-btn").classList.toggle("flex", on);
     }
-    document.getElementById("run-btn").onclick = () => {
+    document.getElementById("run-btn").onclick = async () => {
       const url = document.getElementById("repo-input").value.trim();
-      if (!url || !ws || ws.readyState !== 1) return;
-      lastRepo = url;
-      const target = document.getElementById("target-input").value.trim();
-      ws.send(JSON.stringify({ type: "run", repo_url: url, target: target || undefined }));
+      if (!url) return;
+      const btn = document.getElementById("run-btn");
+      btn.disabled = true;
+      try {
+        const r = await fetch(`${BASE}/api/builds`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repo_url: url }),
+        });
+        const body = await r.json();
+        if (!r.ok || body.status === "error") {
+          setNow("error: " + (body.detail || body.error || r.statusText), "#ffb4ab");
+          btn.disabled = false;
+          return;
+        }
+        // Build now runs as a detached subprocess. Jump to its detail page —
+        // closing this tab, navigating elsewhere, or refreshing has no effect.
+        location.href = `${BASE}/builds/${encodeURIComponent(body.job_id)}`;
+      } catch (e) {
+        setNow("error: " + e.message, "#ffb4ab");
+        btn.disabled = false;
+      }
     };
     document.getElementById("stop-btn").onclick = () => {
       if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: "stop" }));
@@ -740,7 +841,7 @@
 
     // download build artefacts (zip) for the current repo
     document.getElementById("download-btn").onclick = () => {
-      if (lastRepo) window.open("/artifacts?repo=" + encodeURIComponent(lastRepo), "_blank");
+      if (lastRepo) window.open(`${BASE}/artifacts?repo=` + encodeURIComponent(lastRepo), "_blank");
     };
     // serve toggle: on enable, build + run the MCP in a container
     function setServeStatus(state, text, url) {
@@ -810,10 +911,36 @@
       });
     })();
 
+    // ─── mode-driven UI adjustments ─────────────────────────────────
+    if (MODE === "history") {
+      // In per-job view we are NOT running a live pipeline — hide controls
+      // that only make sense against the standalone /ws endpoint, and swap
+      // in the "New MCP from repo" CTA that leads back to the live entry.
+      for (const id of ["run-btn", "stop-btn", "serve-toggle-wrap", "target-input", "repo-input"]) {
+        const el = document.getElementById(id);
+        if (el) el.classList.add("hidden");
+      }
+      // Also hide the wrapper div around repo-input for a clean header.
+      const repoWrap = document.getElementById("repo-input")?.parentElement;
+      if (repoWrap) repoWrap.classList.add("hidden");
+      const newBtn = document.getElementById("new-build-link");
+      if (newBtn) { newBtn.classList.remove("hidden"); newBtn.classList.add("flex"); newBtn.href = `${BASE}/`; }
+      // Bundle download → the shared router's per-job zip.
+      document.getElementById("download-btn").onclick = () => {
+        if (currentJobId) window.open(`${BASE}/builds/${encodeURIComponent(currentJobId)}/artifacts.zip`, "_blank");
+      };
+    }
+
+    // Header "Builds" button → mount-local history index.
+    document.getElementById("builds-link").href = `${BASE}/builds`;
+    // Header logo → mount-local live entry (paste a repo, run new build).
+    document.getElementById("home-link").href = `${BASE}/`;
+
     // ─── init ───────────────────────────────────────────────────────
     buildRail();
-    emptyState(document.getElementById("left-panel"), "account_tree", "awaiting explorer");
-    emptyState(document.getElementById("right-panel"), "build", "awaiting explorer");
+    const _emptyMsg = MODE === "live" ? "awaiting explorer" : "loading build…";
+    emptyState(document.getElementById("left-panel"), "account_tree", _emptyMsg);
+    emptyState(document.getElementById("right-panel"), "build", _emptyMsg);
     connect();
   </script>
 </body>

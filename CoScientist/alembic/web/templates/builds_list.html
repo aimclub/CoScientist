@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+
+<head>
+  <meta charset="utf-8" />
+  <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+  <title>Alembic — Builds</title>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <script>
+    tailwind.config = {
+      darkMode: "class",
+      theme: {
+        extend: {
+          colors: {
+            "primary": "#00daf3", "on-primary": "#00363d", "primary-container": "#007e8c",
+            "secondary": "#40e56c",
+            "error": "#ffb4ab", "error-strong": "#93000a",
+            "background": "#101319",
+            "surface-low": "#191c22", "surface": "#1d2026", "surface-lowest": "#0b0e14",
+            "surface-high": "#272a31",
+            "on-surface": "#e1e2eb", "on-surface-dim": "#c2c6d8",
+            "outline": "#8c90a1", "outline-variant": "#424656",
+          },
+          borderRadius: { "card": "0.75rem", "control": "0.5rem" },
+          fontFamily: {
+            head: ["Space Grotesk", "sans-serif"],
+            mono: ["JetBrains Mono", "monospace"],
+            body: ["Inter", "sans-serif"],
+          }
+        },
+      },
+    }
+  </script>
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    .material-symbols-outlined { font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24; }
+    tbody tr:hover { background: #1d2026; cursor: pointer; }
+    @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .4 } }
+    .pulse-dot { animation: pulse 1.4s infinite; }
+    .scroll::-webkit-scrollbar { width: 6px; height: 6px; }
+    .scroll::-webkit-scrollbar-thumb { background: #32353c; border-radius: 999px; }
+  </style>
+</head>
+
+<body class="bg-background text-on-surface min-h-screen">
+
+  <header class="flex items-center gap-5 px-6 min-h-16 py-2 border-b border-outline-variant/20 bg-surface-lowest">
+    <a id="home-link" href="#" class="flex items-center gap-2.5 hover:opacity-80 transition" title="New MCP from repo">
+      <span class="material-symbols-outlined text-primary text-[26px]">experiment</span>
+      <div class="leading-none">
+        <div class="font-head text-lg font-bold tracking-[0.2em] text-primary uppercase">Alembic</div>
+        <div class="text-[9px] font-mono text-outline tracking-[0.25em] uppercase mt-1">builds</div>
+      </div>
+    </a>
+    <div class="flex-1"></div>
+    <a id="back-chat-btn" href="/" class="flex items-center gap-1.5 bg-surface text-on-surface-dim font-head font-semibold text-sm px-4 h-10 rounded-control border border-outline-variant/30 hover:border-primary/60 hover:text-primary transition">
+      <span class="material-symbols-outlined text-[19px]">chat</span> CoScientist chat
+    </a>
+    <a id="new-build-btn" href="#" class="flex items-center gap-1.5 bg-primary text-on-primary font-head font-semibold text-sm px-4 h-10 rounded-control hover:brightness-110 active:scale-[.98] transition">
+      <span class="material-symbols-outlined text-[19px]">add</span> New MCP from repo
+    </a>
+  </header>
+
+  <main class="p-6 max-w-6xl mx-auto">
+    <div class="mb-4 flex items-center gap-3">
+      <span class="material-symbols-outlined text-outline text-[20px]">history</span>
+      <h1 class="font-head text-xl font-semibold text-on-surface">Pipeline runs</h1>
+      <span id="count-chip" class="text-[11px] font-mono text-outline bg-surface rounded-full px-2 py-0.5">0</span>
+      <button id="refresh-btn" title="Refresh" class="ml-auto flex items-center gap-1 text-xs font-mono text-outline hover:text-primary transition">
+        <span class="material-symbols-outlined text-[16px]">refresh</span> refresh
+      </button>
+    </div>
+
+    <div class="bg-surface border border-outline-variant/20 rounded-card overflow-hidden">
+      <table class="w-full text-sm">
+        <thead class="bg-surface-low text-outline">
+          <tr>
+            <th class="text-left font-head text-[11px] uppercase tracking-widest px-4 py-3">Status</th>
+            <th class="text-left font-head text-[11px] uppercase tracking-widest px-4 py-3">Build</th>
+            <th class="text-left font-head text-[11px] uppercase tracking-widest px-4 py-3">Repository</th>
+            <th class="text-left font-head text-[11px] uppercase tracking-widest px-4 py-3">MCP</th>
+            <th class="text-left font-head text-[11px] uppercase tracking-widest px-4 py-3">Stage</th>
+            <th class="text-left font-head text-[11px] uppercase tracking-widest px-4 py-3">Started</th>
+            <th class="text-left font-head text-[11px] uppercase tracking-widest px-4 py-3">Duration</th>
+            <th class="text-left font-head text-[11px] uppercase tracking-widest px-4 py-3"></th>
+          </tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div id="empty" class="hidden p-10 text-center text-outline font-mono text-sm">
+        No builds yet. <a id="empty-cta" href="#" class="text-primary hover:underline">Start one →</a>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    // Same base-URL detection as the dashboard: mounted at "/alembic" from the
+    // common web app, or at root by the standalone alembic app.
+    const _p = location.pathname;
+    const BASE = (_p === "/alembic/builds" || _p.startsWith("/alembic/")) ? "/alembic" : "";
+    document.getElementById("home-link").href = `${BASE}/`;
+    document.getElementById("new-build-btn").href = `${BASE}/`;
+    document.getElementById("empty-cta").href = `${BASE}/`;
+
+    const STATUS = {
+      running: { color: "#00daf3", icon: "progress_activity", label: "running", cls: "pulse-dot" },
+      done:    { color: "#40e56c", icon: "check_circle", label: "done", cls: "" },
+      failed:  { color: "#ffb4ab", icon: "error", label: "failed", cls: "" },
+    };
+    const esc = s => (s == null ? "" : String(s)).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    function fmtDuration(sec) {
+      sec = Math.max(0, Math.round(sec || 0));
+      if (sec < 60) return sec + "s";
+      const m = Math.floor(sec / 60), s = sec % 60;
+      if (m < 60) return `${m}m ${s}s`;
+      const h = Math.floor(m / 60);
+      return `${h}h ${m % 60}m`;
+    }
+    // Compact "5m ago" / "2h ago" / "yesterday 14:20" / "Mar 3 14:20".
+    function fmtStarted(epoch) {
+      if (!epoch) return "—";
+      const d = new Date(epoch * 1000);
+      const now = Date.now();
+      const diffMs = now - d.getTime();
+      const diffSec = Math.max(0, Math.round(diffMs / 1000));
+      const hh = String(d.getHours()).padStart(2, "0");
+      const mm = String(d.getMinutes()).padStart(2, "0");
+      if (diffSec < 60) return diffSec + "s ago";
+      if (diffSec < 3600) return Math.floor(diffSec / 60) + "m ago";
+      if (diffSec < 24 * 3600) return Math.floor(diffSec / 3600) + "h ago";
+      if (diffSec < 48 * 3600) return `yesterday ${hh}:${mm}`;
+      return d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) + ` ${hh}:${mm}`;
+    }
+    function fmtStartedTitle(epoch) {
+      return epoch ? new Date(epoch * 1000).toLocaleString() : "";
+    }
+    function repoCell(url) {
+      if (!url) return `<span class="text-outline">—</span>`;
+      const short = url.replace(/^https?:\/\/(www\.)?/, "").replace(/\.git$/, "");
+      return `<a href="${esc(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="font-mono text-[12px] text-primary hover:underline break-all">${esc(short)}</a>`;
+    }
+    // MCP endpoint + docker-ps container status. `active` is true/false/null
+    // (null = docker unreachable, or build has no container yet).
+    function mcpCell(b) {
+      const url = b.mcp_url;
+      if (!url) return `<span class="text-outline">—</span>`;
+      const hostport = url.replace(/^https?:\/\//, "").replace(/\/mcp\/?$/, "");
+      let pill;
+      if (b.container_active === true) {
+        pill = `<span class="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-wide text-secondary" title="container ${esc(b.container || '')} running"><span class="material-symbols-outlined text-[13px]">circle</span>active</span>`;
+      } else if (b.container_active === false) {
+        pill = `<span class="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-wide text-error" title="container ${esc(b.container || '')} not in docker ps"><span class="material-symbols-outlined text-[13px]">circle</span>stopped</span>`;
+      } else {
+        pill = `<span class="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-wide text-outline" title="docker status unknown"><span class="material-symbols-outlined text-[13px]">help</span>unknown</span>`;
+      }
+      return `<div class="flex flex-col gap-0.5"><a href="${esc(url)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" class="font-mono text-[12px] text-primary hover:underline break-all">${esc(hostport)}</a>${pill}</div>`;
+    }
+    function rowHtml(b) {
+      const s = STATUS[b.status] || { color: "#8c90a1", icon: "help", label: b.status || "?", cls: "" };
+      return `<tr data-jid="${esc(b.job_id)}">
+        <td class="px-4 py-3">
+          <span class="inline-flex items-center gap-1.5 text-xs font-mono uppercase tracking-wide ${s.cls}" style="color:${s.color}">
+            <span class="material-symbols-outlined text-[16px] ${b.status === 'running' ? 'pulse-dot' : ''}">${s.icon}</span>${s.label}
+          </span>
+        </td>
+        <td class="px-4 py-3 font-mono text-[12px] text-on-surface">${esc(b.job_id)}</td>
+        <td class="px-4 py-3">${repoCell(b.repo_url)}</td>
+        <td class="px-4 py-3">${mcpCell(b)}</td>
+        <td class="px-4 py-3 font-mono text-[11px] text-outline">${esc(b.stage || '')}</td>
+        <td class="px-4 py-3 font-mono text-[11px] text-on-surface-dim" title="${esc(fmtStartedTitle(b.started_at))}">${fmtStarted(b.started_at)}</td>
+        <td class="px-4 py-3 font-mono text-[11px] text-on-surface-dim">${fmtDuration(b.elapsed_seconds)}</td>
+        <td class="px-4 py-3 text-right">
+          <span class="material-symbols-outlined text-outline text-[18px]">chevron_right</span>
+        </td>
+      </tr>`;
+    }
+    async function load() {
+      let builds = [];
+      try {
+        const r = await fetch(`${BASE}/api/builds`, { cache: "no-store" });
+        if (r.ok) builds = (await r.json()).builds || [];
+      } catch (e) {}
+      const rows = document.getElementById("rows");
+      const empty = document.getElementById("empty");
+      document.getElementById("count-chip").textContent = builds.length;
+      if (!builds.length) { rows.innerHTML = ""; empty.classList.remove("hidden"); return; }
+      empty.classList.add("hidden");
+      // Backend already sorts newest-first, but re-sort here defensively in
+      // case a merge from disk-only rows lands out of order.
+      builds.sort((a, b) => (b.started_at || 0) - (a.started_at || 0));
+      rows.innerHTML = builds.map(rowHtml).join("");
+      for (const tr of rows.querySelectorAll("tr[data-jid]")) {
+        tr.addEventListener("click", () => {
+          location.href = `${BASE}/builds/${encodeURIComponent(tr.dataset.jid)}`;
+        });
+      }
+    }
+    document.getElementById("refresh-btn").addEventListener("click", load);
+    load();
+    // Auto-refresh while any build is running.
+    setInterval(load, 5000);
+  </script>
+</body>
+</html>
