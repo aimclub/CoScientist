@@ -30,7 +30,17 @@ VAULT_SURFACE = os.environ.get('VAULT_SURFACE', 'all').lower()
 if VAULT_SURFACE not in ('worker', 'framework', 'all'):
     raise ValueError(f"VAULT_SURFACE must be worker, framework or all, got '{VAULT_SURFACE}'")
 
-_client_config = Config(signature_version='s3v4', s3={'addressing_style': 'path'})
+# Bounds for one S3 call. The botocore defaults are 60 s to connect, 60 s to
+# read, and up to 5 attempts, so an endpoint that drops packets blocks a tool
+# for about 300 s. The MCP client gives up at 300 s and closes the stream, and
+# the server then logs a ClosedResourceError for a response nobody waits for.
+_client_config = Config(
+    signature_version='s3v4',
+    s3={'addressing_style': 'path'},
+    connect_timeout=5,
+    read_timeout=30,
+    retries={'max_attempts': 3, 'mode': 'standard'},
+)
 
 # Internal client for direct operations.
 s3_client = boto3.client(
