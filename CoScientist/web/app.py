@@ -27,6 +27,7 @@ from CoScientist.web.session_registry import LocalSessionRegistry
 from CoScientist.agents import agent_system, planner_agent
 from CoScientist.config import ReportConfig
 from CoScientist.reporting import finalize_report
+from CoScientist.tools.fedot_trace_handler import fedot_trace_handler
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.config import get_settings
 from CoScientist.tools.coder_tools.coder_tools import coder_toolset
@@ -1508,6 +1509,27 @@ def create_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001 — never crash the server on a UI tail
             print(f"[BuildWS] error ({job_id}): {exc}")
 
+    @app.get("/fedot-trace", response_class=HTMLResponse)
+    async def fedot_trace_page():
+        return HTMLResponse(
+            (WEB_DIR / "templates" / "fedot_trace.html").read_text(encoding="utf-8"),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.websocket("/ws/fedot-trace")
+    async def fedot_trace_ws(ws: WebSocket):
+        """Live feed for the /fedot-trace tab — see fedot_trace_handler.py."""
+        await ws.accept()
+        await ws.send_json({"type": "connected", "run_active": fedot_trace_handler.is_active})
+        await fedot_trace_handler.attach_websocket(ws)
+        try:
+            while True:
+                await ws.receive_text()
+        except WebSocketDisconnect:
+            print("[FedotTraceWS] client disconnected")
+        finally:
+            fedot_trace_handler.detach_websocket(ws)
+
     # --- Roadmap endpoints ---
     @app.get("/api/users/{user_id}/sessions/{session_id}/roadmap")
     async def get_roadmap(user_id: str, session_id: str):
@@ -1628,6 +1650,24 @@ def create_app() -> FastAPI:
             "hierarchy": hierarchy,
             "delegatable_names": list(cfg.delegatable_names()),
         })
+
+    @app.post("/api/fedot-debug-run")
+    async def fedot_debug_run(data: dict):
+        task_description = data.get(
+            "task_description",
+            "Ping test: say hello, do nothing else.",
+        )
+        from CoScientist.tools.fedotmas_tools import FedotMASToolset
+
+        async def _run():
+            toolset = FedotMASToolset()
+            try:
+                await toolset.fedot_tool(task_description=task_description, tool_context=None)
+            except Exception as exc:  # noqa: BLE001 — this is a debug trigger, never crash the server
+                logging.getLogger("CoScientist.web").warning("fedot-debug-run failed: %r", exc)
+
+        asyncio.create_task(_run())
+        return JSONResponse({"status": "started", "task_description": task_description})
 
     # --- Events log ---
     @app.get("/api/users/{user_id}/sessions/{session_id}/events")

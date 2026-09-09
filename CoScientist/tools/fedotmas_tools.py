@@ -1,20 +1,27 @@
 """Tools for fedotmas inference"""
 
 import asyncio
+import uuid
 from typing import List, Optional, Dict, Any
 
 from google.adk.tools import BaseTool, ToolContext
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.agents.readonly_context import ReadonlyContext
 
-from fedotmas import MAS, HttpMCPServer
+from fedotmas import MAW, HttpMCPServer
+from fedotmas.control import run_config_guardrails
 from fedotmas.plugins import LangfusePlugin, LoggingPlugin, WebSearchLimitPlugin
 
 from CoScientist.tools.fedot_artifact_plugin import ArtifactCapturePlugin
+from CoScientist.tools.fedot_trace_plugin import FedotTracePlugin
+from CoScientist.tools.fedot_trace_handler import fedot_trace_handler
 from CoScientist.logging.metrics import UsageMetricsPlugin
+from CoScientist.logging.fedot_bridge import patch_fedotmas_logging
 from rag_tools import MCPServer
 from rag_tools.storage import PostgresClient
 from rag_tools.config.settings import get_settings
+
+patch_fedotmas_logging()
 
 settings = get_settings()
 
@@ -81,7 +88,7 @@ class FedotMASToolset(BaseToolset):
         # F010.A3/A4: an after_tool_callback plugin captures S3 artifact links
         # (results_presigned_url) at the tool-call boundary, BEFORE FEDOT.MAS sub-agents
         # paraphrase them away / hallucinate molecules.
-        # NB: passing plugins= REPLACES MAS defaults, so re-include them.
+        # NB: passing plugins= REPLACES MAW defaults, so re-include them.
         cap = ArtifactCapturePlugin()
         # NOTE (F015): do NOT impose a short FEDOT timeout — confirm the pipeline produces
         # CORRECT results first, optimize stage latency later. timeout=None = unbounded.
@@ -99,8 +106,10 @@ class FedotMASToolset(BaseToolset):
                 FEDOT_TIMEOUT_S = None
         result = None
         status, err = "success", None
+        run_id = uuid.uuid4().hex
+        await fedot_trace_handler.mark_run_start(run_id, task_description)
         try:
-            mas = MAS(
+            mas = MAW(
                 mcp_servers=servers_payload,
                 # UsageMetricsPlugin bills FEDOT.MAS sub-agents' own LLM traffic
                 # against them, same as any other AgentTool sub-runner — without
@@ -109,15 +118,29 @@ class FedotMASToolset(BaseToolset):
                     LoggingPlugin(),
                     WebSearchLimitPlugin(max_calls_per_agent=4),
                     LangfusePlugin(trace_name="coscientist:fedot"),
+                    FedotTracePlugin(fedot_trace_handler, run_id),
                     cap,
                     UsageMetricsPlugin(),
                 ],
             )
-            result = await mas.run(task_description, timeout=FEDOT_TIMEOUT_S)
+            try:
+                config = await mas.generate_config(task_description)
+                guardrail_errors = run_config_guardrails(config)
+                if guardrail_errors:
+                    raise ValueError(
+                        f"Invalid pipeline config: {'; '.join(guardrail_errors)}"
+                    )
+                result = await mas.build_and_run(
+                    config, task_description, timeout=FEDOT_TIMEOUT_S
+                )
+            finally:
+                mas._finalize_langfuse()
         except (asyncio.TimeoutError, TimeoutError):
             status, err = "timeout", f"FEDOT.MAS exceeded {FEDOT_TIMEOUT_S}s"
         except Exception as e:
             status, err = "error", f"FEDOT.MAS run failed: {e}"
+        finally:
+            await fedot_trace_handler.mark_run_end(run_id, status, err)
 
         # Fallback (F010.A4): scan the final MAS state for presigned URLs the plugin may
         # have missed (only when a result actually came back).
