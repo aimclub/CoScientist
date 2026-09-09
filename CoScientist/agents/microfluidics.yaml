@@ -50,12 +50,11 @@ agents:
       CoScientist microfluidics root orchestrator — runs the case module by
       module: ТЗ + literature, design, experiment, report.
     prompt: microfluidics_root_orchestrator
-    tools: [microfluidics]
-    #subordinates:
-    #  - ModuleA_TZLiterature
-    #  - ModuleB_Design
-    #  - ModuleC_Experiment
-    #  - ReportAgent
+    subordinates:
+      - ModuleA_TZLiterature
+      - ModuleB_Design
+      - ModuleC_Experiment
+      - ReportAgent
 
   # ── Module A — stages 1–2: ТЗ + literature (was the whole profile) ─────────
   ModuleA_TZLiterature:
