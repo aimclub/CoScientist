@@ -151,7 +151,6 @@ def test_runs_endpoint_registers():
 # ── Task 6: minimal OTel traceparent stitching ───────────────────────────────
 
 def test_otel_span_parents_on_traceparent():
-    from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -172,6 +171,7 @@ def test_otel_span_parents_on_traceparent():
     assert any(s.name == "invoke_agent" for s in spans)
     inv = next(s for s in spans if s.name == "invoke_agent")
     assert format(inv.context.trace_id, "032x") == "0af7651916cd43dd8448eb211c80319c"
+    assert format(inv.parent.span_id, "016x") == "b7ad6b7169203331"
     assert inv.attributes["gen_ai.operation.name"] == "invoke_agent"
     assert inv.attributes["gen_ai.agent.name"] == "ScriptedOrchestrator"
     assert inv.attributes["run_id"] == "run-tr"

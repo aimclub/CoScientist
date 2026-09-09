@@ -147,11 +147,19 @@ def make_a2a_app(
         plugins=plugins,
     )
     executor = A2aAgentExecutor(runner=runner)
+    task_store = InMemoryTaskStore()
     handler = DefaultRequestHandler(
         agent_executor=executor,
-        task_store=InMemoryTaskStore(),
+        task_store=task_store,
     )
-    app = A2AFastAPIApplication(agent_card=agent_card, http_handler=handler).build()
+    builder = A2AFastAPIApplication(agent_card=agent_card, http_handler=handler)
+    if get_settings().synapse.enabled:
+        from CoScientist.a2a.synapse_tracing import SynapseJSONRPCHandler
+
+        builder.handler = SynapseJSONRPCHandler(
+            agent_card, handler, task_store=task_store
+        )
+    app = builder.build()
     if checkpoint_plugin is not None:
         # Snapshot management is a side REST API on the same app: control
         # commands must not pass through LLM interpretation (design §6).
