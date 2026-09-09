@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from CoScientist.config import get_settings  # noqa: E402
 from CoScientist.graph.research import queries, schema  # noqa: E402
 from CoScientist.graph.research.store import ResearchGraphStore  # noqa: E402
 
@@ -402,9 +403,13 @@ def test_ready_trigger_offers_one_hypothesis_at_a_time(store):
     assert "QUEUED" in ready["rendered"]
 
 
-def test_commit_keeps_one_hypothesis_active_and_postpones_the_rest(store):
+def test_commit_keeps_one_hypothesis_active_and_postpones_the_rest(store, monkeypatch):
     """A batch of hypotheses proposed in one commit: the selected one stays
     `formulated`, the alternatives are stored as `postponed` backlog."""
+    # Pinned rather than relying on the code default: HYPOTHESES__MAX_ACTIVE in
+    # .env overrides it for local runs, and this test's math (1 stays active,
+    # 2 postponed) only holds for max_active == 1.
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 1)
     _init(store)
     r = store.commit(
         source="HypothesesAgent",
@@ -423,7 +428,10 @@ def test_commit_keeps_one_hypothesis_active_and_postpones_the_rest(store):
     assert not queries.postponed_hypotheses(store)["rendered"]
 
 
-def test_postponed_backlog_surfaces_only_when_nothing_is_active(store):
+def test_postponed_backlog_surfaces_only_when_nothing_is_active(store, monkeypatch):
+    # Same pin as above: this test's second hypothesis must auto-postpone at
+    # creation, which only happens when max_active == 1.
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 1)
     _init(store)
     store.commit(source="HypothesesAgent",
                  nodes=[{"type": "Hypothesis", "ref": "a", "attrs": {"formulation": "one"}},
@@ -779,3 +787,45 @@ def test_validator_discards_result_if_research_changes_during_llm_call():
 
     assert result is None
     assert not graph.committed
+
+
+def test_tool_needs_adaptation_to_available_transition(store):
+    _init(store)
+    # T1 is available from _init; let's create a tool with needs_adaptation
+    r = store.commit(
+        source="HypothesesAgent",
+        nodes=[{"type": "Tool", "status": "needs_adaptation", "attrs": {"name": "CVAE harness"}}],
+    )
+    assert r.ok, r.errors
+    tool_id = r.committed["nodes"][0]["id"]
+
+    # OrchestratorAgent can transition it to available
+    r2 = store.commit(
+        source="OrchestratorAgent",
+        status_updates=[{"id": tool_id, "status": "available"}],
+    )
+    assert r2.ok, r2.errors
+    tool_node = next(n for n in store.full()["nodes"] if n["id"] == tool_id)
+    assert tool_node["status"] == "available"
+
+
+def test_orchestrator_can_commit_evidence(store):
+    _init(store)
+    # HypothesesAgent creates hypothesis
+    r = store.commit(
+        source="HypothesesAgent",
+        nodes=[{"type": "Hypothesis", "ref": "h", "attrs": {"formulation": "CVAE models molecule properties"}}],
+    )
+    assert r.ok, r.errors
+
+    # OrchestratorAgent commits Evidence and links to H1
+    r2 = store.commit(
+        source="OrchestratorAgent",
+        nodes=[{"type": "Evidence", "ref": "e", "attrs": {"subtype": "computational", "content": "95% validity"}}],
+        edges=[{"type": "supports", "from": "#e", "to": "H1"}],
+    )
+    assert r2.ok, r2.errors
+    ev_node = next(n for n in store.full()["nodes"] if n["type"] == "Evidence")
+    assert ev_node["status"] == "obtained"
+    assert any(e["type"] == "supports" and e["to"] == "H1" for e in store.full()["edges"])
+

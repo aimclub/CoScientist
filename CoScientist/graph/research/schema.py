@@ -183,7 +183,8 @@ STATUS_TRANSITIONS: Dict[str, FrozenSet[Tuple[str, str]]] = {
                                      ("running", "done"), ("running", "failed"),
                                      ("failed", "planned")}),
     "ConfirmationCriteria": frozenset({("not_met", "met"), ("met", "not_met")}),
-    "Tool": frozenset({("needs_adaptation", "being_created"),
+    "Tool": frozenset({("needs_adaptation", "available"),
+                       ("needs_adaptation", "being_created"),
                        ("being_created", "available"),
                        ("being_created", "creation_failed"),
                        ("creation_failed", "being_created")}),
@@ -382,11 +383,14 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         # postpones verification, approves conclusions, and wires constraints. The
         # VERDICT (under_verification→confirmed/refuted) and the Conclusion belong
         # to the ValidatorAgent, so they are absent here.
-        create=frozenset({"ResearchQuestion", "Report", "Publication", "Spec",
+        create=frozenset({"ResearchQuestion", "Evidence", "Report", "Publication", "Spec",
                           "EfficiencyJustification", "CostModel", "EfficiencyMetric"}),
-        update_attrs=frozenset({"Resource", "ResearchQuestion"}),
+        update_attrs=frozenset({"Resource", "ResearchQuestion", "EmpiricalBase", "Tool"}),
         transitions=_transitions(
             "ResearchQuestion", "Resource",
+            ("Tool", "needs_adaptation", "available"),
+            ("Tool", "needs_adaptation", "being_created"),
+            ("Tool", "being_created", "available"),
             ("Conclusion", "draft", "approved"),               # approval
             ("Hypothesis", "formulated", "under_verification"),  # start verification
             ("Hypothesis", "formulated", "postponed"),
@@ -394,6 +398,7 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
             ("Hypothesis", "postponed", "formulated")),          # scheduling only
         edges=_edges("contextualizes", "defines_scope", "derived_from", "applies_to",
                      "motivates", "regulates", "constrains",
+                     "relates_to", "supports", "refutes", "refines",
                      ("produces", "Conclusion", "ResearchQuestion")),
     ),
     # Spec Module 4 — the judge. Given ONE hypothesis's evidence slice it weighs

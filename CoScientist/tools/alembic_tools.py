@@ -200,11 +200,11 @@ def _snapshot(rec: Dict[str, Any], with_log_tail: bool = True) -> Dict[str, Any]
         # Live build page in the CoScientist web UI (tails this build's log and
         # renders the streamed pipeline events). ``progress_page`` is relative
         # and always present, since the web layer resolves it itself.
-        "progress_page": f"/builds/{rec['job_id']}",
+        "progress_page": f"/alembic/builds/{rec['job_id']}",
         "workdir": rec.get("workdir"),
     }
     if _WEB_BASE_URL:
-        out["progress_url"] = f"{_WEB_BASE_URL}/builds/{rec['job_id']}"
+        out["progress_url"] = f"{_WEB_BASE_URL}/alembic/builds/{rec['job_id']}"
     text = _read_log(rec) if (with_log_tail or rec["status"] != "running") else ""
     stages = _STAGE_RE.findall(text)
     if stages:
@@ -535,7 +535,7 @@ def web_build_snapshot(job_id: str) -> Optional[Dict[str, Any]]:
     out: Dict[str, Any] = {
         "job_id": job_id,
         "status": status,
-        "progress_page": f"/builds/{job_id}",
+        "progress_page": f"/alembic/builds/{job_id}",
         "workdir": str(workdir_p) if workdir_p.exists() else None,
         "started_at": meta.get("started_at") or (log.stat().st_mtime if log.exists() else None),
     }
@@ -549,7 +549,7 @@ def web_build_snapshot(job_id: str) -> Optional[Dict[str, Any]]:
     if meta.get("started_at") and meta.get("finished_at"):
         out["elapsed_seconds"] = round(meta["finished_at"] - meta["started_at"])
     if _WEB_BASE_URL:
-        out["progress_url"] = f"{_WEB_BASE_URL}/builds/{job_id}"
+        out["progress_url"] = f"{_WEB_BASE_URL}/alembic/builds/{job_id}"
     if status == "done":
         url = _URL_RE.search(text)
         image = _IMAGE_RE.search(text)
@@ -603,6 +603,42 @@ def parse_event_line(line: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+# ── Session-bundle helpers ────────────────────────────────────────────────────
+# Called by session_bundle.py to snapshot / restore the in-memory job registry
+# when exporting or importing a .cossession.zip archive.
+
+_SNAPSHOT_KEYS = ("job_id", "repo_url", "status", "mcp_url", "image",
+                  "container", "started_at", "finished_at", "log_file")
+
+
+def export_jobs_snapshot() -> list:
+    """Serialisable snapshot of every job in the process-wide registry."""
+    with _LOCK:
+        return [{k: rec.get(k) for k in _SNAPSHOT_KEYS} for rec in _JOBS.values()]
+
+
+def import_jobs_snapshot(jobs: list) -> None:
+    """Restore job records from a previously exported snapshot.
+
+    * ``running`` → ``failed`` (the original process is gone).
+    * ``log_file`` is repointed to this process's LOG_DIR.
+    * Existing records with the same job_id are NOT overwritten.
+    """
+    with _LOCK:
+        for rec in jobs:
+            jid = rec.get("job_id")
+            if not jid or jid in _JOBS:
+                continue
+            entry = dict(rec)
+            if entry.get("status") == "running":
+                entry["status"] = "failed"
+                entry["error"] = "Build was running when the session was exported."
+                entry.setdefault("finished_at", entry.get("started_at"))
+            entry["log_file"] = str(LOG_DIR / f"{jid}.log")
+            _JOBS[jid] = entry
+
+
 __all__ = ["ALEMBIC_TOOLS", "build_mcp_server", "check_mcp_build", "list_mcp_builds",
            "web_build_log_file", "web_build_snapshot", "web_build_workdir",
-           "web_build_repo_url", "web_list_builds", "parse_event_line"]
+           "web_build_repo_url", "web_list_builds", "parse_event_line",
+           "export_jobs_snapshot", "import_jobs_snapshot", "LOG_DIR"]

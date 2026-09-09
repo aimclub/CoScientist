@@ -162,7 +162,10 @@ def test_pipeline_state_injections_are_optional(config, system):
     """ADK {state_key} injections that depend on an upstream agent having called
     a tool must use the optional `{key?}` form, or a degenerate run (empty web
     search, no retrieval) crashes the agent with a KeyError mid-turn."""
-    state_keys = ("accumulated_tools", "filtered_tools", "accumulated_web_mcps")
+    state_keys = (
+        "accumulated_tools", "filtered_tools", "accumulated_web_mcps",
+        "fedot_candidates", "reranker_candidates",
+    )
     for name in config.agents:
         instruction = getattr(system.agent(name), "instruction", "") or ""
         for key in state_keys:
@@ -251,8 +254,14 @@ def test_task_executor_is_a_router_over_both_execution_paths(config, system):
     # router (no A2A card of its own).
     pipeline = config.agent("ToolPipelineAgent")
     assert pipeline.cls == "sequential"
-    assert pipeline.children == ["ToolPreparerAgent", "ExperimentAgent"]
+    # Prepare tools, then run ONE executor: the switch picks the ReAct executor,
+    # or the FEDOT.MAS fallback when the reranker produced no usable ranking.
+    assert pipeline.children == ["ToolPreparerAgent", "ExecutorSwitchAgent"]
     assert pipeline.a2a is None
+
+    switch = config.agent("ExecutorSwitchAgent")
+    assert switch.cls == "custom:executor_switch"
+    assert switch.children == ["ExperimentAgent", "FedotAgent"]
 
     # Execution has ONE entry point on the orchestrator's roster.
     orch_subs = config.agent("OrchestratorAgent").subordinates

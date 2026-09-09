@@ -215,7 +215,9 @@ from CoScientist.agents import task_execution_agent
 
 **Subordinates (AgentTools):**
 1. `ToolPipelineAgent` — `SequentialAgent`: tool preparation (retrieve → rerank →
-   deploy) followed by `ExperimentAgent`, which runs the deployed MCP tools
+   deploy) followed by `ExecutorSwitchAgent`, which runs the deployed MCP tools
+   via `ExperimentAgent` — or, when the reranker returned no usable ranking,
+   hands the whole unfiltered candidate set to `FedotAgent` instead
 2. `coder_agent` — writes and runs code in the sandbox
 
 **Purpose:** Deliver a task's result, choosing between ready-made MCP tools and

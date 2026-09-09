@@ -3,13 +3,13 @@ Application configuration using Pydantic Settings.
 """
 import os as _os
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
-from dotenv import load_dotenv as _load_dotenv
+from dotenv import find_dotenv as _find_dotenv, load_dotenv as _load_dotenv
 from pydantic import BaseModel, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_load_dotenv()
+_load_dotenv(_find_dotenv())
 
 from rag_tools.config import Settings as ToolRAGSettings
 
@@ -152,6 +152,11 @@ class MCPSettings(BaseModel):
     paper_analysis_url: Optional[str] = None
     papers_search_url: Optional[str] = None
     result_formatter_url: Optional[str] = None
+    # The file vault (mcp-servers/vault-mcp-server). Two consumers read it:
+    # worker agents get the upload/download pair as an ADK toolset, and
+    # framework code calls it per request through tools/vault_client.py.
+    # Unset means both drop out, and the run still completes.
+    vault_url: Optional[str] = None
 
 
 # =========================
@@ -276,6 +281,8 @@ class WebSettings(BaseModel):
     auto_clear_graph_enabled: bool = _os.getenv("GRAPH__AUTO_CLEAR", "false").lower() in ("true", "1", "yes")
     executor_tool_keep_score: float = float(_os.getenv("EXECUTOR_TOOL_KEEP_SCORE", "0.3"))
     executor_tool_abstain_score: float = float(_os.getenv("EXECUTOR_TOOL_ABSTAIN_SCORE", "0.2"))
+    fedot_fallback_enabled: bool = _os.getenv("EXECUTOR__FEDOT_FALLBACK", "true").lower() in ("true", "1", "yes")
+    fedot_fallback_timeout_s: float = float(_os.getenv("EXECUTOR__FEDOT_FALLBACK_TIMEOUT", "900"))
     sandbox_url: str = _os.getenv("SANDBOX_URL", "")
     coder_workspace_id: _Optional[str] = _os.getenv("CODER_WORKSPACE_ID")
     coder_mode: str = _os.getenv("CODER__MODE", "local")        # "local" | "openhands"
@@ -314,6 +321,28 @@ class ResearchGraphSettings(BaseModel):
 
 
 # =========================
+# CRITIC
+# =========================
+class CriticSettings(BaseModel):
+    """Critic LLM callback parameters (pre-action, post-action, plan critic)."""
+    timeout: float = 90.0
+    http_timeout_ratio: float = 0.75
+    max_attempts: int = 2
+    max_tokens: int = 7000
+    model: Optional[str] = None  # Dedicated model for the Critic callbacks; falls back to llm.main_model if unset
+    # Model "thinking" for the critic, in system.yaml's vocabulary: False/"off",
+    # or "minimal"|"low"|"medium"|"high". A verdict is a short judgement against
+    # an explicit checklist, and reasoning tokens are spent from `max_tokens` —
+    # thinking too hard truncates the JSON it was supposed to return. None
+    # leaves the provider's default alone.
+    reasoning: Optional[Union[bool, str]] = "low"
+
+    @property
+    def http_timeout(self) -> float:
+        return self.timeout * self.http_timeout_ratio
+
+
+# =========================
 # MAIN SETTINGS
 # =========================
 class Settings(BaseSettings):
@@ -335,6 +364,7 @@ class Settings(BaseSettings):
     mcp: MCPSettings = MCPSettings()
     web: WebSettings = WebSettings()
     research_graph: ResearchGraphSettings = ResearchGraphSettings()
+    critic: CriticSettings = CriticSettings()
 
     model_config = SettingsConfigDict(
         env_file=".env",          
