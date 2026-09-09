@@ -97,6 +97,27 @@ def set_sandbox_start_sink(sink: Optional[StartSink]) -> None:
     _start_sink = sink
 
 
+#: ``(session_key, info) -> None | Awaitable`` for the sandbox agent's own plan.
+#: Same shape as :data:`StartSink`; the info carries ``plan`` and the agent
+#: that started the run.
+PlanSink = StartSink
+
+_plan_sink: Optional[PlanSink] = None
+
+
+def set_sandbox_plan_sink(sink: Optional[PlanSink]) -> None:
+    """Register where the sandbox agent's plan updates go; ``None`` unregisters.
+
+    The agent inside the container keeps a task list of its own and rewrites it
+    as the work goes. It is the only account of what is happening in there
+    between "task submitted" and the final summary — the tool call itself
+    returns nothing until the job is over — so the Web runtime wires itself in
+    here and relays each new revision to the tabs watching the session.
+    """
+    global _plan_sink
+    _plan_sink = sink
+
+
 def _host_session(tool_context: Optional[ToolContext]) -> Optional[Tuple[str, str]]:
     """The host's ``(user_id, session_id)`` for this call, if there is one.
 
@@ -160,6 +181,22 @@ def _start_notifier(tool_context: Optional[ToolContext]):
     return announce
 
 
+def _plan_notifier(tool_context: Optional[ToolContext]):
+    """Build the ``on_plan`` callback that relays the agent's plan to the host."""
+    host_key = _host_session(tool_context)
+    agent = getattr(tool_context, "agent_name", None) or "CoderAgent"
+
+    async def relay(plan: Dict[str, Any]) -> None:
+        sink = _plan_sink
+        if sink is None:
+            return
+        result = sink(host_key, {"agent": agent, "plan": plan})
+        if inspect.isawaitable(result):
+            await result
+
+    return relay
+
+
 def _shape(result: Dict[str, Any], *, waited: int) -> Dict[str, Any]:
     """Map the client result onto the coder toolset's response vocabulary."""
     status = result.get("status")
@@ -184,6 +221,7 @@ def _shape(result: Dict[str, Any], *, waited: int) -> Dict[str, Any]:
     shaped = {
         "status": norm,
         "summary": result.get("summary", ""),
+        "s3_uploads": result.get("s3_uploads") or [],
         "sandbox_id": result.get("sandbox_id"),
         "reused": result.get("reused", False),
         "watch_url": result.get("watch_url", ""),
@@ -224,8 +262,8 @@ async def run_sandbox_task(
 
     IMPORTANT — this is NOT your `execute_bash` workspace. It is a different
     machine, and files do not move between the two. Send data in via
-    `dataset_url`; get results back through the returned summary, and verify
-    them with `list_sandbox_files`.
+    `dataset_url`; get results back through the returned summary and the
+    download links in `s3_uploads`, and verify them with `list_sandbox_files`.
 
     Use it for work that is too heavy or too long for `execute_bash`. For
     ordinary code, shell and git work, keep using `execute_bash`.
@@ -247,8 +285,10 @@ async def run_sandbox_task(
 
     Returns:
         Dict with status ("success" | "running" | "busy" | "error"), the
-        sandbox agent's summary, sandbox_id, watch_url (live console),
-        vscode_url, and next_step when a follow-up call is needed.
+        sandbox agent's summary, s3_uploads (the files the run uploaded, each
+        with filename, url, size and key — the summary text does NOT repeat
+        these links, so pass them on from here), sandbox_id, watch_url (live
+        console), vscode_url, and next_step when a follow-up call is needed.
     """
     result = await sandbox.arun_sandbox_task(
         task,
@@ -256,12 +296,16 @@ async def run_sandbox_task(
         new_sandbox=new_sandbox,
         sandbox_id=sandbox_id,
         session_id=_session(tool_context),
+        tool_context=tool_context,
         timeout=RUN_WAIT,
         poll_interval=POLL_INTERVAL,
         # Announced from inside the client: this call returns only when the job
         # is over, so waiting for its result to carry the links would show them
         # when there is nothing left to watch.
         on_start=_start_notifier(tool_context),
+        # The sandbox agent's own plan, relayed as it changes: without it the
+        # UI has nothing to say for the minutes (or hours) this call takes.
+        on_plan=_plan_notifier(tool_context),
         metrics_sink=_metrics_sink(tool_context),
     )
     logger.info(
@@ -332,13 +376,16 @@ async def check_sandbox_task(tool_context: ToolContext = None) -> Dict[str, Any]
 
     Returns:
         Dict with status ("success" | "running" | "error"), the sandbox agent's
-        summary, sandbox_id, watch_url and vscode_url.
+        summary, s3_uploads (the files the run uploaded, each with filename,
+        url, size and key), sandbox_id, watch_url and vscode_url.
     """
     result = await sandbox.await_sandbox_task(
         session_id=_session(tool_context),
+        tool_context=tool_context,
         timeout=CHECK_WAIT,
         poll_interval=POLL_INTERVAL,
         metrics_sink=_metrics_sink(tool_context),
+        on_plan=_plan_notifier(tool_context),
     )
     return _shape(result, waited=CHECK_WAIT)
 

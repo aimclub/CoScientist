@@ -193,3 +193,67 @@ class LocalSessionRegistry:
         if not session:
             raise KeyError(f"Unknown session '{session_id}' for user '{user_id}'.")
         return session
+
+    def ensure_user(self, nickname: str) -> dict[str, Any]:
+        """Find an existing user by nickname (case-insensitive) or create one.
+
+        Used by session import to guarantee the target user exists without
+        raising on duplicates.
+        """
+        if not isinstance(nickname, str):
+            raise ValueError("Nickname must be a string.")
+        nickname = " ".join(nickname.strip().split())
+        if not nickname:
+            raise ValueError("Nickname must not be empty.")
+
+        nickname_key = nickname.casefold()
+        with self._lock:
+            existing_id = self._nickname_index.get(nickname_key)
+            if existing_id is not None:
+                return dict(self._users[existing_id])
+            # Create a new user
+            user_id = f"user_{uuid4().hex}"
+            user = {
+                "id": user_id,
+                "nickname": nickname,
+                "created_at": _now(),
+                "last_session_id": None,
+            }
+            self._users[user_id] = user
+            self._nickname_index[nickname_key] = user_id
+            return dict(user)
+
+    def import_session(
+        self,
+        user_id: str,
+        session_id: str,
+        title: str = "Imported session",
+        *,
+        created_at: Optional[str] = None,
+        updated_at: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Register a session with explicit id and preserved metadata.
+
+        Unlike ``create_session``, this accepts a pre-generated ``session_id``
+        and optional original timestamps — used when restoring a bundle so the
+        UI shows when the session was originally created.
+        """
+        self.require_user(user_id)
+        title = " ".join((title or "Imported session").strip().split())[:120] or "Imported session"
+
+        with self._lock:
+            key = (user_id, session_id)
+            if key in self._sessions:
+                raise ValueError(f"Session '{session_id}' already exists.")
+            now = _now()
+            session = {
+                "id": session_id,
+                "user_id": user_id,
+                "title": title,
+                "status": "idle",
+                "created_at": created_at or now,
+                "updated_at": updated_at or now,
+            }
+            self._sessions[key] = session
+            self._users[user_id]["last_session_id"] = session_id
+            return dict(session)

@@ -15,8 +15,6 @@ SessionKey = tuple[str, str]
 class WebHITLHandler(AbstractHITLHandler):
     """Route HITL requests only to tabs displaying the owning session."""
 
-    HITL_TIMEOUT_SECONDS: int = 300
-
     def __init__(self):
         # request_id -> future/payload/session metadata
         self._pending: dict[str, dict] = {}
@@ -25,6 +23,24 @@ class WebHITLHandler(AbstractHITLHandler):
         self._sockets: dict[SessionKey | None, list] = {}
         self._event_log: list[dict] = []
         self._sender = None
+
+    @property
+    def hitl_timeout_seconds(self) -> float:
+        if hasattr(self, "_hitl_timeout_seconds"):
+            return self._hitl_timeout_seconds
+        try:
+            from CoScientist.config import get_settings
+            return get_settings().web.hitl_auto_approve_timeout
+        except Exception:
+            return 300
+
+    @hitl_timeout_seconds.setter
+    def hitl_timeout_seconds(self, value: float) -> None:
+        self._hitl_timeout_seconds = float(value)
+
+    @property
+    def HITL_TIMEOUT_SECONDS(self) -> int:
+        return self.hitl_timeout_seconds
 
     def __deepcopy__(self, memo):
         return self
@@ -147,6 +163,7 @@ class WebHITLHandler(AbstractHITLHandler):
         public_context = dict(request.context or {})
         public_context.pop("_session", None)
 
+        timeout_sec = self.hitl_timeout_seconds
         payload = {
             "type": "hitl_request",
             "request_id": request_id,
@@ -157,6 +174,7 @@ class WebHITLHandler(AbstractHITLHandler):
             "context": public_context,
             "form": request.form,
             "invoked_via": request.invoked_via,
+            "timeout_seconds": timeout_sec,
         }
 
         log_payload = dict(payload)
@@ -176,17 +194,26 @@ class WebHITLHandler(AbstractHITLHandler):
         if delivered:
             logger.info("HITL request %s sent to %d tab(s)", request_id[:8], delivered)
         else:
-            logger.warning(
-                "HITL request %s has no live tab; waiting %ss for reconnect",
-                request_id[:8],
-                self.HITL_TIMEOUT_SECONDS,
-            )
+            if timeout_sec > 0:
+                logger.warning(
+                    "HITL request %s has no live tab; waiting %ss for reconnect",
+                    request_id[:8],
+                    timeout_sec,
+                )
+            else:
+                logger.warning(
+                    "HITL request %s has no live tab; waiting indefinitely for reconnect",
+                    request_id[:8],
+                )
 
         try:
-            response_data = await asyncio.wait_for(
-                asyncio.shield(future),
-                timeout=self.HITL_TIMEOUT_SECONDS,
-            )
+            if timeout_sec > 0:
+                response_data = await asyncio.wait_for(
+                    asyncio.shield(future),
+                    timeout=timeout_sec,
+                )
+            else:
+                response_data = await asyncio.shield(future)
         except asyncio.TimeoutError:
             response_data = {"action": "approve", "approved": True}
             await self._broadcast(
@@ -194,7 +221,7 @@ class WebHITLHandler(AbstractHITLHandler):
                     "type": "hitl_timeout",
                     "request_id": request_id,
                     "agent_name": request.agent_name,
-                    "timeout_seconds": self.HITL_TIMEOUT_SECONDS,
+                    "timeout_seconds": timeout_sec,
                 },
                 session_key,
             )

@@ -39,24 +39,15 @@ orchestrator_agent = _system.root
 root_agent = orchestrator_agent
 
 # Agents that run as pipeline stages (pre/post) around the orchestrator.
-pipeline_pre_agents = [_system.agent(n) for n in _system.config.pipeline.pre]
-pipeline_post_agents = [_system.agent(n) for n in _system.config.pipeline.post]
+pipeline_pre_agents = [_system.agent(n) for n in _system.config.pipeline.pre if _system.config.agent(n).is_enabled()]
+pipeline_post_agents = [_system.agent(n) for n in _system.config.pipeline.post if _system.config.agent(n).is_enabled()]
 
 # The RUN root: the whole lifecycle (pre → orchestrator → post/aggregator) is one
 # ADK SequentialAgent, driven by a single Runner.run_async so it is ONE invocation
 # = ONE trace, with the Result Aggregator as the terminal child (it reads the graph
 # the orchestrator populated and writes the report). When no pipeline stages are
 # declared, the orchestrator IS the run root (no needless wrapper).
-if pipeline_pre_agents or pipeline_post_agents:
-    from google.adk.agents.sequential_agent import SequentialAgent
-
-    run_root = SequentialAgent(
-        name="ResearchPipeline",
-        description="Full research lifecycle: orchestrator run then report synthesis.",
-        sub_agents=[*pipeline_pre_agents, orchestrator_agent, *pipeline_post_agents],
-    )
-else:
-    run_root = orchestrator_agent
+run_root = _system.run_root
 
 planner_agent = _system.agents.get("PlannerAgent")
 hypotheses_agent = _system.agents.get("HypothesesAgent")
@@ -76,13 +67,18 @@ tz_agent = _system.agents.get("TZAgent")
 _tracer = get_multi_agent_tracer()
 if _tracer is not None:
     track_adk_agent_recursive(run_root, _tracer)
+    for _ag in _system.agents.values():
+        if isinstance(getattr(_ag, "after_model_callback", None), list) and len(_ag.after_model_callback) > 1:
+            _ag.after_model_callback.insert(0, _ag.after_model_callback.pop())
+        if isinstance(getattr(_ag, "before_tool_callback", None), list) and len(_ag.before_tool_callback) > 1:
+            _ag.before_tool_callback.insert(0, _ag.before_tool_callback.pop())
 
 
 def build_for_mode():
     """Build an AgentSystem configured for the current start mode from settings.
 
     Reads ``settings.web.start_mode``:
-      * ``"init"`` (default) — PlanningPipelineAgent is root (sequential: PlannerAgent →
+      * ``"init"`` / ``"planner"`` — PlanningPipelineAgent is root (sequential: PlannerAgent →
         OrchestratorAgent).
       * ``"orchestrator"`` — OrchestratorAgent is root, with PlannerAgent
         added to its subordinates so it can be invoked on demand.
@@ -98,7 +94,7 @@ def build_for_mode():
     from CoScientist.config import get_settings
     start_mode = get_settings().web.start_mode
 
-    if start_mode == "init":
+    if start_mode in ("init", "planner"):
         raw_config = load_config()
         patched = copy.deepcopy(raw_config)
         pipeline_agent_name = "PlanningPipelineAgent" if "PlanningPipelineAgent" in patched.agents else "InitAgent"
@@ -106,22 +102,33 @@ def build_for_mode():
             patched.agents[pipeline_agent_name].root = True
             patched.agents[pipeline_agent_name].enabled = True
             patched.agents["OrchestratorAgent"].root = False
-            # In Init mode the PlannerAgent runs first and its output replaces
+            # In Planner mode the PlannerAgent runs first and its output replaces
             # the original user query; inject_original_query restores it so the
             # OrchestratorAgent sees the original request.
+            # Must run before redact_link_urls so that any links in the restored
+            # query are subsequently redacted into [[linkXXXX]] references.
             orch_cb = patched.agents["OrchestratorAgent"].callbacks.before_model
             if "inject_original_query" not in orch_cb:
-                orch_cb.append("inject_original_query")
+                if "redact_link_urls" in orch_cb:
+                    orch_cb.insert(orch_cb.index("redact_link_urls"), "inject_original_query")
+                else:
+                    orch_cb.insert(0, "inject_original_query")
             system = build_system(config=patched)
         else:
             logger.warning(
-                "start_mode is set to 'init' but 'PlanningPipelineAgent' is not present in "
-                "the system config; falling back to default build_system()"
+                "start_mode is set to %r but 'PlanningPipelineAgent' is not present in "
+                "the system config; falling back to default build_system()",
+                start_mode,
             )
             system = build_system()
         _tracer = get_multi_agent_tracer()
         if _tracer is not None:
-            track_adk_agent_recursive(system.root, _tracer)
+            track_adk_agent_recursive(system.run_root, _tracer)
+            for _ag in system.agents.values():
+                if isinstance(getattr(_ag, "after_model_callback", None), list) and len(_ag.after_model_callback) > 1:
+                    _ag.after_model_callback.insert(0, _ag.after_model_callback.pop())
+                if isinstance(getattr(_ag, "before_tool_callback", None), list) and len(_ag.before_tool_callback) > 1:
+                    _ag.before_tool_callback.insert(0, _ag.before_tool_callback.pop())
         return system
 
     if start_mode in ("orchestrator_planner", "orchestrator_plan"):
@@ -152,12 +159,17 @@ def build_for_mode():
         system = build_system(config=patched)
         _tracer = get_multi_agent_tracer()
         if _tracer is not None:
-            track_adk_agent_recursive(system.root, _tracer)
+            track_adk_agent_recursive(system.run_root, _tracer)
+            for _ag in system.agents.values():
+                if isinstance(getattr(_ag, "after_model_callback", None), list) and len(_ag.after_model_callback) > 1:
+                    _ag.after_model_callback.insert(0, _ag.after_model_callback.pop())
+                if isinstance(getattr(_ag, "before_tool_callback", None), list) and len(_ag.before_tool_callback) > 1:
+                    _ag.before_tool_callback.insert(0, _ag.before_tool_callback.pop())
         return system
 
     if start_mode != "orchestrator":
         raise ValueError(
-            f"Unknown start_mode {start_mode!r}; expected 'init', 'orchestrator', or 'orchestrator_planner'"
+            f"Unknown start_mode {start_mode!r}; expected 'init'/'planner', 'orchestrator', or 'orchestrator_planner'"
         )
 
     # Load a fresh config and patch it for orchestrator-as-root mode.
@@ -180,7 +192,12 @@ def build_for_mode():
     system = build_system(config=patched)
     _tracer = get_multi_agent_tracer()
     if _tracer is not None:
-        track_adk_agent_recursive(system.root, _tracer)
+        track_adk_agent_recursive(system.run_root, _tracer)
+        for _ag in system.agents.values():
+            if isinstance(getattr(_ag, "after_model_callback", None), list) and len(_ag.after_model_callback) > 1:
+                _ag.after_model_callback.insert(0, _ag.after_model_callback.pop())
+            if isinstance(getattr(_ag, "before_tool_callback", None), list) and len(_ag.before_tool_callback) > 1:
+                _ag.before_tool_callback.insert(0, _ag.before_tool_callback.pop())
     return system
 
 __all__ = [

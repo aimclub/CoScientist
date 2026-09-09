@@ -20,15 +20,9 @@ agent-visible state, and the sandbox client keeps them out of its tool result
 for the same reason. The ways out are :func:`snapshot` (HTTP/console) and the
 sink registered with :func:`set_metrics_sink` (the Web UI).
 
-Pricing comes from litellm's model table. Models it does not know — a fresh
-OpenRouter slug, a self-hosted endpoint — are counted in tokens and reported as
-``unpriced_calls`` rather than silently priced at zero; give them a price with
-``LLM_PRICE_OVERRIDES`` (JSON, or a path to a JSON file)::
-
-    LLM_PRICE_OVERRIDES='{"openrouter/deepseek/deepseek-v4-flash":
-                          {"input": 0.28, "output": 0.42, "cache_read": 0.028}}'
-
-in USD per 1M tokens.
+Pricing comes dynamically from OpenRouter's live API (cached in memory for
+1 hour) and litellm's model table. Models that are not found are counted in
+tokens and reported as ``unpriced_calls`` rather than silently priced at zero.
 """
 
 from __future__ import annotations
@@ -39,6 +33,7 @@ import logging
 import os
 import threading
 import time
+import urllib.request
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -99,6 +94,55 @@ def _price_overrides() -> Dict[str, Dict[str, float]]:
     return _overrides
 
 
+_openrouter_cache: Dict[str, tuple[float, Optional[Dict[str, float]]]] = {}
+_openrouter_lock = threading.Lock()
+
+
+def _fetch_openrouter_price_for_model(model: str) -> Optional[Dict[str, float]]:
+    """Fetch live pricing for a specific requested model from OpenRouter API."""
+    url = "https://openrouter.ai/api/v1/models"
+    req = urllib.request.Request(
+        url,
+        headers={"User-Agent": "CoScientist/1.0", "Accept": "application/json"},
+    )
+    target_slug = model.removeprefix("openrouter/").lstrip("~")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            if resp.status != 200:
+                return None
+            data = json.loads(resp.read().decode("utf-8"))
+            models = data.get("data", [])
+            for item in models:
+                mid = str(item.get("id") or "")
+                clean_mid = mid.removeprefix("openrouter/").lstrip("~")
+                if clean_mid == target_slug or mid == model:
+                    pr = item.get("pricing", {})
+                    p_in = float(pr.get("prompt", 0) or 0) * 1_000_000
+                    p_out = float(pr.get("completion", 0) or 0) * 1_000_000
+                    p_cache = float(pr.get("input_cache_read", 0) or pr.get("prompt", 0) or 0) * 1_000_000
+                    return {"input": p_in, "output": p_out, "cache_read": p_cache}
+            return None
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Failed to fetch OpenRouter pricing for %s: %s", model, exc)
+        return None
+
+
+def _get_openrouter_api_price(model: str) -> Optional[Dict[str, float]]:
+    """Get model pricing from OpenRouter API for the requested model, cached for 1 hour."""
+    now = time.monotonic()
+    cached = _openrouter_cache.get(model)
+    if cached is not None and (now - cached[0]) < 3600:
+        return cached[1]
+
+    with _openrouter_lock:
+        cached = _openrouter_cache.get(model)
+        if cached is not None and (now - cached[0]) < 3600:
+            return cached[1]
+        price = _fetch_openrouter_price_for_model(model)
+        _openrouter_cache[model] = (now, price)
+        return price
+
+
 def price_call(
     model: str,
     prompt_tokens: int,
@@ -111,9 +155,9 @@ def price_call(
     is what every provider reports and what litellm expects — ``cached_tokens``
     only says how much of it was served from cache (and is therefore cheaper).
 
-    Returns ``(usd, source)`` where source is ``override``, ``litellm`` or
-    ``unavailable``. Zero cost with source ``unavailable`` means "we do not know
-    what this model costs", not "it was free".
+    Returns ``(usd, source)`` where source is ``override``, ``litellm``,
+    ``openrouter-api`` or ``unavailable``. Zero cost with source ``unavailable``
+    means "we do not know what this model costs", not "it was free".
     """
     fresh = max(prompt_tokens - cached_tokens, 0)
 
@@ -138,8 +182,20 @@ def price_call(
         )
         return float(prompt_cost) + float(completion_cost), "litellm"
     except Exception:  # noqa: BLE001 - unmapped model, offline table, bad slug
-        logger.debug("No price for model %s", model, exc_info=True)
-        return 0.0, "unavailable"
+        logger.debug("No price for model %s in litellm", model, exc_info=True)
+
+    if model.startswith("openrouter/") or model.startswith("~"):
+        or_price = _get_openrouter_api_price(model)
+        if or_price:
+            cache_rate = or_price.get("cache_read", or_price.get("input", 0.0))
+            usd = (
+                fresh * or_price.get("input", 0.0)
+                + cached_tokens * cache_rate
+                + completion_tokens * or_price.get("output", 0.0)
+            ) / 1_000_000
+            return usd, "openrouter-api"
+
+    return 0.0, "unavailable"
 
 
 def price_first(
@@ -341,12 +397,16 @@ class UsageLedger:
         reasoning_tokens: int = 0,
         total_tokens: Optional[int] = None,
         seconds: float = 0.0,
+        cost_usd: Optional[float] = None,
     ) -> None:
         """Record one call. ``model`` is the preferred name, ``alt_models`` the
         other names the same call is known by — see :func:`price_first`."""
-        name, cost, source = price_first(
-            (model, *alt_models), prompt_tokens, completion_tokens, cached_tokens,
-        )
+        if cost_usd is not None and cost_usd >= 0:
+            name, cost, source = model, float(cost_usd), "openrouter-response"
+        else:
+            name, cost, source = price_first(
+                (model, *alt_models), prompt_tokens, completion_tokens, cached_tokens,
+            )
         with self._lock:
             self._agent(key, agent).model(name).add(
                 prompt_tokens=prompt_tokens,
@@ -550,6 +610,12 @@ def record_completion(
         completion_details = getattr(usage, "completion_tokens_details", None)
         reasoning = getattr(completion_details, "reasoning_tokens", 0) or 0
         resolved = resolve_key(context, key)
+
+        raw_cost = getattr(usage, "cost", None)
+        if raw_cost is None and isinstance(usage, dict):
+            raw_cost = usage.get("cost")
+        cost_val = float(raw_cost) if raw_cost is not None else None
+
         LEDGER.record_llm(
             resolved,
             agent,
@@ -561,6 +627,7 @@ def record_completion(
             reasoning_tokens=int(reasoning),
             total_tokens=int(getattr(usage, "total_tokens", 0) or 0) or None,
             seconds=seconds,
+            cost_usd=cost_val,
         )
         publish(resolved)
     except Exception as exc:  # noqa: BLE001
@@ -624,6 +691,10 @@ class UsageMetricsPlugin(BasePlugin):
 
         prompt = int(getattr(usage, "prompt_token_count", 0) or 0)
         completion = int(getattr(usage, "candidates_token_count", 0) or 0)
+
+        raw_cost = getattr(usage, "cost", None) or getattr(llm_response, "cost", None)
+        cost_val = float(raw_cost) if raw_cost is not None else None
+
         LEDGER.record_llm(
             key,
             call_key[1],
@@ -635,6 +706,7 @@ class UsageMetricsPlugin(BasePlugin):
             reasoning_tokens=int(getattr(usage, "thoughts_token_count", 0) or 0),
             total_tokens=int(getattr(usage, "total_token_count", 0) or 0) or None,
             seconds=(time.monotonic() - started) if started else 0.0,
+            cost_usd=cost_val,
         )
         publish(key)
         return None

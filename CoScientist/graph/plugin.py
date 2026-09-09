@@ -35,6 +35,7 @@ from google.adk.plugins.base_plugin import BasePlugin
 
 from CoScientist.graph.memory import ROOT_ID, get_knowledge_graph
 from CoScientist.graph.session_scope import SessionKey, session_key
+from CoScientist.utils.s3_refs import find_s3_uris
 
 _agent_names_cache: Optional[set] = None
 _composite_parents_cache: Optional[dict] = None
@@ -361,7 +362,8 @@ class GraphMemoryPlugin(BasePlugin):
                 graph.add_node(
                     id=nid, kind="tool_call", turn_id=self._turn(tool_context),
                     label=tool.name, executor_agent=agent, status="running",
-                    parent_ids=[parent], input=_short(tool_args), t_start=time.time(),
+                    parent_ids=[parent], input=_short(tool_args),
+                    input_files=find_s3_uris(tool_args), t_start=time.time(),
                 )
                 graph.add_edge(parent, nid, type="caused_by")
             state.node_by_fcid[fcid] = nid
@@ -384,7 +386,9 @@ class GraphMemoryPlugin(BasePlugin):
             if nid:
                 graph.set_status(
                     nid, status="failed" if _is_error(result) else "success",
-                    output=_short(result, _OUTPUT_LIMIT), t_end=time.time(),
+                    output=_short(result, _OUTPUT_LIMIT),
+                    output_files=find_s3_uris(result),
+                    t_end=time.time(),
                 )
         except Exception:  # noqa: BLE001
             pass

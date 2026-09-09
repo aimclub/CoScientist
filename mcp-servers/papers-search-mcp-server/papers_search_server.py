@@ -9,11 +9,17 @@ from fastmcp.server.dependencies import get_http_request
 from CoScientist.paper_parser.s3_connection import S3BucketService
 from openalex_client import OpenAlexClient
 
+def _s3_env(primary: str, fallback: str) -> str | None:
+    """S3__* is the name every server and the main app use. The bare names stay
+    as a fallback for one release, so an existing deployment keeps working."""
+    return os.getenv(primary) or os.getenv(fallback)
+
+
 s3_service = S3BucketService(
-    endpoint=os.getenv("ENDPOINT_URL"),
-    access_key=os.getenv("ACCESS_KEY"),
-    secret_key=os.getenv("SECRET_KEY"),
-    bucket_name=os.getenv("BUCKET_NAME"),
+    endpoint=_s3_env("S3__ENDPOINT_URL", "ENDPOINT_URL"),
+    access_key=_s3_env("S3__ACCESS_KEY", "ACCESS_KEY"),
+    secret_key=_s3_env("S3__SECRET_KEY", "SECRET_KEY"),
+    bucket_name=_s3_env("S3__BUCKET_NAME", "BUCKET_NAME"),
 )
 
 mcp = FastMCP("PapersSearch")
@@ -123,7 +129,11 @@ def download_papers_from_search(
     session_id: str = "1",
     user_id: str = "1",
 ) -> dict:
-    """Search papers in OpenAlex and upload found PDFs directly to S3."""
+    """Search papers in OpenAlex and upload found PDFs directly to S3.
+
+    Each uploaded paper carries ``bucket``, ``s3_key`` and ``presigned_url``. The
+    bucket and the key are the durable reference. The URL expires in one hour.
+    """
     email, api_key = _get_credentials()
     client = OpenAlexClient(email=email)
     response = client.search_works(
@@ -143,7 +153,9 @@ def download_papers_from_search(
         return {"answer": "No papers found for the given filters.", "metadata": {"papers": []}}
 
     logging.info(f"Found {len(works)} papers with PDFs available for download.")
-    s3_prefix = f"{user_id}/{session_id}/papers_search_results/"
+    # The ephemeral/ top segment is what the bucket lifecycle rule filters on.
+    # Objects written at the old prefix matched no rule and never expired.
+    s3_prefix = f"ephemeral/{user_id}/{session_id}/papers_search_results/"
     s3_client = s3_service.create_s3_client()
     uploaded = []
 
@@ -164,7 +176,9 @@ def download_papers_from_search(
                 "id": work.get("id"),
                 "paper_title": title,
                 "pdf_url": pdf_url,
+                "bucket": s3_service.bucket_name,
                 "s3_key": s3_key,
+                "presigned_url": s3_service.generate_presigned_url(s3_key, expiration=3600),
                 "doi": work.get("doi"),
                 "publication_year": work.get("publication_year"),
             }

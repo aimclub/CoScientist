@@ -1,8 +1,9 @@
+from CoScientist.agents.common import is_proxy_error
 import asyncio
 import json
 import logging
 import os
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -11,13 +12,15 @@ from urllib.parse import urlparse
 from uuid import uuid4
 from weakref import WeakKeyDictionary
 
-from fastapi import (FastAPI, HTTPException, Request, WebSocket,
-                     WebSocketDisconnect)
-from fastapi.responses import (HTMLResponse, JSONResponse, Response,
-                               StreamingResponse)
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from CoScientist.agents.callbacks.tool_callbacks import DATASET_URL_STATE_KEY
+from CoScientist.agents.callbacks.report_language import (
+    REPORT_LANGUAGES,
+    REPORT_LANGUAGE_STATE_KEY,
+)
 from CoScientist.main import CoScientistManager
 from CoScientist.web.handler import WebHITLHandler
 from CoScientist.web.session_registry import LocalSessionRegistry
@@ -27,6 +30,8 @@ from CoScientist.reporting import finalize_report
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.config import get_settings
 from CoScientist.tools.coder_tools.coder_tools import coder_toolset
+from CoScientist.agents.common import sync_proxy_session
+from CoScientist.utils.text import strip_thinking
 
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
@@ -71,6 +76,11 @@ SOCKET_SEND_TIMEOUT_SECONDS = 5.0
 # log and are never dropped, so only the tool stream is capped.
 MAX_TOOL_ACTIVITY_EVENTS = 600
 TOOL_ACTIVITY_TRIM_SLACK = 200
+# Untruncated tool args/results kept for on-demand fetch (ToolsViewer's "Show
+# full result"), keyed by call_id. Independent of MAX_TOOL_ACTIVITY_EVENTS
+# since most calls never need an entry here at all — only ones whose preview
+# was actually truncated get one.
+MAX_TOOL_FULL_VALUES = 300
 DATASET_URL_MAX_LENGTH = 2048
 # Graph stores the Settings modal can wipe. The derived ``knowledge`` view is
 # absent on purpose: it is a projection of ``execution`` plus ``memory``.
@@ -98,6 +108,23 @@ def _validated_dataset_url(raw: Any) -> str:
     return url
 
 
+def _validated_report_language(raw: Any) -> str:
+    """Normalize the report language the user picked; "" clears the choice.
+
+    A closed enum, so a typo becomes an immediate message instead of a finished
+    report in the wrong language. Clearing it hands the session back to the
+    default that ``normalize_report_language`` applies.
+    """
+    lang = str(raw or "").strip().lower()
+    if not lang:
+        return ""
+    if lang not in REPORT_LANGUAGES:
+        raise ValueError(
+            "Report language must be one of: " + ", ".join(REPORT_LANGUAGES) + "."
+        )
+    return lang
+
+
 def _apply_frontend_settings(frontend: dict) -> None:
     """Map the frontend JS ``appSettings`` object to ``settings.web``.
 
@@ -116,15 +143,26 @@ def _apply_frontend_settings(frontend: dict) -> None:
         val = bool(general["hitlEnabled"])
         web.hitl_enabled = val
         get_settings().hitl.enabled = val
+    if "hitlAutoApproveTimeout" in general:
+        web.hitl_auto_approve_timeout = int(general["hitlAutoApproveTimeout"])
     if "usePlanner" in general:
         web.use_planner = bool(general["usePlanner"])
+    if "useProxy" in general:
+        web.use_proxy = bool(general["useProxy"])
+        sync_proxy_session()
     if "opikEnabled" in general:
-        web.opik_enabled = bool(general["opikEnabled"])
+        val = bool(general["opikEnabled"])
+        web.opik_enabled = val
+        get_settings().opik.enabled = val
     if "autoNamingEnabled" in general:
         web.auto_naming_enabled = bool(general["autoNamingEnabled"])
     if "coscientistUsername" in general:
         val = str(general["coscientistUsername"]).strip()
         web.coscientist_username = val if val else None
+    if "contextInitEnabled" in general:
+        val = bool(general["contextInitEnabled"])
+        web.context_init_enabled = val
+        get_settings().context_init.enabled = val
     if "knowledgeGraphEnabled" in general:
         web.knowledge_graph_enabled = bool(general["knowledgeGraphEnabled"])
     if "researchGraphEnabled" in general:
@@ -172,8 +210,8 @@ def _apply_frontend_settings(frontend: dict) -> None:
     if "workspaceId" in coder:
         val = coder["workspaceId"]
         web.coder_workspace_id = val if val else None
-    if "localToolsEnabled" in coder:
-        web.coder_local_tools_enabled = bool(coder["localToolsEnabled"])
+    if "mode" in coder:
+        web.coder_mode = str(coder["mode"])
 
 
 def _settings_payload() -> dict:
@@ -190,11 +228,15 @@ def _settings_payload() -> dict:
             "startMode": web.start_mode,
             "maxRetries": web.max_retries,
             "hitlEnabled": web.hitl_enabled,
+            "hitlAutoApproveTimeout": web.hitl_auto_approve_timeout,
             "usePlanner": web.use_planner,
+            "useProxy": web.use_proxy,
             "opikEnabled": web.opik_enabled,
             "autoNamingEnabled": web.auto_naming_enabled,
             "coscientistUsername": web.coscientist_username or "",
+            "contextInitEnabled": settings.context_init.enabled,
             "knowledgeGraphEnabled": web.knowledge_graph_enabled,
+            "autoClearGraphEnabled": web.auto_clear_graph_enabled,
             "researchGraphEnabled": settings.research_graph.enabled,
         },
         "plannerAgent": {
@@ -215,7 +257,7 @@ def _settings_payload() -> dict:
         "coderAgent": {
             "sandboxUrl": web.sandbox_url,
             "workspaceId": web.coder_workspace_id or "",
-            "localToolsEnabled": web.coder_local_tools_enabled,
+            "mode": web.coder_mode,
         },
     }
 
@@ -236,6 +278,11 @@ class WebRuntime:
         self.stopping_runs: set[SessionKey] = set()
         self._closing = False
         self.agent_events: dict[SessionKey, list[dict[str, Any]]] = defaultdict(list)
+        # Full (untruncated) tool args/results, keyed by call_id — see
+        # MAX_TOOL_FULL_VALUES. Never broadcast; only served on demand.
+        self.tool_full_values: dict[SessionKey, "OrderedDict[str, dict[str, Any]]"] = (
+            defaultdict(OrderedDict)
+        )
         # Latest usage/cost snapshot per session — cumulative, so one entry is
         # the whole history and a reconnecting tab needs nothing older.
         self.metrics: dict[SessionKey, dict[str, Any]] = {}
@@ -243,6 +290,10 @@ class WebRuntime:
         # here as well as in ADK state so a reconnecting tab and a session whose
         # manager has not been built yet both see the same link.
         self.dataset_urls: dict[SessionKey, str] = {}
+        # Report language chosen for a session from the chat composer. Holds
+        # ONLY explicit choices — an absent key means the browser has not spoken
+        # yet, which is what lets the UI default follow its interface language.
+        self.report_languages: dict[SessionKey, str] = {}
         self.pending_hitl: dict[str, dict[str, Any]] = {}
         self.hitl_handler = WebHITLHandler()
         self.hitl_handler.set_sender(self.send_socket)
@@ -387,6 +438,8 @@ class WebRuntime:
         async with self.manager_lock:
             manager = self.managers.get(key)
             if manager is None:
+                if get_settings().web.auto_clear_graph_enabled:
+                    _clear_session_graphs(user_id, session_id, view="all")
                 manager = CoScientistManager(
                     app_name=APP_NAME,
                     user_id=user_id,
@@ -478,6 +531,7 @@ class WebRuntime:
                     "run_status_version": version,
                     "metrics": self.metrics.get(key),
                     "dataset_url": self.dataset_urls.get(key, ""),
+                    "report_language": self.report_languages.get(key, ""),
                 })
             except Exception:
                 self.detach_socket(key, ws)
@@ -518,6 +572,57 @@ class WebRuntime:
                 author="user",
                 actions=EventActions(
                     state_delta={DATASET_URL_STATE_KEY: current},
+                ),
+            ),
+        )
+        return current
+
+    async def apply_report_language(
+        self,
+        key: SessionKey,
+        lang: str | None = None,
+    ) -> str:
+        """Set/clear the session's report language and mirror it into ADK state.
+
+        ``lang=None`` re-syncs the stored choice without changing it — called at
+        the start of every run, because the ADK session may not have existed yet
+        when the user picked the language.
+
+        The mirror holds only explicit choices, and an unset session mirrors ""
+        into state rather than a language. That keeps the one fallback site in
+        ``normalize_report_language``. Writing a default here would turn "the UI
+        default follows its interface language" into "the default is always
+        Russian".
+        """
+        if lang is not None:
+            if lang:
+                self.report_languages[key] = lang
+            else:
+                self.report_languages.pop(key, None)
+        current = self.report_languages.get(key, "")
+        if lang is None and not current:
+            # A re-sync must never downgrade a language already in state to "".
+            # Only an explicit clear does that, so a session whose state carries
+            # a choice the mirror has lost keeps it.
+            return current
+
+        user_id, session_id = key
+        adk_session = await self.session_service.get_session(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        if adk_session is None:
+            return current
+        if adk_session.state.get(REPORT_LANGUAGE_STATE_KEY, "") == current:
+            return current
+        await self.session_service.append_event(
+            adk_session,
+            Event(
+                invocation_id=f"reportlang_{uuid4().hex}",
+                author="user",
+                actions=EventActions(
+                    state_delta={REPORT_LANGUAGE_STATE_KEY: current},
                 ),
             ),
         )
@@ -615,6 +720,30 @@ def _wire_sandbox_links(runtime: WebRuntime) -> None:
     sandbox_tools.set_sandbox_start_sink(deliver)
 
 
+def _wire_sandbox_plan(runtime: WebRuntime) -> None:
+    """Relay the sandbox agent's own plan to the tabs watching the session.
+
+    A sandbox task is the longest single thing the system does — one tool call
+    that can run for hours — and it reports nothing until it is over. The agent
+    in the container does keep a task list, though, and rewrites it as it goes;
+    the client relays each new revision here, which is what lets the status
+    line say *which step* is running instead of "writing and running code" for
+    the whole job.
+
+    Live-only, deliberately: the plan describes what is happening right now, a
+    replayed one would describe a container that is already gone. A tab that
+    reconnects mid-run picks the current revision up on the next poll.
+    """
+    from CoScientist.tools.coder_tools import sandbox_tools
+
+    async def deliver(key: SessionKey | None, info: dict[str, Any]) -> None:
+        if key is None or (key not in runtime.sockets and key not in runtime.active_runs):
+            return
+        await runtime.send(key, {"type": "sandbox_plan", **_json_safe(info)})
+
+    sandbox_tools.set_sandbox_plan_sink(deliver)
+
+
 def _wire_metrics(runtime: WebRuntime) -> None:
     """Stream the running cost of a session to the tabs watching it.
 
@@ -662,11 +791,32 @@ def _wire_tool_activity(runtime: WebRuntime) -> None:
             event for index, event in enumerate(events) if index not in dropped
         ]
 
+    def stash_full_values(key: SessionKey, event: dict[str, Any]) -> None:
+        """Pull the untruncated `*_full` fields out of the broadcast event and
+        keep them server-side under the call's id, so a client can fetch the
+        whole thing later without it ever going out over every tab's socket.
+        """
+        call_id = event.get("call_id")
+        full_fields = {
+            field: event.pop(key_name)
+            for field, key_name in (("args", "args_full"), ("result", "result_full"), ("error", "error_full"))
+            if key_name in event
+        }
+        if not call_id or not full_fields:
+            return
+        store = runtime.tool_full_values[key]
+        entry = store.setdefault(call_id, {})
+        entry.update(full_fields)
+        store.move_to_end(call_id)
+        while len(store) > MAX_TOOL_FULL_VALUES:
+            store.popitem(last=False)
+
     async def deliver(key: SessionKey, payload: dict[str, Any]) -> None:
         if key not in runtime.sockets and key not in runtime.active_runs:
             # A key we never served (e.g. the CLI default scope) has nowhere to go.
             return
         event = {"type": "tool_activity", **_json_safe(payload)}
+        stash_full_values(key, event)
         events = runtime.agent_events[key]
         events.append(event)
         trim(events)
@@ -690,6 +840,10 @@ def _wire_agent_output(runtime: WebRuntime) -> None:
         if key not in runtime.sockets and key not in runtime.active_runs:
             # A key we never served (e.g. the CLI default scope) has nowhere to go.
             return
+        if "content" in payload and isinstance(payload["content"], str):
+            payload["content"] = strip_thinking(payload["content"])
+            if not payload["content"].strip():
+                return
         event = {"type": "agent_output", **_json_safe(payload)}
         runtime.agent_events[key].append(event)
         await runtime.send(key, event)
@@ -708,6 +862,63 @@ async def lifespan(app: FastAPI):
     await app.state.runtime.close()
 
 
+def _clear_session_graphs(
+    user_id: str,
+    session_id: str,
+    view: str = "all",
+) -> tuple[dict[str, Any], bool]:
+    """Wipe graph data for a user/session.
+
+    Returns a tuple of (deleted_details_dict, has_failed_boolean).
+    """
+    if view == "all":
+        targets = GRAPH_DELETE_TARGETS
+    elif view == "session":
+        targets = ("execution", "research")
+    elif view in GRAPH_DELETE_TARGETS:
+        targets = (view,)
+    else:
+        targets = ()
+
+    deleted: dict[str, Any] = {}
+    failed = False
+    for name in targets:
+        try:
+            if name == "execution":
+                from CoScientist.graph.memory import reset_knowledge_graph
+                reset_knowledge_graph(user_id=user_id, session_id=session_id)
+                deleted[name] = {"scope": "session", "cleared": True}
+            elif name == "research":
+                from CoScientist.graph.research.store import get_research_graph
+                archived = get_research_graph(
+                    user_id=user_id,
+                    session_id=session_id,
+                ).reset(archive=True)
+                deleted[name] = {
+                    "scope": "session",
+                    "cleared": True,
+                    "archived": archived,
+                }
+            elif name == "memory":
+                from CoScientist.graph.memory_store import (
+                    get_global_knowledge_memory,
+                )
+                result = get_global_knowledge_memory().clear()
+                deleted[name] = {
+                    "scope": "global",
+                    "cleared": bool(result.get("persisted")),
+                    **result,
+                }
+                failed = failed or not result.get("persisted")
+        except Exception as exc:  # noqa: BLE001 — report every target's fate
+            logging.getLogger("CoScientist.web").warning(
+                "Graph deletion failed for %s: %s", name, exc
+            )
+            deleted[name] = {"cleared": False, "error": str(exc)}
+            failed = True
+    return deleted, failed
+
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
@@ -721,6 +932,7 @@ def create_app() -> FastAPI:
     runtime = WebRuntime()
     _wire_hitl(runtime)
     _wire_sandbox_links(runtime)
+    _wire_sandbox_plan(runtime)
     _wire_tool_activity(runtime)
     _wire_agent_output(runtime)
     _wire_metrics(runtime)
@@ -886,6 +1098,8 @@ def create_app() -> FastAPI:
                 title,
                 session_id=session_id,
             )
+            if get_settings().web.auto_clear_graph_enabled:
+                _clear_session_graphs(user_id, session_id, view="all")
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
@@ -980,6 +1194,186 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse({"session": session})
+
+    # --- Session export / import / save / restore ---
+    @app.post("/api/users/{user_id}/sessions/{session_id}/export")
+    async def export_session_endpoint(user_id: str, session_id: str):
+        """Download a full session bundle as a .cossession.zip file."""
+        from urllib.parse import quote
+        from CoScientist.web.session_bundle import export_session, BUNDLE_EXTENSION
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        bundle_bytes = await export_session(runtime, (user_id, session_id))
+        session_meta = runtime.registry.get_session(user_id, session_id) or {}
+        title = session_meta.get("title", "session")
+        safe_title = "".join(
+            c if c.isalnum() or c in " _-" else "_" for c in title
+        )[:60].strip() or "session"
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        filename = f"{safe_title}_{stamp}{BUNDLE_EXTENSION}"
+
+        ascii_title = "".join(
+            c if (c.isascii() and c.isalnum()) or c in " _-" else "_" for c in title
+        )[:60].strip() or "session"
+        fallback_filename = f"{ascii_title}_{stamp}{BUNDLE_EXTENSION}"
+        encoded_filename = quote(filename)
+
+        return Response(
+            content=bundle_bytes,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{fallback_filename}"; filename*=UTF-8\'\'{encoded_filename}',
+            },
+        )
+
+    @app.post("/api/users/{user_id}/sessions/{session_id}/save")
+    async def save_session_endpoint(user_id: str, session_id: str):
+        """Save a session bundle to disk (no download)."""
+        from CoScientist.web.session_bundle import export_session, save_to_disk
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        bundle_bytes = await export_session(runtime, (user_id, session_id))
+        session_meta = runtime.registry.get_session(user_id, session_id) or {}
+        title = session_meta.get("title", "session")
+        filename = save_to_disk(bundle_bytes, title, user_id, session_id)
+        return JSONResponse({"status": "success", "filename": filename})
+
+    @app.post("/api/import-session/preview")
+    async def preview_import_endpoint(request: Request):
+        """Inspect a .cossession.zip bundle without importing it.
+
+        Returns manifest info and whether MCP builds are included.
+        """
+        from CoScientist.web.session_bundle import preview_bundle
+
+        content_type = (request.headers.get("content-type") or "").lower()
+        if "multipart" in content_type:
+            form = await request.form()
+            upload = form.get("file")
+            if upload is None:
+                raise HTTPException(status_code=400, detail="No file uploaded.")
+            bundle_bytes = await upload.read()
+        else:
+            bundle_bytes = await request.body()
+        if not bundle_bytes:
+            raise HTTPException(status_code=400, detail="Empty file.")
+        try:
+            result = preview_bundle(bundle_bytes)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(result)
+
+    @app.post("/api/users/{user_id}/import-session")
+    async def import_session_endpoint(user_id: str, request: Request):
+        """Import a session from an uploaded .cossession.zip bundle.
+
+        Accepts ``multipart/form-data`` with a ``file`` field (and an optional
+        ``rebuild_mcp`` field), OR raw bytes with
+        ``application/zip``/``application/octet-stream``.
+        """
+        from CoScientist.web.session_bundle import import_session
+
+        rebuild_mcp = False
+        content_type = (request.headers.get("content-type") or "").lower()
+        if "multipart" in content_type:
+            form = await request.form()
+            upload = form.get("file")
+            if upload is None:
+                raise HTTPException(status_code=400, detail="No file uploaded.")
+            bundle_bytes = await upload.read()
+            rebuild_mcp = str(form.get("rebuild_mcp", "")).lower() in ("true", "1", "yes")
+        else:
+            bundle_bytes = await request.body()
+
+        if not bundle_bytes:
+            raise HTTPException(status_code=400, detail="Empty file.")
+
+        # Always import into the ITMO_DEV user, ignoring the URL user_id
+        target_nickname = "ITMO_DEV"
+        try:
+            result = await import_session(runtime, target_nickname, bundle_bytes,
+                                          rebuild_mcp=rebuild_mcp)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(result, status_code=201)
+
+    @app.get("/api/saved-sessions")
+    async def list_saved_sessions_endpoint():
+        """List all session bundles saved to disk."""
+        from CoScientist.web.session_bundle import list_saved_sessions
+        return JSONResponse({"sessions": list_saved_sessions()})
+
+    @app.post("/api/restore-session")
+    async def restore_session_endpoint(data: dict):
+        """Restore a previously saved session from disk."""
+        from CoScientist.web.session_bundle import (
+            import_session,
+            read_saved_bundle,
+        )
+        filename = data.get("filename", "")
+        if not filename:
+            raise HTTPException(status_code=400, detail="filename is required.")
+        try:
+            bundle_bytes = read_saved_bundle(filename)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        rebuild_mcp = bool(data.get("rebuild_mcp", False))
+        target_nickname = "ITMO_DEV"
+        try:
+            result = await import_session(runtime, target_nickname, bundle_bytes,
+                                          rebuild_mcp=rebuild_mcp)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(result, status_code=201)
+
+    @app.get("/api/saved-sessions/{filename}/events")
+    async def saved_session_events_endpoint(filename: str):
+        """The event log of a saved bundle, for replaying a run in the UI.
+
+        Feeds the status indicator's `?demo=<filename>` mode: the frontend can
+        drive its state machine off a real recorded run instead of costing a
+        live one.
+        """
+        from CoScientist.web.session_bundle import read_saved_events
+        try:
+            events = read_saved_events(filename)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"events": events})
+
+    @app.delete("/api/saved-sessions/{filename}")
+    async def delete_saved_session_endpoint(filename: str):
+        """Delete a saved session bundle from disk."""
+        from CoScientist.web.session_bundle import delete_saved_session
+        if delete_saved_session(filename):
+            return JSONResponse({"status": "deleted"})
+        raise HTTPException(status_code=404, detail=f"No saved session '{filename}'.")
+
+    @app.get("/api/saved-sessions/{filename}/download")
+    async def download_saved_session_endpoint(filename: str):
+        """Download a previously saved bundle from disk."""
+        from urllib.parse import quote
+        from CoScientist.web.session_bundle import read_saved_bundle
+        try:
+            bundle_bytes = read_saved_bundle(filename)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        safe_name = Path(filename).name
+        ascii_name = "".join(
+            c if c.isascii() and (c.isalnum() or c in "._-") else "_" for c in safe_name
+        ) or "session.cossession.zip"
+        encoded_name = quote(safe_name)
+        return Response(
+            content=bundle_bytes,
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f'attachment; filename="{ascii_name}"; filename*=UTF-8\'\'{encoded_name}',
+            },
+        )
 
     # --- HITL diagnostics ---
     @app.get("/api/hitl-status")
@@ -1164,6 +1558,34 @@ def create_app() -> FastAPI:
             status_code=500 if failed else 200,
         )
 
+    @app.delete("/api/users/{user_id}/sessions/{session_id}/graph")
+    async def delete_session_graph(
+        user_id: str,
+        session_id: str,
+        view: str = "all",
+    ):
+        """Drop stored graph data on the operator's explicit request."""
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        allowed_views = (*GRAPH_DELETE_TARGETS, "all", "session")
+        if view not in allowed_views:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"unknown graph view {view!r}; expected one of "
+                    f"{', '.join(allowed_views)}"
+                ),
+            )
+
+        deleted, failed = _clear_session_graphs(user_id, session_id, view=view)
+        return JSONResponse(
+            {"status": "error" if failed else "success", "deleted": deleted},
+            status_code=500 if failed else 200,
+        )
+
     @app.get("/api/graph")
     async def api_graph(
         user_id: str = "",
@@ -1267,7 +1689,7 @@ def create_app() -> FastAPI:
         )
         if adk_session is None:
             raise HTTPException(status_code=404, detail="ADK session not found.")
-        tasks = adk_session.state.get("active_tasks", [])
+        tasks = adk_session.state.get("_master_active_tasks") or adk_session.state.get("active_tasks", [])
         return JSONResponse({
             "content": json.dumps(tasks, ensure_ascii=False, indent=2),
             "tasks": _json_safe(tasks),
@@ -1300,7 +1722,7 @@ def create_app() -> FastAPI:
             Event(
                 invocation_id=f"roadmap_{uuid4().hex}",
                 author="user",
-                actions=EventActions(state_delta={"active_tasks": tasks}),
+                actions=EventActions(state_delta={"active_tasks": tasks, "_master_active_tasks": tasks}),
             ),
         )
         runtime.registry.touch_session(user_id, session_id)
@@ -1350,20 +1772,28 @@ def create_app() -> FastAPI:
     # --- Agent info ---
     @app.get("/api/agents")
     async def get_agents():
-        """Return list of registered agents."""
+        """Return list of registered agents and system hierarchy."""
+        from CoScientist.assembly.schema import get_config
+        cfg = get_config()
+        hierarchy = cfg.agent_hierarchy_map()
+        agents_list = []
+        for name in cfg.build_order():
+            ac = cfg.agent(name)
+            agents_list.append({
+                "name": ac.name,
+                "class": ac.cls,
+                "role": ac.cls,
+                "description": ac.description,
+                "enabled": ac.is_enabled(),
+                "tools": list(ac.tools),
+                "subordinates": list(ac.subordinates),
+                "children": list(ac.children),
+                "is_root": bool(ac.root),
+            })
         return JSONResponse({
-            "agents": [
-                {"name": "OrchestratorAgent", "role": "orchestrator", "status": "idle"},
-                {"name": "PlannerAgent", "role": "planner", "status": "idle"},
-                {"name": "CoderAgent", "role": "coder", "status": "idle"},
-                {"name": "HypothesesAgent", "role": "hypothesis", "status": "idle"},
-                {"name": "ResearchAgent", "role": "research", "status": "idle"},
-                {"name": "ToolRetrieverAgent", "role": "tool_retriever", "status": "idle"},
-                {"name": "ToolRerankerAgent", "role": "tool_reranker", "status": "idle"},
-                {"name": "ToolWebSearcherAgent", "role": "tool_websearcher", "status": "idle"},
-                {"name": "ToolSearcherAgent", "role": "tool_searcher", "status": "idle"},
-                {"name": "ExperimentAgent", "role": "experiment", "status": "idle"},
-            ]
+            "agents": agents_list,
+            "hierarchy": hierarchy,
+            "delegatable_names": list(cfg.delegatable_names()),
         })
 
     # --- Events log ---
@@ -1386,6 +1816,43 @@ def create_app() -> FastAPI:
             except Exception:  # noqa: BLE001
                 events = []
         return JSONResponse({"events": events[-100:]})
+
+    # --- Usage and cost ---
+    @app.get("/api/users/{user_id}/sessions/{session_id}/metrics")
+    async def get_metrics(user_id: str, session_id: str, report: bool = False):
+        """What this session has spent, broken down by agent.
+
+        Read straight from the ledger rather than from the last pushed snapshot,
+        so the answer is current even when no tab is connected. ``?report=1``
+        adds the console rendering, for a quick look from the terminal.
+        """
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        from CoScientist.logging.metrics import format_report, snapshot
+
+        data = snapshot(key=(user_id, session_id))
+        if report:
+            data = {**data, "report": format_report(data)}
+        return JSONResponse(_json_safe(data))
+
+    # --- Full (untruncated) tool args/results, for the ToolsViewer's "Show
+    # full result" — the live socket stream only ever carries a preview.
+    @app.get("/api/users/{user_id}/sessions/{session_id}/tool-activity/{call_id}")
+    async def get_tool_activity_full(user_id: str, session_id: str, call_id: str):
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        entry = runtime.tool_full_values.get((user_id, session_id), {}).get(call_id)
+        if entry is None:
+            raise HTTPException(
+                status_code=404,
+                detail="No stored full result for this call (it may have expired or was never truncated)",
+            )
+        return JSONResponse({"call_id": call_id, **entry})
 
     # --- Usage and cost ---
     @app.get("/api/users/{user_id}/sessions/{session_id}/metrics")
@@ -1435,7 +1902,7 @@ def create_app() -> FastAPI:
             user=user,
             session=session_meta,
             active_tasks=(
-                adk_session.state.get("active_tasks", [])
+                (adk_session.state.get("_master_active_tasks") or adk_session.state.get("active_tasks", []))
                 if adk_session else []
             ),
         )
@@ -1496,6 +1963,22 @@ def create_app() -> FastAPI:
                     await runtime.send(key, {
                         "type": "dataset_url",
                         "dataset_url": url,
+                    })
+                elif msg_type == "set_report_language":
+                    try:
+                        lang = _validated_report_language(data.get("report_language"))
+                    except ValueError as exc:
+                        await runtime.send_socket(ws, {
+                            "type": "report_language_rejected",
+                            "message": str(exc),
+                        }, key)
+                        continue
+                    await runtime.apply_report_language(key, lang)
+                    # Broadcast: the report is one document, so every tab on the
+                    # session agrees on its language, whichever one picked it.
+                    await runtime.send(key, {
+                        "type": "report_language",
+                        "report_language": lang,
                     })
                 elif msg_type == "hitl_response":
                     _handle_hitl_response(runtime, key, data)
@@ -1568,6 +2051,9 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
         # manager), so mirror it into state now that the session exists — this is
         # what puts the link in front of CoderAgent.
         await runtime.apply_dataset_url(key)
+        # Same reason as the attachment above: the language may have been picked
+        # before the ADK session existed.
+        await runtime.apply_report_language(key)
         runtime.registry.touch_session(user_id, session_id, status="processing")
         execution_lock = runtime.execution_locks[key]
 
@@ -1589,14 +2075,36 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
         _cancel_pending_hitl(runtime, key)
         runtime.hitl_handler.reset(key)
         runtime.registry.touch_session(user_id, session_id, status="idle")
-        error_msg = f"Error processing query: {str(exc)}"
-        error_event = {
-            "type": "error",
-            "message": error_msg,
-            "timestamp": datetime.now().isoformat(),
-        }
-        await runtime.send(key, error_event)
-        runtime.record_event(key, error_event)
+
+        if is_proxy_error(exc):
+            msg = (
+                f"**Error connecting to proxy server**\n\n"
+                f"Failed to connect to the proxy server to execute the query to the language model. "
+                f"Please ensure the proxy container is running, the corporate VPN is enabled (other - disabled), and "
+                f"and the proxy is accessible."
+            )
+            agent_msg = {
+                "type": "agent_event",
+                "author": "OrchestratorAgent",
+                "content": msg,
+                "is_final": True,
+                "timestamp": datetime.now().isoformat(),
+            }
+            runtime.record_event(key, agent_msg)
+            await runtime.send(key, agent_msg)
+            await runtime.send(key, {
+                "type": "final_response",
+                "content": msg,
+            })
+        else:
+            error_msg = f"Error processing query: {str(exc)}"
+            error_event = {
+                "type": "error",
+                "message": error_msg,
+                "timestamp": datetime.now().isoformat(),
+            }
+            await runtime.send(key, error_event)
+            runtime.record_event(key, error_event)
 
 
 async def _run_chat_invocation(
@@ -1617,6 +2125,8 @@ async def _run_chat_invocation(
     # The Result Aggregator runs as the terminal stage of the SAME run_async, so its
     # format_results reads report_config mid-invocation — set it before the run.
     # TODO(planning): thread a real ReportConfig (e.g. --latex mode) from the web layer.
+    # The report LANGUAGE is not part of this — it travels as session state
+    # (report_language) and reaches the prompt through inject_report_language.
     report_config = ReportConfig()
     await manager._set_state("report_config", report_config.to_state())
 
@@ -1653,10 +2163,17 @@ async def _run_chat_invocation(
                     # A model turn that only carries a function call often still
                     # ships a blank text part. Requiring real characters keeps
                     # it from surfacing as an empty message bubble.
-                    text_parts = [
-                        p.text for p in event.content.parts
-                        if p.text and p.text.strip()
-                    ]
+                    # Skip thinking/reasoning parts and strip inline thinking tags.
+                    text_parts = []
+                    for p in event.content.parts:
+                        if getattr(p, "thought", False):
+                            continue
+                        t = getattr(p, "text", None)
+                        if not t or not t.strip():
+                            continue
+                        cleaned = strip_thinking(t)
+                        if cleaned:
+                            text_parts.append(cleaned)
                     if text_parts:
                         event_data["content"] = "\n".join(text_parts)
 

@@ -48,19 +48,24 @@ def test_pipeline_stages_are_declared_agents_and_not_root(config):
     assert "ResultAggregatorAgent" in config.pipeline.post
 
 
-def test_run_root_is_one_sequential_run_ending_in_the_aggregator():
+def test_run_root_is_one_sequential_run_ending_in_the_aggregator(monkeypatch):
     """The whole lifecycle is ONE ADK SequentialAgent (context-init pre-stage →
     orchestrator → aggregator) driven by a single run_async — so it is one
     invocation / one Opik trace with the Result Aggregator as the terminal stage
     (no separate static-directive run)."""
     from google.adk.agents.sequential_agent import SequentialAgent
-    from CoScientist.agents import run_root, orchestrator_agent
+    from CoScientist.assembly import build_system
+    from CoScientist.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings.context_init, "enabled", True)
+    system = build_system()
+    run_root = system.run_root
 
     assert isinstance(run_root, SequentialAgent)
     names = [a.name for a in run_root.sub_agents]
     # The context-init pre-stage seeds the research frame before the orchestrator.
     assert names[0] == "ContextInitAgent", "context-init runs before the orchestrator"
-    assert orchestrator_agent.name == "OrchestratorAgent"
     assert names.index("OrchestratorAgent") < names.index("ResultAggregatorAgent")
     assert names[-1] == "ResultAggregatorAgent", "aggregator must be the terminal stage"
 
@@ -157,7 +162,10 @@ def test_pipeline_state_injections_are_optional(config, system):
     """ADK {state_key} injections that depend on an upstream agent having called
     a tool must use the optional `{key?}` form, or a degenerate run (empty web
     search, no retrieval) crashes the agent with a KeyError mid-turn."""
-    state_keys = ("accumulated_tools", "filtered_tools", "accumulated_web_mcps")
+    state_keys = (
+        "accumulated_tools", "filtered_tools", "accumulated_web_mcps",
+        "fedot_candidates", "reranker_candidates",
+    )
     for name in config.agents:
         instruction = getattr(system.agent(name), "instruction", "") or ""
         for key in state_keys:
@@ -246,8 +254,14 @@ def test_task_executor_is_a_router_over_both_execution_paths(config, system):
     # router (no A2A card of its own).
     pipeline = config.agent("ToolPipelineAgent")
     assert pipeline.cls == "sequential"
-    assert pipeline.children == ["ToolPreparerAgent", "ExperimentAgent"]
+    # Prepare tools, then run ONE executor: the switch picks the ReAct executor,
+    # or the FEDOT.MAS fallback when the reranker produced no usable ranking.
+    assert pipeline.children == ["ToolPreparerAgent", "ExecutorSwitchAgent"]
     assert pipeline.a2a is None
+
+    switch = config.agent("ExecutorSwitchAgent")
+    assert switch.cls == "custom:executor_switch"
+    assert switch.children == ["ExperimentAgent", "FedotAgent"]
 
     # Execution has ONE entry point on the orchestrator's roster.
     orch_subs = config.agent("OrchestratorAgent").subordinates
@@ -285,7 +299,7 @@ def test_dataset_collector_is_a_coder_subordinate_sharing_the_sandbox(monkeypatc
     collector = config.agent("DatasetCollectorAgent")
     # Both share the coder toolset -> same workspace-state anchor -> same sandbox.
     assert "coder" in collector.tools and "coder" in coder.tools
-    on = _build_with(monkeypatch, config, coder_local_tools_enabled=True)
+    on = _build_with(monkeypatch, config, coder_mode="local")
     # The coder prompt advertises the subordinate (rendered from config).
     coder_instruction = on.agent("CoderAgent").instruction
     assert "DatasetCollectorAgent" in coder_instruction
@@ -406,16 +420,16 @@ def test_critic_on_a_plain_llm_agent_is_rejected(config):
         SystemConfig.model_validate(raw)
 
 
-def test_build_for_mode_init(monkeypatch):
+def test_build_for_mode_planner(monkeypatch):
     from CoScientist.config import get_settings
     from CoScientist.agents import build_for_mode
 
     settings = get_settings()
-    monkeypatch.setattr(settings.web, "start_mode", "init")
-
-    system = build_for_mode()
-    assert system is not None
-    assert system.root.name == "PlanningPipelineAgent"
+    for mode in ("init", "planner"):
+        monkeypatch.setattr(settings.web, "start_mode", mode)
+        system = build_for_mode()
+        assert system is not None
+        assert system.root.name == "PlanningPipelineAgent"
 
 
 def test_build_for_mode_orchestrator(monkeypatch):
@@ -447,6 +461,49 @@ def test_build_for_mode_orchestrator_planner(monkeypatch):
     # OrchestratorAgent has create_plan tool
     tools = _tool_names(system.root)
     assert "create_plan" in tools
+
+
+def test_build_for_mode_run_root_includes_pipeline_pre_and_post(monkeypatch):
+    from google.adk.agents.sequential_agent import SequentialAgent
+    from CoScientist.config import get_settings
+    from CoScientist.agents import build_for_mode
+
+    settings = get_settings()
+    monkeypatch.setattr(settings.web, "start_mode", "orchestrator")
+    monkeypatch.setattr(settings.context_init, "enabled", True)
+
+    system = build_for_mode()
+    run_root = system.run_root
+    assert isinstance(run_root, SequentialAgent)
+    names = [a.name for a in run_root.sub_agents]
+    assert names[0] == "ContextInitAgent"
+    assert names[-1] == "ResultAggregatorAgent"
+    assert "OrchestratorAgent" in names
+
+
+def test_build_for_mode_planner_run_root(monkeypatch):
+    from google.adk.agents.sequential_agent import SequentialAgent
+    from CoScientist.config import get_settings
+    from CoScientist.agents import build_for_mode
+
+    settings = get_settings()
+    monkeypatch.setattr(settings.context_init, "enabled", True)
+    for mode in ("init", "planner"):
+        monkeypatch.setattr(settings.web, "start_mode", mode)
+
+        system = build_for_mode()
+        run_root = system.run_root
+        assert isinstance(run_root, SequentialAgent)
+        names = [a.name for a in run_root.sub_agents]
+        assert names[0] == "ContextInitAgent"
+        assert names[1] == "PlanningPipelineAgent"
+        assert names[-1] == "ResultAggregatorAgent"
+
+        planning_agent = run_root.sub_agents[1]
+        planning_children = [a.name for a in planning_agent.sub_agents]
+        assert planning_children == ["PlannerAgent", "OrchestratorAgent"]
+
+
 
 
 
@@ -526,7 +583,7 @@ def test_research_graph_switch_drops_tools_and_prompt(monkeypatch, config):
 def test_coder_local_tools_switch_leaves_only_the_sandbox(monkeypatch, config):
     """The CoderAgent keeps working — through the sandbox — and its prompt stops
     telling it to reach for execute_bash."""
-    off = _build_with(monkeypatch, config, coder_local_tools_enabled=False)
+    off = _build_with(monkeypatch, config, coder_mode="openhands")
 
     for name in ("CoderAgent", "DatasetCollectorAgent"):
         cfg = config.agent(name)
@@ -544,7 +601,7 @@ def test_coder_local_tools_switch_on_attaches_the_local_toolset(monkeypatch, con
     """The other half of the switch. Pinned rather than read off the ambient
     settings: CODER__LOCAL_TOOLS_ENABLED=False in a developer's .env would
     otherwise turn this into a failure about their environment."""
-    on = _build_with(monkeypatch, config, coder_local_tools_enabled=True)
+    on = _build_with(monkeypatch, config, coder_mode="local")
 
     coder = on.agent("CoderAgent")
     assert "execute_bash" in _tool_names(coder)

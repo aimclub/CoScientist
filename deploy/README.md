@@ -99,7 +99,7 @@ Split of duties:
 - Secrets and endpoints stay in `~/.config/coscientist/.env` (LLM keys, S3,
   Postgres, service URLs).
 - Runtime toggles stay in the unit file as `Environment=` lines
-  (`HITL__ENABLED=true`, `CONTEXT_INIT__ENABLED=true`). `load_dotenv` does not
+  (`HITL__ENABLED=true`, `RESEARCH_FRAME=true`). `load_dotenv` does not
   override real environment variables, so the unit wins over the same keys in
   `.env`.
 

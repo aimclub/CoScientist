@@ -302,7 +302,7 @@ work this way:
 |--------|---------|-----------------|
 | Graphs → Knowledge Graph | `web.knowledge_graph_enabled` | `graph` drops off every agent, `inject_graph_root` yields nothing, and `GraphMemoryPlugin` stops recording |
 | Graphs → Research Graph | `research_graph.enabled` | `research_graph` / `research_graph_orchestrator` drop out with their prompt sections |
-| CoderAgent → Local Coder Tools | `web.coder_local_tools_enabled` | `coder` drops out, leaving the coder family with the OpenHands `sandbox` tools only |
+| CoderAgent → Coder Execution Mode | `web.coder_mode` (`local`/`openhands`) | When set to `openhands`, `coder` local toolset drops out, leaving the coder family with OpenHands `sandbox` tools only |
 
 Prose that names specific tools has to branch too, or the prompt will advertise
 a tool the agent cannot call and `guard_unknown_tools` will fire on every

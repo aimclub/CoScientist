@@ -59,10 +59,40 @@ class AgentSystem:
 
     config: SystemConfig
     agents: Dict[str, BaseAgent] = field(default_factory=dict)
+    _run_root: Optional[BaseAgent] = field(default=None, init=False, repr=False)
 
     @property
     def root(self) -> BaseAgent:
         return self.agents[self.config.root.name]
+
+    @property
+    def run_root(self) -> BaseAgent:
+        if self._run_root is not None:
+            return self._run_root
+        pipeline_pre = [
+            self.agents[n]
+            for n in self.config.pipeline.pre
+            if self.config.agent(n).is_enabled()
+        ]
+        pipeline_post = [
+            self.agents[n]
+            for n in self.config.pipeline.post
+            if self.config.agent(n).is_enabled()
+        ]
+        if pipeline_pre or pipeline_post:
+            from google.adk.agents.sequential_agent import SequentialAgent
+
+            self._run_root = SequentialAgent(
+                name="ResearchPipeline",
+                description=(
+                    "Full research lifecycle: orchestrator run then report"
+                    " synthesis."
+                ),
+                sub_agents=[*pipeline_pre, self.root, *pipeline_post],
+            )
+        else:
+            self._run_root = self.root
+        return self._run_root
 
     def agent(self, name: str) -> BaseAgent:
         if name not in self.agents:
@@ -74,11 +104,15 @@ def _resolve_model(cfg: AgentConfig, system: SystemConfig):
     from CoScientist.agents.common import make_coder_llm, make_llm
 
     ref = cfg.model or system.defaults.model
+    deadline_s = cfg.llm_timeout
+    # An agent that says nothing about reasoning inherits `defaults.reasoning`;
+    # an unset default sends no reasoning kwargs at all.
+    reasoning = cfg.reasoning if cfg.reasoning is not None else system.defaults.reasoning
     if ref == "main":
-        return make_llm()
+        return make_llm(deadline_s=deadline_s, reasoning=reasoning)
     if ref == "coder":
-        return make_coder_llm()
-    return make_llm(ref)
+        return make_coder_llm(deadline_s=deadline_s, reasoning=reasoning)
+    return make_llm(ref, deadline_s=deadline_s, reasoning=reasoning)
 
 
 def _resolve_tools(cfg: AgentConfig) -> List[ToolEntry]:
@@ -235,10 +269,17 @@ def _subordinate_instance(
 
 
 def _build_custom_agent(
-    cfg: AgentConfig, system: SystemConfig, class_key: str
+    cfg: AgentConfig,
+    system: SystemConfig,
+    class_key: str,
+    built: Optional[Dict[str, BaseAgent]] = None,
 ) -> BaseAgent:
     cls = REGISTRY.agent_class(class_key)
     kwargs = dict(name=cfg.name, description=cfg.description)
+    if cfg.children and built is not None:
+        kwargs["sub_agents"] = [
+            built[c] for c in cfg.children if system.agent(c).is_enabled()
+        ]
     if issubclass(cls, LlmAgent):
         tool_entries = _resolve_tools(cfg)
         ctx = PromptContext(config=cfg, system=system, tool_entries=tool_entries)
@@ -294,14 +335,18 @@ def build_system(
         elif cfg.cls in ("sequential", "parallel"):
             cls = SequentialAgent if cfg.cls == "sequential" else ParallelAgent
             sub_agents = [built[c] for c in cfg.children] if cfg.is_enabled() else []
+            ctx = PromptContext(config=cfg, system=config)
             agent = cls(
                 name=cfg.name,
                 description=cfg.description,
                 sub_agents=sub_agents,
+                **_callback_kwargs(cfg, ctx),
                 **cfg.resolved_options(),
             )
         else:  # custom:<key>
-            agent = _build_custom_agent(cfg, config, cfg.cls.split(":", 1)[1])
+            agent = _build_custom_agent(
+                cfg, config, cfg.cls.split(":", 1)[1], built
+            )
         built[name] = agent
 
     return AgentSystem(config=config, agents=built)

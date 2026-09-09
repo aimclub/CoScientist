@@ -53,6 +53,7 @@ from alembic.tools import (
 )
 from alembic.tools.venv import ensure_server_packages, install_repo
 from alembic.tools.analysis import decide_layout, symbol_table, target_top_modules, verify_target
+from alembic.staging import stage_task_inputs, task_mounts
 from alembic.tools.codegen import function_param_names, render_code_py, write_server, write_setup_sh
 from alembic.tools.fs import _clone_repo_sync
 from alembic.tools.invoke import check_repo_imports
@@ -117,6 +118,28 @@ def _tasks_prompt(tasks: list[dict], propose_extras: bool = False) -> str:
     return "\n".join(lines)
 
 
+def _hints_prompt(hints: str | None) -> str:
+    """A SOFT nudge for the explorer only: free-text describing tool(s) the
+    caller hopes to see mined among the others. No forced name/signature, no
+    plan-gate enforcement — the opposite end of the spectrum from _tasks_prompt
+    (REQUIRED TASKS, exact + gated). Composes with it: required tools stay
+    pinned, this just steers what else gets proposed."""
+    if not hints or not hints.strip():
+        return ""
+    return (
+        "\n\nSUGGESTED DIRECTION (soft, not a requirement): among the tools "
+        "you propose, the caller would especially value something along these "
+        "lines:\n"
+        + hints.strip()
+        + "\nTreat this only as a hint about what would be useful. Do NOT invent "
+        "a tool the repo cannot support, do NOT force any particular name or "
+        "argument signature to match it, and do NOT let it crowd out the repo's "
+        "other important workflow tools. If the repo has real code for it, lean "
+        "toward surfacing that tool (best-first); otherwise ignore the hint. "
+        "Ground every tool in real repo code as usual."
+    )
+
+
 _DATA_POLICY = ("\n\nDATA POLICY (absolute): do NOT download any datasets, even if the "
                 "exploration report or the repo README asks for one. Allowed downloads: "
                 "package dependencies, configs, and pretrained model weights/checkpoints "
@@ -124,36 +147,13 @@ _DATA_POLICY = ("\n\nDATA POLICY (absolute): do NOT download any datasets, even 
 
 
 def _stage_task_inputs(tasks: list[dict]) -> None:
-    """Copy each task's example/test_case mount files from the bind-mounted
-    data dir into /mount/input, per the task's mount mapping. Missing files are
-    noted, never fatal (exec-level testing degrades gracefully, R6)."""
-    if not MOUNT_DATA.exists():
-        if tasks and any(_task_mounts(t) for t in tasks):
-            logger.warning("[tasks] no /mount/data bind mount — task input files unavailable.")
-        return
-    for t in tasks:
-        for src, dst in _task_mounts(t):
-            s, d = MOUNT_DATA / src, MOUNT_INPUT / dst
-            if not s.exists():
-                logger.warning(f"[tasks] mount source missing: {s}")
-                continue
-            d.parent.mkdir(parents=True, exist_ok=True)
-            if d.exists() or d.is_symlink():
-                continue
-            # Symlink, not copy — WSI dirs are tens of GB and read-only inputs;
-            # copying them into the container is slow and wastes disk.
-            try:
-                d.symlink_to(s, target_is_directory=s.is_dir())
-            except OSError:
-                (shutil.copytree if s.is_dir() else shutil.copy)(s, d)
+    """Stage each task's example/test_case mount files from the bind-mounted
+    data dir into /mount/input. See :mod:`alembic.staging`."""
+    stage_task_inputs(tasks, MOUNT_DATA, MOUNT_INPUT, warn=logger.warning)
 
 
 def _task_mounts(task: dict) -> list[tuple[str, str]]:
-    pairs: list[tuple[str, str]] = []
-    for inv in [task.get("example") or {}, *(task.get("test_cases") or {}).values()]:
-        if isinstance(inv, dict):
-            pairs += [(s, d) for s, d in (inv.get("mount") or {}).items()]
-    return pairs
+    return task_mounts(task)
 
 
 def _task_ref(tasks: list[dict]) -> str | None:
@@ -178,12 +178,14 @@ def _task_ref(tasks: list[dict]) -> str | None:
 # Pipeline
 # ══════════════════════════════════════════════════════════════════════════════
 async def run_pipeline(repo_url: str, resume_from: str | None = None,
-                       stop_after: str | None = None, tasks_cli: str | None = None):
+                       stop_after: str | None = None, tasks_cli: str | None = None,
+                       hints_cli: str | None = None):
     set_current_repo(repo_url)
     name = get_repo_name(repo_url)
     base = WORKDIR / name
     session_service = InMemorySessionService()
     tasks = _load_tasks(tasks_cli)
+    hints = hints_cli or config.HINTS
     await emit({"type": "pipeline", "status": "start", "repo": name,
                 "repo_url": repo_url})
 
@@ -202,7 +204,8 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None,
     sink_id = logger.add(log_file, format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}",
                          level="DEBUG", encoding="utf-8")
     logger.info(f"[Run] {name} — log → {log_file}"
-                + (f"  ({len(tasks)} target task(s))" if tasks else ""))
+                + (f"  ({len(tasks)} target task(s))" if tasks else "")
+                + ("  (soft hint active)" if hints and hints.strip() else ""))
 
     metrics = _new_metrics()
 
@@ -224,7 +227,8 @@ async def run_pipeline(repo_url: str, resume_from: str | None = None,
             _banner(1, f"Explorer ({repo_url})")
             plan_ok = await _staged_llm(
                 "explorer", explorer_agent, name, metrics, session_service,
-                message_fn=lambda note: repo_url + _tasks_prompt(tasks, propose_extras=True) + note,
+                message_fn=lambda note: repo_url + _tasks_prompt(tasks, propose_extras=True)
+                                        + _hints_prompt(hints) + note,
                 gate_fn=lambda: _plan_gate(repo_url, tasks),
                 owned=[reports_dir() / "exploration.md", reports_dir() / "plan.json"],
                 required_report="exploration",
@@ -708,7 +712,7 @@ async def _call_debugger(name, session_service, metrics, message, memory=None) -
     mem = ("\n\nPrevious fix attempts this run (do NOT repeat them):\n- "
            + "\n- ".join(m[:200] for m in memory)) if memory else ""
     try:
-        final, steps, tokens, _ = await asyncio.wait_for(
+        final, steps, tokens, sm = await asyncio.wait_for(
             run_agent(debugger_agent, session_service, sid, message + mem),
             timeout=config.DEBUGGER_CALL_TIMEOUT)
     except asyncio.TimeoutError:
@@ -716,6 +720,7 @@ async def _call_debugger(name, session_service, metrics, message, memory=None) -
         return "debugger timed out"
     metrics["total_actions"] += steps
     metrics["total_tokens"] += tokens
+    metrics["total_cost_usd"] = metrics.get("total_cost_usd", 0.0) + sm.get("cost_usd", 0.0)
     return final
 
 
@@ -742,7 +747,10 @@ async def _wrap(name, session_service, metrics):
     if server_err:
         logger.warning(f"[wrapper] server venv setup problem (continuing): {server_err}")
 
-    res = write_server(name, names)
+    # The plan's recorded invocation for each tool: the last resort for typing
+    # a param the repo function itself leaves un-annotated and un-defaulted.
+    sample_args = {t.name: t.sample_args for t in plan.tools if t.sample_args}
+    res = write_server(name, names, sample_args=sample_args)
     gate = check_server()
     used_fallback = False
     if not gate["passed"]:
@@ -752,11 +760,14 @@ async def _wrap(name, session_service, metrics):
         await session_service.create_session(app_name=config.APP_NAME, user_id=config.USER_ID,
                                              session_id=sid)
         try:
-            await asyncio.wait_for(
+            _, steps, tokens, sm = await asyncio.wait_for(
                 run_agent(wrapper_agent, session_service, sid,
                           f"The generated server.py fails its compile/import gate.\n"
                           f"Output dir: {out}\nError:\n{gate['error']}"),
                 timeout=config.WRAPPER_CALL_TIMEOUT)
+            metrics["total_actions"] += steps
+            metrics["total_tokens"] += tokens
+            metrics["total_cost_usd"] = metrics.get("total_cost_usd", 0.0) + sm.get("cost_usd", 0.0)
         except asyncio.TimeoutError:
             logger.warning("[wrapper] fallback agent timed out.")
         gate = check_server()
@@ -856,7 +867,8 @@ def _new_metrics() -> dict:
     return {"actions_per_stage": {}, "tokens_per_stage": {}, "durations_per_stage": {},
             "tool_calls_per_stage": {}, "guard_retries_per_stage": {},
             "transient_fault_retries_per_stage": {}, "abort_reason_per_stage": {},
-            "failures_by_class": {}, "total_actions": 0, "total_tokens": 0}
+            "failures_by_class": {}, "total_actions": 0, "total_tokens": 0,
+            "cost_usd_per_stage": {}, "total_cost_usd": 0.0}
 
 
 def _accumulate_stage(metrics, stage, duration, steps, tokens, sm) -> None:
@@ -866,6 +878,9 @@ def _accumulate_stage(metrics, stage, duration, steps, tokens, sm) -> None:
     metrics["tokens_per_stage"][stage] = metrics["tokens_per_stage"].get(stage, 0) + tokens
     metrics["total_actions"] += steps
     metrics["total_tokens"] += tokens
+    cost = sm.get("cost_usd", 0.0) if sm else 0.0
+    metrics["cost_usd_per_stage"][stage] = metrics["cost_usd_per_stage"].get(stage, 0.0) + cost
+    metrics["total_cost_usd"] += cost
     if sm:
         for key, mkey in [("tool_calls", "tool_calls_per_stage"),
                           ("guard_retries", "guard_retries_per_stage"),
@@ -909,7 +924,7 @@ def _report_completion(name: str, base: Path) -> None:
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         logger.error("Usage: python -m alembic.main <repo_url> [--resume <stage>] "
-                     "[--until <stage>] [--tasks <spec>]")
+                     "[--until <stage>] [--tasks <spec>] [--hints <text>]")
         logger.error(f"       stages: {', '.join(STAGES)}")
         sys.exit(1)
 
@@ -937,7 +952,8 @@ if __name__ == "__main__":
     try:
         asyncio.run(run_pipeline(sys.argv[1], resume_from=_arg("--resume"),
                                  stop_after=_arg("--until"),
-                                 tasks_cli=_arg("--tasks") or _arg("--target-task")))
+                                 tasks_cli=_arg("--tasks") or _arg("--target-task"),
+                                 hints_cli=_arg("--hints")))
     except Exception:
         logger.exception("Pipeline error:")
         raise

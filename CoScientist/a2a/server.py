@@ -53,12 +53,16 @@ def _attach_opik_tracer(agent: BaseAgent, app_name: str) -> None:
         from opik.integrations.adk import OpikTracer, track_adk_agent_recursive
 
         from CoScientist.config import get_settings
+        from CoScientist.logging.opik_tracer import get_multi_agent_tracer
 
         settings = get_settings()
+        # Ensure tracer env / proxy setup is initialized
+        get_multi_agent_tracer()
+        project_name = settings.opik.opik_project_name or "adk-coscientist"
         tracer = OpikTracer(
             name=f"a2a-{app_name}",
             metadata=_redact(settings.model_dump()),
-            project_name="adk-coscientist",
+            project_name=project_name,
         )
         track_adk_agent_recursive(agent, tracer)
     except Exception as exc:  # never let tracing break the server

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from CoScientist.config.report import ReportConfig
-from CoScientist.reporting.collect import report_dir_for
+from CoScientist.reporting.collect import SOURCES_FILENAME, report_dir_for
 from CoScientist.reporting.latex import render_latex
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,10 @@ def finalize_report(
         latex_files = render_latex(
             final_markdown or "", report_dir, report_config.latex, references
         )
-        manifest = _build_manifest(session_id, report_dir, report_config, latex_files)
+        promoted = _promote_sources(report_dir)
+        manifest = _build_manifest(
+            session_id, report_dir, report_config, latex_files, promoted
+        )
         (report_dir / "MANIFEST.json").write_text(
             json.dumps(manifest, indent=2), encoding="utf-8"
         )
@@ -64,11 +67,64 @@ def finalize_report(
         return RunResult(markdown=final_markdown, report_dir=None, manifest=None)
 
 
+def _promote_sources(report_dir: Path) -> Dict[str, str]:
+    """Copy every collected artifact out of ``ephemeral/`` and into ``permanent/``.
+
+    A worker only ever uploads under ``ephemeral/``, where the bucket lifecycle
+    rule deletes it after EPHEMERAL_TTL_DAYS. The report outlives that, so the
+    objects it shows have to move. ``collect_artifacts`` left the mapping from
+    each local file to its object in ``SOURCES_FILENAME``.
+
+    Only objects that S3 already holds are promoted. ``report.md``, the LaTeX
+    output, and the files a local sandbox left on this disk were never uploaded,
+    and a worker may not write to ``permanent/`` directly.
+
+    Returns report-relative path -> new ``permanent/`` key. Empty on any failure:
+    a vault that is down costs the deliverable its durability, not its existence.
+    """
+    sources_path = report_dir / SOURCES_FILENAME
+    if not sources_path.exists():
+        return {}
+    try:
+        sources = json.loads(sources_path.read_text(encoding="utf-8"))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("report: cannot read %s (%s)", sources_path, exc)
+        return {}
+    # A stale or hand-edited file can hold any shape. Check it here: an escape
+    # from this function lands in the caller's except, which reports the whole
+    # deliverable as missing while report.md sits complete on disk.
+    if not isinstance(sources, dict):
+        logger.warning("report: %s is not a mapping, skipping promotion", sources_path)
+        return {}
+
+    from CoScientist.tools.vault_client import call_vault_sync, vault_url
+
+    if not vault_url():
+        logger.info("report: MCP__VAULT_URL is not set, artifacts stay ephemeral")
+        return {}
+
+    promoted: Dict[str, str] = {}
+    for rel_path, ref in sorted(sources.items()):
+        key = ref.get("s3_key") if isinstance(ref, dict) else None
+        if not isinstance(key, str) or not key.startswith("ephemeral/"):
+            continue
+        result = call_vault_sync("promote_artifact", s3_key=key)
+        new_key = (result or {}).get("s3_key")
+        if new_key:
+            promoted[rel_path] = new_key
+        else:
+            logger.warning("report: could not promote %s for %s", key, rel_path)
+
+    logger.info("report: promoted %d of %d artifact(s)", len(promoted), len(sources))
+    return promoted
+
+
 def _build_manifest(
     session_id: str,
     report_dir: Path,
     report_config: ReportConfig,
     latex_files: List[Path],
+    promoted: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
     def listing(subdir: str) -> List[str]:
         d = report_dir / subdir
@@ -83,6 +139,9 @@ def _build_manifest(
         "figures": listing("figures"),
         "tables": listing("tables"),
         "sections": listing("sections"),
+        # Report-relative path -> the permanent/ key that outlives the run. A
+        # file with no entry here exists only inside this folder.
+        "promoted": promoted or {},
         "latex": {
             "mode": report_config.latex,
             "files": sorted(str(p.relative_to(report_dir)) for p in latex_files),

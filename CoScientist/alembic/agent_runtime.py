@@ -146,6 +146,25 @@ def _trunc(text: str, n: int = 2000) -> str:
     return text if len(text) <= n else text[:n] + "…"
 
 
+def _price_usage(usage) -> float:
+    """$ for one model call, or 0.0 if litellm has no price for config.MODEL.
+
+    Self-contained on purpose: alembic ships into its own Docker image without
+    the rest of the CoScientist package (see config.py's import note), so this
+    cannot reuse CoScientist.logging.metrics — it prices straight off litellm,
+    already a pipeline dependency.
+    """
+    try:
+        prompt = getattr(usage, "prompt_token_count", 0) or 0
+        completion = getattr(usage, "candidates_token_count", 0) or 0
+        prompt_cost, completion_cost = litellm.cost_per_token(
+            model=config.MODEL, prompt_tokens=prompt, completion_tokens=completion,
+        )
+        return float(prompt_cost) + float(completion_cost)
+    except Exception:  # noqa: BLE001 - unmapped model must not break a run
+        return 0.0
+
+
 def _log_event(agent_name: str, event) -> None:
     if not event.content or not event.content.parts:
         return
@@ -177,12 +196,12 @@ def _tool_outcome(name: str, response) -> tuple[bool | None, str]:
 
 async def _run_agent_once(agent, runner, session_id, message, required_report,
                           deadline=None, progress=None):
-    """Run one invocation. Returns (final, wrote_report, steps, tokens,
+    """Run one invocation. Returns (final, wrote_report, steps, tokens, cost_usd,
     transient_fault, tool_calls, failures_by_class, abort_reason)."""
     _transient_provider_fault.set(False)
     enable_read_dedup(agent.name == "explorer")
     content = types.Content(role="user", parts=[types.Part(text=message)])
-    final, wrote_report, step, total_tokens = "Agent did not produce a final response.", False, 0, 0
+    final, wrote_report, step, total_tokens, total_cost = "Agent did not produce a final response.", False, 0, 0, 0.0
     last_call, tool_repeats = None, 0
     tool_calls: dict[str, int] = {}
     call_key_counts: dict[tuple, int] = {}
@@ -200,6 +219,7 @@ async def _run_agent_once(agent, runner, session_id, message, required_report,
             usage = getattr(event, "usage_metadata", None)
             if usage:
                 total_tokens += getattr(usage, "total_token_count", 0) or 0
+                total_cost += _price_usage(usage)
 
             if event.content:
                 for part in event.content.parts:
@@ -214,12 +234,12 @@ async def _run_agent_once(agent, runner, session_id, message, required_report,
                         last_call = call_key
                         if tool_repeats >= config.MAX_TOOL_REPEATS:
                             logger.warning(f"[{agent.name}] ABORT: {fc.name} called {tool_repeats}x identical — break.")
-                            return (final, wrote_report, step, total_tokens, _fault(), tool_calls, failures_by_class, "tool_repeat")
+                            return (final, wrote_report, step, total_tokens, total_cost, _fault(), tool_calls, failures_by_class, "tool_repeat")
                         if fc.name not in config.TOOL_CYCLE_EXEMPT:
                             call_key_counts[call_key] = call_key_counts.get(call_key, 0) + 1
                             if call_key_counts[call_key] >= config.MAX_TOOL_CYCLE:
                                 logger.warning(f"[{agent.name}] ABORT: {fc.name} called {call_key_counts[call_key]}x (cycle) — break.")
-                                return (final, wrote_report, step, total_tokens, _fault(), tool_calls, failures_by_class, "tool_cycle")
+                                return (final, wrote_report, step, total_tokens, total_cost, _fault(), tool_calls, failures_by_class, "tool_cycle")
 
                     fr = getattr(part, "function_response", None)
                     if fr:
@@ -237,11 +257,11 @@ async def _run_agent_once(agent, runner, session_id, message, required_report,
 
             if step >= config.MAX_STEPS:
                 logger.warning(f"[{agent.name}] ABORT: reached {config.MAX_STEPS} steps.")
-                return (final, wrote_report, step, total_tokens, _fault(), tool_calls, failures_by_class, "max_steps")
+                return (final, wrote_report, step, total_tokens, total_cost, _fault(), tool_calls, failures_by_class, "max_steps")
 
             if deadline is not None and time.monotonic() >= deadline:
                 logger.warning(f"[{agent.name}] ABORT: soft deadline — break for a final write_report nudge.")
-                return (final, wrote_report, step, total_tokens, _fault(), tool_calls, failures_by_class, "soft_deadline")
+                return (final, wrote_report, step, total_tokens, total_cost, _fault(), tool_calls, failures_by_class, "soft_deadline")
 
             if event.is_final_response():
                 if event.content and event.content.parts:
@@ -261,7 +281,7 @@ async def _run_agent_once(agent, runner, session_id, message, required_report,
         where = f"{tb[-1].filename.split('/')[-1]}:{tb[-1].lineno}" if tb else "?"
         logger.warning(f"[{agent.name}] event-loop error: {_short_err(e)}  (raised at {where})")
 
-    return final, wrote_report, step, total_tokens, _fault(), tool_calls, failures_by_class, None
+    return final, wrote_report, step, total_tokens, total_cost, _fault(), tool_calls, failures_by_class, None
 
 
 async def run_agent(agent, session_service, session_id, message,
@@ -270,7 +290,7 @@ async def run_agent(agent, session_service, session_id, message,
 
     Returns (final_text, total_steps, total_tokens, stage_metrics) where
     stage_metrics = {tool_calls, failures_by_class, guard_retries,
-    transient_fault_retries, abort_reason}."""
+    transient_fault_retries, abort_reason, cost_usd}."""
     runner = Runner(agent=agent, app_name=config.APP_NAME, session_service=session_service)
     final = "Agent did not produce a final response."
     richest_final = ""   # longest real response across attempts — when the agent
@@ -278,6 +298,7 @@ async def run_agent(agent, session_service, session_id, message,
     # answer holds the full report; later nag-replies are terse. Salvage wants
     # the richest, not the last. (Used only for logging + report salvage.)
     total_steps = total_tokens = guard_retries = transient_fault_retries = 0
+    total_cost = 0.0
     tool_calls: dict[str, int] = {}
     failures_by_class: dict[str, int] = {}
     abort_reason = None
@@ -286,12 +307,13 @@ async def run_agent(agent, session_service, session_id, message,
     for attempt in range(config.MAX_GUARD_RETRIES + 1):
         fault_retries = 0
         while True:
-            (final, wrote_report, steps, tokens, transient_fault,
+            (final, wrote_report, steps, tokens, cost, transient_fault,
              call_counts, fail_counts, this_abort) = await _run_agent_once(
                 agent, runner, session_id, current_message, required_report,
                 deadline=current_deadline, progress=progress)
             total_steps += steps
             total_tokens += tokens
+            total_cost += cost
             for k, v in call_counts.items():
                 tool_calls[k] = tool_calls.get(k, 0) + v
             for k, v in fail_counts.items():
@@ -330,5 +352,5 @@ async def run_agent(agent, session_service, session_id, message,
     return (richest_final or final), total_steps, total_tokens, {
         "tool_calls": tool_calls, "failures_by_class": failures_by_class,
         "guard_retries": guard_retries, "transient_fault_retries": transient_fault_retries,
-        "abort_reason": abort_reason,
+        "abort_reason": abort_reason, "cost_usd": total_cost,
     }

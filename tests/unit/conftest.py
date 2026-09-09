@@ -15,3 +15,25 @@ def _isolated_web_state(tmp_path, monkeypatch):
     monkeypatch.setenv("WEB_STATE_DIR", str(tmp_path / "web_state"))
     monkeypatch.setenv("SANDBOX_BINDINGS_FILE",
                        str(tmp_path / "sandbox_bindings.json"))
+
+
+@pytest.fixture(autouse=True)
+def _let_caplog_see_our_logs():
+    """Let pytest's caplog capture the application's own logger.
+
+    ``CoScientist.logging.logger`` sets ``propagate = False`` deliberately: the
+    application owns its file handler and must not hijack the root logger for
+    every third-party library. But caplog listens on root, so with propagation
+    off a test asserting on a warning we do emit sees an empty log — and which
+    tests hit it depends on whether anything imported the logging module first,
+    which is not something a test should depend on.
+    """
+    import logging
+
+    app_logger = logging.getLogger("CoScientist")
+    previous = app_logger.propagate
+    app_logger.propagate = True
+    try:
+        yield
+    finally:
+        app_logger.propagate = previous

@@ -1,3 +1,4 @@
+import json
 import os
 import re
 
@@ -25,6 +26,190 @@ logger = logging.getLogger(__name__)
 # State key carrying the executor's tool-match verdict for the redirect guard.
 TOOL_MATCH_STATE_KEY = "executor_tool_match"
 
+RERANK_SCORED = "scored"                  # the model ranked the candidates
+RERANK_RECOVERED = "recovered_local"      # ranked by the local cross-encoder instead
+RERANK_PARSE_FAILED = "parse_failed"      # output_key payload unreadable
+RERANK_EMPTY_RANKING = "empty_ranking"    # readable, but not one usable {index, score}
+RERANK_NO_CANDIDATES = "no_candidates"    # retrieval accumulated nothing to rank
+
+UNJUDGED_REASONS = frozenset({RERANK_PARSE_FAILED, RERANK_EMPTY_RANKING})
+
+
+class RerankParseError(ValueError):
+    """A reranker's ``output_key`` payload could not be read as a JSON object.
+
+    Deliberately distinct from an empty ranking: see UNJUDGED_REASONS above.
+    """
+
+
+def _output_key_json(value: Any) -> Dict[str, Any]:
+    """Coerce a reranker's ``output_key`` payload to a dict, or raise.
+
+    With ``output_schema`` set, ADK validates the model's text and stores a dict.
+    We deliberately drop the schema on the rerankers so ADK never sends OpenRouter
+    a *strict* json_schema ``response_format`` (some providers stall on the
+    grammar-constrained decode it implies), which leaves ``output_key`` holding
+    raw text — already reduced to bare JSON by ``sanitize_json_output``.
+
+    Raises:
+        RerankParseError: the payload is missing, empty, not JSON, or not an object.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+        except ValueError as exc:
+            raise RerankParseError(f"not valid JSON: {value[:300]!r}") from exc
+        if isinstance(parsed, dict):
+            return parsed
+        raise RerankParseError(
+            f"got a JSON {type(parsed).__name__}, expected an object"
+        )
+    raise RerankParseError(f"empty or missing payload ({type(value).__name__})")
+
+
+def _score_map(entries: Any, *, cast: Callable[[Any], Any]) -> Dict[int, Any]:
+    """Build ``{index: score}``, skipping anything malformed.
+
+    Without ``output_schema`` nothing validates the model's shape any more, so a
+    missing/!int ``index`` or a non-numeric ``score`` must degrade to "this tool
+    went unscored" rather than raise inside an after_agent callback.
+    """
+    out: Dict[int, Any] = {}
+    if not isinstance(entries, list):
+        return out
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        index = entry.get("index")
+        if not isinstance(index, int) or isinstance(index, bool):
+            continue
+        try:
+            out[index] = cast(entry.get("score"))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+# ── ToolReranker shortlist (local cross-encoder pre-pass) ────────────────────
+# Every entry in `accumulated_tools` carries the score of the retrieval query
+# that FOUND it, and those queries differ per tool — so the scores share no
+# scale. (Observed: a tool whose query happened to contain its own name scored
+# 0.74 while the one the task actually needed scored 0.38 and sat 12th.)
+# Truncating on them drops the right tool, so we re-score every candidate
+# against ONE query — the task — with the local reranker service, and shortlist
+# on that. Putting candidates on a common scale is exactly the job the LLM
+# reranker does next; this just narrows what it has to read.
+_RERANK_SHORTLIST_KEY = "reranker_candidates"
+_RERANK_SHORTLIST_SIZE = int(os.getenv("RERANK_SHORTLIST_SIZE", "8"))
+_SHORTLIST_SCORES_KEY = "shortlist_scores"
+
+
+def _first_text(content) -> str:
+    """First text part of a Content, or '' if there is none."""
+    if content is None or not getattr(content, "parts", None):
+        return ""
+    for part in content.parts:
+        if getattr(part, "text", None):
+            return part.text
+    return ""
+
+
+async def shortlist_reranker_tools(callback_context: CallbackContext) -> None:
+    """Narrow `accumulated_tools` to the top-K by local cross-encoder score.
+
+    Also records every candidate's score in ``state['shortlist_scores']`` — the
+    LLM reranker that runs next can come back unreadable, and those scores are
+    then the cheapest way to still rank the candidates (see
+    ``after_tool_reranker_agent``).
+
+    Best-effort by construction: every early return leaves the full tool list in
+    place, so an unreachable reranker service costs context, never correctness.
+    """
+    state = callback_context.state
+    acc: List[Dict[str, Any]] = state.get('accumulated_tools') or []
+    # Set first: the prompt reads this key, so it must be populated on every path.
+    state[_RERANK_SHORTLIST_KEY] = acc
+    state[_SHORTLIST_SCORES_KEY] = {}
+
+    # Scored even when the list is short enough to need no truncation: the scores
+    # themselves are the point now, not just the ordering. Costs one extra call
+    # to the local cross-encoder on the common path, and buys a deterministic
+    # recovery for every reranker failure below the shortlist threshold.
+    if not acc:
+        return None
+
+    task = _first_text(getattr(callback_context, "user_content", None)).strip()
+    if not task:
+        logger.info(
+            "shortlist: no task text on this invocation — passing all %d tools", len(acc)
+        )
+        return None
+
+    documents = [
+        f"{tool.get('tool', '')}: {tool.get('description', '')}" for tool in acc
+    ]
+    try:
+        from rag_tools.retrieval import APIReranker
+
+        ranked = await APIReranker().rerank_with_scores(
+            task, documents, top_k=len(documents)
+        )
+    except Exception as exc:  # noqa: BLE001 — never fail the run over a shortlist
+        logger.warning(
+            "shortlist: reranker unavailable (%r) — passing all %d tools", exc, len(acc)
+        )
+        return None
+
+    # APIReranker swallows its own HTTP errors and answers with all-zero scores.
+    # That ordering is just the input order, so shortlisting on it would silently
+    # cut arbitrary tools — treat it as "service down" instead.
+    if not ranked or max(score for _, score in ranked) <= 0.0:
+        logger.warning(
+            "shortlist: no usable scores from the reranker — passing all %d tools", len(acc)
+        )
+        return None
+
+    state[_SHORTLIST_SCORES_KEY] = {
+        acc[i]["tool_index"]: float(score)
+        for i, score in ranked
+        if 0 <= i < len(acc) and isinstance(acc[i].get("tool_index"), int)
+    }
+
+    if len(acc) <= _RERANK_SHORTLIST_SIZE:
+        return None
+
+    shortlist = [acc[i] for i, _ in ranked[:_RERANK_SHORTLIST_SIZE] if 0 <= i < len(acc)]
+    if not shortlist:
+        return None
+
+    logger.info(
+        "shortlist: %d -> %d tools for the reranker (best=%s)",
+        len(acc), len(shortlist), round(ranked[0][1], 3),
+    )
+    state[_RERANK_SHORTLIST_KEY] = shortlist
+    return None
+
+
+# Rendered into FedotAgent's prompt via `{fedot_candidates?}`.
+_FEDOT_CANDIDATES_KEY = "fedot_candidates"
+
+
+def inject_fedot_candidates(callback_context: CallbackContext) -> None:
+    """before_agent for FedotAgent: show it the tools `fedot_tool` will get.
+
+    Same expression the tool itself uses — the reranker's pick when there is one,
+    the unfiltered candidate pool when the reranker's answer was unreadable — so
+    the prompt and the actual MCP server set can never disagree about what is on
+    the table.
+    """
+    state = callback_context.state
+    state[_FEDOT_CANDIDATES_KEY] = (
+        state.get('filtered_tools') or state.get('accumulated_tools') or []
+    )
+    return None
+
+
 def before_tool_reranker_model(
     callback_context: CallbackContext, llm_request: LlmRequest
 ) -> None:
@@ -47,18 +232,64 @@ def before_tool_reranker_model(
 def after_tool_reranker_agent(
     callback_context: CallbackContext
 ) -> None:
-    """Adds ToolReranker output to state"""
+    """Turn ToolReranker's output into ``filtered_tools`` + a reasoned verdict.
+
+    Records WHY the tool set came out as it did (see the RERANK_* constants), so
+    the guards downstream can tell "judged, nothing relevant" (abstain to
+    CoderAgent) apart from "we could not read the answer" (recover locally, or
+    hand the unfiltered candidates to the FEDOT.MAS fallback). Conflating the two
+    is how a single malformed JSON reply silently throws away tools that
+    retrieval found correctly.
+    """
     from CoScientist.config import get_settings
     web_settings = get_settings().web
     keep_score = web_settings.executor_tool_keep_score
     abstain_score = web_settings.executor_tool_abstain_score
 
-
     current_state = callback_context.state
-    reranked_tools: Dict[str, float] = (current_state.get('reranked_tools') or {}).get('tools', [])
+    acc_tools: List[Dict[str, Any]] = current_state.get('accumulated_tools') or []
 
-    rerank_map: Dict[int, float] = {t['index']: t['score'] for t in reranked_tools}
-    acc_tools: List[Dict[str, Any]] = current_state.get('accumulated_tools', [])
+    rerank_map: Dict[int, float] = {}
+    reason = RERANK_SCORED
+    try:
+        payload = _output_key_json(current_state.get('reranked_tools'))
+    except RerankParseError as exc:
+        logger.warning("reranker output unusable — %s", exc)
+        reason = RERANK_PARSE_FAILED
+    else:
+        rerank_map = _score_map(payload.get('tools'), cast=float)
+        if not rerank_map and acc_tools:
+            # Readable JSON, no usable pairs: a renamed key ("tool_index" for
+            # "index" — the prompt names both), a stringified index, a score that
+            # is not a number. Indistinguishable from "all irrelevant" by score
+            # alone, which is exactly why it needs its own reason.
+            logger.warning(
+                "reranker returned no usable {index, score} pairs for %d candidate(s)",
+                len(acc_tools),
+            )
+            reason = RERANK_EMPTY_RANKING
+
+    if not acc_tools:
+        reason = RERANK_NO_CANDIDATES
+
+    if reason in UNJUDGED_REASONS:
+        # Recovery layer 1 — free and deterministic: the cross-encoder already
+        # scored every candidate against this same task in
+        # `shortlist_reranker_tools`, on one scale. Prefer it over any further
+        # LLM work. Only when it has nothing to say do we stay "unjudged" and let
+        # the FEDOT.MAS fallback take the whole candidate set.
+        recovered = {
+            idx: score
+            for idx, score in (current_state.get(_SHORTLIST_SCORES_KEY) or {}).items()
+            if isinstance(idx, int) and isinstance(score, (int, float))
+        }
+        if recovered:
+            rerank_map = {int(k): float(v) for k, v in recovered.items()}
+            reason = RERANK_RECOVERED
+            logger.info(
+                "reranker unusable — ranked %d candidate(s) by local cross-encoder score",
+                len(rerank_map),
+            )
 
     filtered_tools: List[Dict[str, Any]] = [
         tool for tool in acc_tools
@@ -80,16 +311,31 @@ def after_tool_reranker_agent(
         matched = bool(filtered_tools)
     # else (best < _ABSTAIN): ABSTAIN — leave filtered_tools empty so the
     # redirect guard on ExperimentAgent sends the task to CoderAgent instead of
-    # running an unrelated tool.
+    # running an unrelated tool. Only for a reason that actually judged them.
 
     # Record the verdict for the redirect guard / the orchestrator's critic.
     callback_context.state[TOOL_MATCH_STATE_KEY] = {
         "matched": matched,
         "best_score": round(best_score, 3),
         "kept": len(filtered_tools),
+        "reason": reason,
+        "candidates": len(acc_tools),
     }
     callback_context.state['filtered_tools'] = filtered_tools
+
+    if reason in UNJUDGED_REASONS:
+        # Keep the candidate pool: FedotAgent builds its MCP server set out of
+        # `accumulated_tools`, and clearing it here is what would make an
+        # unreadable reranker answer unrecoverable.
+        logger.warning(
+            "reranker verdict=%s — keeping %d candidate(s) for the FEDOT.MAS fallback",
+            reason, len(acc_tools),
+        )
+        return
+
     callback_context.state['accumulated_tools'] = []
+    callback_context.state[_RERANK_SHORTLIST_KEY] = []
+    callback_context.state[_SHORTLIST_SCORES_KEY] = {}
     callback_context.state['retrieval_queries'] = []
     return
 
@@ -97,14 +343,30 @@ def after_tool_reranker_agent(
 def after_fullset_reranker_agent(
     callback_context: CallbackContext
 ) -> None:
-    """Adds ToolReranker output to state"""
+    """Turn FullSetToolReranker's output into ``filtered_mcps``.
 
+    Parsed the same defensive way as ToolReranker's: this used to lean on
+    ``output_schema`` for its shape and index straight into the payload, so a
+    string, a missing ``index`` or a non-list ``mcp_scores`` raised
+    AttributeError/KeyError/TypeError out of an after_agent callback and killed
+    the whole run. Deploying no web MCP is a fine outcome; crashing is not.
+    """
     current_state = callback_context.state
-    reranked_mcps: List[Dict[str, Any]] = (current_state.get('reranked_web_servers') or {}).get('mcp_scores', [])
 
-    # Binary deploy score (0/1) per MCP index — truthiness selects deploy.
-    rerank_map: Dict[int, bool] = {t['index']: t['score'] for t in reranked_mcps}
-    acc_mcps: List[Dict[str, Any]] = current_state.get('accumulated_web_mcps', [])
+    try:
+        payload = _output_key_json(current_state.get('reranked_web_servers'))
+        scores = payload.get('mcp_scores')
+    except RerankParseError as exc:
+        logger.warning("web-MCP reranker output unusable — %s; deploying none", exc)
+        scores = None
+
+    # Binary deploy score per MCP index — truthiness selects deploy. A model that
+    # answers with the 0.0-1.0 floats the sibling reranker asks for still works:
+    # bool() of a non-zero float is True.
+    rerank_map: Dict[int, bool] = {
+        idx: bool(score) for idx, score in _score_map(scores, cast=bool).items()
+    }
+    acc_mcps: List[Dict[str, Any]] = current_state.get('accumulated_web_mcps') or []
 
     filtered_mcps: List[Dict[str, Any]] = [
         mcp for mcp in acc_mcps
@@ -199,6 +461,33 @@ def inject_dataset_context(callback_context: CallbackContext):
 NO_MATCHING_TOOL_TOKEN = "NO_MATCHING_TOOL"
 
 
+def rerank_fallback_active(state: Any) -> bool:
+    """True when the executor's tool set must go to the FEDOT.MAS fallback.
+
+    Three conditions, all required:
+      * the reranker never JUDGED the candidates (see UNJUDGED_REASONS) — note
+        this is already past the local cross-encoder recovery in
+        ``after_tool_reranker_agent``, so it means both rankers came up empty;
+      * retrieval did accumulate candidates, so there is something to hand over;
+      * the fallback is switched on.
+
+    Read by ``ExecutorSwitchAgent`` (which child runs) and by
+    ``redirect_when_no_tools`` (abstain, or stand aside for the fallback), so the
+    two can never disagree about what happens next.
+    """
+    verdict = (state.get(TOOL_MATCH_STATE_KEY) if state else None) or {}
+    if verdict.get("reason") not in UNJUDGED_REASONS:
+        return False
+    if not (state.get("accumulated_tools") or []):
+        return False
+    try:
+        from CoScientist.config import get_settings
+        return bool(get_settings().web.fedot_fallback_enabled)
+    except Exception:  # noqa: BLE001 — a settings failure must not switch it ON
+        logger.warning("fedot fallback: settings unreadable — treating as disabled")
+        return False
+
+
 def redirect_when_no_tools(
     callback_context: CallbackContext,
 ) -> Optional[types.Content]:
@@ -219,6 +508,14 @@ def redirect_when_no_tools(
 
     # Only abstain on an explicit no-match verdict with nothing usable.
     if verdict.get("matched") or has_local or has_web:
+        return None
+
+    if rerank_fallback_active(state):
+        logger.info(
+            "[%s] no tools, but the reranker never judged them (%s) — the FEDOT.MAS "
+            "fallback owns this task, not CoderAgent",
+            _agent_name(callback_context), verdict.get("reason"),
+        )
         return None
 
     best = verdict.get("best_score", 0.0)
@@ -459,8 +756,7 @@ def inject_original_query(
 
     # Replace the last user-role content in llm_request.contents
     for i, content in enumerate(llm_request.contents):
-        content = llm_request.contents[i]
-        if content.role == "user" and content.parts:
+        if getattr(content, "role", "user") == "user" and getattr(content, "parts", None):
             llm_request.contents[i] = types.Content(
                 role="user",
                 parts=[types.Part(text=original_text)],

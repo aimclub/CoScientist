@@ -80,39 +80,13 @@ energy). Agents are sorted by cost.
 
 ## Pricing, and when it is honest
 
-Prices come from litellm's model table.
+Prices come dynamically from OpenRouter's live API (cached in memory for 1 hour) and litellm's model table.
 
-A call is known by two names and they are not interchangeable: the **request**
-carries the routed slug the agent was configured with
-(`openrouter/qwen/qwen3-235b-a22b-2507`), while the **response** echoes what the
-provider calls itself (`qwen/qwen3-235b-a22b-2507`, prefix stripped). Only one
-of them usually has a price, and which one varies by model — litellm prices the
-routed slug for qwen and the bare one for `deepseek/deepseek-v4-flash`. So both
-are tried, request first.
+When an OpenRouter model call is made, the price lookup queries OpenRouter's live pricing API directly. For other providers, prices are retrieved from litellm's model table.
 
-A price found under the echoed name is recorded with `cost_source:
-"litellm-alias"`: it is the underlying provider's list price rather than the
-router's, so it can sit slightly below what was actually billed. An override on
-the configured slug is tried before either and wins — that is how to pin the
-exact number.
-
-A model neither name prices is counted in **tokens** and reported as
+A model that cannot be priced by any source is counted in **tokens** and reported as
 `unpriced_calls`; `totals.complete` goes `false` and both the console report and
 the UI say the total is a floor. Zero there means *unknown*, never *free*.
-
-The offenders are named in `llm.unpriced_models` (and in the report and the UI
-note), so there is nothing to hunt for. Close the gap with
-`LLM_PRICE_OVERRIDES` — inline JSON or a path to a JSON file, in USD per 1M
-tokens:
-
-```bash
-LLM_PRICE_OVERRIDES='{"openrouter/deepseek/deepseek-v4-flash":
-                      {"input": 0.28, "output": 0.42, "cache_read": 0.028}}'
-```
-
-`cache_read` is optional and defaults to the input rate. Cached prompt tokens
-are billed at that rate and the rest at `input`, matching how providers report
-`prompt_tokens` (the whole input, cache included).
 
 ## Sandbox metrics
 

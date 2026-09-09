@@ -11,6 +11,12 @@
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
     rel="stylesheet" />
   <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+  <!-- Live status indicator: the reducer that turns the raw event stream
+       into one human sentence. Vendored locally, no CDN. -->
+  <script src="/static/status_indicator.js"></script>
   <script id="tailwind-config">
     tailwind.config = {
       darkMode: "class",
@@ -18,10 +24,10 @@
         extend: {
           colors: {
             "primary": "#00daf3", "surface-dim": "#101319",
-            "surface-container-high": "#272a31", "outline": "#8c90a1",
+            "surface-container-high": "#272a31", "outline": "#cbd5e1",
             "surface-variant": "#32353c", "secondary": "#40e56c",
             "secondary-container": "#02c953", "tertiary": "#eac400",
-            "outline-variant": "#424656", "surface-container-low": "#191c22",
+            "outline-variant": "#94a3b8", "surface-container-low": "#191c22",
             "on-surface": "#e1e2eb", "primary-container": "#007e8c",
             "surface-container": "#1d2026", "surface-container-lowest": "#0b0e14",
             "on-surface-variant": "#c2c6d8", "surface-container-highest": "#32353c",
@@ -39,165 +45,21 @@
       },
     }
   </script>
-  <style>
-    body {
-      font-family: 'Inter', sans-serif;
-    }
-
-    .material-symbols-outlined {
-      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-    }
-
-    .no-scrollbar::-webkit-scrollbar {
-      display: none;
-    }
-
-    .line-through-dim {
-      text-decoration: line-through;
-      text-decoration-color: #424656;
-      color: #424656;
-    }
-
-    .topology-grid {
-      background-image: radial-gradient(rgba(0, 218, 243, 0.05) 1px, transparent 1px);
-      background-size: 24px 24px;
-    }
-
-    /* Collapsible left rail: the sidebar slides out of view and everything that
-       was offset by its width (header, main) reclaims the space. */
-    #side-nav {
-      transition: transform .25s ease;
-    }
-
-    #top-nav,
-    #main-content {
-      transition: margin-left .25s ease, width .25s ease;
-    }
-
-    body.nav-collapsed #side-nav {
-      transform: translateX(-100%);
-    }
-
-    body.nav-collapsed #top-nav {
-      margin-left: 0;
-      width: 100%;
-    }
-
-    body.nav-collapsed #main-content {
-      margin-left: 0;
-    }
-
-    /* Chat composer: wraps text and grows with the content up to a ceiling. */
-    #chat-input {
-      resize: none;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      overflow-wrap: break-word;
-      min-height: 4.5rem;
-      max-height: 15rem;
-      line-height: 1.5rem;
-    }
-
-    @keyframes fadeIn {
-      from {
-        opacity: 0;
-        transform: translateY(8px)
-      }
-
-      to {
-        opacity: 1;
-        transform: translateY(0)
-      }
-    }
-
-    .msg-enter {
-      animation: fadeIn .3s ease-out;
-    }
-
-    .typing-dot {
-      animation: pulse 1.2s infinite;
-    }
-
-    .typing-dot:nth-child(2) {
-      animation-delay: .2s;
-    }
-
-    .typing-dot:nth-child(3) {
-      animation-delay: .4s;
-    }
-
-    @keyframes pulse {
-
-      0%,
-      100% {
-        opacity: .3
-      }
-
-      50% {
-        opacity: 1
-      }
-    }
-
-    /* Rendered markdown inside a chat bubble. Tailwind's preflight strips the
-       defaults off h1/ul/table, so every element a report uses is restated. */
-    .md > *:first-child { margin-top: 0; }
-    .md > *:last-child { margin-bottom: 0; }
-    .md p { margin: 0 0 .7em; line-height: 1.6; }
-    .md .md-h { font-weight: 700; line-height: 1.3; margin: 1.2em 0 .5em; }
-    .md .md-h1 { font-size: 1.25em; }
-    .md .md-h2 { font-size: 1.15em; }
-    .md .md-h3 { font-size: 1.05em; }
-    .md .md-h4, .md .md-h5, .md .md-h6 { font-size: 1em; }
-    .md .md-list { margin: 0 0 .7em; padding-left: 1.35em; }
-    .md ul.md-list { list-style: disc; }
-    .md ol.md-list { list-style: decimal; }
-    .md .md-list li { margin: .2em 0; line-height: 1.55; }
-    .md strong { font-weight: 700; }
-    .md em { font-style: italic; }
-    .md del { text-decoration: line-through; opacity: .7; }
-    .md .md-rule { border: 0; border-top: 1px solid rgb(var(--md-outline-variant, 120 120 120) / .25); margin: 1em 0; }
-    .md .md-quote {
-      margin: 0 0 .7em; padding: .1em 0 .1em .8em;
-      border-left: 2px solid currentColor; opacity: .8;
-    }
-    .md .md-inline-code, .md .md-code code {
-      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: .88em;
-    }
-    .md .md-inline-code {
-      background: rgb(127 127 127 / .16); padding: .1em .35em; border-radius: .25em;
-    }
-    .md .md-code {
-      background: rgb(127 127 127 / .12); border-radius: .5em;
-      padding: .7em .8em; margin: 0 0 .7em; overflow-x: auto;
-    }
-    /* Wide tables scroll inside the bubble instead of stretching the chat. */
-    .md .md-table-wrap { overflow-x: auto; margin: 0 0 .7em; }
-    .md .md-table { border-collapse: collapse; width: 100%; font-size: .92em; }
-    .md .md-table th, .md .md-table td {
-      border: 1px solid rgb(127 127 127 / .28); padding: .35em .6em; vertical-align: top;
-    }
-    .md .md-table th { background: rgb(127 127 127 / .12); font-weight: 700; }
-  </style>
+  <link rel="stylesheet" href="/static/css/main.css">
 </head>
 
 <body class="bg-background text-on-surface overflow-hidden">
 
   <!-- SideNavBar -->
   <aside id="side-nav"
-    class="w-64 h-full fixed left-0 top-0 border-r border-[#424656]/10 bg-[#191c22] flex flex-col h-screen py-6 font-['Space_Grotesk'] tracking-tight z-50">
-    <div class="px-6 mb-8 flex items-start justify-between gap-2">
-      <div>
-        <h1 class="text-xl font-bold tracking-widest text-[#00daf3] uppercase">CoScientist</h1>
-        <p class="text-[10px] text-outline-variant tracking-widest mt-1" id="version-label">MAS v1.0.0</p>
-      </div>
-      <button type="button" onclick="toggleSideNav()" title="Hide sidebar"
-        class="text-outline-variant hover:text-primary transition-colors -mr-1">
-        <span class="material-symbols-outlined text-base">left_panel_close</span>
-      </button>
+    class="w-64 h-full fixed left-0 top-0 border-r border-outline-variant/10 bg-[#191c22] flex flex-col h-screen py-6 font-['Space_Grotesk'] tracking-tight z-50">
+    <div class="px-6 mb-8">
+      <h1 class="text-xl font-bold tracking-widest text-[#00daf3] uppercase">CoScientist</h1>
+      <p class="text-[10px] text-outline-variant tracking-widest mt-1" id="version-label">MAS v1.0.0</p>
     </div>
     <div class="px-6 mb-4">
-      <h3 class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Agents</h3>
+      <h3 data-i18n="nav.agents" class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Agents
+      </h3>
     </div>
     <nav id="agent-nav" class="flex-1 space-y-1 px-3 overflow-y-auto no-scrollbar">
       <!-- Populated by JS -->
@@ -205,21 +67,37 @@
     <div class="px-4 mt-auto space-y-4">
       <div class="space-y-2 pt-4 border-t border-outline-variant/10">
         <div class="flex items-center justify-between">
-          <label class="text-[8px] text-outline-variant uppercase font-bold tracking-widest">User</label>
+          <label data-i18n="nav.user"
+            class="text-[8px] text-outline-variant uppercase font-bold tracking-widest">User</label>
           <button onclick="openIdentityModal()" title="Register user" class="text-primary hover:brightness-125"><span
               class="material-symbols-outlined text-sm">person_add</span></button>
         </div>
         <select id="user-select" onchange="onUserSelected(this.value)"
           class="w-full bg-surface-container-high border-outline-variant/20 rounded text-[10px] text-on-surface py-1.5"></select>
         <div class="flex items-center justify-between">
-          <label class="text-[8px] text-outline-variant uppercase font-bold tracking-widest">Session</label>
+          <label data-i18n="nav.session"
+            class="text-[8px] text-outline-variant uppercase font-bold tracking-widest">Session</label>
           <div class="flex gap-2">
             <button onclick="renameCurrentSession()" title="Rename session"
               class="text-outline-variant hover:text-primary"><span
                 class="material-symbols-outlined text-sm">edit</span></button>
+            <button onclick="saveCurrentSession()" title="Save session to disk"
+              class="text-outline-variant hover:text-primary"><span
+                class="material-symbols-outlined text-sm">save</span></button>
+            <button onclick="exportCurrentSession()" title="Export session (.zip)"
+              class="text-outline-variant hover:text-primary"><span
+                class="material-symbols-outlined text-sm">download</span></button>
+            <button onclick="triggerImportSession()" title="Import session"
+              class="text-outline-variant hover:text-primary"><span
+                class="material-symbols-outlined text-sm">upload</span></button>
+            <button onclick="openSavedSessionsModal()" title="Restore saved session"
+              class="text-outline-variant hover:text-primary"><span
+                class="material-symbols-outlined text-sm">restore</span></button>
             <button onclick="createNewSession()" title="New session" class="text-primary hover:brightness-125"><span
                 class="material-symbols-outlined text-sm">add_circle</span></button>
           </div>
+          <input type="file" id="import-session-input" accept=".cossession.zip,.zip" class="hidden"
+            onchange="handleImportFile(this)">
         </div>
         <select id="session-select" onchange="onSessionSelected(this.value)"
           class="w-full bg-surface-container-high border-outline-variant/20 rounded text-[10px] text-on-surface py-1.5"></select>
@@ -229,7 +107,8 @@
           <span class="material-symbols-outlined text-primary text-sm">science</span>
         </div>
         <div>
-          <p id="active-nickname" class="text-[10px] font-bold text-on-surface">No user selected</p>
+          <p id="active-nickname" class="text-[10px] font-bold text-on-surface">No user selected
+          </p>
           <p id="conn-status" class="text-[8px] text-error uppercase font-bold tracking-widest">Disconnected</p>
         </div>
       </div>
@@ -238,23 +117,24 @@
 
   <!-- TopNavBar -->
   <header id="top-nav"
-    class="flex items-center justify-between px-8 py-4 ml-64 w-[calc(100%-16rem)] top-0 sticky z-50 bg-[#101319]/70 backdrop-blur-xl border-b border-[#424656]/15 shadow-[0_24px_48px_-12px_rgba(0,218,243,0.08)]">
+    class="flex items-center justify-between px-8 py-4 ml-64 w-[calc(100%-16rem)] top-0 sticky z-50 bg-[#101319]/70 backdrop-blur-xl border-b border-outline-variant/15 shadow-[0_24px_48px_-12px_rgba(0,218,243,0.08)]">
     <div class="flex items-center gap-8">
       <button type="button" id="side-nav-toggle" onclick="toggleSideNav()" title="Show/hide sidebar"
-        class="text-[#424656] hover:text-[#00daf3] transition-colors flex items-center">
+        class="text-outline-variant hover:text-primary transition-colors flex items-center">
         <span id="side-nav-toggle-icon" class="material-symbols-outlined">left_panel_open</span>
       </button>
-      <div class="font-black text-[#00daf3] font-headline tracking-tighter">ORCHESTRATOR</div>
+      <div data-i18n="nav.orchestrator" class="font-black text-[#00daf3] font-headline tracking-tighter">ORCHESTRATOR
+      </div>
       <div
         class="hidden md:flex items-center gap-6 font-['Space_Grotesk'] text-[10px] uppercase tracking-widest font-bold">
-        <span id="status-badge" class="text-[#424656]">Status: Idle</span>
-        <span id="event-count" class="text-[#424656]">Events: 0</span>
+        <span id="status-badge" class="text-outline-variant">Status: Idle</span>
+        <span id="event-count" class="text-outline-variant">Events: 0</span>
       </div>
     </div>
-    <div class="flex items-center gap-4 text-[#424656]">
+    <div class="flex items-center gap-4 text-outline-variant">
       <button onclick="clearChat()" title="Clear current view (history is preserved)">
         <span
-          class="material-symbols-outlined cursor-pointer hover:text-[#00daf3] transition-colors">delete_sweep</span>
+          class="material-symbols-outlined cursor-pointer hover:text-primary transition-colors">delete_sweep</span>
       </button>
     </div>
   </header>
@@ -264,36 +144,69 @@
 
     <!-- Central Chat Area -->
     <section
-      class="flex-1 flex flex-col bg-surface-container-low rounded-xl relative border border-[#424656]/10 shadow-inner">
+      class="flex-1 min-w-0 flex flex-col bg-surface-container-low rounded-xl relative border border-outline-variant/10 shadow-inner">
       <div class="p-4 border-b border-outline-variant/10 flex justify-between items-center bg-surface-container-low/50">
         <div class="flex items-center gap-3">
-          <span id="live-dot" class="w-2 h-2 bg-[#424656] rounded-full"></span>
-          <h2 class="font-headline text-xs font-bold tracking-wider text-on-surface-variant uppercase">Mission Control
+          <span id="live-dot" class="w-2 h-2 bg-outline-variant/60 rounded-full"></span>
+          <h2 data-i18n="chat.missionControl"
+            class="font-headline text-xs font-bold tracking-wider text-on-surface-variant uppercase">Mission Control
           </h2>
         </div>
         <div class="flex items-center gap-3">
           <button id="activity-toggle" onclick="toggleActivityRail()" title="Show/hide agent activity"
-            class="text-[#424656] hover:text-primary transition-colors">
+            class="text-outline-variant hover:text-primary transition-colors">
             <span class="material-symbols-outlined text-base">timeline</span>
           </button>
           <div id="active-badge"
-            class="text-[10px] bg-surface-container-highest px-3 py-1 rounded text-[#424656] border border-[#424656]/20 uppercase font-bold tracking-widest">
+            class="text-[10px] bg-surface-container-highest px-3 py-1 rounded text-outline-variant border border-outline-variant/20 uppercase font-bold tracking-widest">
             Offline</div>
         </div>
       </div>
 
-      <!-- Activity Rail: who is working right now and with which tools.
-           Lives outside the chat feed on purpose — it must stay glanceable
-           without adding a single message to the conversation. -->
+      <!-- Activity Rail: Executive Fleet & Tool Execution HUD -->
       <div id="activity-rail"
-        class="hidden px-4 py-2.5 border-b border-outline-variant/10 bg-surface-container-lowest/40 space-y-2">
-        <div class="flex items-center gap-2">
-          <span class="text-[8px] font-bold text-outline-variant uppercase tracking-widest shrink-0">Agents</span>
-          <div id="activity-agents" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-1"></div>
+        class="hidden w-full max-w-full min-w-0 border-b border-outline-variant/15 bg-gradient-to-b from-[#11141b]/95 via-[#0d1016]/95 to-[#0b0d13]/95 backdrop-blur-xl px-4 py-2.5 space-y-2 shadow-[inset_0_1px_0_0_rgba(0,218,243,0.12),0_8px_24px_-4px_rgba(0,0,0,0.5)]">
+        
+        <!-- Row 1: Agent Fleet -->
+        <div class="flex items-center gap-2.5 w-full min-w-0">
+          <div class="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md bg-[#161a23] border border-outline-variant/15 shadow-sm">
+            <span class="material-symbols-outlined text-primary text-[14px]">hub</span>
+            <span data-i18n="rail.agents" class="text-[9px] font-bold font-mono tracking-widest uppercase text-on-surface-variant">Agents</span>
+            <span id="activity-agents-count" class="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-primary/15 text-primary border border-primary/25">0</span>
+          </div>
+          
+          <div class="relative flex-1 min-w-0 flex items-center group/rail">
+            <button type="button" id="rail-agents-left" onclick="scrollActivityRail('activity-agents', -240)"
+              class="hidden absolute left-0 z-10 w-6 h-6 rounded-full bg-surface-container-high/95 border border-outline-variant/25 text-on-surface shadow-lg hover:text-primary hover:border-primary/50 transition-all items-center justify-center -ml-1 cursor-pointer">
+              <span class="material-symbols-outlined text-[14px]">chevron_left</span>
+            </button>
+            <div id="activity-agents" class="flex items-center gap-2 overflow-x-auto no-scrollbar flex-1 min-w-0 py-0.5 scroll-smooth"></div>
+            <button type="button" id="rail-agents-right" onclick="scrollActivityRail('activity-agents', 240)"
+              class="hidden absolute right-0 z-10 w-6 h-6 rounded-full bg-surface-container-high/95 border border-outline-variant/25 text-on-surface shadow-lg hover:text-primary hover:border-primary/50 transition-all items-center justify-center -mr-1 cursor-pointer">
+              <span class="material-symbols-outlined text-[14px]">chevron_right</span>
+            </button>
+          </div>
         </div>
-        <div class="flex items-center gap-2">
-          <span class="text-[8px] font-bold text-outline-variant uppercase tracking-widest shrink-0">Tools</span>
-          <div id="activity-tools" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-1"></div>
+
+        <!-- Row 2: Tool Calls -->
+        <div class="flex items-center gap-2.5 w-full min-w-0 pt-1.5 border-t border-outline-variant/10">
+          <div class="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md bg-[#161a23] border border-outline-variant/15 shadow-sm">
+            <span class="material-symbols-outlined text-outline-variant text-[14px]">handyman</span>
+            <span data-i18n="rail.tools" class="text-[9px] font-bold font-mono tracking-widest uppercase text-on-surface-variant">Tools</span>
+            <span id="activity-selected-agent-label" class="text-[8px] font-mono text-primary/80 font-medium truncate max-w-[100px]"></span>
+          </div>
+
+          <div class="relative flex-1 min-w-0 flex items-center group/rail">
+            <button type="button" id="rail-tools-left" onclick="scrollActivityRail('activity-tools', -240)"
+              class="hidden absolute left-0 z-10 w-6 h-6 rounded-full bg-surface-container-high/95 border border-outline-variant/25 text-on-surface shadow-lg hover:text-primary hover:border-primary/50 transition-all items-center justify-center -ml-1 cursor-pointer">
+              <span class="material-symbols-outlined text-[14px]">chevron_left</span>
+            </button>
+            <div id="activity-tools" class="flex items-center gap-2 overflow-x-auto no-scrollbar flex-1 min-w-0 py-0.5 scroll-smooth"></div>
+            <button type="button" id="rail-tools-right" onclick="scrollActivityRail('activity-tools', 240)"
+              class="hidden absolute right-0 z-10 w-6 h-6 rounded-full bg-surface-container-high/95 border border-outline-variant/25 text-on-surface shadow-lg hover:text-primary hover:border-primary/50 transition-all items-center justify-center -mr-1 cursor-pointer">
+              <span class="material-symbols-outlined text-[14px]">chevron_right</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -302,12 +215,18 @@
         class="flex-1 overflow-y-auto p-6 space-y-6 no-scrollbar bg-gradient-to-b from-transparent to-surface-container-lowest/20">
         <div class="flex flex-col items-center justify-center h-full opacity-50">
           <span class="material-symbols-outlined text-4xl text-primary/30 mb-3">hub</span>
-          <p class="text-sm text-outline-variant font-medium">Send a query to begin orchestration</p>
+          <p data-i18n="chat.sendQuery" class="text-sm text-outline-variant font-medium">Send a query to begin
+            orchestration</p>
         </div>
       </div>
 
+      <!-- Live status: what the system is doing right now, in one sentence.
+           Sits between the feed and the composer so it is the last thing read
+           before typing, and never scrolls away with the conversation. -->
+      <div id="status-indicator" class="hidden px-6 pt-1 pb-0" role="status" aria-live="polite"></div>
+
       <!-- Chat Input -->
-      <div class="p-6 bg-surface-container-lowest/50 backdrop-blur-md border-t border-outline-variant/5">
+      <div class="p-6 pt-4 bg-surface-container-lowest/50 backdrop-blur-md border-t border-outline-variant/5">
         <!-- Context attached to this session (dataset archive, …) -->
         <div id="attachment-chips" class="hidden flex flex-wrap items-center gap-2 mb-2"></div>
 
@@ -325,14 +244,14 @@
                   stroke-linecap="round" stroke-dasharray="113.097" stroke-dashoffset="62.20"
                   class="transition-all duration-300"></circle>
               </svg>
-              <span id="dataset-upload-pct"
-                class="absolute text-xs font-bold font-mono text-on-surface">45%</span>
+              <span id="dataset-upload-pct" class="absolute text-xs font-bold font-mono text-on-surface">45%</span>
             </div>
 
             <!-- Labels and Controls -->
             <div class="flex-1 min-w-0">
               <div class="flex items-center justify-between gap-2">
-                <span class="text-[10px] font-bold tracking-wider uppercase text-outline-variant font-mono">DATASET UPLOAD</span>
+                <span class="text-[10px] font-bold tracking-wider uppercase text-outline-variant font-mono">DATASET
+                  UPLOAD</span>
                 <button type="button" id="dataset-upload-cancel-btn" onclick="cancelDatasetUpload()"
                   class="px-2.5 py-0.5 text-[11px] font-medium bg-[#222631] hover:bg-[#2c3140] border border-outline-variant/20 rounded-md text-on-surface-variant hover:text-on-surface transition-colors">
                   Cancel
@@ -351,11 +270,16 @@
           </div>
 
           <!-- Expandable Details Drawer -->
-          <div id="dataset-upload-details" class="hidden mt-3 pt-2.5 border-t border-outline-variant/10 text-[11px] font-mono text-outline-variant space-y-1">
-            <div class="flex justify-between"><span class="text-outline-variant/70">Filename:</span><span id="dataset-upload-filename" class="text-on-surface truncate max-w-[220px]">—</span></div>
-            <div class="flex justify-between"><span class="text-outline-variant/70">Speed:</span><span id="dataset-upload-speed" class="text-on-surface">—</span></div>
-            <div class="flex justify-between"><span class="text-outline-variant/70">ETA:</span><span id="dataset-upload-eta" class="text-on-surface">—</span></div>
-            <div class="flex justify-between"><span class="text-outline-variant/70">Status:</span><span id="dataset-upload-status" class="text-on-surface font-semibold">—</span></div>
+          <div id="dataset-upload-details"
+            class="hidden mt-3 pt-2.5 border-t border-outline-variant/10 text-[11px] font-mono text-outline-variant space-y-1">
+            <div class="flex justify-between"><span class="text-outline-variant/70">Filename:</span><span
+                id="dataset-upload-filename" class="text-on-surface truncate max-w-[220px]">—</span></div>
+            <div class="flex justify-between"><span class="text-outline-variant/70">Speed:</span><span
+                id="dataset-upload-speed" class="text-on-surface">—</span></div>
+            <div class="flex justify-between"><span class="text-outline-variant/70">ETA:</span><span
+                id="dataset-upload-eta" class="text-on-surface">—</span></div>
+            <div class="flex justify-between"><span class="text-outline-variant/70">Status:</span><span
+                id="dataset-upload-status" class="text-on-surface font-semibold">—</span></div>
           </div>
         </div>
 
@@ -376,9 +300,17 @@
               </button>
             </div>
           </div>
+          <!-- Report language for THIS session. Separate from the interface
+               language toggle (lang-btn-en / lang-btn-ru) in the sidebar. -->
+          <select id="report-lang-select" onchange="onReportLanguageChange()" title="Report language / Язык отчёта"
+            class="shrink-0 bg-surface-container-highest border border-outline-variant/20 text-on-surface-variant text-[10px] font-mono rounded-md px-2 py-1 focus:border-primary/40 focus:ring-0 cursor-pointer">
+            <option value="ru" data-i18n="composer.reportLang.ru">Отчёт: RU</option>
+            <option value="en" data-i18n="composer.reportLang.en">Отчёт: EN</option>
+          </select>
           <textarea id="chat-input" rows="3" wrap="soft" spellcheck="false" autocomplete="off"
             class="bg-transparent border-none focus:ring-0 text-sm flex-1 py-1.5 text-on-surface placeholder:text-outline-variant/50 font-medium no-scrollbar"
-            placeholder="Send system command…  (Enter — send, Shift+Enter — new line)"></textarea>
+            placeholder="Send system command…  (Enter — send, Shift+Enter — new line)"
+            data-i18n-placeholder="chat.placeholder"></textarea>
           <button type="button" id="stop-btn" onclick="stopChat()"
             class="hidden p-2 bg-error/20 text-error border border-error/30 rounded-md hover:bg-error/30 transition-all shadow-md"
             title="Stop agents">
@@ -393,16 +325,17 @@
     </section>
 
     <!-- Right Sidebar: Telemetry -->
-    <aside class="w-80 flex flex-col gap-6 overflow-y-auto no-scrollbar pb-8">
+    <aside class="w-80 shrink-0 flex flex-col gap-6 overflow-y-auto no-scrollbar pb-8">
       <!-- Telemetry -->
       <div class="hidden bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/10 overflow-hidden relative">
         <div class="absolute top-3 right-3">
           <span id="telemetry-live"
-            class="text-[8px] font-bold text-[#424656] font-mono tracking-tighter uppercase flex items-center gap-1">
-            <span class="w-1 h-1 bg-[#424656] rounded-full"></span> Offline
+            class="text-[8px] font-bold text-outline-variant font-mono tracking-tighter uppercase flex items-center gap-1">
+            <span class="w-1.5 h-1.5 bg-outline-variant/60 rounded-full"></span> Offline
           </span>
         </div>
-        <h4 class="text-[10px] font-bold text-outline-variant uppercase mb-3 tracking-widest">Telemetry Output</h4>
+        <h4 data-i18n="telemetry.header"
+          class="text-[10px] font-bold text-outline-variant uppercase mb-3 tracking-widest">Telemetry Output</h4>
         <div id="telemetry-log"
           class="space-y-1.5 font-mono text-[9px] text-primary/60 max-h-96 overflow-y-auto no-scrollbar">
           <div class="text-outline-variant">Waiting for connection…</div>
@@ -412,7 +345,8 @@
       <!-- Usage & Cost — what this session has spent, by agent -->
       <div class="bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/10 overflow-hidden">
         <div class="flex items-baseline justify-between mb-3">
-          <h4 class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Usage &amp; Cost</h4>
+          <h4 data-i18n="usage.header" class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">
+            Usage &amp; Cost</h4>
           <span id="metrics-total" class="text-sm font-mono font-bold text-primary">$0.0000</span>
         </div>
         <div id="metrics-summary" class="text-[9px] font-mono text-outline-variant mb-2">no model calls yet</div>
@@ -427,8 +361,6 @@
     </aside>
   </main>
 
-  <script>
-    // =========================================================================
     // WebSocket & State
     // =========================================================================
     let ws = null;
@@ -3119,6 +3051,7 @@
       feed.scrollTop = feed.scrollHeight;
     }
   </script>
+=======
 
   <!-- Local user picker (in-memory development mode) -->
   <div id="identity-modal"
@@ -3198,66 +3131,167 @@
     </div>
   </div>
 
-  <!-- Roadmap Editor Modal -->
+  <!-- Roadmap & Execution Plan Modal -->
   <div id="roadmap-modal"
     class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
     <div
-      class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] mx-4">
+      class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[88vh] mx-4 transition-all">
       <!-- Modal Header -->
       <div
-        class="px-6 py-4 border-b border-outline-variant/10 flex justify-between items-center bg-surface-container-low/50">
-        <div class="flex items-center gap-3">
-          <span class="material-symbols-outlined text-primary">map</span>
-          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider">Roadmap Editor</h3>
+        class="px-6 py-4 border-b border-outline-variant/10 flex flex-col gap-3 bg-surface-container-low/60">
+        <div class="flex justify-between items-center">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+              <span class="material-symbols-outlined text-primary text-sm">account_tree</span>
+            </div>
+            <div>
+              <div class="flex items-center gap-2">
+                <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider" id="roadmap-modal-title">Roadmap & Execution Plan</h3>
+                <span id="roadmap-counter-badge" class="text-[9px] font-mono font-semibold px-2 py-0.5 rounded-full bg-surface-container-highest text-primary border border-primary/20">0 tasks</span>
+              </div>
+              <p class="text-[9px] text-outline-variant/70 font-mono tracking-wide" id="roadmap-modal-subtitle">Execution steps for the current session</p>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <!-- Add Task Button -->
+            <button type="button" id="roadmap-add-task-btn" onclick="addNewRoadmapTask()"
+              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-container-highest/90 hover:bg-surface-container-high border border-primary/25 hover:border-primary/50 text-[10px] font-semibold text-primary transition-all shadow-sm active:scale-95">
+              <span class="material-symbols-outlined text-xs">add_task</span>
+              <span>Add Task</span>
+            </button>
+
+            <!-- Close Modal -->
+            <button onclick="closeRoadmapEditor()"
+              class="text-outline-variant hover:text-on-surface p-1 rounded-md hover:bg-surface-container-high transition-colors flex items-center">
+              <span class="material-symbols-outlined text-lg">close</span>
+            </button>
+          </div>
         </div>
-        <button onclick="closeRoadmapEditor()"
-          class="text-outline-variant hover:text-on-surface transition-colors flex items-center">
-          <span class="material-symbols-outlined text-lg">close</span>
-        </button>
+
+        <!-- Filter & Search Toolbar (shown in Visual mode) -->
+        <div id="roadmap-visual-toolbar" class="flex flex-wrap items-center justify-between gap-3 pt-1 border-t border-outline-variant/10">
+          <!-- Status Filter Tabs -->
+          <div class="flex items-center gap-1 text-[10px] font-medium" id="roadmap-filter-tabs">
+            <button onclick="filterRoadmapTasks('all')" data-filter="all"
+              class="roadmap-tab-btn active px-2.5 py-1 rounded-md bg-surface-container-highest text-primary font-semibold border border-primary/20 transition-all">
+              All (<span id="rf-all-count">0</span>)
+            </button>
+            <button onclick="filterRoadmapTasks('active')" data-filter="active"
+              class="roadmap-tab-btn px-2.5 py-1 rounded-md text-outline-variant hover:text-on-surface transition-all">
+              In Progress (<span id="rf-active-count">0</span>)
+            </button>
+            <button onclick="filterRoadmapTasks('done')" data-filter="done"
+            class="roadmap-tab-btn px-2.5 py-1 rounded-md text-outline-variant hover:text-on-surface transition-all">
+              Completed (<span id="rf-done-count">0</span>)
+            </button>
+            <button onclick="filterRoadmapTasks('todo')" data-filter="todo"
+              class="roadmap-tab-btn px-2.5 py-1 rounded-md text-outline-variant hover:text-on-surface transition-all">
+              Pending (<span id="rf-todo-count">0</span>)
+            </button>
+          </div>
+
+          <!-- Search & Expand All Toolbar Actions -->
+          <div class="flex items-center gap-2 flex-1 max-w-sm justify-end">
+            <!-- Search Input -->
+            <div class="relative min-w-[170px] flex-1">
+              <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-outline-variant/60 text-xs">search</span>
+              <input type="text" id="roadmap-search-input" oninput="searchRoadmapTasks(this.value)"
+                placeholder="Search tasks…"
+                class="w-full pl-7 pr-3 py-1 text-[11px] bg-surface-container-lowest/80 border border-outline-variant/15 rounded-md text-on-surface placeholder:text-outline-variant/40 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 transition-all" />
+            </div>
+
+            <!-- Expand / Collapse All -->
+            <div class="flex items-center gap-0.5 shrink-0 bg-surface-container-highest/60 rounded-md border border-outline-variant/15 p-0.5">
+              <button type="button" onclick="toggleAllDescExpand(true)"
+                title="Expand all descriptions"
+                class="p-1 rounded text-outline-variant hover:text-primary hover:bg-surface-container-high transition-colors flex items-center">
+                <span class="material-symbols-outlined text-sm">unfold_more</span>
+              </button>
+              <button type="button" onclick="toggleAllDescExpand(false)"
+                title="Collapse all descriptions"
+                class="p-1 rounded text-outline-variant hover:text-primary hover:bg-surface-container-high transition-colors flex items-center">
+                <span class="material-symbols-outlined text-sm">unfold_less</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Progress Track -->
+        <div class="flex items-center gap-3 pt-1">
+          <div class="flex-1 h-1.5 bg-surface-container-highest rounded-full overflow-hidden">
+            <div id="roadmap-progress-bar"
+              class="h-full bg-gradient-to-r from-primary via-primary to-secondary transition-all duration-500 rounded-full"
+              style="width: 0%;"></div>
+          </div>
+          <span id="roadmap-progress-text" class="text-[10px] font-mono text-outline-variant shrink-0 tabular-nums">0% completed</span>
+        </div>
       </div>
 
       <!-- Modal Body -->
-      <div class="p-6 flex-1 overflow-y-auto flex flex-col gap-4">
-        <p class="text-xs text-on-surface-variant leading-relaxed">
-          Edit the execution plan stored in the current user's active session.
-          This plan guides agent execution and is isolated from other sessions.
-        </p>
+      <div class="p-6 flex-1 overflow-y-auto flex flex-col gap-4 bg-gradient-to-b from-transparent to-surface-container-lowest/20">
 
-        <div class="relative flex-1 flex flex-col min-h-[300px]">
-          <textarea id="roadmap-textarea"
-            class="w-full flex-1 min-h-[300px] bg-surface-container-lowest border border-outline-variant/10 rounded-lg p-4 font-mono text-xs text-on-surface placeholder:text-outline-variant/30 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 resize-none leading-relaxed"
-            placeholder="1. Action...&#10;2. Action..."></textarea>
+        <!-- 1. Visual Cards View -->
+        <div id="roadmap-visual-view" class="flex flex-col gap-3">
+          <!-- Empty State -->
+          <div id="roadmap-empty-state" class="hidden flex flex-col items-center justify-center py-16 opacity-75">
+            <span class="material-symbols-outlined text-4xl text-primary/40 mb-3">account_tree</span>
+            <p class="text-sm font-medium text-on-surface">No tasks found in roadmap</p>
+            <p class="text-xs text-outline-variant mt-1">PlannerAgent generates the plan, or click "Add Task" to create one manually.</p>
+            <button type="button" onclick="addNewRoadmapTask()"
+              class="mt-4 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-on-primary text-xs font-semibold shadow hover:brightness-110 active:scale-95 transition-all">
+              <span class="material-symbols-outlined text-sm">add_task</span>
+              <span>Add Task</span>
+            </button>
+          </div>
+
+          <!-- Cards Timeline List -->
+          <div id="roadmap-tasks-list" class="space-y-3 relative"></div>
         </div>
 
-        <div id="roadmap-feedback-container" class="hidden mt-2 flex flex-col gap-2">
-          <label class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Feedback / Revision
-            Instructions</label>
-          <input id="roadmap-feedback-input"
-            class="bg-surface-container-highest border border-outline-variant/10 rounded-md px-3 py-2 text-xs text-on-surface placeholder:text-outline-variant/50 focus:ring-1 focus:ring-primary/40 focus:border-primary/40"
-            placeholder="E.g. Add an extra step for data validation..." />
+        <!-- HITL Feedback Container -->
+        <div id="roadmap-feedback-container" class="hidden mt-2 p-4 rounded-xl border border-primary/25 bg-primary/5 flex flex-col gap-2.5">
+          <div class="flex items-center gap-2">
+            <span class="material-symbols-outlined text-primary text-sm">edit_note</span>
+            <label class="text-[10px] font-bold text-primary uppercase tracking-widest">Feedback / Revision Instructions for Planner</label>
+          </div>
+          <textarea id="roadmap-feedback-input" rows="2"
+            class="w-full bg-surface-container-highest border border-outline-variant/15 rounded-md px-3 py-2 text-xs text-on-surface placeholder:text-outline-variant/50 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 resize-none"
+            placeholder="Specify what should be changed or added (e.g. Add validation against off-targets, split task 2)..."></textarea>
         </div>
 
+        <!-- Operation Status Alert -->
         <div id="roadmap-status" class="text-[10px] font-mono text-outline-variant hidden"></div>
       </div>
 
       <!-- Modal Footer -->
-      <div class="px-6 py-4 border-t border-outline-variant/10 flex justify-end gap-3 bg-surface-container-low/50">
-        <button onclick="closeRoadmapEditor()"
-          class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
-          Cancel
-        </button>
-        <button id="save-roadmap-btn" onclick="saveRoadmap()"
-          class="px-4 py-2 bg-primary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-primary/20 transition-all flex items-center gap-2">
-          <span class="material-symbols-outlined text-sm">save</span> Save Changes
-        </button>
-        <button id="revise-roadmap-btn" onclick="reviseRoadmap()"
-          class="hidden px-4 py-2 bg-surface-container-highest border border-error/20 text-error hover:bg-error/10 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all flex items-center gap-2">
-          <span class="material-symbols-outlined text-sm">edit</span> Revise Plan
-        </button>
-        <button id="confirm-roadmap-btn" onclick="saveAndConfirmRoadmap()"
-          class="hidden px-4 py-2 bg-secondary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-secondary/20 transition-all flex items-center gap-2">
-          <span class="material-symbols-outlined text-sm">check_circle</span> Save & Confirm
-        </button>
+      <div class="px-6 py-3.5 border-t border-outline-variant/10 flex justify-between items-center bg-surface-container-low/60">
+        <div class="flex items-center gap-3 text-[10px] font-mono text-outline-variant/70">
+          <span id="roadmap-stat-total">Total: 0</span>
+          <span>·</span>
+          <span id="roadmap-stat-active" class="text-primary">In progress: 0</span>
+          <span>·</span>
+          <span id="roadmap-stat-done" class="text-secondary">Done: 0</span>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <button onclick="closeRoadmapEditor()"
+            class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
+            Cancel
+          </button>
+          <button id="save-roadmap-btn" onclick="saveRoadmap()"
+            class="px-4 py-2 bg-primary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-primary/20 transition-all flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">save</span> Save Changes
+          </button>
+          <button id="revise-roadmap-btn" onclick="reviseRoadmap()"
+            class="hidden px-4 py-2 bg-surface-container-highest border border-error/20 text-error hover:bg-error/10 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">edit</span> Revise Plan
+          </button>
+          <button id="confirm-roadmap-btn" onclick="saveAndConfirmRoadmap()"
+            class="hidden px-4 py-2 bg-secondary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-secondary/20 transition-all flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">check_circle</span> Save & Confirm
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -3282,6 +3316,9 @@
           </div>
         </div>
         <div class="flex items-center gap-2">
+          <button id="experiment-expand-all" onclick="toggleExperimentExpandAll()"
+            class="text-[9px] font-bold uppercase tracking-wider text-outline-variant hover:text-primary px-2 py-1 rounded hover:bg-primary/10 transition-colors">Expand
+            all</button>
           <button onclick="clearExperimentViewer()"
             class="text-outline-variant hover:text-error transition-colors flex items-center gap-1 px-2 py-1 rounded hover:bg-error/10"
             title="Clear feed">
@@ -3310,7 +3347,7 @@
         class="px-6 py-3 border-t border-outline-variant/10 flex justify-between items-center bg-surface-container-low/50">
         <div class="flex items-center gap-2">
           <span id="experiment-event-count"
-            class="text-[9px] font-mono text-outline-variant/60 uppercase tracking-wider">0 events</span>
+            class="text-[9px] font-mono text-outline-variant/60 uppercase tracking-wider">0 calls</span>
         </div>
         <button onclick="closeExperimentViewer()"
           class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
@@ -3332,8 +3369,18 @@
             <span class="material-symbols-outlined text-primary text-sm">settings</span>
           </div>
           <div>
-            <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider">Settings</h3>
-            <p class="text-[9px] text-outline-variant/70 font-mono uppercase tracking-wider">System Configuration</p>
+            <h3 data-i18n="settings.title"
+              class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider">Settings</h3>
+            <p data-i18n="settings.subtitle"
+              class="text-[9px] text-outline-variant/70 font-mono uppercase tracking-wider">System Configuration</p>
+          </div>
+          <!-- Language toggle -->
+          <div
+            class="flex items-center gap-1 ml-4 bg-surface-container-high rounded-md border border-outline-variant/20 p-0.5">
+            <button id="lang-btn-en" onclick="applyLanguage('en')"
+              class="px-2 py-1 text-[10px] font-bold uppercase tracking-wider rounded transition-all text-on-surface-variant hover:text-on-surface">EN</button>
+            <button id="lang-btn-ru" onclick="applyLanguage('ru')"
+              class="px-2 py-1 text-[10px] font-bold uppercase tracking-wider rounded transition-all text-on-surface-variant hover:text-on-surface">RU</button>
           </div>
         </div>
         <button onclick="closeSettings()"
@@ -3350,7 +3397,7 @@
           <div class="flex items-center gap-2 mb-1">
             <span class="material-symbols-outlined text-primary text-base">tune</span>
             <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">
-              General <span
+              <span data-i18n="settings.general">General</span> <span data-i18n="settings.general.hint"
                 class="normal-case text-[10px] font-normal text-on-surface-variant font-sans tracking-normal ml-1">(Default
                 values are set in .env or settings.py)</span>
             </h4>
@@ -3359,8 +3406,10 @@
             <!-- Start Mode -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Session Start Mode</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Choose which agent starts the
+                <label data-i18n="settings.startMode.label" class="text-xs font-bold text-on-surface">Session Start
+                  Mode</label>
+                <p data-i18n="settings.startMode.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Choose which agent starts the
                   session. <strong>PlannerAgent</strong> runs PlannerAgent first, then OrchestratorAgent.
                   <strong>OrchestratorAgent</strong> starts directly with the orchestrator.
                   <strong>Orchestrator as a planner</strong> gives Orchestrator the plan tool and disables PlannerAgent.
@@ -3368,17 +3417,20 @@
               </div>
               <select id="start-mode-select" onchange="updateStartModeUI()"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 min-w-[180px] cursor-pointer">
-                <option value="init">PlannerAgent</option>
-                <option value="orchestrator">OrchestratorAgent</option>
-                <option value="orchestrator_planner">Orchestrator as a planner</option>
+                <option value="planner" data-i18n="settings.startMode.planner">PlannerAgent</option>
+                <option value="orchestrator" data-i18n="settings.startMode.orchestrator">OrchestratorAgent</option>
+                <option value="orchestrator_planner" data-i18n="settings.startMode.orchestratorPlanner">Orchestrator as
+                  a planner</option>
               </select>
             </div>
             <hr class="border-outline-variant/10" />
             <!-- Max Retries -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Max LLM Retries</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Number of LLM call retry attempts on
+                <label data-i18n="settings.maxRetries.label" class="text-xs font-bold text-on-surface">Max LLM
+                  Retries</label>
+                <p data-i18n="settings.maxRetries.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Number of LLM call retry attempts on
                   transient network or upstream API errors.</p>
               </div>
               <input id="max-retries-input" type="number" min="0" max="10" value="3"
@@ -3388,22 +3440,39 @@
             <!-- HITL -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">HITL Enabled</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Toggle Human-in-the-Loop approval for
+                <label data-i18n="settings.hitl.label" class="text-xs font-bold text-on-surface">HITL Enabled</label>
+                <p data-i18n="settings.hitl.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Toggle
+                  Human-in-the-Loop approval for
                   dangerous or outward-facing actions.</p>
               </div>
               <input id="hitl-enabled-checkbox" type="checkbox" checked class="w-5 h-5 accent-primary cursor-pointer" />
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- HITL Auto-Approve Timeout -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label data-i18n="settings.hitlTimeout.label" class="text-xs font-bold text-on-surface">HITL
+                  Auto-Approve Timeout (s)</label>
+                <p data-i18n="settings.hitlTimeout.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Seconds before auto-approving HITL
+                  requests (-1 for no timeout / wait for human).</p>
+              </div>
+              <input id="hitl-timeout-input" type="number" min="-1" step="1" value="300"
+                class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-24 text-center focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
             </div>
             <hr class="border-outline-variant/10" />
             <!-- Use Planner -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
                 <div class="flex items-center gap-1.5 flex-wrap">
-                  <label class="text-xs font-bold text-on-surface">Use Planner</label>
-                  <span id="use-planner-note" class="text-[10px] text-warning/90 italic font-normal hidden">(disabled
+                  <label data-i18n="settings.usePlanner.label" class="text-xs font-bold text-on-surface">Use
+                    Planner</label>
+                  <span id="use-planner-note" data-i18n="settings.usePlanner.note"
+                    class="text-[10px] text-warning/90 italic font-normal hidden">(disabled
                     when using PlannerAgent mode)</span>
                 </div>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Whether the orchestrator delegates to
+                <p data-i18n="settings.usePlanner.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Whether the orchestrator delegates to
                   PlannerAgent for task decomposition.</p>
               </div>
               <input id="use-planner-checkbox" type="checkbox" checked
@@ -3411,11 +3480,46 @@
                 class="w-5 h-5 accent-primary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed" />
             </div>
             <hr class="border-outline-variant/10" />
+            <!-- Research Frame -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label data-i18n="settings.contextInit.label" class="text-xs font-bold text-on-surface">Research
+                  Frame</label>
+                <p data-i18n="settings.contextInit.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Draft research frame and seed it into the research graph before the orchestrator runs
+                  (${context_init.enabled}).
+                </p>
+              </div>
+              <input id="context-init-enabled-checkbox" type="checkbox" checked
+                class="w-5 h-5 accent-primary cursor-pointer" />
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- Use Proxy -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <label data-i18n="settings.useProxy.label" class="text-xs font-bold text-on-surface">Use Corporate
+                    Proxy</label>
+                  <span id="use-proxy-note" data-i18n="settings.useProxy.note"
+                    class="text-[10px] text-warning/90 italic font-normal">(set only in
+                    env)</span>
+                </div>
+                <p data-i18n="settings.useProxy.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Route LLM model calls through
+                  corporate proxy (SERVICES__PROXY_URL).</p>
+              </div>
+              <input id="use-proxy-checkbox" type="checkbox" disabled
+                class="w-5 h-5 accent-primary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed" />
+            </div>
+            <hr class="border-outline-variant/10" />
             <!-- Enable Opik Tracing -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Enable Opik Tracing</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Send execution logs and agent traces
+                <label data-i18n="settings.opik.label" class="text-xs font-bold text-on-surface">Enable Opik
+                  Tracing</label>
+                <p data-i18n="settings.opik.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Send
+                  execution logs and agent traces
                   to your Opik dashboard.</p>
               </div>
               <input id="opik-enabled-checkbox" type="checkbox" class="w-5 h-5 accent-primary cursor-pointer" />
@@ -3424,8 +3528,10 @@
             <!-- Auto-name Sessions -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Auto-name Sessions</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Automatically generate session titles
+                <label data-i18n="settings.autoNaming.label" class="text-xs font-bold text-on-surface">Auto-name
+                  Sessions</label>
+                <p data-i18n="settings.autoNaming.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Automatically generate session titles
                   based on the first prompt.</p>
               </div>
               <input id="auto-naming-enabled-checkbox" type="checkbox" checked
@@ -3435,11 +3541,14 @@
             <!-- Default Username -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Default Username</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Auto-selects user on startup (can
+                <label data-i18n="settings.defaultUsername.label" class="text-xs font-bold text-on-surface">Default
+                  Username</label>
+                <p data-i18n="settings.defaultUsername.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Auto-selects user on startup (can
                   also be set via COSCIENTIST_USERNAME in .env).</p>
               </div>
               <input id="default-username-input" type="text" placeholder="e.g. COSCIENTIST_USERNAME in .env"
+                data-i18n-placeholder="settings.defaultUsername.placeholder"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-48 focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
             </div>
           </div>
@@ -3449,16 +3558,19 @@
         <div class="space-y-4">
           <div class="flex items-center gap-2 mb-1">
             <span class="material-symbols-outlined text-primary text-base">hub</span>
-            <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">Graphs</h4>
+            <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline"><span
+                data-i18n="settings.graphs">Graphs</span></h4>
           </div>
           <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4 space-y-4">
             <!-- Knowledge graph -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Knowledge Graph</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Records the execution graph of every
+                <label data-i18n="settings.knowledgeGraph.label" class="text-xs font-bold text-on-surface">Knowledge
+                  Graph</label>
+                <p data-i18n="settings.knowledgeGraph.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Records the execution graph of every
                   run and lets agents read it (<span class="font-mono">get_graph_history</span>, <span
-                    class="font-mono">get_agents_info</span>).
+                    class="font-mono">get_agents_info</span>, <span class="font-mono">search_knowledge_memory</span>).
                   When off, nothing is recorded, the Graph view stays empty, and the tools disappear from every agent
                   and from their prompts.</p>
               </div>
@@ -3469,8 +3581,10 @@
             <!-- Research graph -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Research Graph</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">The typed research blackboard agents
+                <label data-i18n="settings.researchGraph.label" class="text-xs font-bold text-on-surface">Research
+                  Graph</label>
+                <p data-i18n="settings.researchGraph.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">The typed research blackboard agents
                   commit findings to (<span class="font-mono">research_commit</span>, <span
                     class="font-mono">research_context_slice</span>, orchestrator triggers). When off, the whole
                   feature — tools and prompt sections — drops out and agents pass context through their answers only.
@@ -3479,28 +3593,51 @@
               <input id="research-graph-checkbox" type="checkbox" checked
                 class="w-5 h-5 accent-primary cursor-pointer" />
             </div>
-            <p class="text-[10px] text-outline-variant/80 italic">Applies to new sessions — the agent system is built
+            <hr class="border-outline-variant/10" />
+            <!-- Auto-clear graph before session -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <div class="flex items-center gap-1.5 flex-wrap">
+                  <label data-i18n="settings.autoClearGraph.label" class="text-xs font-bold text-on-surface">Auto-clear
+                    Graph Before Session</label>
+                  <span id="auto-clear-graph-note" data-i18n="settings.autoClearGraph.note"
+                    class="text-[10px] text-warning/90 italic font-normal">(set only in env)</span>
+                </div>
+                <p data-i18n="settings.autoClearGraph.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Automatically clear graph data before
+                  each session starts.</p>
+              </div>
+              <input id="auto-clear-graph-checkbox" type="checkbox" disabled
+                class="w-5 h-5 accent-primary cursor-not-allowed opacity-60" />
+            </div>
+            <p data-i18n="settings.graphs.sessionNote" class="text-[10px] text-outline-variant/80 italic">Applies to new
+              sessions — the agent system is built
               once per session.</p>
             <hr class="border-outline-variant/10" />
             <!-- Delete stored graphs -->
             <div class="flex items-start justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Delete Graph Data</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Wipe what the graphs have recorded.
-                  Both graphs belong to the <strong>current session</strong>. The research graph is archived next to
-                  its file first; the execution graph keeps only the agent roster.</p>
+                <label data-i18n="settings.deleteGraph.label" class="text-xs font-bold text-on-surface">Delete Graph
+                  Data</label>
+                <p data-i18n="settings.deleteGraph.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Wipe what the graphs have recorded.
+                  The execution and research graphs belong to the <strong>current session</strong>; the knowledge memory
+                  is installation-wide and disappears for every session at once. The research graph and the knowledge
+                  memory are archived next to their files first; the execution graph keeps only the agent roster.</p>
                 <div id="graph-delete-status" class="hidden text-[10px] font-mono mt-1.5"></div>
               </div>
               <div class="flex items-center gap-2 shrink-0">
                 <select id="graph-delete-target"
                   class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 cursor-pointer">
-                  <option value="execution">Execution (session)</option>
-                  <option value="research">Research (session)</option>
-                            <option value="all">All of the above</option>
+                  <option value="execution" data-i18n="settings.deleteGraph.optExecution">Execution (session)</option>
+                  <option value="research" data-i18n="settings.deleteGraph.optResearch">Research (session)</option>
+                  <option value="memory" data-i18n="settings.deleteGraph.optMemory">Knowledge memory (global)</option>
+                  <option value="all" data-i18n="settings.deleteGraph.optAll">All of the above</option>
                 </select>
                 <button id="graph-delete-btn" onclick="deleteGraphData()"
                   class="px-4 py-2 bg-surface-container-highest border border-error/20 text-error hover:bg-error/10 active:scale-95 disabled:opacity-40 disabled:cursor-not-allowed rounded-md font-bold text-[10px] uppercase tracking-wider transition-all flex items-center gap-2">
-                  <span class="material-symbols-outlined text-sm">delete_forever</span> Delete
+                  <span class="material-symbols-outlined text-sm">delete_forever</span> <span
+                    data-i18n="settings.deleteGraph.btn">Delete</span>
                 </button>
               </div>
             </div>
@@ -3517,8 +3654,10 @@
             <!-- Retrieval tools -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Retrieval Tools</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Let the planner search the MCP
+                <label data-i18n="settings.planner.retrieval.label" class="text-xs font-bold text-on-surface">Retrieval
+                  Tools</label>
+                <p data-i18n="settings.planner.retrieval.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Let the planner search the MCP
                   registry (<span class="font-mono">retrieve_tools</span>, <span
                     class="font-mono">get_server_info</span>) before writing the roadmap. When off, it plans by outcome
                   and never names concrete tools or server ids.</p>
@@ -3531,12 +3670,15 @@
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
                 <div class="flex items-center gap-1.5 flex-wrap">
-                  <label class="text-xs font-bold text-on-surface">Graph Tools</label>
-                  <span id="planner-graph-note" class="text-[10px] text-warning/90 italic font-normal hidden">(disabled
+                  <label data-i18n="settings.planner.graph.label" class="text-xs font-bold text-on-surface">Graph
+                    Tools</label>
+                  <span id="planner-graph-note" data-i18n="settings.planner.graph.note"
+                    class="text-[10px] text-warning/90 italic font-normal hidden">(disabled
                     — Knowledge Graph is off)</span>
                 </div>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Let the planner read the shared
-                  execution graph (history and agent roster) so it does not re-plan finished work.</p>
+                <p data-i18n="settings.planner.graph.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Let the planner read the shared
+                  knowledge graph (history, agent roster, knowledge memory) so it does not re-plan finished work.</p>
               </div>
               <input id="planner-graph-checkbox" type="checkbox" checked
                 class="w-5 h-5 accent-primary cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed" />
@@ -3545,8 +3687,10 @@
             <!-- Plan critic -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Plan Critic</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Have an LLM critic review the
+                <label data-i18n="settings.planner.critic.label" class="text-xs font-bold text-on-surface">Plan
+                  Critic</label>
+                <p data-i18n="settings.planner.critic.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Have an LLM critic review the
                   registered roadmap (assignees, coverage, dependencies) before it is executed, and send it back to
                   the planner if it objects. Runs whether or not HITL is on, before a human sees the plan. Costs one
                   extra LLM call per planning run.</p>
@@ -3557,8 +3701,10 @@
             <!-- Critic revision rounds -->
             <div id="planner-critic-rounds-row" class="flex items-center justify-between gap-4 pl-3">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Revision Rounds</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">How many times the critic may send
+                <label data-i18n="settings.planner.rounds.label" class="text-xs font-bold text-on-surface">Revision
+                  Rounds</label>
+                <p data-i18n="settings.planner.rounds.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">How many times the critic may send
                   the roadmap back. <span class="font-mono">1</span> — it gets a single say and the rewrite then
                   stands. Each extra round is a full replan, and a critic that never approves would otherwise keep
                   the planner going.</p>
@@ -3570,15 +3716,18 @@
             <!-- Merge tasks -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Merge Tasks</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Automatically merge consecutive
+                <label data-i18n="settings.planner.mergeTasks.label" class="text-xs font-bold text-on-surface">Merge
+                  Tasks</label>
+                <p data-i18n="settings.planner.mergeTasks.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Automatically merge consecutive
                   tasks assigned to the same executor (CoderAgent / TaskExecutorAgent) into a single task. Turn off to
                   keep every task the planner wrote as a separate unit of work.</p>
               </div>
               <input id="planner-merge-tasks-checkbox" type="checkbox" checked
                 class="w-5 h-5 accent-primary cursor-pointer" />
             </div>
-            <p class="text-[10px] text-outline-variant/80 italic">Applies to new sessions — the agent system is built
+            <p data-i18n="settings.graphs.sessionNote" class="text-[10px] text-outline-variant/80 italic">Applies to new
+              sessions — the agent system is built
               once per session.</p>
           </div>
         </div>
@@ -3592,8 +3741,10 @@
           <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4">
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Per-turn — max searches</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Maximum number of web search tool
+                <label data-i18n="settings.research.maxSearches.label"
+                  class="text-xs font-bold text-on-surface">Per-turn — max searches</label>
+                <p data-i18n="settings.research.maxSearches.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Maximum number of web search tool
                   calls per agent turn. After this limit, the agent must synthesize from existing results.</p>
               </div>
               <input id="research-max-searches" type="number" min="1" max="20" value="2"
@@ -3612,12 +3763,15 @@
           <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4">
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Max Active Hypotheses</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">How many hypotheses are kept
+                <label data-i18n="settings.hypotheses.maxActive.label" class="text-xs font-bold text-on-surface">Max
+                  Active Hypotheses</label>
+                <p data-i18n="settings.hypotheses.maxActive.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">How many hypotheses are kept
                   as active (<span class="font-mono">formulated</span>) simultaneously for parallel verification.
                   <span class="font-mono">1</span> — the classic "one at a time" mode: the agent picks the single
                   best hypothesis and postpones the rest. Higher values let the orchestrator verify several
-                  branches in parallel.</p>
+                  branches in parallel.
+                </p>
               </div>
               <input id="hypotheses-max-active" type="number" min="1" max="5" value="1"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-20 text-center focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
@@ -3632,28 +3786,36 @@
             <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">CoderAgent</h4>
           </div>
           <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4 space-y-4">
-            <!-- Local coder tools -->
+            <!-- Coder mode -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
                 <div class="flex items-center gap-1.5 flex-wrap">
-                  <label class="text-xs font-bold text-on-surface">Local Coder Tools</label>
-                  <span id="coder-local-tools-note" class="text-[10px] text-warning/90 italic font-normal hidden">(no
-                    Sandbox URL set — the coder would have nothing to run code with)</span>
+                  <label data-i18n="settings.coder.mode.label" class="text-xs font-bold text-on-surface">Coder Execution
+                    Mode</label>
+                  <span id="coder-local-tools-note" data-i18n="settings.coder.mode.note"
+                    class="text-[10px] text-warning/90 italic font-normal hidden">(no
+                    Sandbox URL set — OpenHands mode requires a Sandbox URL)</span>
                 </div>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">The in-process toolset (<span
-                    class="font-mono">execute_bash</span>, file edits, git). Turn it off to leave the coder family with
-                  the OpenHands <span class="font-mono">sandbox</span> tools only — everything then runs on the remote
-                  sandbox instead of this machine.</p>
+                <p data-i18n="settings.coder.mode.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Choose execution mode:
+                  <strong>local</strong> uses in-process tools (<span class="font-mono">execute_bash</span>, file edits,
+                  git); <strong>openhands</strong> relays tasks to the remote OpenHands sandbox agent.
+                </p>
               </div>
-              <input id="coder-local-tools-checkbox" type="checkbox" checked onchange="updateCoderToolsUI()"
-                class="w-5 h-5 accent-primary cursor-pointer" />
+              <select id="coder-mode-select" onchange="updateCoderToolsUI()"
+                class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 min-w-[180px] cursor-pointer">
+                <option value="local">local</option>
+                <option value="openhands">openhands</option>
+              </select>
             </div>
             <hr class="border-outline-variant/10" />
             <!-- Sandbox URL -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Sandbox Remote URL</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">The endpoint URL of the isolated
+                <label data-i18n="settings.coder.sandboxUrl.label" class="text-xs font-bold text-on-surface">Sandbox
+                  Remote URL</label>
+                <p data-i18n="settings.coder.sandboxUrl.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">The endpoint URL of the isolated
                   code-execution sandbox server.</p>
               </div>
               <input id="coder-sandbox-url" type="text" oninput="updateCoderToolsUI()"
@@ -3663,11 +3825,14 @@
             <!-- Workspace ID -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Coder Workspace ID</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Pin a custom persistent workspace
+                <label data-i18n="settings.coder.workspaceId.label" class="text-xs font-bold text-on-surface">Coder
+                  Workspace ID</label>
+                <p data-i18n="settings.coder.workspaceId.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Pin a custom persistent workspace
                   folder name to save code state across delegations. Leave empty to auto-generate.</p>
               </div>
               <input id="coder-workspace-id" type="text" placeholder="e.g. workspace_1"
+                data-i18n-placeholder="settings.coder.workspaceId.placeholder"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 min-w-[240px]" />
             </div>
           </div>
@@ -3680,7 +3845,8 @@
             <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">MedicalAgent</h4>
           </div>
           <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4">
-            <p class="text-[10px] text-outline-variant italic">No configurable parameters yet.</p>
+            <p data-i18n="settings.noConfig" class="text-[10px] text-outline-variant italic">No configurable parameters
+              yet.</p>
           </div>
         </div>
 
@@ -3695,8 +3861,10 @@
             <!-- Keep score -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Tool Keep Threshold</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Minimum relevance score (0.0 to 1.0)
+                <label data-i18n="settings.taskExec.keepScore.label" class="text-xs font-bold text-on-surface">Tool Keep
+                  Threshold</label>
+                <p data-i18n="settings.taskExec.keepScore.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Minimum relevance score (0.0 to 1.0)
                   for a retrieved MCP tool to be loaded into context.</p>
               </div>
               <input id="task-exec-keep-score" type="number" min="0" max="1" step="0.05" value="0.3"
@@ -3706,8 +3874,10 @@
             <!-- Abstain score -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
-                <label class="text-xs font-bold text-on-surface">Tool Abstain Threshold</label>
-                <p class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Threshold below which the tool
+                <label data-i18n="settings.taskExec.abstainScore.label" class="text-xs font-bold text-on-surface">Tool
+                  Abstain Threshold</label>
+                <p data-i18n="settings.taskExec.abstainScore.desc"
+                  class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">Threshold below which the tool
                   pipeline completely abstains, so the executor re-routes the task to the CoderAgent.</p>
               </div>
               <input id="task-exec-abstain-score" type="number" min="0" max="1" step="0.05" value="0.2"
@@ -3724,7 +3894,8 @@
             </h4>
           </div>
           <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4">
-            <p class="text-[10px] text-outline-variant italic">No configurable parameters yet.</p>
+            <p data-i18n="settings.noConfig" class="text-[10px] text-outline-variant italic">No configurable parameters
+              yet.</p>
           </div>
         </div>
 
@@ -3735,16 +3906,91 @@
       <div class="px-6 py-4 border-t border-outline-variant/10 flex justify-end gap-3 bg-surface-container-low/50">
         <button onclick="closeSettings()"
           class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
-          Cancel
+          <span data-i18n="settings.cancel">Cancel</span>
         </button>
         <button onclick="saveSettings()"
           class="px-4 py-2 bg-primary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-primary/20 transition-all flex items-center gap-2">
-          <span class="material-symbols-outlined text-sm">save</span> Save Settings
+          <span class="material-symbols-outlined text-sm">save</span> <span data-i18n="settings.save">Save
+            Settings</span>
         </button>
       </div>
     </div>
   </div>
 
+  <!-- Saved Sessions Modal -->
+  <div id="saved-sessions-modal"
+    class="hidden fixed inset-0 z-[120] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+    <div
+      class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-2xl shadow-2xl p-6 mx-4 max-h-[80vh] flex flex-col">
+      <div class="flex items-center justify-between mb-5">
+        <div>
+          <h3 class="font-headline font-bold text-on-surface uppercase tracking-wider">Saved Sessions</h3>
+          <p class="text-[10px] text-outline-variant mt-1">Restore or manage previously saved sessions</p>
+        </div>
+        <button onclick="closeSavedSessionsModal()" class="text-outline-variant hover:text-on-surface">
+          <span class="material-symbols-outlined">close</span>
+        </button>
+      </div>
+      <div id="saved-sessions-list" class="flex-1 overflow-y-auto space-y-2 min-h-[100px]">
+        <p class="text-[10px] text-outline-variant italic">Loading…</p>
+      </div>
+      <div class="pt-4 border-t border-outline-variant/10 flex justify-end">
+        <button onclick="closeSavedSessionsModal()"
+          class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
+          Close
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MCP Rebuild Confirmation Modal — shown during import when the bundle contains MCP builds -->
+  <div id="mcp-rebuild-modal"
+    class="hidden fixed inset-0 z-[130] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+    <div class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-lg shadow-2xl p-6 mx-4">
+      <div class="flex items-start justify-between mb-5">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+            <span class="material-symbols-outlined text-primary text-sm">build</span>
+          </div>
+          <div>
+            <h3 class="font-headline font-bold text-on-surface uppercase tracking-wider">MCP Servers Found</h3>
+            <p class="text-[10px] text-outline-variant mt-1">This session contains MCP tool server builds</p>
+          </div>
+        </div>
+      </div>
+      <div id="mcp-rebuild-list" class="space-y-2 max-h-[200px] overflow-y-auto mb-5">
+      </div>
+      <p class="text-[10px] text-outline-variant mb-5">
+        <strong>Rebuild</strong> will launch Docker builds for each server (takes ~10–30 min per server).
+        <strong>Skip</strong> will import the session without starting the servers — build logs and metadata will still
+        be available.
+      </p>
+      <div class="flex justify-end gap-3">
+        <button id="mcp-rebuild-skip-btn"
+          class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
+          Skip</button>
+        <button id="mcp-rebuild-confirm-btn"
+          class="px-4 py-2 bg-primary text-on-primary rounded-md font-bold text-[10px] uppercase tracking-wider hover:brightness-110 transition-all">
+          Rebuild</button>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- Core Modular Application Scripts -->
+  <script src="/static/js/state.js"></script>
+  <script src="/static/js/i18n.js"></script>
+  <script src="/static/js/activity_rail.js"></script>
+  <script src="/static/js/chat.js"></script>
+  <script src="/static/js/hitl.js"></script>
+  <script src="/static/js/telemetry.js"></script>
+  <script src="/static/js/sessions.js"></script>
+  <script src="/static/js/modals/settings.js"></script>
+  <script src="/static/js/modals/dataset.js"></script>
+  <script src="/static/js/modals/roadmap.js"></script>
+  <script src="/static/js/modals/experiments.js"></script>
+  <script src="/static/js/ws.js"></script>
+  <script src="/static/js/app.js"></script>
 </body>
 
 </html>

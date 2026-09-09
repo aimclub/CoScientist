@@ -282,8 +282,8 @@ def test_dataset_prompt_block_names_the_link_and_is_empty_without_one():
     assert empty.state[DATASET_CONTEXT_STATE_KEY] == ""
 
 
-@pytest.mark.parametrize("local_coder_tools", [True, False])
-def test_the_dataset_block_reaches_the_coder_in_both_tool_setups(local_coder_tools):
+@pytest.mark.parametrize("coder_mode", ["local", "openhands"])
+def test_the_dataset_block_reaches_the_coder_in_both_tool_setups(coder_mode):
     """Since nothing auto-fills the argument, the prompt is the ONLY way in.
 
     The coder has two prompts — one for the local toolset, one for the
@@ -295,17 +295,17 @@ def test_the_dataset_block_reaches_the_coder_in_both_tool_setups(local_coder_too
     from CoScientist.config import get_settings
 
     settings = get_settings()
-    previous = settings.web.coder_local_tools_enabled
-    settings.web.coder_local_tools_enabled = local_coder_tools
+    previous = settings.web.coder_mode
+    settings.web.coder_mode = coder_mode
     try:
         system = build_for_mode()
         for name in ("CoderAgent", "DatasetCollectorAgent"):
             assert "{dataset_context?}" in system.agents[name].instruction, (
                 f"{name} cannot see the attached archive with "
-                f"coder_local_tools_enabled={local_coder_tools}"
+                f"coder_mode={coder_mode}"
             )
     finally:
-        settings.web.coder_local_tools_enabled = previous
+        settings.web.coder_mode = previous
 
 
 def test_nothing_fills_dataset_url_in_behind_the_agent():

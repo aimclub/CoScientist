@@ -7,6 +7,7 @@ it knows nothing about any specific paper or task, only about *artifacts*.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -14,12 +15,19 @@ import shutil
 import urllib.parse
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Set
+
+from CoScientist.reporting.artifact_index import load as load_artifact_index
+from CoScientist.utils.s3_refs import s3_uri
 
 logger = logging.getLogger(__name__)
 
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp")
 _TABLE_EXTS = (".csv", ".tsv")
+# Source material a tool pulled in, not a result the run produced. The papers
+# search server uploads every PDF it downloads and returns a link to each one.
+# The report shows figures and tables, so these only add noise to it.
+_SOURCE_EXTS = (".pdf", ".doc", ".docx", ".zip", ".tar", ".gz")
 _MAX_TABLE_ROWS = 15
 
 # Workspace scan guards: dependency/VCS/cache dirs that carry bundled example
@@ -30,6 +38,13 @@ _WORKSPACE_SKIP_DIRS = frozenset({
     ".ipynb_checkpoints", "build", "dist",
 })
 _MAX_WORKSPACE_FILES = 40
+
+# Where a collected file came from, written beside the report folder for
+# finalize_report. Collection knows the bucket and the key and then throws
+# them away for a local path, and finalize runs later and needs them back to
+# promote the object out of ephemeral/. Dot-prefixed: it is plumbing between
+# two stages, not part of the deliverable.
+SOURCES_FILENAME = ".artifact_sources.json"
 
 # Any http(s) URL whose path ends in a known media extension (the presigned query
 # string is optional). Bulletproof fallback: matches an artifact link embedded in
@@ -172,6 +187,9 @@ def collect_artifacts(
     reports_root: Path | str = "logs/reports",
     workspace_root: Path | str = "workspace",
     graph_nodes: Optional[List[Dict[str, Any]]] = None,
+    index_key: Optional[tuple] = None,
+    resolve_url: Optional[Callable[[str], Optional[str]]] = None,
+    synced_files: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """Copy/download run artifacts into the report folder; return markdown blocks.
 
@@ -186,6 +204,23 @@ def collect_artifacts(
                        artifact URL recorded on a node's ``attrs`` (e.g. a MinIO
                        presigned figure URL an agent committed to an Evidence node)
                        is downloaded too.
+        index_key:     ``(user_id, session_id)`` scope of the on-disk artifact
+                       index. It is not always the ``session_id`` above: inside
+                       an AgentTool child the raw session id is a transient
+                       random one, while the index keeps the public web scope.
+                       Without it the index is found by ``session_id`` alone.
+        resolve_url:   turns an ``s3://bucket/key`` into a fresh download URL.
+                       A presigned URL cached in the index expires in an hour,
+                       so a run that is restarted, or simply slow, arrives here
+                       holding dead links. This function is called for those.
+                       ``None`` leaves them unresolved, as before.
+        synced_files:  workspace-relative paths the vault sync already uploaded.
+                       Those arrive through the index, so the walk below skips
+                       them. Without this they would be collected twice whenever
+                       the code-exec server runs on this host, because both sides
+                       use ``code_exec.workspace_root``. A file the sync failed
+                       to upload is NOT in this set and is still walked, which is
+                       the point of naming them instead of skipping the walk.
 
     Returns a dict with ``report_dir``, ``figures``, ``tables``, and
     ``blocks_markdown`` (the concatenation the agent should embed).
@@ -203,11 +238,12 @@ def collect_artifacts(
     figures: List[str] = []
     tables: List[str] = []
 
-    # 1) Captured artifacts in session state (remote URLs). Accept fedot_artifacts
-    #    plus any other list state key ending in "_artifacts" (e.g. mcp_artifacts
-    #    captured at the tool boundary), then any artifact URL an agent recorded on
-    #    a research-graph node.
-    artifact_lists: List[Dict[str, Any]] = []
+    # 1) Captured artifacts. The on-disk index comes first: it survives a restart,
+    #    while session state does not. Session state is the fallback, and both are
+    #    read because a run that started before this index existed has state only.
+    #    Then any artifact URL an agent recorded on a research-graph node.
+    index_user, index_session = index_key or (None, session_id)
+    artifact_lists: List[Dict[str, Any]] = list(load_artifact_index(index_session, index_user))
     for key, val in state.items():
         if key == "fedot_artifacts" or (isinstance(key, str) and key.endswith("_artifacts")):
             if isinstance(val, list):
@@ -219,32 +255,87 @@ def collect_artifacts(
         for url in find_artifact_urls(node.get("attrs") or {}):
             artifact_lists.append({"url": url, "tool": label or "graph"})
     seen_urls = set()
+    seen_refs = set()
+    unresolved = 0
+    sources: Dict[str, Dict[str, str]] = {}
+
+    def _fresh_url(art: Dict[str, Any]) -> Optional[str]:
+        """A download URL for this artifact, minted from the durable reference
+        when the cached one is missing or dead."""
+        bucket, key = art.get("bucket"), art.get("s3_key")
+        if not (resolve_url and bucket and key):
+            return None
+        try:
+            return resolve_url(s3_uri(bucket, key))
+        except Exception as exc:  # noqa: BLE001 - a report outranks one figure
+            logger.warning("collect: cannot resolve s3://%s/%s (%s)", bucket, key, exc)
+            return None
+
+    def _note_source(art: Dict[str, Any], dest: Path) -> None:
+        """Remember which object this local file came from, for finalize."""
+        bucket, key = art.get("bucket"), art.get("s3_key")
+        if bucket and key:
+            sources[_rel(dest, report_dir)] = {"bucket": bucket, "s3_key": key}
+
     for art in artifact_lists:
+        # Dedupe on the durable reference where there is one. Two entries for one
+        # object can hold two different presigned URLs and still be one file.
+        bucket, key = art.get("bucket"), art.get("s3_key")
+        ref = s3_uri(bucket, key) if bucket and key else None
+        if ref:
+            if ref in seen_refs:
+                continue
+            seen_refs.add(ref)
+
         url = art.get("url")
         if not url or url in seen_urls:
-            continue
+            # No URL at all, or one already spent on an earlier entry. A durable
+            # reference can still produce a working link.
+            if url and not ref:
+                continue
+            url = _fresh_url(art) or url
+            if not url:
+                if art.get("s3_key"):
+                    unresolved += 1
+                continue
         seen_urls.add(url)
+        if _looks_like(url, _SOURCE_EXTS):
+            continue
         label = art.get("tool") or art.get("name") or "artifact"
         if _looks_like(url, _IMAGE_EXTS):
             name = f"{label}_{_url_filename(url, '.png')}"
             dest = figures_dir / name
-            if _download(url, dest):
-                figures.append(str(dest))
-                figure_blocks.append(f"### {label}\n\n![{label}](figures/{name})")
+            if not _download(url, dest):
+                # The cached URL expired. Mint one and try once more.
+                retry = _fresh_url(art)
+                if not (retry and retry != url and _download(retry, dest)):
+                    if art.get("s3_key"):
+                        unresolved += 1
+                    continue
+            figures.append(str(dest))
+            figure_blocks.append(f"### {label}\n\n![{label}](figures/{name})")
+            _note_source(art, dest)
         else:  # default remote artifacts to tabular
             name = f"{label}_{_url_filename(url, '.csv')}"
             dest = tables_dir / name
-            if _download(url, dest):
-                tables.append(str(dest))
-                md = _table_to_markdown(dest)
-                head = f"### {label} — [download]({_rel(dest, report_dir)})"
-                table_blocks.append(f"{head}\n\n{md}" if md else head)
+            if not _download(url, dest):
+                retry = _fresh_url(art)
+                if not (retry and retry != url and _download(retry, dest)):
+                    if art.get("s3_key"):
+                        unresolved += 1
+                    continue
+            tables.append(str(dest))
+            md = _table_to_markdown(dest)
+            head = f"### {label} — [download]({_rel(dest, report_dir)})"
+            table_blocks.append(f"{head}\n\n{md}" if md else head)
+            _note_source(art, dest)
 
     # 2) Files the run itself LEFT in the sandbox workspace. Prune vendored trees
     #    aggressively: a coder step may `git clone` a whole library (e.g. the RDKit
     #    repo) or create a venv into the sandbox, and its bundled example
     #    images/CSVs are NOT run outputs — collecting them buries the real figures.
     workspace_dir = Path(workspace_root) / f"ws_{session_id}"
+    already_synced = synced_files or set()
     ws_figures = ws_tables = 0
     if workspace_dir.exists():
         for root, dirs, files in os.walk(workspace_dir):
@@ -260,6 +351,8 @@ def collect_artifacts(
             ]
             for fname in sorted(files):
                 src = Path(root) / fname
+                if _rel(src, workspace_dir) in already_synced:
+                    continue  # the vault sync sent this one; it comes back above
                 stem = src.stem
                 if _looks_like(fname, _IMAGE_EXTS):
                     if ws_figures >= _MAX_WORKSPACE_FILES:
@@ -290,6 +383,18 @@ def collect_artifacts(
             "## Data tables\n\n" + "\n\n".join(table_blocks) + "\n", encoding="utf-8"
         )
 
+    # 4) Where each collected file came from. finalize_report reads this to
+    #    promote the objects out of ephemeral/ before the lifecycle rule takes
+    #    them. It goes on disk rather than into session state because one of the
+    #    two finalize call sites (web/app.py) passes no state at all.
+    if sources:
+        try:
+            (report_dir / SOURCES_FILENAME).write_text(
+                json.dumps(sources, indent=2), encoding="utf-8"
+            )
+        except Exception as exc:  # noqa: BLE001 - promotion is not the report
+            logger.warning("collect: failed to write %s (%s)", SOURCES_FILENAME, exc)
+
     blocks: List[str] = []
     if figure_blocks:
         blocks.append("## Figures\n\n" + "\n\n".join(figure_blocks))
@@ -300,6 +405,11 @@ def collect_artifacts(
         "collect: session=%s figures=%d tables=%d -> %s",
         session_id, len(figures), len(tables), report_dir,
     )
+    if unresolved:
+        logger.warning(
+            "collect: %d indexed artifact(s) have a key but no usable URL. "
+            "They need the vault download tool to reach the report.", unresolved,
+        )
     return {
         "report_dir": str(report_dir),
         "figures": figures,
@@ -322,4 +432,4 @@ def _rel(path: Path, base: Path) -> str:
         return path.name
 
 
-__all__ = ["collect_artifacts", "report_dir_for"]
+__all__ = ["collect_artifacts", "report_dir_for", "SOURCES_FILENAME"]

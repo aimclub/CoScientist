@@ -10,7 +10,7 @@ WorkingDirectory=%h/cosci/CoScientist
 # (load_dotenv). load_dotenv does not override real environment variables,
 # so these lines win over the same keys in .env.
 Environment=HITL__ENABLED=true
-Environment=CONTEXT_INIT__ENABLED=true
+Environment=RESEARCH_FRAME=true
 Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 
 # openrouter.ai is blocked on the VM egress. Reach it through the institutional
