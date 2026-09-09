@@ -8,6 +8,7 @@ on sys.path to test it — same reasoning as tests/unit/_codegen_loader.py.
 
 import email.message
 import importlib.util
+import re
 import sys
 import types
 from pathlib import Path
@@ -110,11 +111,11 @@ def test_s3_enabled_true_with_a_mix_of_bare_and_aliased_names(monkeypatch):
     assert s3t.s3_enabled() is True
 
 
-def test_env_prefers_the_bare_name_over_the_alias(monkeypatch):
+def test_env_prefers_the_s3_prefixed_name_over_the_legacy_bare_name(monkeypatch):
     _clear_env(monkeypatch)
     monkeypatch.setenv("BUCKET_NAME", "bare-bucket")
     monkeypatch.setenv("S3__BUCKET_NAME", "aliased-bucket")
-    assert s3t._env("BUCKET_NAME") == "bare-bucket"
+    assert s3t._env("BUCKET_NAME") == "aliased-bucket"
 
 
 def test_maybe_upload_uses_the_aliased_bucket_name(tmp_path, monkeypatch):
@@ -169,7 +170,7 @@ def test_scope_from_headers_sanitizes_unsafe_characters():
 def test_call_prefix_shape():
     prefix = s3t.call_prefix(("alice", "sess-1"), "massformer", "predict")
     parts = prefix.split("/")
-    assert parts[:5] == ["alembic", "alice", "sess-1", "massformer", "predict"]
+    assert parts[:5] == ["ephemeral", "alice", "sess-1", "alembic_massformer", "predict"]
     assert len(parts) == 6
     assert len(parts[5]) == 8  # uuid4().hex[:8]
 
@@ -200,7 +201,7 @@ def test_publish_result_is_a_noop_without_s3_env(tmp_path, monkeypatch):
     out = s3t.publish_result(result, "prefix", tmp_path / "repos")
 
     assert out == result
-    assert "output_path_s3_key" not in out
+    assert "output_path_s3" not in out
 
 
 # ── resolve_input ────────────────────────────────────────────────────────
@@ -676,6 +677,28 @@ def test_download_http_enforces_an_overall_wall_clock_deadline(tmp_path, monkeyp
     assert list(scratch.rglob("*.bin")) == []   # partial file cleaned up
 
 
+# ── maybe_upload / publish_result: the vault-compatible nested contract ─────
+
+def test_maybe_upload_returns_bucket_alongside_the_key_and_url(tmp_path, monkeypatch):
+    """s3_refs._walk (the framework's artifact walker) only recognises a
+    durable reference from a dict carrying BOTH bucket and s3_key — so
+    maybe_upload must hand bucket back too, not just s3_key/presigned_url."""
+    _clear_env(monkeypatch)
+    _set_env(monkeypatch)
+    client = _FakeUploadClient()
+    monkeypatch.setattr(s3t, "_client_factory", lambda: client)
+
+    src = tmp_path / "data.csv"
+    src.write_text("x", encoding="utf-8")
+    uploaded = s3t.maybe_upload(str(src), "prefix", "output_path")
+
+    assert uploaded == {
+        "bucket": "bucket",
+        "s3_key": "prefix/output_path/data.csv",
+        "presigned_url": uploaded["presigned_url"],
+    }
+
+
 # ── publish_result: upload gating and shape ─────────────────────────────────
 
 def test_publish_result_uploads_existing_file_outside_deny_root(tmp_path, monkeypatch):
@@ -692,8 +715,11 @@ def test_publish_result_uploads_existing_file_outside_deny_root(tmp_path, monkey
     result = s3t.publish_result({"result_path": str(out_file)}, "prefix/abc", deny_root)
 
     assert result["result_path"] == str(out_file)   # original untouched
-    assert result["result_path_s3_key"] == "prefix/abc/result_path/result.csv"
-    assert result["result_path_presigned_url"].startswith("https://signed/")
+    assert result["result_path_s3"]["bucket"] == "bucket"
+    assert result["result_path_s3"]["s3_key"] == "prefix/abc/result_path/result.csv"
+    assert result["result_path_s3"]["presigned_url"].startswith("https://signed/")
+    assert "result_path_s3_key" not in result
+    assert "result_path_presigned_url" not in result
     assert client.uploads[0]["bucket"] == "bucket"
 
 
@@ -738,9 +764,8 @@ def test_publish_result_ignores_a_file_inside_any_of_several_deny_roots(tmp_path
         (repos, scratch),
     )
 
-    assert "input_path_s3_key" not in result
-    assert "input_path_presigned_url" not in result
-    assert result["result_path_s3_key"] == "prefix/result_path/result.csv"
+    assert "input_path_s3" not in result
+    assert result["result_path_s3"]["s3_key"] == "prefix/result_path/result.csv"
     assert [u["local_path"] for u in client.uploads] == [str(out_file)]
 
 
@@ -775,8 +800,8 @@ def test_publish_result_recurses_into_nested_dict_and_list(tmp_path, monkeypatch
         deny_root,
     )
 
-    assert result["nested"]["output_path_s3_key"] == "prefix/output_path/a.csv"
-    assert result["items"][0]["output_path_s3_key"] == "prefix/output_path/b.csv"
+    assert result["nested"]["output_path_s3"]["s3_key"] == "prefix/output_path/a.csv"
+    assert result["items"][0]["output_path_s3"]["s3_key"] == "prefix/output_path/b.csv"
     assert result["items"][1] == {"score": 1}
 
 
@@ -796,7 +821,7 @@ def test_publish_result_returns_none_from_maybe_upload_on_client_error(tmp_path,
     result = s3t.publish_result({"result_path": str(out_file)}, "prefix", tmp_path / "repos")
 
     assert result == {"result_path": str(out_file)}
-    assert "result_path_s3_key" not in result
+    assert "result_path_s3" not in result
 
 
 # ── MAJOR 4 regression: upload failures are logged, not swallowed silently ──
@@ -858,10 +883,45 @@ def test_publish_result_two_outputs_with_the_same_basename_get_distinct_keys(tmp
         {"a_path": str(f1), "b_path": str(f2)}, "prefix", tmp_path / "repos",
     )
 
-    assert result["a_path_s3_key"] != result["b_path_s3_key"]
-    assert result["a_path_presigned_url"] != result["b_path_presigned_url"]
+    assert result["a_path_s3"]["s3_key"] != result["b_path_s3"]["s3_key"]
+    assert result["a_path_s3"]["presigned_url"] != result["b_path_s3"]["presigned_url"]
     keys = {u["key"] for u in client.uploads}
     assert len(keys) == 2   # both actually landed under distinct keys
+
+
+# ── MAJOR 2 (round 2) regression: two fully non-ASCII basenames that both ──
+# ── collapse to "download" under _key_safe_filename must still get distinct
+# ── keys, not silently overwrite one another ────────────────────────────────
+
+def test_publish_result_two_non_ascii_basenames_collapsing_to_download_get_distinct_keys(
+    tmp_path, monkeypatch
+):
+    _clear_env(monkeypatch)
+    _set_env(monkeypatch)
+    client = _FakeUploadClient()
+    monkeypatch.setattr(s3t, "_client_factory", lambda: client)
+
+    f1 = tmp_path / "out1" / "данные а.csv"
+    f1.parent.mkdir(parents=True)
+    f1.write_text("1", encoding="utf-8")
+    f2 = tmp_path / "out2" / "данные б.csv"
+    f2.parent.mkdir(parents=True)
+    f2.write_text("2", encoding="utf-8")
+
+    # sanity: both basenames really do collapse to the same sanitized name
+    assert s3t._key_safe_filename(f1.name) == s3t._key_safe_filename(f2.name) == "download.csv"
+
+    result = s3t.publish_result(
+        {"items": [{"output_path": str(f1)}, {"output_path": str(f2)}]},
+        "ephemeral/local/default/alembic_demo/predict/abcd1234",
+        tmp_path / "repos",
+    )
+
+    key_a = result["items"][0]["output_path_s3"]["s3_key"]
+    key_b = result["items"][1]["output_path_s3"]["s3_key"]
+    assert key_a != key_b
+    for key in (key_a, key_b):
+        assert _VAULT_KEY_RE.match(key), key
 
 
 # ── minor: presign expiration is clamped ─────────────────────────────────────
@@ -914,3 +974,113 @@ def test_client_factory_passes_a_region_default_and_override(monkeypatch):
     monkeypatch.setenv("S3_REGION", "eu-west-1")
     s3t._client_factory()
     assert calls[-1]["region_name"] == "eu-west-1"
+
+
+# ── M1/M2 regression: the built key/id must clear the vault's own validation ─
+
+# Mirrors mcp-servers/vault-mcp-server/vault_server.py:56 `_KEY_RE` exactly —
+# duplicated (not imported) because that server is a separate, independently
+# deployed process this module has no import relationship with.
+_VAULT_KEY_RE = re.compile(
+    r"^(ephemeral|permanent)/[a-zA-Z0-9_-]{1,64}/[a-zA-Z0-9_-]{1,64}/[a-zA-Z0-9_/.-]+$"
+)
+
+
+def test_maybe_upload_key_matches_the_vault_key_regex_for_a_nasty_input(tmp_path, monkeypatch):
+    """M1 (basename) + M2 (user/session) regression, combined: a call_prefix
+    built from a user/session with dots and non-ASCII characters, plus a
+    maybe_upload basename with a space, a '+', and non-ASCII characters, must
+    still produce a key the vault server's own _KEY_RE accepts — not just one
+    this test suite happens to accept by hand."""
+    _clear_env(monkeypatch)
+    _set_env(monkeypatch)
+    client = _FakeUploadClient()
+    monkeypatch.setattr(s3t, "_client_factory", lambda: client)
+
+    prefix = s3t.call_prefix(("ali.ceé", "sess.1é"), "demo_repo", "predict")
+
+    src = tmp_path / "данные а+б.csv"
+    src.write_text("x", encoding="utf-8")
+    uploaded = s3t.maybe_upload(str(src), prefix, "output_path")
+
+    assert uploaded is not None
+    assert _VAULT_KEY_RE.match(uploaded["s3_key"]), uploaded["s3_key"]
+
+
+# ── MINOR (round 4) regression: safe_id ─────────────────────────────────────
+
+def test_safe_id_falls_back_to_default_for_none():
+    """MINOR 1: `str(None)` used to sanitize to the literal id `"None"`
+    instead of falling back to `default`, mirroring
+    mcp-servers/chemical-mcp-server/server/utils/vault.py:safe_id, which
+    treats `None`/empty the same via `str(value or "")`."""
+    assert s3t.safe_id(None, "local") == "local"
+
+
+def test_safe_id_falls_back_to_default_for_empty_string():
+    assert s3t.safe_id("", "default") == "default"
+
+
+def test_safe_id_replaces_dots_and_unicode_with_underscore():
+    assert s3t.safe_id("ali.ceé", "local") == "ali_ce"
+
+
+def test_safe_id_truncates_to_64_chars():
+    long_id = "a" * 200
+    result = s3t.safe_id(long_id, "local")
+    assert result == "a" * 64
+    assert len(result) == 64
+
+
+# ── MINOR (round 4) regression: _key_safe_filename ──────────────────────────
+
+def test_key_safe_filename_collapses_non_ascii_to_download_plus_suffix():
+    assert s3t._key_safe_filename("данные.csv") == "download.csv"
+
+
+def test_key_safe_filename_falls_back_for_empty_or_dot_only_names():
+    assert s3t._key_safe_filename("") == "download"
+    assert s3t._key_safe_filename(".") == "download"
+    assert s3t._key_safe_filename("..") == "download"
+
+
+def test_key_safe_filename_truncates_stem_and_suffix_separately():
+    long_name = ("a" * 300) + ("." + "b" * 100)
+    result = s3t._key_safe_filename(long_name)
+    stem, suffix = result.split(".", 1)
+    assert len(stem) == s3t._MAX_KEY_FILENAME_STEM
+    assert len(suffix) == s3t._MAX_KEY_FILENAME_SUFFIX - 1  # the leading "." is part of the suffix cap
+
+
+def test_key_safe_filename_preserves_an_already_ascii_name_as_is():
+    assert s3t._key_safe_filename("data-1_v2.csv") == "data-1_v2.csv"
+
+
+# ── integration: publish_result output is what the framework's own artifact
+#    walker (CoScientist.utils.s3_refs.find_s3_artifacts) actually expects ──
+
+def test_publish_result_output_is_found_by_the_real_artifact_walker(tmp_path, monkeypatch):
+    """publish_result's nested {"bucket", "s3_key", "presigned_url"} dict is
+    only useful if CoScientist.utils.s3_refs.find_s3_artifacts (the
+    framework's real artifact walker, not a hand-rolled stand-in) actually
+    recognises it. Imported locally, not at module level: this file is
+    otherwise stand-alone loadable with no CoScientist package on sys.path
+    (see the module docstring) — this one integration test is a deliberate
+    exception, and pyproject's `pythonpath = ["."]` makes the import resolve
+    when pytest runs from the repo root."""
+    from CoScientist.utils.s3_refs import find_s3_artifacts
+
+    _clear_env(monkeypatch)
+    _set_env(monkeypatch)
+    client = _FakeUploadClient()
+    monkeypatch.setattr(s3t, "_client_factory", lambda: client)
+
+    out_file = tmp_path / "result.csv"
+    out_file.write_text("data", encoding="utf-8")
+
+    result = s3t.publish_result({"output_path": str(out_file)}, "prefix", tmp_path / "repos")
+
+    artifacts = find_s3_artifacts(result)
+
+    assert len(artifacts) == 1
+    assert artifacts[0]["s3_uri"] == "s3://bucket/prefix/output_path/result.csv"

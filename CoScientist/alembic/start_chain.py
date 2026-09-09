@@ -85,10 +85,11 @@ PASSTHROUGH_ENV = (
 SERVE_ONLY_ENV = (
     "ENDPOINT_URL", "ACCESS_KEY", "SECRET_KEY", "BUCKET_NAME",
     "S3_REGION", "S3_PRESIGN_EXPIRATION", "S3_HTTP_TIMEOUT", "S3_HTTP_MAX_BYTES",
-    # The same credentials under the main app's nested-settings spelling
-    # (config/settings.py:S3Settings, env_nested_delimiter "__") — they must be
-    # excluded from the build container under EITHER spelling, and
-    # helpers/s3_transfer.py falls back to these when the bare names are unset.
+    # The vault contract's own nested-settings spelling (config/settings.py:
+    # S3Settings, env_nested_delimiter "__") — helpers/s3_transfer.py reads
+    # THESE first now, falling back to the bare names above only as a
+    # deprecated legacy spelling; both must be excluded from the build
+    # container regardless of which one is actually set.
     "S3__ENDPOINT_URL", "S3__ACCESS_KEY", "S3__SECRET_KEY", "S3__BUCKET_NAME",
 )
 

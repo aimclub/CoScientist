@@ -12,6 +12,7 @@ collisions on download/upload, and scratch-dir cleanup on every path.
 
 import importlib.util
 import json
+import re
 import sys
 import types
 from pathlib import Path
@@ -82,6 +83,80 @@ def test_rendered_server_reads_headers_defensively():
     assert "except Exception" in server
 
 
+# ── scoping by params: what render_server bakes into each tool's signature ──
+
+def test_rendered_tool_declares_optional_user_id_and_session_id():
+    server = cg.render_server("demo", [_SIG])
+
+    assert (
+        'def predict(input_path: str, user_id: str = "", session_id: str = "") -> dict:'
+        in server
+    )
+    assert (
+        'return _call("predict", {"input_path": input_path}, user_id, session_id)'
+        in server
+    )
+
+
+def test_rendered_tool_docstring_mentions_the_framework_fills_scope_params():
+    """The marker must live in predict()'s OWN docstring — the module-level
+    docstring also mentions SessionScopePlugin (see render_server's template),
+    which used to let `"SessionScopePlugin" in server` pass regardless of
+    whether the per-tool docstring got its scope-params blurb appended."""
+    server = cg.render_server("demo", [_SIG])
+
+    match = re.search(
+        r'def predict\([^\n]*\)\s*->\s*dict:\s*\n\s*"""(.*?)"""', server, re.DOTALL
+    )
+    assert match is not None, "could not find predict()'s docstring in the rendered server"
+    assert "SessionScopePlugin" in match.group(1)
+
+
+def test_rendered_tool_does_not_duplicate_a_scope_param_the_tool_already_declares():
+    """A tool whose own signature already names user_id must not get a second
+    declaration. Its value still flows into the helper kwargs (payload) — a
+    domain user_id is legitimate tool input — but NOT into the S3 scope
+    passed to _call(): that argument is "" instead, so the tool's own id
+    (e.g. a database row id) can never leak into the S3 key. "" falls back
+    to headers/local-default for that slot, same as an empty scope param."""
+    sig = {
+        "name": "predict",
+        "params": [("user_id", "str", None), ("input_path", "str", None)],
+        "doc": "Run predict.",
+    }
+    server = cg.render_server("demo", [sig])
+
+    def_line = next(l for l in server.splitlines() if l.startswith("def predict("))
+    assert def_line.count("user_id") == 1
+    assert 'session_id: str = ""' in def_line
+    assert (
+        'return _call("predict", {"user_id": user_id, "input_path": input_path}, '
+        '"", session_id)' in server
+    )
+
+
+def test_rendered_tool_docstring_only_mentions_its_own_scope_extras():
+    """MAJOR 1 (round 2): a tool that already declares its own `session_id`
+    only gets ONE extra scope param appended (`user_id`) — the blurb must
+    name only `user_id`, not both, since `session_id` here is the tool's own
+    required domain parameter (e.g. a database row id), not an S3 scope
+    hint, and telling a caller to "leave it empty" would be wrong."""
+    sig = {
+        "name": "predict",
+        "params": [("session_id", "str", None), ("input_path", "str", None)],
+        "doc": "Run predict.",
+    }
+    server = cg.render_server("demo", [sig])
+
+    match = re.search(
+        r'def predict\([^\n]*\)\s*->\s*dict:\s*\n\s*"""(.*?)"""', server, re.DOTALL
+    )
+    assert match is not None, "could not find predict()'s docstring in the rendered server"
+    doc = match.group(1)
+    assert "user_id" in doc
+    assert "session_id" not in doc
+
+
 def test_rendered_server_scratch_cleanup_is_in_a_finally():
     """MAJOR 5: the scratch dir must be removed on every path (success,
     tool failure, parse failure), not only after a successful publish."""
@@ -145,10 +220,11 @@ def _set_s3_env(monkeypatch):
     monkeypatch.setenv("BUCKET_NAME", "bucket")
 
 
-def _install_fastmcp_stub(monkeypatch):
+def _install_fastmcp_stub(monkeypatch, headers: dict | None = None):
     """A minimal fastmcp stand-in so the rendered server can be exec'd without
     the real package installed — mirrors how a truly isolated server venv
-    would behave (FastMCP + get_http_headers only)."""
+    would behave (FastMCP + get_http_headers only). ``headers`` lets a test
+    exercise the header-fallback branch of ``_s3_scope``; defaults to none."""
 
     class _FastMCP:
         def __init__(self, name):
@@ -166,7 +242,7 @@ def _install_fastmcp_stub(monkeypatch):
     fastmcp_pkg.FastMCP = _FastMCP
     server_pkg = types.ModuleType("fastmcp.server")
     deps_mod = types.ModuleType("fastmcp.server.dependencies")
-    deps_mod.get_http_headers = lambda: {}
+    deps_mod.get_http_headers = lambda: (headers if headers is not None else {})
     monkeypatch.setitem(sys.modules, "fastmcp", fastmcp_pkg)
     monkeypatch.setitem(sys.modules, "fastmcp.server", server_pkg)
     monkeypatch.setitem(sys.modules, "fastmcp.server.dependencies", deps_mod)
@@ -186,8 +262,8 @@ def _write_rendered_server(out: Path, helper_source: str | None) -> Path:
     return server_path
 
 
-def _load_server_module(server_path: Path, monkeypatch):
-    _install_fastmcp_stub(monkeypatch)
+def _load_server_module(server_path: Path, monkeypatch, headers: dict | None = None):
+    _install_fastmcp_stub(monkeypatch, headers=headers)
     spec = importlib.util.spec_from_file_location("alembic_server_under_test", server_path)
     mod = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = mod
@@ -301,7 +377,7 @@ def test_call_with_s3_publishes_colliding_output_basenames_to_distinct_keys(tmp_
 
     result = mod._call("predict", {})
 
-    assert result["a_path_s3_key"] != result["b_path_s3_key"]
+    assert result["a_path_s3"]["s3_key"] != result["b_path_s3"]["s3_key"]
     assert len(set(uploaded_keys)) == 2
 
 
@@ -342,9 +418,8 @@ def test_call_does_not_republish_an_echoed_input_path_from_scratch(tmp_path, mon
 
     result = mod._call("predict", {"input_path": "s3://bucket/dir/data.csv"})
 
-    assert "input_path_s3_key" not in result
-    assert "input_path_presigned_url" not in result
-    assert "result_path_s3_key" in result
+    assert "input_path_s3" not in result
+    assert "result_path_s3" in result
     assert len(uploaded) == 1 and uploaded[0].endswith("/result_path/result.csv")
 
 
@@ -458,3 +533,188 @@ def test_call_survives_a_broken_s3_helper_file(tmp_path, monkeypatch):
     mod = _load_server_module(server_path, monkeypatch)
 
     assert mod._s3.s3_enabled() is False
+
+
+# ── _call(): scoping by params, with the header path as a fallback ──────────
+
+def _fake_upload_client(uploaded_keys: list) -> type:
+    class _FakeClient:
+        def upload_file(self, local_path, bucket, key):
+            uploaded_keys.append(key)
+
+        def generate_presigned_url(self, method, Params, ExpiresIn):
+            return f"https://signed/{Params['Key']}"
+    return _FakeClient
+
+
+def test_call_uses_scope_params_for_the_s3_prefix_when_both_are_set(tmp_path, monkeypatch):
+    _set_s3_env(monkeypatch)
+    server_path = _write_rendered_server(
+        tmp_path, helper_source=_REAL_S3_TRANSFER.read_text(encoding="utf-8"))
+    mod = _load_server_module(server_path, monkeypatch)
+
+    uploaded_keys = []
+    monkeypatch.setattr(mod._s3, "_client_factory", _fake_upload_client(uploaded_keys))
+
+    out_file = tmp_path / "out" / "result.csv"
+    out_file.parent.mkdir(parents=True)
+    out_file.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(
+        mod.subprocess, "run",
+        lambda cmd, **kw: _FakeCompleted(_sentinel_stdout({"result_path": str(out_file)})))
+
+    mod._call("predict", {}, "alice", "sess-1")
+
+    assert uploaded_keys[0].startswith("ephemeral/alice/sess-1/alembic_demo/predict/")
+
+
+def test_call_falls_back_to_request_headers_when_scope_params_are_empty(tmp_path, monkeypatch):
+    _set_s3_env(monkeypatch)
+    server_path = _write_rendered_server(
+        tmp_path, helper_source=_REAL_S3_TRANSFER.read_text(encoding="utf-8"))
+    mod = _load_server_module(
+        server_path, monkeypatch,
+        headers={"X-Coscientist-User": "bob", "X-Coscientist-Session": "sess-9"})
+
+    uploaded_keys = []
+    monkeypatch.setattr(mod._s3, "_client_factory", _fake_upload_client(uploaded_keys))
+
+    out_file = tmp_path / "out" / "result.csv"
+    out_file.parent.mkdir(parents=True)
+    out_file.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(
+        mod.subprocess, "run",
+        lambda cmd, **kw: _FakeCompleted(_sentinel_stdout({"result_path": str(out_file)})))
+
+    mod._call("predict", {})   # no scope params passed at all
+
+    assert uploaded_keys[0].startswith("ephemeral/bob/sess-9/alembic_demo/predict/")
+
+
+def test_call_prefers_scope_params_over_request_headers(tmp_path, monkeypatch):
+    _set_s3_env(monkeypatch)
+    server_path = _write_rendered_server(
+        tmp_path, helper_source=_REAL_S3_TRANSFER.read_text(encoding="utf-8"))
+    mod = _load_server_module(
+        server_path, monkeypatch,
+        headers={"X-Coscientist-User": "header-user", "X-Coscientist-Session": "header-sess"})
+
+    uploaded_keys = []
+    monkeypatch.setattr(mod._s3, "_client_factory", _fake_upload_client(uploaded_keys))
+
+    out_file = tmp_path / "out" / "result.csv"
+    out_file.parent.mkdir(parents=True)
+    out_file.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(
+        mod.subprocess, "run",
+        lambda cmd, **kw: _FakeCompleted(_sentinel_stdout({"result_path": str(out_file)})))
+
+    mod._call("predict", {}, "param-user", "param-sess")
+
+    assert uploaded_keys[0].startswith("ephemeral/param-user/param-sess/alembic_demo/predict/")
+
+
+def test_call_falls_back_to_headers_when_only_one_scope_param_is_set(tmp_path, monkeypatch):
+    """A partial pair (one of user_id/session_id set, the other blank) is not
+    good enough — the header path (and its own local/default fallback) takes
+    over rather than mixing one param with a header-derived value."""
+    _set_s3_env(monkeypatch)
+    server_path = _write_rendered_server(
+        tmp_path, helper_source=_REAL_S3_TRANSFER.read_text(encoding="utf-8"))
+    mod = _load_server_module(server_path, monkeypatch)   # no headers => ("local", "default")
+
+    uploaded_keys = []
+    monkeypatch.setattr(mod._s3, "_client_factory", _fake_upload_client(uploaded_keys))
+
+    out_file = tmp_path / "out" / "result.csv"
+    out_file.parent.mkdir(parents=True)
+    out_file.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(
+        mod.subprocess, "run",
+        lambda cmd, **kw: _FakeCompleted(_sentinel_stdout({"result_path": str(out_file)})))
+
+    mod._call("predict", {}, "only-user", "")
+
+    assert uploaded_keys[0].startswith("ephemeral/local/default/alembic_demo/predict/")
+
+
+def test_call_does_not_forward_scope_params_into_subprocess_kwargs(tmp_path, monkeypatch):
+    """user_id/session_id are consumed by _call() itself for the S3 prefix —
+    they must never reach the tools-venv runner subprocess (they are not part
+    of the tool's own contract unless it declares them itself)."""
+    _clear_s3_env(monkeypatch)
+    server_path = _write_rendered_server(
+        tmp_path, helper_source=_REAL_S3_TRANSFER.read_text(encoding="utf-8"))
+    mod = _load_server_module(server_path, monkeypatch)
+
+    captured = {}
+
+    def _fake_run(cmd, **kw):
+        captured["kwargs_json"] = cmd[4]
+        return _FakeCompleted(_sentinel_stdout({"result_path": "/x"}))
+
+    monkeypatch.setattr(mod.subprocess, "run", _fake_run)
+
+    result = mod._call("predict", {"input_path": "/local/data.csv"}, "alice", "sess-1")
+
+    assert json.loads(captured["kwargs_json"]) == {"input_path": "/local/data.csv"}
+    assert result == {"result_path": "/x"}
+
+
+def test_call_scope_ignores_a_tool_own_conflicting_user_id_param(tmp_path, monkeypatch):
+    """M3 regression: a tool that declares its own `user_id` parameter
+    (domain data, e.g. a database row id) must not have that value used for
+    the S3 scope — the domain value still reaches the tool as a normal
+    argument, but the scope for that slot falls back to headers/local-
+    default instead of leaking the tool's own id into the S3 key."""
+    _set_s3_env(monkeypatch)
+    sig = {
+        "name": "predict",
+        "params": [("user_id", "str", None), ("input_path", "str", None)],
+        "doc": "Run predict.",
+    }
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    server_path = tmp_path / "server.py"
+    server_path.write_text(cg.render_server("demo", [sig]), encoding="utf-8")
+    helpers = tmp_path / "helpers"
+    helpers.mkdir(parents=True, exist_ok=True)
+    (helpers / "s3_transfer.py").write_text(
+        _REAL_S3_TRANSFER.read_text(encoding="utf-8"), encoding="utf-8")
+    mod = _load_server_module(server_path, monkeypatch)
+
+    uploaded_keys = []
+    monkeypatch.setattr(mod._s3, "_client_factory", _fake_upload_client(uploaded_keys))
+
+    out_file = tmp_path / "out" / "result.csv"
+    out_file.parent.mkdir(parents=True)
+    out_file.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(
+        mod.subprocess, "run",
+        lambda cmd, **kw: _FakeCompleted(_sentinel_stdout({"result_path": str(out_file)})))
+
+    mod.predict(user_id="domain-row-id-42", input_path="/local/x.csv", session_id="sess-9")
+
+    # session_id alone (without a non-empty user_id scope value) is not a
+    # complete pair either — same "partial pair" rule as
+    # test_call_falls_back_to_headers_when_only_one_scope_param_is_set — so
+    # this falls all the way to ("local", "default"), never to "sess-9".
+    assert uploaded_keys[0].startswith("ephemeral/local/default/alembic_demo/predict/")
+    assert "domain-row-id-42" not in uploaded_keys[0]
+
+
+def test_generated_tool_function_works_without_s3_env_ignoring_scope_params(tmp_path, monkeypatch):
+    """Invariant: without S3 configured, server.py behaves exactly as before
+    S3/scope support existed — the user_id/session_id params exist on every
+    tool (baked in at codegen time) but are simply ignored at runtime."""
+    _clear_s3_env(monkeypatch)
+    server_path = _write_rendered_server(
+        tmp_path, helper_source=_REAL_S3_TRANSFER.read_text(encoding="utf-8"))
+    mod = _load_server_module(server_path, monkeypatch)
+
+    monkeypatch.setattr(
+        mod.subprocess, "run",
+        lambda cmd, **kw: _FakeCompleted(_sentinel_stdout({"ok": True})))
+
+    assert mod.predict(input_path="/local/x.csv") == {"ok": True}
+    assert mod.predict(input_path="/local/x.csv", user_id="alice", session_id="s1") == {"ok": True}
+    assert not (tmp_path / ".scratch").exists()

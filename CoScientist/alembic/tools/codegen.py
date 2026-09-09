@@ -217,7 +217,9 @@ def _render_param(p: tuple[str, str | None, str | None]) -> str:
 
 
 def _escape_doc(doc: str) -> str:
-    return doc.replace("\\", "\\\\").replace('"""', r"\"\"\"")
+    escaped = doc.replace("\\", "\\\\").replace('"""', r"\"\"\"")
+    # A doc ending in a bare quote would glue onto the closing triple-quote.
+    return escaped + " " if escaped.endswith('"') else escaped
 
 
 def render_server(repo_name: str, signatures: list[dict]) -> str:
@@ -227,13 +229,48 @@ def render_server(repo_name: str, signatures: list[dict]) -> str:
         # required params first — a literal-defaulted param may follow one
         # without a default in the original, which Python forbids; reorder.
         params = sorted(sig["params"], key=lambda p: p[2] is not None)
-        args = ", ".join(_render_param(p) for p in params)
+        declared = {n for n, _, _ in params}
+        # Every tool additionally accepts an optional user_id/session_id pair
+        # — SessionScopePlugin (CoScientist/tools/session_scope_plugin.py)
+        # fills them in at the ADK tool-call boundary when a tool declares
+        # them and the caller left them blank. Declared unconditionally, not
+        # only when S3 is configured: whether S3 is on is a runtime env
+        # check _call() makes per call, but this signature is baked in at
+        # codegen time — the params exist (and are silently ignored by _call)
+        # even on a server with no S3 configured at all. Skipped for a tool
+        # whose own signature already names one of them — no duplicate
+        # parameter — but in that case the declared value flows ONLY into
+        # the helper kwargs (via payload below, unchanged); "" is passed to
+        # _call() for that scope slot instead (see call_user_id/
+        # call_session_id below), because the tool's OWN user_id/session_id
+        # is domain data (e.g. a database row id) with nothing to do with
+        # the S3 namespace — mixing it in would leak that value into the
+        # bucket layout. "" falls back to the request headers / local-
+        # default, same as a caller that never sends the scope params.
+        scope_extras = [
+            (n, "str", '""') for n in ("user_id", "session_id") if n not in declared
+        ]
+        args = ", ".join(_render_param(p) for p in (*params, *scope_extras))
         payload = ", ".join(f'"{n}": {n}' for n, _, _ in sig["params"])
+        doc = _escape_doc(sig["doc"])
+        if scope_extras:
+            names = " / ".join(n for n, *_ in scope_extras)
+            hint_word = "hints" if len(scope_extras) > 1 else "hint"
+            pronoun = "them" if len(scope_extras) > 1 else "it"
+            doc += (
+                f"\n\n    {names}: optional S3 vault scope {hint_word}, filled in "
+                "automatically by the framework (SessionScopePlugin) when left "
+                f"blank — leave {pronoun} empty unless you deliberately need "
+                "another session's objects."
+            )
+        call_user_id = "user_id" if "user_id" not in declared else '""'
+        call_session_id = "session_id" if "session_id" not in declared else '""'
         blocks.append(
             f"@mcp.tool()\n"
             f"def {sig['name']}({args}) -> dict:\n"
-            f'    """{_escape_doc(sig["doc"])}"""\n'
-            f'    return _call("{sig["name"]}", {{{payload}}})\n'
+            f'    """{doc}"""\n'
+            f'    return _call("{sig["name"]}", {{{payload}}}, '
+            f"{call_user_id}, {call_session_id})\n"
         )
     tools_src = "\n\n".join(blocks)
     typing_imports = ", ".join(_TYPING_IMPORTS)
@@ -248,7 +285,15 @@ helpers/s3_transfer.py) a *_path/*_file kwarg given as an s3:// or http(s)://
 URI is downloaded to a per-call scratch dir before the tool runs, and any
 *_path/*_file the tool returns as an existing local file (outside the cloned
 repo) is uploaded and presigned after it. Without those four variables set
-this file behaves exactly as before S3 support existed.
+the RUNTIME behaves exactly as before S3 support existed — but the tool
+SCHEMA does not: every tool below always declares the trailing
+user_id/session_id params regardless of whether S3 is configured, since that
+decision is baked in at codegen time, not made at runtime.
+
+Every tool below also declares optional user_id/session_id scope params
+(filled in automatically by SessionScopePlugin at the ADK boundary when left
+blank) that take priority over the X-Coscientist-* request headers for the
+S3 key prefix; both fall back to ("local", "default") when neither is set.
 """
 import importlib.util
 import json
@@ -283,6 +328,18 @@ class _S3Unavailable:
     def scope_from_headers(headers):
         return ("local", "default")
 
+    @staticmethod
+    def safe_id(v, default):
+        # No-op counterpart to helpers/s3_transfer.py:safe_id — kept so this
+        # stub stays a COMPLETE stand-in: s3_enabled() being False already
+        # short-circuits _call() before _s3_scope() would reach this, but a
+        # future reordering of that call sequence must not turn a successful
+        # subprocess run into an AttributeError against this shim. Always
+        # returns `default` — this shim does NOT sanitize/pass through `v`
+        # the way the real safe_id() does, since S3 being off means nothing
+        # downstream ever looks at the result anyway.
+        return default
+
 
 # Stdlib-only at import time (boto3 lives inside its functions), so loading it
 # costs nothing on a server with S3 unconfigured — see helpers/s3_transfer.py.
@@ -297,10 +354,16 @@ except Exception:
     _s3 = _S3Unavailable()
 
 
-def _s3_scope() -> tuple[str, str]:
-    """(user, session) from the request's X-Coscientist-* headers, falling
-    back to ("local", "default") over stdio or on an old fastmcp with no
-    header access."""
+def _s3_scope(user_id: str = "", session_id: str = "") -> tuple[str, str]:
+    """(user, session) for one call's S3 key prefix. The user_id/session_id
+    tool params (filled in by SessionScopePlugin at the ADK boundary — see
+    CoScientist/tools/session_scope_plugin.py) take priority when BOTH are
+    non-empty; otherwise this falls back to the request's X-Coscientist-*
+    headers (cheap and compatible: a caller that bypasses the plugin, stdio
+    transport, or an old fastmcp with no header access), which in turn fall
+    back to ("local", "default")."""
+    if user_id and session_id:
+        return _s3.safe_id(user_id, "local"), _s3.safe_id(session_id, "default")
     headers = None
     try:
         from fastmcp.server.dependencies import get_http_headers
@@ -310,7 +373,7 @@ def _s3_scope() -> tuple[str, str]:
     return _s3.scope_from_headers(headers)
 
 
-def _call(tool: str, kwargs: dict) -> dict:
+def _call(tool: str, kwargs: dict, user_id: str = "", session_id: str = "") -> dict:
     scratch = None
     try:
         # prepare_kwargs() runs INSIDE the try — a failed input download (S3
@@ -328,7 +391,8 @@ def _call(tool: str, kwargs: dict) -> dict:
                 res = out.get("result")
                 result = res if isinstance(res, dict) else {{"result": res}}
                 if scratch is not None:
-                    prefix = _s3.call_prefix(_s3_scope(), "{repo_name}", tool)
+                    prefix = _s3.call_prefix(
+                        _s3_scope(user_id, session_id), "{repo_name}", tool)
                     # scratch is denied too: a tool echoing its downloaded
                     # input_path must not re-upload it or return a local path
                     # the finally below is about to delete.
