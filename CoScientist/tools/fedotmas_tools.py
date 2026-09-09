@@ -8,7 +8,7 @@ from google.adk.tools.base_toolset import BaseToolset
 from google.adk.agents.readonly_context import ReadonlyContext
 
 from fedotmas import MAS, HttpMCPServer
-from fedotmas.plugins import LoggingPlugin, WebSearchLimitPlugin
+from fedotmas.plugins import LangfusePlugin, LoggingPlugin, WebSearchLimitPlugin
 
 from CoScientist.tools.fedot_artifact_plugin import ArtifactCapturePlugin
 from CoScientist.logging.metrics import UsageMetricsPlugin
@@ -17,6 +17,7 @@ from rag_tools.storage import PostgresClient
 from rag_tools.config.settings import get_settings
 
 settings = get_settings()
+
 
 class FedotMASToolset(BaseToolset):
     """Toolset for fedotmas usage"""
@@ -104,7 +105,13 @@ class FedotMASToolset(BaseToolset):
                 # UsageMetricsPlugin bills FEDOT.MAS sub-agents' own LLM traffic
                 # against them, same as any other AgentTool sub-runner — without
                 # it their model calls are invisible to the cost ledger.
-                plugins=[LoggingPlugin(), WebSearchLimitPlugin(max_calls_per_agent=4), cap, UsageMetricsPlugin()],
+                plugins=[
+                    LoggingPlugin(),
+                    WebSearchLimitPlugin(max_calls_per_agent=4),
+                    LangfusePlugin(trace_name="coscientist:fedot"),
+                    cap,
+                    UsageMetricsPlugin(),
+                ],
             )
             result = await mas.run(task_description, timeout=FEDOT_TIMEOUT_S)
         except (asyncio.TimeoutError, TimeoutError):
