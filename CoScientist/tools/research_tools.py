@@ -1,5 +1,5 @@
 """Tools for websearch / literature research (MCP toolsets)."""
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from google.adk.tools.mcp_tool import McpToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
@@ -11,6 +11,7 @@ settings = get_settings()
 PAPER_ANALYSIS_URL = settings.mcp.paper_analysis_url
 PAPERS_SEARCH_URL = settings.mcp.papers_search_url
 VAULT_URL = settings.mcp.vault_url
+MICROFLUIDICS_URL = settings.mcp.microfluidics_url
 
 
 _PAPER_ANALYSIS_TIMEOUT = 60 * 15.0  # 30 min — processing many PDFs is slow
@@ -20,6 +21,7 @@ def _http_mcp_toolset(
     sse_read_timeout: float = 60 * 5.0,
     headers: Optional[dict] = None,
     tool_filter: Optional[list] = None,
+    httpx_client_factory: Optional[Callable] = None,
 ) -> Optional[McpToolset]:
     """Build an HTTP MCP toolset, or None when the URL is not configured.
 
@@ -32,12 +34,15 @@ def _http_mcp_toolset(
     """
     if not url:
         return None
+    conn_kwargs: dict[str, Any] = {
+        "url": url,
+        "sse_read_timeout": sse_read_timeout,
+        "headers": headers or {},
+    }
+    if httpx_client_factory is not None:
+        conn_kwargs["httpx_client_factory"] = httpx_client_factory
     return McpToolset(
-        connection_params=StreamableHTTPConnectionParams(
-            url=url,
-            sse_read_timeout=sse_read_timeout,
-            headers=headers or {},
-        ),
+        connection_params=StreamableHTTPConnectionParams(**conn_kwargs),
         tool_filter=tool_filter,
     )
 
@@ -57,6 +62,29 @@ if settings.services.proxy_url:
 
 websearch_toolset_instance = McpToolset(
     connection_params=StreamableHTTPConnectionParams(**_tavily_conn_kwargs),
+)
+
+# ---------------------------------------------------------------------------
+# Microfluidics MCP server — Bearer-token auth, optionally proxied
+# (MCP__MICROFLUIDICS_URL / MCP__MICROFLUIDICS_API_KEY in .env).
+# ---------------------------------------------------------------------------
+_microfluidics_headers = (
+    {"Authorization": f"Bearer {settings.mcp.microfluidics_api_key}"}
+    if settings.mcp.microfluidics_api_key
+    else {}
+)
+
+microfluidics_toolset_instance = _http_mcp_toolset(
+    MICROFLUIDICS_URL,
+    headers=_microfluidics_headers,
+    httpx_client_factory=(
+        create_mcp_proxy_httpx_factory(
+            settings.services.proxy_url,
+            enabled_fn=settings.web.use_proxy,
+        )
+        if settings.services.proxy_url
+        else None
+    ),
 )
 
 # Optional paper-analysis / paper-search MCP servers — only built when configured

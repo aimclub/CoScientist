@@ -25,6 +25,9 @@ def _websearch():
     from CoScientist.tools import websearch_toolset_instance
     return websearch_toolset_instance
 
+def _microfluidics():
+    from CoScientist.tools import microfluidics_toolset_instance
+    return microfluidics_toolset_instance
 
 def _paper_analysis():
     from CoScientist.tools import paper_analysis_toolset_instance
@@ -271,6 +274,23 @@ REGISTRY.register_tool(ToolEntry(
             name="download_papers_from_search",
             signature="download_papers_from_search(query)",
             purpose="Searches and downloads papers for downstream analysis.",
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="microfluidics",
+    factory=_microfluidics,
+    optional=True,  # built only when MCP__MICROFLUIDICS_URL is configured
+    runtime_resolved=True,  # real MCP server — tool surface comes from it
+    docs=(
+        ToolDoc(
+            name="<microfluidics MCP tools>",
+            signature="(varies)",
+            purpose=(
+                "Tools exposed by the microfluidics MCP server (chip CFD / rig "
+                "control) — call them directly."
+            ),
         ),
     ),
 ))

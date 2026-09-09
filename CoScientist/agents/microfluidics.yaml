@@ -50,11 +50,12 @@ agents:
       CoScientist microfluidics root orchestrator — runs the case module by
       module: ТЗ + literature, design, experiment, report.
     prompt: microfluidics_root_orchestrator
-    subordinates:
-      - ModuleA_TZLiterature
-      - ModuleB_Design
-      - ModuleC_Experiment
-      - ReportAgent
+    tools: [microfluidics]
+    #subordinates:
+    #  - ModuleA_TZLiterature
+    #  - ModuleB_Design
+    #  - ModuleC_Experiment
+    #  - ReportAgent
 
   # ── Module A — stages 1–2: ТЗ + literature (was the whole profile) ─────────
   ModuleA_TZLiterature:
@@ -79,7 +80,7 @@ agents:
       анализа литературы (кейс микрофлюидики).
     children: [TZSpecAgent, TZQueryGenAgent]
 
-# Both ТЗ stages are session agents with a human review loop (hitl: true):
+  # Both ТЗ stages are session agents with a human review loop (hitl: true):
   # the agent proposes its artifact (the ТЗ table / the literature queries),
   # the human approves or sends corrections, and the agent rewrites until
   # approved — the CoScientist counterpart of VibePAV's operator questionnaire.
@@ -268,7 +269,7 @@ agents:
       установка — исполняет план опытов: считает течение в чипе (CFD) и подаёт
       команды на микрофлюидную установку, снимая телеметрию.
     prompt: microfluidics_equipment
-    tools: [cfd_mcp_stub, rig_mcp_stub]
+    tools: [cfd_mcp_stub, rig_mcp_stub, microfluidics]
     output_key: experiment_journal
     hitl: true
 

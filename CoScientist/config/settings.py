@@ -157,6 +157,8 @@ class MCPSettings(BaseModel):
     # framework code calls it per request through tools/vault_client.py.
     # Unset means both drop out, and the run still completes.
     vault_url: Optional[str] = None
+    microfluidics_url: Optional[str] = None
+    microfluidics_api_key: Optional[str] = None
 
 
 # =========================
