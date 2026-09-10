@@ -100,6 +100,9 @@ RULES:
 4. Plan only source_request operations. Inventory ≠ checklist. NEVER add a narrative task
    (report/synthesis/выводы) — ResultAggregator owns that.
    No literature/PDB task unless source_request asks (route 2).
+   If pipeline_scope is present and pipeline_scope.research is false: NEVER
+   use route=research or prepare_via=research, even if the ask names scaffolds
+   or literature. Cover the ask with fedot_mas/react_tools/coder only.
    risks/assumptions only at plan root; methods = JSON array of strings.
    Copy experiment_context.constraints into assumptions/risks when they constrain methods.
    On critique revise: uncovered OP-n → add required task(s). Uncovered hypothesis_refs

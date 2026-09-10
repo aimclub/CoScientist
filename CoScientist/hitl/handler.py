@@ -55,6 +55,11 @@ class ConsoleHITLHandler(AbstractHITLHandler):
             for i, opt in enumerate(request.options, 1):
                 print(f"  {i}. {opt}")
 
+        if request.form:
+            return await self._prompt_form(request)
+        if request.action_type == HITLAction.SELECT and request.options:
+            return await self._prompt_select(request)
+
         is_simple_toggle = (request.invoked_via == "callback" and request.action_type == HITLAction.APPROVE)
         
         print("\nAction Menu:")
@@ -95,3 +100,44 @@ class ConsoleHITLHandler(AbstractHITLHandler):
                 sys.exit(0)
             else:
                 print(f"Invalid choice. Please enter a valid option.")
+
+    async def _prompt_select(self, request: HITLRequest) -> HITLResponse:
+        n = len(request.options)
+        while True:
+            raw = await asyncio.to_thread(input, f"\nSelect option (1-{n}): ")
+            raw = raw.strip()
+            if raw.isdigit():
+                idx = int(raw) - 1
+                if 0 <= idx < n:
+                    return HITLResponse(
+                        action=HITLAction.SELECT,
+                        approved=True,
+                        selected_option=request.options[idx],
+                    )
+            print(f"Invalid choice. Please enter 1-{n}.")
+
+    async def _prompt_form(self, request: HITLRequest) -> HITLResponse:
+        form_values: dict = {}
+        intro = (request.form or {}).get("intro")
+        if intro:
+            print(f"\n{intro}")
+        for block in (request.form or {}).get("blocks") or []:
+            title = block.get("title") or ""
+            if title:
+                print(f"\n{title}")
+            answers: dict = {}
+            for field in block.get("fields") or []:
+                name = field.get("name") or ""
+                if not name:
+                    continue
+                raw = await asyncio.to_thread(input, f"  {name}: ")
+                value = raw.strip()
+                if value:
+                    answers[name] = value
+            if answers:
+                form_values[title] = answers
+        return HITLResponse(
+            action=HITLAction.APPROVE,
+            approved=True,
+            form_values=form_values or None,
+        )

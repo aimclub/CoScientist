@@ -243,6 +243,7 @@ def critique_plan(
     hypothesis_refs: Iterable[Any] = (),
     repo_candidates: Iterable[Any] = (),
     operations: Iterable[Any] = (),
+    pipeline_scope: dict[str, Any] | None = None,
 ) -> PlanCritique:
     """Routes, registry refs, scientific design, revision invariants."""
     from CoScientist.context_init.operations import normalize_operation_rows
@@ -291,6 +292,9 @@ def critique_plan(
             message=f"Plan has {n} tasks and may be expensive for v0.",
             suggestion="Confirm each task is an unavoidable execution unit.")
 
+    research_forbidden = (
+        isinstance(pipeline_scope, dict) and pipeline_scope.get("research") is False
+    )
     enabled = {ExecutionRoute.REACT_TOOLS, ExecutionRoute.CODER,
                ExecutionRoute.RESEARCH, ExecutionRoute.MEDICAL}
     if settings.route_fedot:
@@ -423,12 +427,30 @@ def critique_plan(
             fe(tid, "blocker", f"Route {task.route.value!r} is disabled by profile settings.",
                "Choose an enabled route.")
 
+        if research_forbidden and task.route == ExecutionRoute.RESEARCH:
+            fe(
+                tid, "blocker",
+                f"{tid} uses route=research but the human-fixed pipeline_scope "
+                "has research=false.",
+                "Cover this step with fedot_mas/react_tools/coder; do not call ResearchAgent.",
+            )
+        if research_forbidden:
+            for art in task.design.analysis_artifacts:
+                if str(getattr(art, "prepare_via", "") or "") == "research":
+                    fe(
+                        tid, "blocker",
+                        f"{tid} sets prepare_via=research but pipeline_scope.research is false.",
+                        "Use prepare_via=mcp or prepare_via=coder.",
+                    )
+
         if task.route in _MCP and not inventory:
             fe(tid, "blocker",
                f"{tid} uses {task.route.value} but the MCP capability inventory is empty.",
                "Use route=coder when no exact ready MCP covers the task.")
 
-        if task.route in _EVIDENCE_AGENTS:
+        if task.route in _EVIDENCE_AGENTS and not (
+            research_forbidden and task.route == ExecutionRoute.RESEARCH
+        ):
             if task.mcp_servers:
                 fe(tid, "blocker",
                    f"{tid} uses {task.route.value} but lists mcp_servers; "
@@ -462,7 +484,7 @@ def critique_plan(
 
         if task.route == ExecutionRoute.CODER and not task.optional:
             blob = _task_coverage_blob(task, ops_index)
-            if match_named_family_capability(blob):
+            if match_named_family_capability(blob) and not research_forbidden:
                 fe(
                     tid, "major",
                     f"{tid} uses route=coder, but THIS task names a research/medical "
@@ -570,6 +592,7 @@ def validate_and_critique_plan(
     hypothesis_refs: Iterable[Any] = (),
     repo_candidates: Iterable[Any] = (),
     operations: Iterable[Any] = (),
+    pipeline_scope: dict[str, Any] | None = None,
     **_kwargs: Any,
 ) -> tuple[ExperimentPlan, PlanCritique]:
     """Strict schema validation, then deterministic policy checks."""
@@ -591,6 +614,7 @@ def validate_and_critique_plan(
         preferred_tools=None if preferred_tools is None else list(preferred_tools),
         previous_plan=previous_plan, hypothesis_refs=hypothesis_refs, repo_candidates=repo_list,
         operations=operations,
+        pipeline_scope=pipeline_scope,
     )
 
 

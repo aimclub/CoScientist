@@ -1,1 +1,0 @@
-Suggest several molecules that have high docking affinity with KRAS G12C protein. Molecules should possess common drug-like properties, including low toxicity, high QED score, and high level of synthesizability.

@@ -25,6 +25,7 @@ from CoScientist.config import settings
 from CoScientist.agents.prompts.builder import render_template
 from CoScientist.assembly.prompting import PromptContext
 from CoScientist.assembly.registry import REGISTRY, render_tool_docs
+from CoScientist.hitl.pipeline_scope import SCOPE_BASKETS_ALL as _EM_SCOPE_BASKETS
 
 
 def _register(name: str):
@@ -1607,10 +1608,20 @@ def orchestrator(ctx: PromptContext) -> str:
             "   yourself, then carry them out. There is NO planner tool — do not call one."
         )
 
+    scope_hitl_on = (
+        exec_name == "ExperimentModuleAgent"
+        and settings.web.scope_hitl
+        and settings.web.hitl_enabled
+    )
+    if scope_hitl_on:
+        steps.append("{pipeline_scope_directive?}")
+
     # The tool-discovery gate — an EARLY, mandatory step so it is read before
     # routing. Without it the model pattern-matches "generate/find <scientific
     # thing>" straight to ResearchAgent and fans out research calls.
-    if has_retrieval:
+    # When scope HITL is on, retrieve FIRST lives in SKIP_DIRECTIVE (skip branch)
+    # or the custom render_directive (only if EM is named) — not in this base.
+    if has_retrieval and not scope_hitl_on:
         prefer = (
             f"delegate it to {exec_name} and NAME the retrieved tools in your\n"
             "   request"
@@ -1681,12 +1692,14 @@ def orchestrator(ctx: PromptContext) -> str:
             )
         if has_coder:
             alternatives.append("produced by writing/running code (CoderAgent)")
-        steps.append(
+        nature_research = (
             "Do NOT open with ResearchAgent (and never fan out several Research calls\n"
             "   at once) for work that is purely computational without literature review and can instead be "
             + " or ".join(alternatives)
             + ". (If the user explicitly requests literature/papers/scientific knowledge or full-cycle research, start with ResearchAgent)."
         )
+        if not scope_hitl_on:
+            steps.append(nature_research)
 
     # With the coder under the executor there is no Executor-vs-Coder decision
     # left for the orchestrator: it delegates the OUTCOME once and the router
@@ -1724,23 +1737,8 @@ def orchestrator(ctx: PromptContext) -> str:
 
     # Experiment Module owns detailed tasking: never fan-out one stage into N calls.
     if exec_name == "ExperimentModuleAgent":
-        steps.append(
-            "Match the delegation strictly to the user's requested scope:\n"
-            "   - Full-cycle scientific research (requesting literature + hypotheses + computational experiment/data/generation, or multi-step research plans with generation/models/validation) →\n"
-            "     Execute all three stages in sequence without stopping or skipping:\n"
-            "     1. ResearchAgent — review literature, known ligands/chemistry, and background data.\n"
-            "     2. HypothesesAgent — formulate and commit scientific hypotheses into the research graph.\n"
-            "     3. ExperimentModuleAgent — immediately call ExperimentModuleAgent after HypothesesAgent finishes to plan and execute the computational experiment stage. Pass the full goal and context to ExperimentModuleAgent. Do NOT finish your turn or provide a final answer before ExperimentModuleAgent runs!\n"
-            "   - Literature search / paper reviews / scientific knowledge questions (no experiment requested) →\n"
-            "     Call ResearchAgent. When ResearchAgent completes, synthesize the literature findings\n"
-            "     in your final answer and STOP. Do NOT call HypothesesAgent or ExperimentModuleAgent.\n"
-            "   - Hypotheses formulation / ideas only (no experiment requested) →\n"
-            "     Call HypothesesAgent. When HypothesesAgent completes, summarize the formulated hypotheses\n"
-            "     in your final answer and STOP. Do NOT call ExperimentModuleAgent.\n"
-            "   - Pure computational tasks, molecule generation/docking, simulations, code (where literature/hypotheses are not asked or already given) →\n"
-            "     Call ExperimentModuleAgent directly once.\n"
-            "   - Subordinates (ResearchAgent, HypothesesAgent) manage their own research graph commits. Do NOT call research_commit yourself with Evidence or Hypothesis nodes."
-        )
+        if not scope_hitl_on:
+            steps.append(_EM_SCOPE_BASKETS)
         steps.append(
             "ExperimentModuleAgent is ONE computational-experiment stage, not a\n"
             "   per-bullet worker. For a compute/analysis ask, call it\n"
@@ -1788,11 +1786,13 @@ def orchestrator(ctx: PromptContext) -> str:
                 + infra_clause
             )
         if has_research:
-            steps.append(
+            research_fallback = (
                 "Use ResearchAgent for open-ended literature and scientific knowledge searches.\n"
                 "   If ExperimentModuleAgent returns NO_MATCHING_TOOL (its inventory covers nothing),\n"
                 "   you may fall back to ResearchAgent with the original ask."
             )
+            if not scope_hitl_on:
+                steps.append(research_fallback)
     if has_coder or exec_routes_to_coder:
         steps.append(
             "Execute CoderAgent delegations strictly ONE AT A TIME (sequentially) — never issue multiple CoderAgent calls in parallel."

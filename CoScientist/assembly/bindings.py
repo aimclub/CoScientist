@@ -991,6 +991,22 @@ def _hitl_before_model():
     return make_hitl_before_callback(hitl_handler)
 
 
+def _ask_pipeline_scope():
+    from CoScientist.agents.common import hitl_handler
+    from CoScientist.hitl.pipeline_scope import make_ask_pipeline_scope_callback
+    return make_ask_pipeline_scope_callback(hitl_handler)
+
+
+def _enforce_pipeline_scope_hops():
+    from CoScientist.hitl.pipeline_scope import enforce_pipeline_scope_hops
+    return enforce_pipeline_scope_hops
+
+
+def _mark_pipeline_scope_lane():
+    from CoScientist.hitl.pipeline_scope import mark_pipeline_scope_lane
+    return mark_pipeline_scope_lane
+
+
 # Plain callbacks are registered through tiny lazy factories that ignore the
 # context — so importing bindings never drags in S3/opik/etc. transitively.
 _cb("save_uploaded_artifacts", "before_model", factory=lambda ctx: _save_uploaded_artifacts())
@@ -1037,6 +1053,17 @@ _cb("inject_dataset_context", "before_agent", factory=lambda ctx: _inject_datase
 # Human-In-The-Loop approval callback before model/agent execution.
 _cb("hitl_before_model", "before_model", factory=lambda ctx: _hitl_before_model())
 _cb("hitl_before_agent", "before_agent", factory=lambda ctx: _hitl_before_model())
+_cb("ask_pipeline_scope", "before_agent", factory=lambda ctx: _ask_pipeline_scope())
+_cb(
+    "enforce_pipeline_scope_hops",
+    "after_model",
+    factory=lambda ctx: _enforce_pipeline_scope_hops(),
+)
+_cb(
+    "mark_pipeline_scope_lane",
+    "after_tool",
+    factory=lambda ctx: _mark_pipeline_scope_lane(),
+)
 # Limit web search calls per agent turn.
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
 _cb("count_research_searches", "after_tool", factory=lambda ctx: _count_research_searches())

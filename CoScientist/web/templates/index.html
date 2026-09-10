@@ -1211,14 +1211,9 @@
               <span class="material-symbols-outlined text-base">send</span> Отправить
             </button>
           </div>
-        </div>` : hasOptions ? `
+        </div>        ` : hasOptions ? `
         <div id="hitl-controls-${data.request_id}" class="mt-4 pl-11 flex flex-col gap-2">
-          <textarea id="hitl-feedback-${data.request_id}" rows="2" placeholder="Ваш ответ на вопрос — затем «Ответить»"
-            class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
           <div class="flex flex-wrap gap-2">
-            <button onclick="respondHITLEdit('${data.request_id}')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-              <span class="material-symbols-outlined text-base">reply</span> Ответить
-            </button>
             ${data.options.map(o => `
             <button onclick="respondHITLOption('${data.request_id}', '${escJs(o)}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">${escHtml(o)}</button>`).join('')}
           </div>
@@ -1353,6 +1348,19 @@
       const rid = data.request_id;
       const blocksHtml = form.blocks.map((b, bi) => {
         const fieldsHtml = (b.fields || []).map((f, fi) => {
+          if (f.kind === 'toggle') {
+            const on = String(f.value || 'нет').trim().toLowerCase() === 'да';
+            return `
+            <div class="flex items-center justify-between gap-3 py-1">
+              <label class="text-[11px] font-mono text-on-surface-variant">${escHtml(f.name)}</label>
+              <div class="flex gap-1" data-kind="toggle" data-block="${escJs(b.title)}" data-field="${escJs(f.name)}" data-value="${on ? 'да' : 'нет'}">
+                <button type="button" onclick="setHitlToggle(this, 'нет')"
+                  class="hitl-tog hitl-tog-no px-3 py-1 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] ${on ? 'bg-surface-container-high border border-outline-variant/20 text-on-surface-variant' : 'bg-surface-container-highest border border-outline-variant/40 text-on-surface'}">нет</button>
+                <button type="button" onclick="setHitlToggle(this, 'да')"
+                  class="hitl-tog hitl-tog-yes px-3 py-1 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] ${on ? 'bg-primary text-on-primary' : 'bg-surface-container-high border border-outline-variant/20 text-on-surface-variant'}">да</button>
+              </div>
+            </div>`;
+          }
           const openTag = f.open
             ? '<span class="text-[9px] text-error uppercase tracking-wider">не задано</span>'
             : `<span class="text-[9px] text-outline-variant uppercase tracking-wider">${escHtml(f.status || '')}</span>`;
@@ -1379,8 +1387,8 @@
       panel.classList.remove('hidden');
       panel.innerHTML = `
         <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-2">
-          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">Рамка исследования</h3>
-          <p class="text-[11px] text-on-surface-variant">Заполните форму в чате. Пустые поля агент заполнит сам.</p>
+          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${escHtml(form.title || 'Рамка исследования')}</h3>
+          <p class="text-[11px] text-on-surface-variant">Заполните форму в чате.</p>
         </div>`;
 
       feed.innerHTML += `
@@ -1396,14 +1404,31 @@
             ${blocksHtml}
             <div class="flex flex-wrap gap-3 mt-4">
               <button onclick="respondHITLForm('${rid}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-                <span class="material-symbols-outlined text-base">check_circle</span> Сохранить рамку
+                <span class="material-symbols-outlined text-base">check_circle</span> ${escHtml(form.submit_label || 'Сохранить рамку')}
               </button>
+              ${form.allow_skip === false ? '' : `
               <button onclick="respondHITLForm('${rid}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
                 <span class="material-symbols-outlined text-base">skip_next</span> Пропустить (агент решит)
-              </button>
+              </button>`}
             </div>
           </div>
         </div>`;
+    }
+
+    function setHitlToggle(btn, value) {
+      const wrap = btn.parentElement;
+      if (!wrap) return;
+      wrap.setAttribute('data-value', value);
+      wrap.querySelectorAll('.hitl-tog').forEach(el => {
+        el.classList.remove('bg-primary', 'text-on-primary', 'bg-surface-container-highest', 'border-outline-variant/40', 'text-on-surface');
+        el.classList.add('bg-surface-container-high', 'border', 'border-outline-variant/20', 'text-on-surface-variant');
+      });
+      btn.classList.remove('bg-surface-container-high', 'border', 'border-outline-variant/20', 'text-on-surface-variant');
+      if (value === 'да') {
+        btn.classList.add('bg-primary', 'text-on-primary');
+      } else {
+        btn.classList.add('bg-surface-container-highest', 'border', 'border-outline-variant/40', 'text-on-surface');
+      }
     }
 
     function respondHITLForm(requestId, collect) {
@@ -1418,6 +1443,12 @@
           if (!v) return;
           const block = el.getAttribute('data-block');
           const field = el.getAttribute('data-field');
+          (formValues[block] = formValues[block] || {})[field] = v;
+        });
+        document.querySelectorAll(`#hitl-controls-${requestId} [data-kind="toggle"]`).forEach(el => {
+          const block = el.getAttribute('data-block');
+          const field = el.getAttribute('data-field');
+          const v = (el.getAttribute('data-value') || 'нет').trim();
           (formValues[block] = formValues[block] || {})[field] = v;
         });
       }

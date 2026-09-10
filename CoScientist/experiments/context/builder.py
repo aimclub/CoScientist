@@ -63,7 +63,7 @@ _PROMPT_OPTIONAL_KEYS = (
     "research_focus_id", "research_context", "hypotheses", "hypothesis_refs", "prior_results",
     "prior_evidence", "confirmation_criteria",
     "data_refs", "constraints", "operations", "explicit_mcp_servers", "repo_candidates",
-    "revision_feedback", "unresolved_gaps",
+    "revision_feedback", "unresolved_gaps", "pipeline_scope",
 )
 # Hypothesis statuses that still need experimental verification (typed read —
 # refuted/postponed/confirmed nodes must not force new plan coverage).
@@ -853,6 +853,13 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
         "context_digest": research_context[:1500] or source_request[:1500],
         "route_alembic": bool(experiments.route_alembic), "route_fedot": bool(experiments.route_fedot),
     }
+    scope = state.get("pipeline_scope")
+    if isinstance(scope, dict) and scope.get("source") == "hitl":
+        context["pipeline_scope"] = {
+            "research": bool(scope.get("research")),
+            "hypotheses": bool(scope.get("hypotheses")),
+            "experiments": bool(scope.get("experiments")),
+        }
     state["experiment_context"] = context
     state[PLANNER_CONTEXT_KEY] = _prompt_context(context)
     state["experiment_source_request"] = source_request
