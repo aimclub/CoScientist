@@ -605,6 +605,76 @@
     </div>
   </div>
 
+  <!-- ТЗ Panel (microfluidics): the structured ТЗ section by section + operator form -->
+  <div id="tz-modal"
+    class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div
+      class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[88vh] mx-4">
+      <div class="px-6 py-4 border-b border-outline-variant/10 flex flex-col gap-3 bg-surface-container-low/60">
+        <div class="flex justify-between items-center">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+              <span class="material-symbols-outlined text-primary text-sm">assignment</span>
+            </div>
+            <div>
+              <div class="flex items-center gap-2">
+                <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider">Техническое задание</h3>
+                <span id="tz-phase-badge" class="text-[9px] font-mono font-semibold px-2 py-0.5 rounded-full bg-surface-container-highest text-primary border border-primary/20">нет данных</span>
+              </div>
+              <p class="text-[9px] text-outline-variant/70 font-mono tracking-wide">Разделы ТЗ: сверху — ожидающие заполнения человеком, ниже — заполненные</p>
+            </div>
+          </div>
+          <button onclick="closeTzPanel()"
+            class="text-outline-variant hover:text-on-surface p-1 rounded-md hover:bg-surface-container-high transition-colors flex items-center">
+            <span class="material-symbols-outlined text-lg">close</span>
+          </button>
+        </div>
+        <div class="flex items-center gap-3">
+          <div class="flex-1 h-1.5 bg-surface-container-highest rounded-full overflow-hidden">
+            <div id="tz-progress-bar" class="h-full bg-gradient-to-r from-primary via-primary to-secondary transition-all duration-500 rounded-full" style="width: 0%;"></div>
+          </div>
+          <span id="tz-progress-text" class="text-[10px] font-mono text-outline-variant shrink-0 tabular-nums"></span>
+        </div>
+        <div id="tz-intro" class="hidden flex items-start gap-2 text-[11px] text-on-surface bg-error/5 border border-error/20 rounded-lg px-3 py-2"></div>
+        <div class="flex flex-wrap items-center gap-3 text-[9px] text-outline-variant">
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-error/60"></span> ожидает заполнения человеком</span>
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-tertiary"></span> заполнено агентом — проверьте</span>
+          <span>Пустое поле при отправке заполнит агент</span>
+        </div>
+      </div>
+
+      <div id="tz-modal-body" class="p-6 flex-1 overflow-y-auto flex flex-col gap-5">
+        <div id="tz-empty-state" class="flex flex-col items-center justify-center py-16 opacity-75">
+          <span class="material-symbols-outlined text-4xl text-primary/40 mb-3">assignment</span>
+          <p class="text-sm font-medium text-on-surface">ТЗ ещё не сформировано</p>
+          <p class="text-xs text-outline-variant mt-1">Разделы появятся здесь по мере того, как агент постановки ТЗ их заполняет.</p>
+        </div>
+        <div id="tz-awaiting-wrap" class="hidden flex flex-col gap-2">
+          <p class="text-[10px] font-bold text-error uppercase tracking-widest">Ожидают заполнения человеком (<span id="tz-awaiting-count">0</span>)</p>
+          <div id="tz-group-awaiting" class="flex flex-col gap-3"></div>
+        </div>
+        <div id="tz-filled-wrap" class="hidden flex flex-col gap-2">
+          <p class="text-[10px] font-bold text-secondary uppercase tracking-widest">Заполненные разделы (<span id="tz-filled-count">0</span>)</p>
+          <div id="tz-group-filled" class="flex flex-col gap-3"></div>
+        </div>
+      </div>
+
+      <div class="px-6 py-3.5 border-t border-outline-variant/10 flex justify-between items-center gap-3 bg-surface-container-low/60">
+        <span id="tz-stats" class="text-[10px] font-mono text-outline-variant/70"></span>
+        <div class="flex items-center gap-3">
+          <button onclick="closeTzPanel()"
+            class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
+            Закрыть
+          </button>
+          <button id="tz-submit-btn" onclick="submitTzForm()"
+            class="hidden px-4 py-2 bg-primary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-primary/20 transition-all flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">send</span> <span id="tz-submit-label">Отправить</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Experiment Viewer Modal -->
   <div id="experiment-modal"
     class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -1297,6 +1367,7 @@
   <script src="/static/js/modals/settings.js"></script>
   <script src="/static/js/modals/dataset.js"></script>
   <script src="/static/js/modals/roadmap.js"></script>
+  <script src="/static/js/modals/tz.js"></script>
   <script src="/static/js/modals/experiments.js"></script>
   <script src="/static/js/ws.js"></script>
   <script src="/static/js/app.js"></script>

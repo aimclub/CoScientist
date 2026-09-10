@@ -15,6 +15,11 @@ in HITL, with three ways to answer each question:
   * «на усмотрение агента»        -> the agent fills a reasonable working value
 
 Pressing Accept without answers continues with the open questions as-is.
+
+NOTE: TZSessionAgent no longer interviews question by question — the operator
+fills the ТЗ as a form in the web ТЗ panel (``tz_review.py``). ``QUESTION_BANK``
+feeds that form (the question and hint shown on each section waiting for the
+human); the interview helpers below are kept for other callers.
 """
 from __future__ import annotations
 

@@ -298,6 +298,9 @@
       if (snapshot.active_tasks && Array.isArray(snapshot.active_tasks)) {
         StatusIndicator.feed({ type: 'session_snapshot', active_tasks: snapshot.active_tasks }, true);
       }
+      // The ТЗ panel shows the session's latest ТЗ; a pending ТЗ form is
+      // redelivered right after this snapshot.
+      if (window.TZPanel) TZPanel.restore(snapshot.tz || null, activeSession && activeSession.id);
 
       for (const message of messages) {
         // Quiet replay: the indicator recomputes its state from the history so

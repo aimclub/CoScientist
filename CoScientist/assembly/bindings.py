@@ -116,6 +116,17 @@ def _microfluidics_stub(name: str):
 
     return factory
 
+
+def _tz_builder_tool(name: str):
+    """Wrap one section tool of the microfluidics ТЗ (tz_builder.py)."""
+    def factory():
+        from google.adk.tools import FunctionTool
+        from CoScientist.microfluidics import tz_builder
+
+        return [FunctionTool(getattr(tz_builder, name))]
+
+    return factory
+
 def _sleep_tool():
     from google.adk.tools import FunctionTool
     from CoScientist.tools.sleep_tool import sleep_tool
@@ -507,6 +518,73 @@ REGISTRY.register_tool(ToolEntry(
                 "long-running job (e.g. one that takes hours) instead of "
                 "polling it every turn. Capped at 10 minutes per call; call it "
                 "again afterwards if you need to wait longer."
+            ),
+        ),
+    ),
+))
+
+# ── Microfluidics ТЗ (stage 1) ───────────────────────────────────────────────
+# TZSpecAgent fills the ТЗ one section per call; both tools keep the ТЗ in
+# state["structured_tz"] (see CoScientist/microfluidics/tz_builder.py).
+
+REGISTRY.register_tool(ToolEntry(
+    key="fill_tz_section",
+    factory=_tz_builder_tool("fill_tz_section"),
+    docs=(
+        ToolDoc(
+            name="fill_tz_section",
+            signature="fill_tz_section(section, usage, fields)",
+            purpose=(
+                "Сохраняет ОДИН раздел ТЗ — следующий по порядку. Отвечает "
+                "прогрессом (заполнено k из N) и называет раздел, который нужно "
+                "заполнить следующим, с его рекомендуемыми полями."
+            ),
+            usage=(
+                "fields — строки таблицы раздела: "
+                '[{"name": ..., "value": ..., "status": ...}, ...]',
+                'status "error" — раздел не сохранён; в errors указано, на каком '
+                "шаге, в каком разделе и в каком поле (номер и имя) ошибка",
+            ),
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="fill_agent_fields",
+    factory=_tz_builder_tool("fill_agent_fields"),
+    docs=(
+        ToolDoc(
+            name="fill_agent_fields",
+            signature="fill_agent_fields(section, fields)",
+            purpose=(
+                "Заполняет поля, которые оператор оставил пустыми при проверке "
+                "ТЗ, — по одному разделу за вызов, в указанном порядке. Статус "
+                "«заполнено агентом» ставится автоматически."
+            ),
+            usage=(
+                'fields — [{"name": ..., "value": ...}, ...]: ровно поля, '
+                "названные в запросе, с конкретными значениями",
+                "вызывай только после сообщения, что оператор оставил поля тебе",
+            ),
+        ),
+    ),
+))
+
+# Registered for when an agent is allowed to edit an assembled ТЗ; NOT attached
+# to any agent yet — a rewrite after review refills the ТЗ from section 1.
+REGISTRY.register_tool(ToolEntry(
+    key="edit_tz_section",
+    factory=_tz_builder_tool("edit_tz_section"),
+    docs=(
+        ToolDoc(
+            name="edit_tz_section",
+            signature="edit_tz_section(section, fields, usage='')",
+            purpose=(
+                "Переписывает ОДИН раздел уже собранного ТЗ: fields полностью "
+                "заменяют прежнюю таблицу раздела, остальные разделы не меняются."
+            ),
+            usage=(
+                "usage можно не передавать — останется прежний",
             ),
         ),
     ),

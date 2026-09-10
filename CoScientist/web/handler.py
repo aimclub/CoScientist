@@ -164,6 +164,10 @@ class WebHITLHandler(AbstractHITLHandler):
         public_context.pop("_session", None)
 
         timeout_sec = self.hitl_timeout_seconds
+        # A request that needs more time (a long form to fill) may extend the
+        # auto-approve timeout, never shorten it; 0 (wait forever) stays 0.
+        if timeout_sec > 0 and request.timeout_seconds:
+            timeout_sec = max(timeout_sec, float(request.timeout_seconds))
         payload = {
             "type": "hitl_request",
             "request_id": request_id,

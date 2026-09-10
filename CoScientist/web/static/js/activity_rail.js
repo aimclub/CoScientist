@@ -3,7 +3,8 @@
 // =========================================================================
     const AGENTS = [
       { name: "OrchestratorAgent", icon: "hub", desc: "Master Orchestrator" },
-      { name: "PlannerAgent", icon: "map", desc: "Roadmap Planner" },
+      // The microfluidics ТЗ panel sits where the roadmap planner was.
+      { name: "TZSpecAgent", icon: "assignment", desc: "Technical Spec" },
       { name: "ToolsViewer", icon: "science", desc: "Tools Viewer" },
       { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Knowledge Graph", id: "graph-link", href: "/graph" },
       { name: "MCPBuilds", icon: "build", desc: "MCP Builds", href: "/builds" },
@@ -45,8 +46,8 @@
     function onAgentClick(name) {
       if (name === "__settings__") {
         openSettings();
-      } else if (name === "PlannerAgent") {
-        openRoadmapEditor();
+      } else if (name === "TZSpecAgent") {
+        openTzPanel();
       } else if (name === "ToolsViewer") {
         openToolsViewer();
       } else if (name === "KnowledgeGraph") {
@@ -135,6 +136,7 @@
       OrchestratorAgent: 'hub',
       InitAgent: 'flag',
       PlannerAgent: 'map',
+      TZSpecAgent: 'assignment',
       HypothesesAgent: 'lightbulb',
       ResearchAgent: 'travel_explore',
       TaskExecutorAgent: 'alt_route',

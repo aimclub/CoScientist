@@ -12,7 +12,7 @@
 #   RootOrchestrator (llm, root)              routes MODULES only
 #   ├─ ModuleA_TZLiterature (sequential)      stages 1–2 — ТЗ + literature
 #   │    ├─ TZAgent (sequential)              ported from VibePAV
-#   │    │    ├─ TZSpecAgent      -> state["structured_tz"]         (ТЗ table)
+#   │    │    ├─ TZSpecAgent      -> state["structured_tz"]         (ТЗ, by section)
 #   │    │    └─ TZQueryGenAgent  -> state["tz_literature_queries"] (LIT-01…)
 #   │    ├─ PlannerAgent          -> create_plan(…), one task per LIT query
 #   │    └─ LiteratureOrchestrator-> delegates each LIT task to ResearchAgent
@@ -92,6 +92,19 @@ agents:
     # agent PUBLISHES the document: tz_documents/TZ_<timestamp>.md on disk,
     # state["structured_tz_document"], and a chat message with the full text
     # (see TZSessionAgent._post_final_events) before planning starts.
+    #
+    # The ТЗ is filled SECTION BY SECTION: one fill_tz_section call per
+    # canonical block, strictly in order; each answer reports the progress
+    # (k/16) and names the next section, a rejected call names the step and
+    # the field at fault. The tool itself writes state["structured_tz"], so
+    # there is no output_key/output_schema — the final answer is a short
+    # "done" line. edit_tz_section (per-section edits of an assembled ТЗ) is
+    # registered but deliberately NOT attached yet.
+    #
+    # Review: the operator fills the ТЗ as a form in the web ТЗ panel; fields
+    # left empty are filled by the agent through fill_agent_fields (one
+    # section per call, highlighted as «заполнено агентом») and the ТЗ goes
+    # back to the operator — round after round (see tz_review.py).
     class: custom:tz_session
     description: >-
       агент постановки ТЗ — превращает свободный запрос заказчика в
@@ -99,13 +112,8 @@ agents:
       продукт, свойства, критерии качества, ограничения, оборудование,
       приоритеты, форма результата) со статусом каждого поля.
     prompt: microfluidics_tz
-    output_key: structured_tz
-    output_schema: structured_tz
+    tools: [fill_tz_section, fill_agent_fields]
     hitl: true
-    callbacks:
-      # Not every provider honours response_format: strip prose/fences around
-      # the JSON before ADK's strict output_schema validation.
-      after_model: [sanitize_json_output]
 
   TZQueryGenAgent:
     class: custom:session

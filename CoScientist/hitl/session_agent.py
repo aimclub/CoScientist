@@ -64,6 +64,9 @@ class SessionAgent(LlmAgent):
     # critic gets a single say, then the rewrite stands — a self-critique loop
     # that can run forever will. There is always a budget; only its size moves.
     critic_max_rounds: int = 1
+    # Times an agent that stopped half way (see `_unfinished_feedback`) is sent
+    # back to finish, per review pass. After that its output is reviewed as is.
+    unfinished_max_rounds: int = 3
     correction_prompt: str = "The human reviewed your output and provided this feedback/correction:\n\n{feedback}\n\nYou MUST rewrite your output incorporating this feedback."
     critic_correction_prompt: str = "A plan critic reviewed your output and asked for one revision:\n\n{feedback}\n\nProduce the output again ONCE, in full, fixing exactly what the critic named — the previous version was discarded. Registering it normalises it (ids are renumbered, adjacent steps with the same executor assignee are merged); that is expected, so do not register again to undo it. This is the last round: there is no second review."
 
@@ -93,8 +96,26 @@ class SessionAgent(LlmAgent):
                 return registered_plan
         return output_text
 
+    def _unfinished_feedback(self, ctx: InvocationContext) -> Optional[str]:
+        """Feedback that sends the agent back to FINISH its output — not to
+        redo it — when it ended its turn before the output was complete.
+
+        For agents that assemble their output over several tool calls (the
+        microfluidics ТЗ is filled section by section). Checked after every
+        pass, before any reviewer sees the output. Default: always complete."""
+        return None
+
+    def _rewrite_state_delta(self, ctx: InvocationContext) -> dict:
+        """State to carry with a reviewer's (critic or human) feedback — e.g. a
+        reset so the next pass starts over instead of continuing. Default:
+        none."""
+        return {}
+
     async def _feed_back(
-        self, ctx: InvocationContext, feedback_prompt: str
+        self,
+        ctx: InvocationContext,
+        feedback_prompt: str,
+        state_delta: Optional[dict] = None,
     ) -> AsyncGenerator[Event, None]:
         """Hand review feedback to the agent as a user turn and let it re-run.
 
@@ -103,6 +124,8 @@ class SessionAgent(LlmAgent):
         for the next event, and the next run builds its contents from there.
         Appending it ourselves as well duplicated the message in the agent's
         context — the runner's session object is the very one we hold.
+        ``state_delta`` rides on the same event, so the reset and the feedback
+        land together.
 
         The fallback covers a consumer that does not write to the session (a
         bare ``run_async`` in a test): without the event the re-run would not
@@ -115,10 +138,12 @@ class SessionAgent(LlmAgent):
             content=types.Content(
                 role="user", parts=[types.Part(text=feedback_prompt)]
             ),
+            actions=EventActions(state_delta=dict(state_delta or {})),
         )
         yield event
         if not any(e is event for e in reversed(ctx.session.events)):
             ctx.session.events.append(event)
+            ctx.session.state.update(state_delta or {})
         # Clear the end-of-agent flag so the agent is allowed to run again.
         ctx.set_agent_state(self.name)
 
@@ -183,6 +208,7 @@ class SessionAgent(LlmAgent):
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
 
         critic_rounds = 0
+        unfinished_rounds = 0
 
         while True:
             output_text = ""
@@ -216,6 +242,29 @@ class SessionAgent(LlmAgent):
                         )
                     else:
                         yield event
+
+            # ── Completeness check ───────────────────────────────────────
+            # An agent that builds its output over several tool calls may end
+            # its turn half way. Send it back to finish before anyone reviews
+            # a half-built result; like a critic rejection, the premature
+            # final answer never reaches the chat.
+            if final_event is not None:
+                unfinished = self._unfinished_feedback(ctx)
+                if unfinished and unfinished_rounds < self.unfinished_max_rounds:
+                    unfinished_rounds += 1
+                    logger.info(
+                        "%s: output unfinished (round %d/%d): %s",
+                        self.name, unfinished_rounds, self.unfinished_max_rounds,
+                        unfinished,
+                    )
+                    async for event in self._feed_back(ctx, unfinished):
+                        yield event
+                    continue
+                if unfinished:
+                    logger.warning(
+                        "%s: output still unfinished after %d round(s) — "
+                        "passing it on as is", self.name, unfinished_rounds,
+                    )
 
             # ── Critic review ────────────────────────────────────────────
             # Runs before the human sees anything and regardless of whether
@@ -252,8 +301,11 @@ class SessionAgent(LlmAgent):
                     )
                     # The rejected output never reaches the chat — only the
                     # rewrite does, exactly as with a human rejection.
+                    unfinished_rounds = 0
                     async for event in self._feed_back(
-                        ctx, self.critic_correction_prompt.format(feedback=feedback)
+                        ctx,
+                        self.critic_correction_prompt.format(feedback=feedback),
+                        self._rewrite_state_delta(ctx),
                     ):
                         yield event
                     continue
@@ -325,8 +377,11 @@ class SessionAgent(LlmAgent):
             # Rejected or "Edit" requested — feed feedback back into the agent
             feedback = response.instructions or response.free_input or "No feedback provided."
 
+            unfinished_rounds = 0
             async for event in self._feed_back(
-                ctx, self.correction_prompt.format(feedback=feedback)
+                ctx,
+                self.correction_prompt.format(feedback=feedback),
+                self._rewrite_state_delta(ctx),
             ):
                 yield event
 

@@ -35,7 +35,8 @@ _LEGEND = """\
 | Уточнено оператором    | Значение добавлено оператором/агентом постановки ТЗ из контекста и может использоваться как рабочее ограничение              |
 | Не задано              | Значение отсутствует; агент не должен его придумывать, но может запросить уточнение или выполнить поиск вариантов            |
 | Свободный комментарий  | Неформализованная информация; не используется как жёсткий критерий ранжирования, пока не переведена в конкретный параметр    |
-| Рассчитывается агентом | Значение должно быть определено на следующем этапе работы системы                                                            |"""
+| Рассчитывается агентом | Значение должно быть определено на следующем этапе работы системы                                                            |
+| Заполнено агентом      | Оператор оставил поле пустым, и агент подставил рабочее значение; используется как рабочее ограничение до уточнения          |"""
 
 _OPEN_GUIDANCE = {
     "не задано": "Не подменять предположениями; запросить уточнение или выполнить поиск вариантов",
@@ -259,6 +260,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86em;
 .s-calc{background:#eae6f7;color:#5b3fb0;border-color:#d3c9ef}
 .s-comment{background:#e6f0fb;color:#1c5fa8;border-color:#c3ddf5}
 .s-open{background:#f0f0f0;color:#777;border-color:#ddd}
+.s-agent{background:#fff8d6;color:#8a6d00;border-color:#f0dc8a}
 @media (prefers-color-scheme:dark){
  body{background:#171717;color:#e8e8e8}
  h2{border-color:#333} h3{color:#f0f0f0}
@@ -270,6 +272,7 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86em;
  .s-calc{background:#241d3d;color:#b7a4ef;border-color:#40356a}
  .s-comment{background:#132840;color:#8bb9e8;border-color:#274a70}
  .s-open{background:#242424;color:#999;border-color:#3a3a3a}
+ .s-agent{background:#3a3210;color:#eac400;border-color:#5e5220}
 }
 @media print{body{max-width:none;padding:0}}
 """
@@ -279,6 +282,7 @@ _STATUS_HTML_CLASS = {
     "уточнено оператором": "s-op",
     "рассчитывается агентом": "s-calc",
     "свободный комментарий": "s-comment",
+    "заполнено агентом": "s-agent",
 }
 
 

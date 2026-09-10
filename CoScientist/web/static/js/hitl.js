@@ -11,6 +11,11 @@
       // Structured intake (e.g. the research frame): render a per-field form
       // instead of the free-text review, then stop — the other HITL points keep
       // the free-text / option path below.
+      if (data.form && data.form.kind === 'tz' && window.TZPanel) {
+        TZPanel.onHitlRequest(data);
+        scrollChat();
+        return;
+      }
       if (data.form && Array.isArray(data.form.blocks)) {
         renderHitlForm(panel, feed, data);
         scrollChat();

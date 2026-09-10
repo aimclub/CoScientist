@@ -21,6 +21,7 @@
       // Agent descriptions in side nav
       'agent.OrchestratorAgent.desc': { en: 'Master Orchestrator', ru: 'Главный оркестратор' },
       'agent.PlannerAgent.desc': { en: 'Roadmap Planner', ru: 'Планировщик задач' },
+      'agent.TZSpecAgent.desc': { en: 'Technical Spec', ru: 'Техническое задание' },
       'agent.ToolsViewer.desc': { en: 'Tools Viewer', ru: 'Просмотр инструментов' },
       'agent.KnowledgeGraph.desc': { en: 'Knowledge Graph', ru: 'Граф знаний' },
       'agent.MCPBuilds.desc': { en: 'MCP Builds', ru: 'Сборки MCP' },

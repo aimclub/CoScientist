@@ -61,6 +61,7 @@
         if (window.RoadmapModal && typeof window.RoadmapModal.feed === 'function') {
           window.RoadmapModal.feed(data);
         }
+        if (window.TZPanel) window.TZPanel.feed(data);
         switch (data.type) {
           case 'connected':
             addTelemetry('INIT :: ' + data.message);
@@ -121,6 +122,7 @@
             break;
           case 'final_response':
             hideTyping();
+            if (window.TZPanel) TZPanel.clearRequest(null);
             resetAgents();
             activityMarkIdle();
             currentPlannerHitlRequest = null;
@@ -138,6 +140,7 @@
             break;
           case 'hitl_timeout':
             disableHitlControls(data.request_id);
+            if (window.TZPanel) TZPanel.clearRequest(data.request_id, 'Нет ответа — ТЗ принято как есть.');
             document.getElementById('hitl-panel').classList.add('hidden');
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();
@@ -146,6 +149,7 @@
             break;
           case 'hitl_cancelled':
             disableHitlControls(data.request_id);
+            if (window.TZPanel) TZPanel.clearRequest(data.request_id, 'Запрос отменён вместе с запуском.');
             document.getElementById('hitl-panel').classList.add('hidden');
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();
