@@ -190,7 +190,7 @@ def find_papers_in_db(
         number_of_chunks_after_rerank (int): The number of body chunks retained after reranking
 
     Returns:
-        A list of unique relevant papers with their matched body chunks and scores
+        A list of unique relevant papers with metadata and retrieval scores
     """
     meta_filter = extract_metadata_filters(
         task, VISION_LLM_URL, extract_query_filters_prompt
@@ -211,23 +211,16 @@ def find_papers_in_db(
         )
         papers_by_id: dict[str, dict] = {}
         for chunk in chunks:
-            paper = papers_by_id.setdefault(
+            papers_by_id.setdefault(
                 chunk.article_id,
                 {
                     "article_id": chunk.article_id,
                     "title": chunk.metadata["paper_title"],
                     "domain": chunk.domain,
                     "field": chunk.field,
-                    "matched_chunks": [],
-                },
-            )
-            paper["matched_chunks"].append(
-                {
-                    "chunk_id": chunk.id,
-                    "content": chunk.content,
                     "initial_score": chunk.metadata.get("chroma_score"),
                     "rerank_score": chunk.metadata.get("reranker_score"),
-                }
+                },
             )
         return list(papers_by_id.values())
     except Exception as e:
