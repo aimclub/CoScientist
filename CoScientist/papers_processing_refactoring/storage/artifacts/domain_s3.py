@@ -33,19 +33,21 @@ class S3DomainArtifactStore:
         self,
         domain: str,
         article_id: str,
-        paper_summary: str,
         html: str,
         pdf_data: bytes,
         images: dict[str, Image.Image | None],
         metadata: dict[str, Any] | None = None,
+        paper_summary: str | None = None,
     ) -> None:
-        # Paper summary
-        self.client.put_object(
-            Bucket=self.bucket,
-            Key=self._article_prefix(domain, article_id) + "summary.txt",
-            Body=paper_summary.encode("utf-8"),
-            ContentType="text/plain",
-        )
+        # Summary publication is disabled for the current ingestion pipeline.
+        # Keep this optional branch for compatibility with explicit legacy callers.
+        if paper_summary is not None:
+            self.client.put_object(
+                Bucket=self.bucket,
+                Key=self._article_prefix(domain, article_id) + "summary.txt",
+                Body=paper_summary.encode("utf-8"),
+                ContentType="text/plain",
+            )
         
         # HTML
         self.client.put_object(

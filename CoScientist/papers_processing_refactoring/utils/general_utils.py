@@ -34,6 +34,23 @@ class ExpandedSummary(BaseModel):
     )
 
 
+class PaperMetadata(BaseModel):
+    """Bibliographic metadata extracted from a paper."""
+
+    paper_title: str = Field(
+        description="Full paper title, or 'NO TITLE' when it is not explicitly specified."
+    )
+    publication_year: int = Field(
+        description="Publication year, or 9999 when it is not explicitly specified."
+    )
+    authors: str = Field(
+        description="Comma-separated authors, or 'NO AUTHORS' when they are not explicitly specified."
+    )
+    source: str = Field(
+        description="Journal, conference, or publisher, or 'UNDEFINED' when it is not explicitly specified."
+    )
+
+
 def convert_to_base64(file_path, s3_store):
     """
     Convert an image file to a Base64 encoded string.
