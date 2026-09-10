@@ -38,6 +38,23 @@ def _static(name: str, text: str) -> None:
     REGISTRY.register_prompt(name, lambda ctx, _t=text: _t)
 
 
+# ── Report language directive (shared by the user-facing prompts) ───────────
+# `{report_language?}` is an ADK session-state injection. The web layer writes
+# the key before every run (CoScientist/web/app.py), and the trailing `?`
+# renders it empty when the key is absent (CLI runs), so English stays the
+# fallback.
+_LANGUAGE_REQUIREMENT = '''
+--------------------------------------------------
+LANGUAGE REQUIREMENT
+--------------------------------------------------
+Write ALL user-visible output (all prose, headings, summaries, labels) in the
+language given by: {report_language?} (values: en = English, ru = Russian).
+If empty, use English. This applies to every user-facing answer, not only the
+final report. Tool arguments such as search queries stay in English. Structured
+outputs (JSON keys, task ids) stay unchanged.
+'''
+
+
 def _executor_routes_to_coder(ctx: PromptContext) -> bool:
     """Is CoderAgent wired UNDER TaskExecutorAgent?
 
@@ -427,10 +444,12 @@ RULES
 - Be concise, try to fit the answer within 2000 characters
 - Use tools to answer, it is prohibited to answer directly without them
 
+<<LANGUAGE>>
 --------------------------------------------------
 OUTPUT FORMAT
 --------------------------------------------------
 
+Write these section headings in the report language (see LANGUAGE REQUIREMENT):
 **Summary** – short answer
 **Details** – explanation
 **Key Points** – main takeaways
@@ -458,6 +477,7 @@ Update task status to "done" immediately upon completion of each work item.
         PREFER_LINE=prefer_line,
         RESEARCH=render_research_protocol(ctx),
         HITL=ctx.render_hitl(),
+        LANGUAGE=_LANGUAGE_REQUIREMENT,
     )
 
 
@@ -1377,9 +1397,10 @@ Plan tasks are delegation units, not a narration of your reasoning.
 - You MUST use the `create_plan` tool to register ALL steps of your plan in one go.
 - Once you have successfully registered all tasks using `create_plan`, you can finish your turn.
 
+<<LANGUAGE>>
 <<CRITIC>>
 ''', ROSTER=ctx.render_sibling_roster(), DISCOVERY=discovery, GRAPH=graph,
-     CRITIC=critic,
+     CRITIC=critic, LANGUAGE=_LANGUAGE_REQUIREMENT,
      TASK_DESC_MCP=_PLANNER_TASK_DESC_MCP if ctx.has_tool("planner_retrieval") else "")
 
 
@@ -1755,6 +1776,7 @@ Available tools from agents:
 
 <<AGENTS>>
 
+<<LANGUAGE>>
 <<KNOWLEDGE_GRAPH>><<RESEARCH_GRAPH>>
 ### Instructions:
 
@@ -1805,6 +1827,7 @@ with the graph tools (read_research_graph / get_graph_history / get_agents_info)
         KNOWLEDGE_GRAPH=knowledge_graph_section,
         RESEARCH_GRAPH=research_graph_section,
         CRITIC_PROTOCOL=render_critic_protocol(ctx),
+        LANGUAGE=_LANGUAGE_REQUIREMENT,
     )
 
 
@@ -2135,7 +2158,7 @@ A starting digest of the graph:
    and table must be one `format_results` actually collected.
 
 Output the complete Markdown report as your final message.
-''')
+''' + _LANGUAGE_REQUIREMENT)
 
 
 # ── Plan critic ──────────────────────────────────────────────────────────────
@@ -2196,6 +2219,12 @@ plan is executed as-is. So spend the round only on a defect worth a rewrite.
 
 When in doubt, APPROVE. An unjustified rewrite costs a full planning round and
 usually returns a worse plan.
+
+### Language
+
+Write the user-visible "feedback" text in the report language of the session
+(English by default, Russian when the user writes in Russian). Keep the JSON
+keys and the "verdict" values in English, exactly as the contract specifies.
 
 ### Output (strict JSON, no prose, no markdown fences)
 

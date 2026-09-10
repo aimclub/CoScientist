@@ -1607,6 +1607,10 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
     run_status_version = int(
         data.get("_run_status_version", runtime.run_versions[key])
     )
+    # The settings modal sends the report language with every chat message.
+    report_language = data.get("report_language")
+    if report_language not in ("en", "ru"):
+        report_language = "en"
     if not query:
         await runtime.send(key, {"type": "error", "message": "Empty query"})
         return
@@ -1638,6 +1642,7 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
                 manager,
                 query,
                 run_status_version=run_status_version,
+                report_language=report_language,
             )
 
     except asyncio.CancelledError:
@@ -1688,6 +1693,7 @@ async def _run_chat_invocation(
     query: str,
     *,
     run_status_version: int,
+    report_language: str = "en",
 ) -> None:
     """Execute one serialized ADK invocation for a session."""
     user_id, session_id = key
@@ -1701,6 +1707,9 @@ async def _run_chat_invocation(
     # TODO(planning): thread a real ReportConfig (e.g. --latex mode) from the web layer.
     report_config = ReportConfig()
     await manager._set_state("report_config", report_config.to_state())
+    # Prompt templates read {report_language?} from session state. Set it before
+    # the run, so the instructions of every agent in this invocation see it.
+    await manager._set_state("report_language", report_language)
 
     final_response = "No response"
     # The report is the LAST final-response text of the run — the terminal aggregator

@@ -64,8 +64,8 @@ class SessionAgent(LlmAgent):
     # critic gets a single say, then the rewrite stands — a self-critique loop
     # that can run forever will. There is always a budget; only its size moves.
     critic_max_rounds: int = 1
-    correction_prompt: str = "The human reviewed your output and provided this feedback/correction:\n\n{feedback}\n\nYou MUST rewrite your output incorporating this feedback."
-    critic_correction_prompt: str = "A plan critic reviewed your output and asked for one revision:\n\n{feedback}\n\nProduce the output again ONCE, in full, fixing exactly what the critic named — the previous version was discarded. Registering it normalises it (ids are renumbered, adjacent steps with the same executor assignee are merged); that is expected, so do not register again to undo it. This is the last round: there is no second review."
+    correction_prompt: str = "The human reviewed your output and provided this feedback/correction:\n\n{feedback}\n\nYou MUST rewrite your output incorporating this feedback. Write your answer in the report language of this session. The session state key `report_language` gives it: en = English, ru = Russian. If it is empty, use English."
+    critic_correction_prompt: str = "A plan critic reviewed your output and asked for one revision:\n\n{feedback}\n\nProduce the output again ONCE, in full, fixing exactly what the critic named — the previous version was discarded. Registering it normalises it (ids are renumbered, adjacent steps with the same executor assignee are merged); that is expected, so do not register again to undo it. This is the last round: there is no second review. Write your answer in the report language of this session. The session state key `report_language` gives it: en = English, ru = Russian. If it is empty, use English."
 
     def _review_output(self, output_text) -> str:
         """How the proposed output is presented to the human reviewer.
@@ -145,8 +145,7 @@ class SessionAgent(LlmAgent):
             agent_name=self.name,
             action_type=HITLAction.APPROVE,
             message=(
-                f"[INTERNAL_LOOP: SessionAgent] Agent '{self.name}' proposes "
-                "its result. Please review."
+                f"Agent '{self.name}' proposes its result. Please review."
             ),
             context={
                 "output": self._review_output(review_output),

@@ -130,6 +130,10 @@ class S3Settings(BaseModel):
     access_key: Optional[str] = None
     secret_key: Optional[str] = None
     bucket_name: Optional[str] = None
+    # Lifetime of presigned artifact URLs, in seconds. 604800 (7 days) is the
+    # SigV4 maximum. The default of the S3 client (360 s) expires before the
+    # operator opens the report. Override via S3__PRESIGN_TTL.
+    presign_ttl: int = 604800
 
 
 # =========================

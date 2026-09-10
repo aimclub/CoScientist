@@ -429,12 +429,21 @@
     const NICK_STORAGE_KEY = 'coscientist.nickname';
     const SIDE_NAV_KEY = 'coscientist.side_nav';
     const LANG_STORAGE_KEY = 'coscientist.lang';
+    const REPORT_LANG_STORAGE_KEY = 'coscientist.reportLang';
 
     // =========================================================================
     // i18n – lightweight translation system
     // =========================================================================
     // Текущий язык: 'ru' по умолчанию (или из localStorage)
     let currentLang = localStorage.getItem(LANG_STORAGE_KEY) || 'ru';
+
+    // Report language: defaults to the UI language on first run.
+    let reportLang = localStorage.getItem(REPORT_LANG_STORAGE_KEY) || currentLang;
+
+    function setReportLang(lang) {
+      reportLang = lang === 'en' ? 'en' : 'ru';
+      localStorage.setItem(REPORT_LANG_STORAGE_KEY, reportLang);
+    }
 
     const i18n = {
       // ── Navigation & Sidebar ──
@@ -666,6 +675,41 @@
       'settings.noConfig': { en: 'No configurable parameters yet.', ru: 'Пока нет настраиваемых параметров.' },
       'settings.cancel': { en: 'Cancel', ru: 'Отмена' },
       'settings.save': { en: 'Save Settings', ru: 'Сохранить настройки' },
+
+      'settings.reportLang.label': { en: 'Report Language', ru: 'Язык отчёта' },
+      'settings.reportLang.desc': {
+        en: 'The language of the final report that the agents write.',
+        ru: 'Язык итогового отчёта, который пишут агенты.'
+      },
+
+      // ── HITL research-frame form (rendered at runtime, keyed by currentLang) ──
+      'hitl.form.sidebarTitle': { en: 'Research Frame', ru: 'Рамка исследования' },
+      'hitl.form.sidebarHint': {
+        en: 'Fill in the form in the chat. The agent fills the empty fields itself.',
+        ru: 'Заполните форму в чате. Пустые поля агент заполнит сам.'
+      },
+      'hitl.form.title': { en: 'Research Frame', ru: 'Рамка исследования' },
+      'hitl.form.notSet': { en: 'not set', ru: 'не задано' },
+      'hitl.form.placeholderFallback': {
+        en: 'Leave empty and the agent will fill in a working value',
+        ru: 'Оставьте пустым, чтобы агент подставил рабочее значение'
+      },
+      'hitl.form.save': { en: 'Save Frame', ru: 'Сохранить рамку' },
+      'hitl.form.skip': { en: 'Skip (agent decides)', ru: 'Пропустить (агент решит)' },
+      'hitl.form.saved': {
+        en: '✓ Frame saved ({n} fields set by the operator)',
+        ru: '✓ Рамка сохранена ({n} поле(й) заданы оператором)'
+      },
+      'hitl.form.skipped': {
+        en: '→ Frame skipped — the agent will fill in the values',
+        ru: '→ Рамка пропущена — агент подставит значения'
+      },
+
+      // Internal-loop review request (agent name replaces {agent}).
+      'hitl.internalLoop': {
+        en: "Agent '{agent}' proposes its result. Please review.",
+        ru: "Агент '{agent}' предлагает свой результат. Проверьте его."
+      },
     };
 
     /** Применяет текущий язык ко всем элементам с data-i18n / data-i18n-placeholder */
@@ -696,6 +740,12 @@
         btnRu.classList.toggle('bg-primary', currentLang === 'ru');
         btnRu.classList.toggle('text-on-primary', currentLang === 'ru');
       }
+    }
+
+    /** Runtime lookup for dynamic DOM (HITL form), resolved by currentLang. */
+    function t(key) {
+      const entry = i18n[key];
+      return (entry && entry[currentLang]) || (entry && entry.en) || key;
     }
 
     // Применяем язык при загрузке страницы (после того как DOM построится)
@@ -907,23 +957,54 @@
     }
 
     function linkify(escapedText) {
-      // Input is already HTML-escaped. Render links in two ordered passes:
+      // Input is already HTML-escaped. Render links in ordered passes:
+      //   0) markdown images ![alt](url) — must run first, because the plain
+      //      link regex in pass 1 also matches inside ![alt](url);
       //   1) markdown links [label](url) — the agent emits these;
       //   2) bare http(s) URLs and known paths, but ONLY in text that is not
-      //      already inside an <a> from pass 1 (otherwise the http:// inside a
+      //      already inside an <a> from passes 0-1 (otherwise the http:// inside a
       //      freshly-built href gets re-linked → the [url](url) double-link bug).
+      // A link whose URL path (before any ?query) ends in an image extension
+      // gets an inline <img> preview under the link. The & in presigned S3
+      // query strings shows up here as &amp; — the URL patterns allow it.
       const A = ' target="_blank" class="text-primary underline"';
-      let s = escapedText.replace(
-        /\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]+)\)/g,
-        '<a href="$2"' + A + '>$1</a>');
+      const IMG_CLASS = 'mt-2 max-w-full rounded-lg border border-outline-variant/20 cursor-zoom-in';
+      const IMG_SRC_RE = /^(https?:\/\/|\/(?!\/))/;
+      const IMG_EXT_RE = /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i;
+      const isImageUrl = (url) => IMG_EXT_RE.test(url.split(/[?#]/)[0]);
+      // Only http(s) and same-origin relative URLs in src — never javascript:.
+      const imgLink = (url, alt) => IMG_SRC_RE.test(url)
+        ? '<a href="' + url + '" target="_blank"><img src="' + url + '" alt="' + (alt || '') + '"'
+          + ' class="' + IMG_CLASS + '" loading="lazy"></a>'
+        : '';
+      let s = escapedText
+        .replace(/!\[([^\]]*)\]\((https?:\/\/[^\s)]+|\/[^\s)]+)\)/g,
+          (m, alt, url) => imgLink(url, alt) || m)
+        .replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]+)\)/g, (m, label, url) => {
+          const a = '<a href="' + url + '"' + A + '>' + label + '</a>';
+          return isImageUrl(url) ? a + '<br>' + imgLink(url, label) : a;
+        });
       return s.split(/(<a\b[^>]*>.*?<\/a>)/g).map(seg => {
         if (seg.startsWith('<a')) return seg;   // leave existing anchors alone
         return seg
-          .replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1"' + A + '>$1</a>')
+          .replace(/(https?:\/\/[^\s<]+)/g, (m, url) => {
+            const a = '<a href="' + url + '"' + A + '>' + url + '</a>';
+            return isImageUrl(url) ? a + '<br>' + imgLink(url, url) : a;
+          })
           .replace(/(^|\s)(\/api\/tz-document[^\s<]*)/g, '$1<a href="$2"' + A + '>$2</a>')
           // Live MCP build page: /builds/<job_id> (agent surfaces it as progress_page).
           .replace(/(^|\s)(\/builds\/[A-Za-z0-9._-]+)/g, '$1<a href="$2"' + A + '>$2</a>');
       }).join('');
+    }
+
+    // Internal-loop HITL requests arrive with a fixed English message
+    // ("Agent 'X' proposes its result. Please review.", legacy ones carry an
+    // "[INTERNAL_LOOP: ...]" prefix). Show a localized version instead.
+    const INTERNAL_LOOP_RE = /^(?:\[INTERNAL_LOOP:[^\]]*\]\s*)?Agent '([^']+)' proposes its result\. Please review\.?\s*$/;
+    function localizeHitlMessage(message) {
+      const m = INTERNAL_LOOP_RE.exec(message || '');
+      if (!m) return message;
+      return t('hitl.internalLoop').replace('{agent}', m[1]);
     }
 
     let activeSandboxWatchUrl = null;
@@ -1176,7 +1257,7 @@
           </div>
           <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">HITL Required</h3>
         </div>
-        <p class="text-xs text-on-surface-variant leading-relaxed">${escHtml(data.message)}</p>
+        <p class="text-xs text-on-surface-variant leading-relaxed">${escHtml(localizeHitlMessage(data.message))}</p>
         ${sidebarButtons}
         ${openRoadmapSidebarBtn}
       </div>
@@ -1199,7 +1280,7 @@
           </div>
           <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">Human-In-The-Loop Required</h3>
         </div>
-        <p class="text-sm text-on-surface-variant leading-relaxed pl-11">${escHtml(data.message)}</p>
+        <p class="text-sm text-on-surface-variant leading-relaxed pl-11">${escHtml(localizeHitlMessage(data.message))}</p>
         <p class="text-[10px] text-outline-variant font-mono mt-2 pl-11">CTX: ${data.request_id.slice(0, 8)} · ${escHtml(data.agent_name || '')}</p>
         ${outputBlock}
         ${isProvideInput ? `
@@ -1351,27 +1432,37 @@
     function renderHitlForm(panel, feed, data) {
       const form = data.form;
       const rid = data.request_id;
+      // The backend sends {en, ru} dicts for the display strings. The canonical
+      // Russian `title` / `name` stay the round-trip keys in data-block / data-field.
+      const loc = (v, fallback) => {
+        if (v && typeof v === 'object') return v[currentLang] || v.ru || v.en || fallback;
+        return v || fallback;
+      };
       const blocksHtml = form.blocks.map((b, bi) => {
         const fieldsHtml = (b.fields || []).map((f, fi) => {
           const openTag = f.open
-            ? '<span class="text-[9px] text-error uppercase tracking-wider">не задано</span>'
+            ? `<span class="text-[9px] text-error uppercase tracking-wider">${escHtml(t('hitl.form.notSet'))}</span>`
             : `<span class="text-[9px] text-outline-variant uppercase tracking-wider">${escHtml(f.status || '')}</span>`;
           const val = f.open ? '' : String(f.value || '');
+          const label = loc(f.label, f.name);
+          const placeholder = loc(f.placeholder, t('hitl.form.placeholderFallback'));
           return `
             <div class="flex flex-col gap-1">
               <div class="flex items-center justify-between">
-                <label class="text-[11px] font-mono text-on-surface-variant">${escHtml(f.name)}</label>
+                <label class="text-[11px] font-mono text-on-surface-variant">${escHtml(label)}</label>
                 ${openTag}
               </div>
               <textarea id="frm-${rid}-${bi}-${fi}" data-block="${escJs(b.title)}" data-field="${escJs(f.name)}"
-                rows="2" placeholder="${escHtml(f.placeholder || 'Оставьте пустым, чтобы агент подставил рабочее значение')}"
+                rows="2" placeholder="${escHtml(placeholder)}"
                 class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50">${escHtml(val)}</textarea>
             </div>`;
         }).join('');
+        const blockTitle = loc(b.title_i18n, b.title);
+        const blockUsage = loc(b.usage_i18n, b.usage);
         return `
           <div class="mt-3 border border-outline-variant/10 rounded-lg p-3 bg-surface-container-high/40">
-            <p class="text-[11px] font-bold text-on-surface uppercase tracking-wider">${escHtml(b.title)}</p>
-            ${b.usage ? `<p class="text-[10px] text-outline-variant mb-2">${escHtml(b.usage)}</p>` : '<div class="mb-2"></div>'}
+            <p class="text-[11px] font-bold text-on-surface uppercase tracking-wider">${escHtml(blockTitle)}</p>
+            ${blockUsage ? `<p class="text-[10px] text-outline-variant mb-2">${escHtml(blockUsage)}</p>` : '<div class="mb-2"></div>'}
             <div class="flex flex-col gap-2">${fieldsHtml}</div>
           </div>`;
       }).join('');
@@ -1379,10 +1470,12 @@
       panel.classList.remove('hidden');
       panel.innerHTML = `
         <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-2">
-          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">Рамка исследования</h3>
-          <p class="text-[11px] text-on-surface-variant">Заполните форму в чате. Пустые поля агент заполнит сам.</p>
+          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${escHtml(t('hitl.form.sidebarTitle'))}</h3>
+          <p class="text-[11px] text-on-surface-variant">${escHtml(t('hitl.form.sidebarHint'))}</p>
         </div>`;
 
+      const formTitle = loc(form.title_i18n, form.title || t('hitl.form.title'));
+      const formIntro = loc(form.intro_i18n, form.intro || data.message || '');
       feed.innerHTML += `
         <div id="hitl-controls-${rid}" class="my-6 relative msg-enter">
           <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
@@ -1390,16 +1483,16 @@
               <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
                 <span class="material-symbols-outlined text-on-primary text-sm">fact_check</span>
               </div>
-              <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${escHtml(form.title || 'Рамка исследования')}</h3>
+              <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${escHtml(formTitle)}</h3>
             </div>
-            <p class="text-xs text-on-surface-variant leading-relaxed">${escHtml(form.intro || data.message || '')}</p>
+            <p class="text-xs text-on-surface-variant leading-relaxed">${escHtml(formIntro)}</p>
             ${blocksHtml}
             <div class="flex flex-wrap gap-3 mt-4">
               <button onclick="respondHITLForm('${rid}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-                <span class="material-symbols-outlined text-base">check_circle</span> Сохранить рамку
+                <span class="material-symbols-outlined text-base">check_circle</span> ${escHtml(t('hitl.form.save'))}
               </button>
               <button onclick="respondHITLForm('${rid}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
-                <span class="material-symbols-outlined text-base">skip_next</span> Пропустить (агент решит)
+                <span class="material-symbols-outlined text-base">skip_next</span> ${escHtml(t('hitl.form.skip'))}
               </button>
             </div>
           </div>
@@ -1433,7 +1526,7 @@
       document.getElementById('hitl-panel').classList.add('hidden');
       disableHitlControls(requestId);
       const n = formValues ? Object.values(formValues).reduce((s, o) => s + Object.keys(o).length, 0) : 0;
-      addSystemMsg(collect ? `✓ Рамка сохранена (${n} поле(й) заданы оператором)` : '→ Рамка пропущена — агент подставит значения');
+      addSystemMsg(collect ? t('hitl.form.saved').replace('{n}', n) : t('hitl.form.skipped'));
     }
 
     // =========================================================================
@@ -1507,6 +1600,9 @@
       modal.classList.remove('hidden');
       // Apply current language to the modal (highlight toggle + translate)
       applyLanguage();
+      // Sync the report-language select with the stored value
+      const reportLangSelect = document.getElementById('report-lang-select');
+      if (reportLangSelect) reportLangSelect.value = reportLang;
       // Load latest from server
       await loadSettings();
       // Sync UI with current state
@@ -2677,7 +2773,7 @@
       const msg = input.value.trim();
       if (!msg || !ws || ws.readyState !== 1) return;
       maybeAutoNameSession(msg);
-      ws.send(JSON.stringify({ type: 'chat_message', message: msg }));
+      ws.send(JSON.stringify({ type: 'chat_message', message: msg, report_language: reportLang }));
       addTelemetry('SEND :: user query');
     });
 
@@ -3492,6 +3588,16 @@
               class="px-2 py-1 text-[10px] font-bold uppercase tracking-wider rounded transition-all text-on-surface-variant hover:text-on-surface">EN</button>
             <button id="lang-btn-ru" onclick="applyLanguage('ru')"
               class="px-2 py-1 text-[10px] font-bold uppercase tracking-wider rounded transition-all text-on-surface-variant hover:text-on-surface">RU</button>
+          </div>
+          <!-- Report language -->
+          <div class="flex items-center gap-2 ml-4">
+            <label for="report-lang-select" data-i18n="settings.reportLang.label"
+              class="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">Report Language</label>
+            <select id="report-lang-select" onchange="setReportLang(this.value)"
+              class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-[10px] font-mono rounded-md px-2 py-1 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 cursor-pointer">
+              <option value="en">English</option>
+              <option value="ru">Русский</option>
+            </select>
           </div>
         </div>
         <button onclick="closeSettings()"

@@ -53,6 +53,8 @@ summarisation_prompt = (
     f"{DOMAIN_SUBDOMAIN_MAPPING}\n"
     "Do not invent new domain or sub-domain values outside these lists.\n\n"
     "If the domain/sub-domain cannot be determined with confidence, select the closest allowed domain and sub-domain.\n\n"
+    "If the session sets a report language, write the summary in that language. "
+    "Otherwise write the summary in English.\n\n"
     "Article in Markdown markup:\n"
 )
 
