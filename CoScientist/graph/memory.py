@@ -143,6 +143,13 @@ class KnowledgeGraph:
         self.ensure_seeded()
         return self._store.full(self.run_id)
 
+    def tool_vs_coder(self) -> Dict[str, Any]:
+        """Whether this run used a tool from the catalogue or wrote code from
+        scratch. See :func:`CoScientist.graph.projection.tool_vs_coder`."""
+        from CoScientist.graph.projection import tool_vs_coder
+
+        return tool_vs_coder(self.full())
+
     def agents_info(self) -> List[Dict[str, Any]]:
         """Structured info about every agent in the system (the roster)."""
         return [

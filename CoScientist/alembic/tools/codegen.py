@@ -7,16 +7,61 @@ runner the validator used, so serving and validation share one execution path
 and the two-venv layout needs no special casing. An LLM touches server.py only
 if the compile gate fails.
 """
+
 from __future__ import annotations
 
 import ast
+import re
 import shutil
 from pathlib import Path
 
 from alembic.tools.paths import RUN_FUNCTION_SCRIPT, output_dir
 
-_SAFE_TYPES = {"str", "int", "float", "bool", "dict", "list", "tuple", "set",
-               "None", "Optional", "Union", "Any"}
+# Builtins + typing names the generated server is guaranteed to know (it does
+# ``from typing import *`` of these). Capitalised typing generics are included so
+# an annotation like ``List[str]`` survives instead of being dropped to untyped.
+_SAFE_TYPES = {
+    "str",
+    "int",
+    "float",
+    "bool",
+    "dict",
+    "list",
+    "tuple",
+    "set",
+    "frozenset",
+    "bytes",
+    "None",
+    "Optional",
+    "Union",
+    "Any",
+    "List",
+    "Dict",
+    "Tuple",
+    "Set",
+    "FrozenSet",
+    "Sequence",
+    "Iterable",
+    "Mapping",
+    "Literal",
+}
+
+# typing names emitted as an import in the generated server so preserved
+# capitalised annotations (List[str], Dict[str, Any], …) resolve at import time.
+_TYPING_IMPORTS = (
+    "Any",
+    "Dict",
+    "FrozenSet",
+    "Iterable",
+    "List",
+    "Literal",
+    "Mapping",
+    "Optional",
+    "Sequence",
+    "Set",
+    "Tuple",
+    "Union",
+)
 
 
 def _safe_annotation(node: ast.expr | None) -> str | None:
@@ -31,6 +76,39 @@ def _safe_annotation(node: ast.expr | None) -> str | None:
     try:
         return ast.unparse(node)
     except Exception:
+        return None
+
+
+def _type_name(value: object) -> str | None:
+    """Builtin type annotation for a concrete value (bool before int — bool is an
+    int subclass). None for values we can't map (e.g. ``None``)."""
+    if isinstance(value, bool):
+        return "bool"
+    if isinstance(value, int):
+        return "int"
+    if isinstance(value, float):
+        return "float"
+    if isinstance(value, str):
+        return "str"
+    if isinstance(value, list):
+        return "list"
+    if isinstance(value, tuple):
+        return "tuple"
+    if isinstance(value, set):
+        return "set"
+    if isinstance(value, dict):
+        return "dict"
+    return None
+
+
+def _type_from_default(node: ast.expr | None) -> str | None:
+    """Infer a param type from its literal default (``['all-cells']`` → ``list``,
+    ``True`` → ``bool``, ``1`` → ``int``). None for non-literals or ``None``."""
+    if node is None:
+        return None
+    try:
+        return _type_name(ast.literal_eval(node))
+    except (ValueError, SyntaxError):
         return None
 
 
@@ -57,9 +135,30 @@ def _find_def(source: str, name: str) -> ast.FunctionDef | ast.AsyncFunctionDef 
     return None
 
 
-def tool_signature(name: str, out_dir: Path | None = None) -> dict | None:
+def _param_annotation(
+    arg: ast.arg, default_node: ast.expr | None, sample_args: dict | None
+) -> str | None:
+    """Best available type for a param, in precedence order (E1.4): (a) the
+    function's own server-safe annotation, else (b) its literal default's type,
+    else (c) the recorded ``sample_args`` value's type. Untyped params make an LLM
+    pass mis-serialised args (a JSON string for a list), so typing them is what
+    lets the tool actually be called."""
+    ann = _safe_annotation(arg.annotation)
+    if ann is None:
+        ann = _type_from_default(default_node)
+    if ann is None and sample_args and arg.arg in sample_args:
+        ann = _type_name(sample_args[arg.arg])
+    return ann
+
+
+def tool_signature(
+    name: str, out_dir: Path | None = None, sample_args: dict | None = None
+) -> dict | None:
     """Extract {name, params: [(name, annotation|None, default|None)], doc}
-    from tools/<name>.py. None if the file/function is missing or unparseable."""
+    from tools/<name>.py. None if the file/function is missing or unparseable.
+
+    ``sample_args`` (the plan's recorded invocation for this tool) is used to type
+    un-annotated, un-defaulted params so the served schema is not typeless."""
     out = out_dir or output_dir()
     f = out / "tools" / f"{name}.py"
     if not f.exists():
@@ -69,17 +168,31 @@ def tool_signature(name: str, out_dir: Path | None = None) -> dict | None:
         return None
     a = fn.args
     pos = [*a.posonlyargs, *a.args]
-    defaults: list[ast.expr | None] = [None] * (len(pos) - len(a.defaults)) + list(a.defaults)
-    params = [(arg.arg, _safe_annotation(arg.annotation), _literal_default(d))
-              for arg, d in zip(pos, defaults)]
-    params += [(arg.arg, _safe_annotation(arg.annotation),
-                _literal_default(d) if d else None)
-               for arg, d in zip(a.kwonlyargs, a.kw_defaults)]
-    return {"name": name, "params": params,
-            "doc": ast.get_docstring(fn) or f"Run {name}."}
+    defaults: list[ast.expr | None] = [None] * (len(pos) - len(a.defaults)) + list(
+        a.defaults
+    )
+    params = [
+        (arg.arg, _param_annotation(arg, d, sample_args), _literal_default(d))
+        for arg, d in zip(pos, defaults)
+    ]
+    params += [
+        (
+            arg.arg,
+            _param_annotation(arg, d, sample_args),
+            _literal_default(d) if d else None,
+        )
+        for arg, d in zip(a.kwonlyargs, a.kw_defaults)
+    ]
+    return {
+        "name": name,
+        "params": params,
+        "doc": ast.get_docstring(fn) or f"Run {name}.",
+    }
 
 
-def function_param_names(name: str, out_dir: Path | None = None) -> tuple[set[str] | None, bool]:
+def function_param_names(
+    name: str, out_dir: Path | None = None
+) -> tuple[set[str] | None, bool]:
     """(accepted param names, has **kwargs) for the generated tools/<name>.py
     function — the ground truth for which kwargs it actually accepts. Returns
     (None, False) if the file/function is missing/unparseable. Used to filter
@@ -117,12 +230,13 @@ def render_server(repo_name: str, signatures: list[dict]) -> str:
         args = ", ".join(_render_param(p) for p in params)
         payload = ", ".join(f'"{n}": {n}' for n, _, _ in sig["params"])
         blocks.append(
-            f'@mcp.tool()\n'
-            f'def {sig["name"]}({args}) -> dict:\n'
+            f"@mcp.tool()\n"
+            f"def {sig['name']}({args}) -> dict:\n"
             f'    """{_escape_doc(sig["doc"])}"""\n'
             f'    return _call("{sig["name"]}", {{{payload}}})\n'
         )
     tools_src = "\n\n".join(blocks)
+    typing_imports = ", ".join(_TYPING_IMPORTS)
     return f'''"""FastMCP server for {repo_name} — generated by alembic.
 
 Each tool shells through the tools venv via helpers/run_function.py — the same
@@ -132,6 +246,7 @@ execution path (two-venv layouts work unchanged).
 import json
 import subprocess
 from pathlib import Path
+from typing import {typing_imports}
 
 from fastmcp import FastMCP
 
@@ -163,31 +278,68 @@ if __name__ == "__main__":
 '''
 
 
-def write_server(repo_name: str, tool_names: list[str]) -> dict:
+def write_server(
+    repo_name: str, tool_names: list[str], sample_args: dict | None = None
+) -> dict:
     """Generate output/server.py + output/helpers/run_function.py for every
-    tool whose signature extracts cleanly. Returns {written, tools, skipped}."""
+    tool whose signature extracts cleanly. Returns {written, tools, skipped}.
+
+    ``sample_args`` maps tool name → its recorded invocation args (the plan's
+    ``ToolSpec.sample_args``); it types un-annotated params so the served MCP
+    schema is not typeless (E1.4)."""
     out = output_dir()
+    sample_args = sample_args or {}
     sigs, skipped = [], []
     for name in tool_names:
-        sig = tool_signature(name, out)
+        sig = tool_signature(name, out, sample_args=sample_args.get(name))
         (sigs if sig else skipped).append(sig or name)
     helpers = out / "helpers"
     helpers.mkdir(parents=True, exist_ok=True)
     shutil.copy(RUN_FUNCTION_SCRIPT, helpers / "run_function.py")
     server = out / "server.py"
     server.write_text(render_server(out.parent.name, sigs), encoding="utf-8")
-    return {"written": str(server), "tools": [s["name"] for s in sigs], "skipped": skipped}
+    return {
+        "written": str(server),
+        "tools": [s["name"] for s in sigs],
+        "skipped": skipped,
+    }
+
+
+# The transcript is recorded in a live build where each command runs with
+# whatever cwd and venv state the previous one left behind. Replayed cold on a
+# clean image those two assumptions break, so the commands are normalised as
+# they are written — not patched afterwards by whoever replays them.
+_PORTABILITY_FIXES = (
+    # `uv venv` does not install pip, but transcripts routinely go on to call
+    # `.venv/bin/pip` directly. Seed it so those commands resolve.
+    (re.compile(r"\buv venv\b(?!\s+--seed)"), "uv venv --seed"),
+    # A relative `cd .alembic/...` resolves against wherever an earlier `cd`
+    # left us. Anchor it to /work, where setup.sh starts.
+    (re.compile(r"(^|&&\s*)cd \.alembic/"), r"\1cd /work/.alembic/"),
+)
+
+
+def portable_command(command: str) -> str:
+    """One recorded env-stage command, rewritten so a cold replay reproduces it."""
+    for pattern, replacement in _PORTABILITY_FIXES:
+        command = pattern.sub(replacement, command)
+    return command
 
 
 def render_setup_sh(commands: list[str]) -> str:
     """setup.sh from the recorded transcript of successful env-stage commands."""
-    body = "\n".join(commands) if commands else "# (no environment commands were recorded)"
-    return ("#!/usr/bin/env bash\n"
-            "# Environment setup transcript — the commands that actually succeeded\n"
-            "# during the alembic Environment stage, in order. Recorded by code.\n"
-            "set -euo pipefail\n"
-            "cd /work\n\n"
-            f"{body}\n")
+    commands = [portable_command(c) for c in commands]
+    body = (
+        "\n".join(commands) if commands else "# (no environment commands were recorded)"
+    )
+    return (
+        "#!/usr/bin/env bash\n"
+        "# Environment setup transcript — the commands that actually succeeded\n"
+        "# during the alembic Environment stage, in order. Recorded by code.\n"
+        "set -euo pipefail\n"
+        "cd /work\n\n"
+        f"{body}\n"
+    )
 
 
 def write_setup_sh(commands: list[str]) -> Path:

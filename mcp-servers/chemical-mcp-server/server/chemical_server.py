@@ -1,7 +1,6 @@
 import base64
 import json
 import logging
-import os
 import uuid
 from io import StringIO
 from typing import Annotated, Dict, List, Optional
@@ -28,8 +27,10 @@ from .ocr_pipeline import (
     extract_molecules_from_image_urls,
     extract_reactions_from_image_urls,
 )
-from .service_resources import chem_service, retrosynthesis_service, s3_service
+from .service_resources import chem_service, retrosynthesis_service
+from .utils import vault
 from .utils.drawing_utils import draw_molecules_grid, draw_reactions_strip, draw_route_image
+from .utils.vault import safe_id
 
 
 logging.basicConfig(level=logging.INFO)
@@ -42,31 +43,34 @@ mcp = FastMCP("ChemTools")
 async def fetch_activity_data(
     source: str,
     protein_name: str,
-    output_path: Annotated[str, "Full path to the output CSV file"],
     protein_id: Optional[str] = None,
     affinity_type: str = "IC50",
     cutoff: int = 10000,
-) -> str:
+    user_id: Annotated[Optional[str], "Owner of the session. The framework supplies it."] = None,
+    session_id: Annotated[Optional[str], "Current session. The framework supplies it."] = None,
+) -> dict:
     """
     Unified data retrieval tool for biochemical databases.
 
-    Fetches protein-ligand interaction or activity data from BindingDB or ChEMBL.
-    Saves results to the given CSV file path.
+    Fetches protein-ligand interaction or activity data from BindingDB or ChEMBL
+    and uploads the result as a CSV to S3.
 
     Args:
         source (str): Data source ("bindingdb" or "chembl").
         protein_name (str): Target protein name.
-        output_path (str): Full path to the output CSV file.
         protein_id (str, optional): Target protein id. If passed, protein_name is ignored.
         affinity_type (str, optional): Type of affinity (Ki, Kd, IC50). Defaults to "IC50".
         cutoff (int, optional): Optional threshold (nM) for BindingDB. Defaults to 10000.
+        user_id: Session owner. The framework fills this in.
+        session_id: Session identifier. The framework fills this in.
 
     Returns:
-        str: On success, path to the saved file and dataset info. On failure, error message.
+        dict: ``bucket``, ``s3_key`` and ``presigned_url`` of the CSV, plus
+        ``info`` describing the dataset. On failure, ``error``.
     """
     source = source.lower().strip()
     if affinity_type not in VALID_AFFINITY_TYPES:
-        return f"Invalid affinity type '{affinity_type}'. Must be one of {VALID_AFFINITY_TYPES}"
+        return {"error": f"Invalid affinity type '{affinity_type}'. Must be one of {VALID_AFFINITY_TYPES}"}
 
     try:
         async with aiohttp.ClientSession() as session:
@@ -75,7 +79,7 @@ async def fetch_activity_data(
                 if not target_id:
                     resolved_id = await fetch_uniprot_id(session, protein_name)
                     if not resolved_id:
-                        return f"[BindingDB] Could not find UniProt ID for '{protein_name}'"
+                        return {"error": f"[BindingDB] Could not find UniProt ID for '{protein_name}'"}
                     target_id = resolved_id
 
                 results = await fetch_affinity_bindingdb(
@@ -89,27 +93,29 @@ async def fetch_activity_data(
                     session=session,
                 )
             else:
-                return f"Unsupported data source '{source}'. Use 'bindingdb' or 'chembl'."
+                return {"error": f"Unsupported data source '{source}'. Use 'bindingdb' or 'chembl'."}
 
-        output_path = output_path.strip()
-        if isinstance(results, list):
-            out_dir = os.path.dirname(output_path)
-            if out_dir:
-                os.makedirs(out_dir, exist_ok=True)
-            df = pd.DataFrame(results)
-            if len(df) > 0:
-                df.to_csv(output_path, index=False)
-                buffer = StringIO()
-                df.info(buf=buffer)
-                info_str = buffer.getvalue()
-                return (
-                    f"The data was saved to {os.path.abspath(output_path)}. "
-                    f"Here is info about dataset: {info_str}"
-                )
-            return "The data was not saved because it is empty."
-        return results
+        if not isinstance(results, list):
+            return {"answer": results}
+
+        df = pd.DataFrame(results)
+        if len(df) == 0:
+            return {"error": "The data was not saved because it is empty."}
+
+        buffer = StringIO()
+        df.info(buf=buffer)
+        # The file used to be written to a local path the caller chose. That path
+        # means nothing outside this container, so the next step could never open
+        # it. The CSV goes to S3 instead, under the session prefix.
+        target = safe_id(protein_id or protein_name, "target")
+        stored = vault.upload(
+            user_id, session_id, "activity_data",
+            f"{source}_{target}_{affinity_type}_{uuid.uuid4()}.csv",
+            df.to_csv(index=False).encode("utf-8"),
+        )
+        return {**stored, "rows": len(df), "info": buffer.getvalue()}
     except Exception as e:
-        return f"[fetch_activity_data] Error: {str(e)}"
+        return {"error": f"[fetch_activity_data] Error: {str(e)}"}
 
 
 @mcp.tool()
@@ -210,23 +216,26 @@ def smiles2prop(
 @mcp.tool()
 def visualize_molecule(
     smiles: Annotated[str, "SMILES of a molecule"],
-) -> str:
+    user_id: Annotated[Optional[str], "Owner of the session. The framework supplies it."] = None,
+    session_id: Annotated[Optional[str], "Current session. The framework supplies it."] = None,
+) -> dict:
     """
-    Visualizes a molecule from its SMILES and returns a temporary presigned URL to an HTML file.
-
-    The file is stored in S3 under 'visualizations/' with a auto-generated name
-    and is intended for one-time viewing (URL expires in 1 hour).
+    Visualizes a molecule from its SMILES and stores the HTML file in S3.
 
     Args:
         smiles: SMILES string of the molecule.
+        user_id: Session owner. The framework fills this in.
+        session_id: Session identifier. The framework fills this in.
 
     Returns:
-        str: Presigned URL to the HTML visualization, or an error message.
+        dict: ``bucket``, ``s3_key`` and ``presigned_url`` of the HTML
+        visualization. The URL expires in one hour, the object does not, so keep
+        the bucket and the key. On failure, ``error``.
     """
     try:
         mol = Chem.MolFromSmiles(smiles)
         if mol is None:
-            return f"Invalid SMILES: {smiles}"
+            return {"error": f"Invalid SMILES: {smiles}"}
 
         AllChem.AddHs(mol, addCoords=True)
         AllChem.EmbedMolecule(mol)
@@ -241,37 +250,40 @@ def visualize_molecule(
         view.setBackgroundColor("#b8bfcc")
         view.zoomTo()
 
-        s3_key = s3_service.upload_bytes(
-            "chemical_mcp/molecule_visualizations",
+        return vault.upload(
+            user_id, session_id, "molecule_visualizations",
             f"{uuid.uuid4()}.html",
             view.write_html().encode("utf-8"),
         )
 
-        return s3_service.generate_presigned_url(s3_key, expiration=3600)
-
     except Exception as e:
-        return f"Failed to visualize molecule. Error: {repr(e)}"
+        return {"error": f"Failed to visualize molecule. Error: {repr(e)}"}
 
 
 @mcp.tool()
 def extract_reactions(
     image_urls: Annotated[List[str], "List of public HTTP(S) URLs of images"],
+    user_id: Annotated[Optional[str], "Owner of the session. The framework supplies it."] = None,
+    session_id: Annotated[Optional[str], "Current session. The framework supplies it."] = None,
 ) -> Dict:
     """Detect chemical reactions in images loaded by URLs (ChemService).
 
-    Each URL is processed in turn (in memory, no local cache). Annotated JPEGs are uploaded to S3
-    under ``chemical_mcp/annotated_images``; presigned URLs are listed in metadata.
+    Each URL is processed in turn (in memory, no local cache). Annotated JPEGs go
+    to S3 under the session prefix.
 
     Args:
         image_urls: One or more direct image links.
+        user_id: Session owner. The framework fills this in.
+        session_id: Session identifier. The framework fills this in.
 
     Returns:
         dict: ``answer`` maps labels (from URL paths; disambiguated with ``__{index}`` on collision)
-        to reaction dicts. ``metadata`` has ``annotated_image_presigned_urls``, ``source_urls``,
-        and optionally ``failed`` (per-URL errors) if some URLs could not be processed.
+        to reaction dicts. ``metadata`` has ``annotated_images`` (each with ``bucket``,
+        ``s3_key`` and ``presigned_url``), ``source_urls``, and optionally ``failed``
+        (per-URL errors) if some URLs could not be processed.
     """
     try:
-        response = extract_reactions_from_image_urls(image_urls)
+        response = extract_reactions_from_image_urls(image_urls, user_id, session_id)
         return response
     except ChemServiceError as e:
         logger.error("extract_reactions ChemServiceError: %s", e)
@@ -287,21 +299,25 @@ def extract_reactions(
 @mcp.tool()
 def extract_molecules(
     image_urls: Annotated[List[str], "List of public HTTP(S) URLs of images"],
+    user_id: Annotated[Optional[str], "Owner of the session. The framework supplies it."] = None,
+    session_id: Annotated[Optional[str], "Current session. The framework supplies it."] = None,
 ) -> Dict:
     """Detect molecular structures in images loaded by URLs (ChemService).
 
-    Each URL is processed in turn. Annotated JPEGs go to S3 under ``chemical_mcp/annotated_images``;
-    presigned URLs are returned in metadata.
+    Each URL is processed in turn. Annotated JPEGs go to S3 under the session prefix.
 
     Args:
         image_urls: One or more direct image links.
+        user_id: Session owner. The framework fills this in.
+        session_id: Session identifier. The framework fills this in.
 
     Returns:
         dict: ``answer`` maps labels to ``smiles`` / ``errors``. ``metadata`` includes
-        ``annotated_image_presigned_urls``, ``source_urls``, and optionally ``failed``.
+        ``annotated_images`` (each with ``bucket``, ``s3_key`` and ``presigned_url``),
+        ``source_urls``, and optionally ``failed``.
     """
     try:
-        response = extract_molecules_from_image_urls(image_urls)
+        response = extract_molecules_from_image_urls(image_urls, user_id, session_id)
         return response
     except ChemServiceError as e:
         logger.error("extract_molecules ChemServiceError: %s", e)
@@ -319,17 +335,22 @@ def extract_molecules(
 def calculate_docking(
     smiles: str,
     pdb_id: str,
+    user_id: Annotated[Optional[str], "Owner of the session. The framework supplies it."] = None,
+    session_id: Annotated[Optional[str], "Current session. The framework supplies it."] = None,
 ) -> dict:
     """
-    Calculate docking score for a molecule; upload the HTML visualization to S3 and return a presigned URL.
+    Calculate docking score for a molecule and upload the HTML visualization to S3.
 
     Args:
         smiles: SMILES string of the molecule.
         pdb_id: PDB identifier for the receptor structure.
+        user_id: Session owner. The framework fills this in.
+        session_id: Session identifier. The framework fills this in.
 
     Returns:
-        dict: ``answer`` with affinity and errors; ``metadata`` may include ``docking_html_presigned_url``
-        (temporary link, same TTL as molecule visualizations) when a visualization is returned.
+        dict: ``answer`` with affinity and errors. When a visualization comes
+        back, ``metadata.docking_html`` holds ``bucket``, ``s3_key`` and
+        ``presigned_url``. Keep the bucket and the key: the URL expires in an hour.
     """
     try:
         response = chem_service.calculate_docking_score(smiles, pdb_id)
@@ -347,7 +368,7 @@ def calculate_docking(
         errors = response.get("error") if isinstance(response, dict) else None
 
     affinity = None
-    presigned_url: Optional[str] = None
+    docking_html: Optional[dict] = None
 
     if data:
         affinity = data.get("affinity")
@@ -358,24 +379,21 @@ def calculate_docking(
             else:
                 html_content = base64.b64decode(visualization)
             filename = f"docking_{pdb_id}_{uuid.uuid4()}.html"
-            s3_key = s3_service.upload_bytes(
-                "chemical_mcp/docking_results",
-                filename,
-                html_content,
+            docking_html = vault.upload(
+                user_id, session_id, "docking_results", filename, html_content,
             )
-            presigned_url = s3_service.generate_presigned_url(s3_key, expiration=3600)
 
     return {
         "answer": {"affinity": affinity, "errors": errors},
-        "metadata": (
-            {"docking_html_presigned_url": presigned_url} if presigned_url else {}
-        ),
+        "metadata": ({"docking_html": docking_html} if docking_html else {}),
     }
     
 @mcp.tool()
 def retrosynthesis_tree_search(
     smiles: Annotated[str, "Target molecule SMILES"],
     mode: Annotated[str, "One of: fast, balanced, deep"] = "fast",
+    user_id: Annotated[Optional[str], "Owner of the session. The framework supplies it."] = None,
+    session_id: Annotated[Optional[str], "Current session. The framework supplies it."] = None,
 ) -> Dict:
     """
     Plan a retrosynthesis route for a target molecule.
@@ -418,6 +436,7 @@ def retrosynthesis_tree_search(
             - metadata (Dict): visualization info:
                 - route_images (List[Dict]): one entry per route with:
                     - route_id (str): route identifier.
+                    - bucket (str): S3 bucket.
                     - s3_key (str): S3 object key.
                     - presigned_url (str): temporary URL to view the image (1 h TTL).
         On failure returns a dict with an "answer" message.
@@ -434,16 +453,11 @@ def retrosynthesis_tree_search(
         for i, route in enumerate(result.get("routes", [])):
             route_id = route.get("id", f"route_{i}")
             img_bytes = draw_route_image(route)
-            s3_key = s3_service.upload_bytes(
-                "chemical_mcp/retrosynthesis",
-                f"{route_id}_{uuid.uuid4()}.png",
-                img_bytes,
+            stored = vault.upload(
+                user_id, session_id, "retrosynthesis",
+                f"{route_id}_{uuid.uuid4()}.png", img_bytes,
             )
-            route_images.append({
-                "route_id": route_id,
-                "s3_key": s3_key,
-                "presigned_url": s3_service.generate_presigned_url(s3_key, expiration=3600),
-            })
+            route_images.append({"route_id": route_id, **stored})
         metadata["route_images"] = route_images
     except Exception as e:
         logger.warning("retrosynthesis_tree_search: could not render images: %s", e)
@@ -499,6 +513,8 @@ def forward_predict(
     retrosynthesis_model_name: Annotated[str, "Model name for backend"] = "pistachio",
     reagents: Annotated[str, "Reagents string"] = "",
     solvent: Annotated[str, "Solvent string"] = "",
+    user_id: Annotated[Optional[str], "Owner of the session. The framework supplies it."] = None,
+    session_id: Annotated[Optional[str], "Current session. The framework supplies it."] = None,
 ) -> Dict:
     """
     Predict reaction products from reactants (forward synthesis).
@@ -523,11 +539,11 @@ def forward_predict(
                 - score (float): model probability/score.
             - metadata (Dict): visualization info:
                 - predictions_image (Dict):
+                    - bucket (str): S3 bucket.
                     - s3_key (str): S3 object key.
                     - presigned_url (str): temporary URL to view the grid image (1 h TTL).
-                - top_reactions_image (Dict): reaction drawings for top 3 products:
-                    - s3_key (str): S3 object key.
-                    - presigned_url (str): temporary URL to view the reactions image (1 h TTL).
+                - top_reactions_image (Dict): reaction drawings for top 3 products,
+                  same three fields.
         On failure returns a dict with an "answer" message.
     """
     try:
@@ -552,15 +568,10 @@ def forward_predict(
             if p.get("smiles")
         ]
         img_bytes = draw_molecules_grid(smiles_list, labels=labels)
-        s3_key = s3_service.upload_bytes(
-            "chemical_mcp/forward_prediction",
-            f"predictions_{uuid.uuid4()}.png",
-            img_bytes,
+        metadata["predictions_image"] = vault.upload(
+            user_id, session_id, "forward_prediction",
+            f"predictions_{uuid.uuid4()}.png", img_bytes,
         )
-        metadata["predictions_image"] = {
-            "s3_key": s3_key,
-            "presigned_url": s3_service.generate_presigned_url(s3_key, expiration=3600),
-        }
     except Exception as e:
         logger.warning("forward_predict: could not render images: %s", e)
 
@@ -579,15 +590,10 @@ def forward_predict(
             reactions.append((rxn_smi, label))
         if reactions:
             rxn_img_bytes = draw_reactions_strip(reactions)
-            rxn_s3_key = s3_service.upload_bytes(
-                "chemical_mcp/forward_prediction",
-                f"top_reactions_{uuid.uuid4()}.png",
-                rxn_img_bytes,
+            metadata["top_reactions_image"] = vault.upload(
+                user_id, session_id, "forward_prediction",
+                f"top_reactions_{uuid.uuid4()}.png", rxn_img_bytes,
             )
-            metadata["top_reactions_image"] = {
-                "s3_key": rxn_s3_key,
-                "presigned_url": s3_service.generate_presigned_url(rxn_s3_key, expiration=3600),
-            }
     except Exception as e:
         logger.warning("forward_predict: could not render reaction images: %s", e)
 

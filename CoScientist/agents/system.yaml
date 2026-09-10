@@ -12,6 +12,12 @@
 #                 and disappears from their prompts
 #   root:         exactly one agent is the system root (the orchestrator)
 #   model:        main | coder | <literal litellm model string>  (default: main)
+#   reasoning:    model "thinking" for this agent: false (or "off") switches it
+#                 off entirely — the fastest setting for agents that only route,
+#                 reformat or fill a schema; "minimal"|"low"|"medium"|"high"
+#                 turns it down instead. Unset inherits `defaults.reasoning`,
+#                 and an unset default leaves the provider alone. Works on
+#                 hybrid models; one that always reasons ignores it.
 #   description:  THE one description — used in parents' prompt rosters, in the
 #                 AgentTool/RemoteA2aAgent declaration, and on the A2A card
 #   routing:      "when to pick me" bullet in the parent's prompt
@@ -42,6 +48,12 @@
 
 defaults:
   model: main
+  # Reasoning is OFF by default and switched back ON per agent below. Most of
+  # the roster routes, reformats or fills a fixed shape — thinking before each
+  # of those turns costs seconds per call and buys nothing there. The agents
+  # that actually reason declare `reasoning:` for themselves. Set this to
+  # `medium` to restore the previous system-wide behaviour in one line.
+  reasoning: off
 
 # ─────────────────────────────────────────────────────────────────────────────
 # System lifecycle flow (separate from the delegation tree).
@@ -65,6 +77,9 @@ agents:
     root: true
     include_contents: none
     description: Main CoScientist Orchestrator — coordinates specialized agents to solve scientific tasks.
+    # Picks who works next out of the whole roster and reads back what they
+    # returned; a wrong delegation costs an entire sub-agent run.
+    #reasoning: low
     prompt: orchestrator
     tools: [retrieval, graph, research_graph_orchestrator]
     subordinates:
@@ -75,12 +90,14 @@ agents:
       - MedicalAgent
       - McpBuilderAgent
     callbacks:
-      before_model: [save_uploaded_artifacts, seed_coder_workspace]
-      before_agent: [before_get_task, inject_graph_root, inject_research_context]
+      before_model: [save_uploaded_artifacts, seed_coder_workspace, redact_link_urls]
+      before_agent: [before_get_task, inject_graph_root, inject_research_context, user_links]
       # Catch hallucinated tool calls (e.g. the orchestrator inventing a
       # sub-agent's `execute_bash`) and correct them, instead of ADK raising
       # ValueError('Tool not found') and crashing the whole run.
-      after_model: [guard_unknown_tools]
+      after_model: [expand_link_refs, guard_unknown_tools]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
       # after_model: [pre_action_critique]
       # The post-action critic is intentionally not wired; add
       # `after_tool: [post_action_critique]` to enable it — the orchestrator
@@ -126,13 +143,19 @@ agents:
     routing: >-
       for a complex multi-step task, call this FIRST to produce a roadmap,
       then follow it step by step.
+    # The roadmap is the shape of the whole run — the one place worth thinking
+    # hard, and it is produced once.
+    reasoning: medium
     prompt: planner
-    tools: [planner_retrieval, create_plan_tool, planner_graph]
+    tools: [planner_retrieval, create_plan_tool, planner_graph, research_graph_readonly]
     output_key: planner_roadmap
     report_output: true
     callbacks:
-      before_agent: [inject_graph_root]
-      after_model: [guard_unknown_tools, finish_after_plan_registered]
+      before_agent: [inject_graph_root, inject_research_context, user_links]
+      before_model: [redact_link_urls]
+      after_model: [expand_link_refs, guard_unknown_tools, finish_after_plan_registered]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
     hitl: true
     critic: ${web.planner_critic_enabled}
     options:
@@ -161,13 +184,23 @@ agents:
       структурированную рамку (вопрос, профиль, ограничения, бюджеты,
       инструменты, эмпирическая база, условия подтверждения, модель стоимости),
       согласует её с оператором и заполняет граф исследования до старта.
+    # Interprets a free-form question, but into a fixed schema, and the operator
+    # reviews the result before it is seeded — some thinking, not a lot.
+    reasoning: off
     prompt: context_init
     output_key: research_frame
     output_schema: research_frame
     hitl: true
     callbacks:
-      # Strip prose/fences around the JSON before strict output_schema validation.
-      after_model: [sanitize_json_output]
+      before_agent: [user_links]
+      before_model: [redact_link_urls]
+      # expand_link_refs MUST come first: ADK's after_model chain stops at the
+      # first callback that returns a response, and sanitize_json_output
+      # returns one on every JSON answer. expand_link_refs mutates the text in
+      # place and returns None, so it never stops the chain — sanitize_json_output
+      # still runs next and reads the already-expanded text. Reversed, a
+      # `[[link1]]` inside a frame field would never be expanded.
+      after_model: [expand_link_refs, sanitize_json_output]
 
   ResultAggregatorAgent:
     class: llm
@@ -179,6 +212,9 @@ agents:
       Reads the finished Research Context Graph (conclusions, evidence,
       hypotheses with their status) and the run's figures/tables, and synthesizes
       a single, complete, visually-rich Markdown report grounded in the graph.
+    # Writing from an already-decided graph, and it runs last, with the user
+    # waiting on the report — enough reasoning to organize it, no more.
+    reasoning: low
     prompt: result_aggregator
     tools: [result_formatter, research_graph_readonly]
     # Graph-primary grounding: no conversation history — the report is built from
@@ -186,7 +222,11 @@ agents:
     # figures/tables collected by format_results, not from the raw transcript.
     include_contents: none
     callbacks:
-      before_agent: [inject_research_context]
+      before_agent: [inject_research_context, inject_report_language, user_links]
+      before_model: [redact_link_urls]
+      after_model: [expand_link_refs]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
     output_key: final_report
 
   HypothesesAgent:
@@ -202,13 +242,19 @@ agents:
       Use this to generate hypotheses when the solution is unclear or approaches need to be proposed.
       It picks the single most relevant hypothesis to test first, so plan ONE verification branch after it.
       Decision-making and compatibility assessment based on gathered facts.
+    # Ideation plus choosing what to test first: the most reasoning-bound job
+    # in the system.
+    reasoning: high
     prompt: hypotheses
     output_key: hypotheses
     report_output: true
     tools: [task_tracker, graph, research_graph]
     callbacks:
-      before_agent: [before_get_task, inject_research_context]
-      after_model: [guard_unknown_tools]
+      before_agent: [before_get_task, inject_research_context, user_links]
+      before_model: [redact_link_urls]
+      after_model: [expand_link_refs, guard_unknown_tools]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
     a2a:
       key: hypotheses
       port: 8002
@@ -240,16 +286,18 @@ agents:
       Use it to gather extra information about the scientific field and literature.
       Use it when information cannot be computed or retrieved via tools, and specifically 
       requires searching information from the web or literature.  
+    # Decides how to search, then judges and synthesizes what comes back.
+    reasoning: medium
     prompt: research
     tools: [websearch, paper_analysis, papers_search, task_tracker, graph, research_graph]
     output_key: search_results
     report_output: true
     callbacks:
-      before_agent: [before_get_task, inject_research_context]
-      before_model: [inject_uploaded_papers]
-      before_tool: [WebSearchLimiter]
-      after_tool: [log_research_tool_calls]
-      after_model: [guard_unknown_tools]
+      before_agent: [before_get_task, inject_research_context, user_links]
+      before_model: [inject_uploaded_papers, redact_link_urls]
+      before_tool: [WebSearchLimiter, resolve_link_refs]
+      after_tool: [log_research_tool_calls, register_tool_result_links]
+      after_model: [expand_link_refs, guard_unknown_tools]
     hitl: true
     a2a:
       key: research
@@ -279,12 +327,18 @@ agents:
           evaluation, shell and git operations, collecting/processing data
       It routes between those two paths internally, so assign it the OUTCOME and
       let it choose how to reach it.
+    # A two-way switch (run a ready tool vs. write code): reasoning stays off
+    # (the default) — the thinking belongs to whichever branch it picks.
     prompt: task_router
     subordinates: [ToolPipelineAgent, CoderAgent]
     output_key: executor_results
     report_output: true
     callbacks:
-      after_model: [guard_unknown_tools]
+      after_model: [expand_link_refs, guard_unknown_tools]
+      before_agent: [user_links]
+      before_model: [redact_link_urls]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
     a2a:
       key: task_execution
       port: 8004
@@ -308,7 +362,7 @@ agents:
     routing: >-
       when the result can be obtained by RUNNING AN EXISTING tool/service.
       Hallmark: "compute/run X using tools we already have."
-    children: [ToolPreparerAgent, ExperimentAgent]
+    children: [ToolPreparerAgent, ExecutorSwitchAgent]
 
   CoderAgent:
     class: llm
@@ -336,16 +390,21 @@ agents:
           * environment setup and running long jobs
           → Use whenever no existing tool covers the objective and the step requires
             doing software/data engineering rather than calling a ready service
+    # Multi-step engineering: plans edits, reads failures, adapts.
+    reasoning: medium
     prompt: coder
-    tools: [coder, sandbox, research_graph]
+    tools: [coder, sandbox, research_graph, vault]
     subordinates: [DatasetCollectorAgent]
     output_key: coder_results
     callbacks:
-      before_agent: [inject_research_context, inject_dataset_context]
+      before_agent: [inject_research_context, inject_dataset_context, user_links]
+      before_model: [redact_link_urls]
       #before_model: [hitl_before_model]
       # Catch hallucinated tool names (e.g. calling `find` directly) and return a
       # corrective message instead of letting ADK crash the whole run.
-      after_model: [guard_unknown_tools]
+      after_model: [expand_link_refs, guard_unknown_tools]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
     hitl: true
     a2a:
       key: coder
@@ -379,12 +438,17 @@ agents:
       when a step needs raw data gathered/assembled from external sources before
       building or training on it (e.g. "collect a dataset of BTK inhibitors with
       IC50"). It downloads into the shared workspace and writes a MANIFEST.
+    # The same sandbox work as the coder, on a narrower, more mechanical job.
+    reasoning: low
     prompt: dataset_collector
-    tools: [coder, sandbox, websearch, research_graph]
+    tools: [coder, sandbox, websearch, research_graph, vault]
     output_key: dataset_results
     callbacks:
-      before_agent: [inject_research_context, inject_dataset_context]
-      after_model: [guard_unknown_tools]
+      before_agent: [inject_research_context, inject_dataset_context, user_links]
+      before_model: [redact_link_urls]
+      after_model: [expand_link_refs, guard_unknown_tools]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
 
   MedicalAgent:
     class: llm
@@ -399,14 +463,18 @@ agents:
           - the step involves clinical or biomedical questions
           - medical literature evidence (PubMed, PICO, study taxonomy) is required
           - an uploaded medical image (DICOM/scan) must be analyzed
+    # Clinical judgement over retrieved evidence.
+    reasoning: medium
     prompt: medical
     tools: [medical, task_tracker, graph, research_graph]
     output_key: medical_results
     report_output: true
     callbacks:
-      before_agent: [before_get_task, inject_research_context]
-      before_model: [inject_medical_artifacts]
-      after_model: [guard_unknown_tools]
+      before_agent: [before_get_task, inject_research_context, user_links]
+      before_model: [inject_medical_artifacts, redact_link_urls]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
+      after_model: [expand_link_refs, guard_unknown_tools]
     a2a:
       key: medical
       port: 8005
@@ -436,11 +504,18 @@ agents:
           → Use ONLY to produce a reusable tool server; a single run of the
             code belongs to CoderAgent, and calling an already-built MCP tool
             belongs to TaskExecutorAgent.
+    # Drives the Alembic pipeline tool by tool; the hard reasoning lives inside
+    # that pipeline's own agents, not in this caller.
+    reasoning: low
     prompt: mcp_builder
     tools: [alembic]
     output_key: mcp_build_results
     callbacks:
-      after_model: [guard_unknown_tools]
+      after_model: [expand_link_refs, guard_unknown_tools]
+      before_agent: [user_links]
+      before_model: [redact_link_urls]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
     a2a:
       key: mcp_builder
       port: 8007
@@ -478,11 +553,12 @@ agents:
     description: Agent to rerank retrieved MCP servers from RAG database of MCP tools for given task.
     prompt: tool_reranker
     output_key: reranked_tools
-    output_schema: tool_ranking
+    llm_timeout: 45
     callbacks:
+      before_agent: [shortlist_reranker_tools]
       before_model: [skip_retriever_context]
-      # Not every provider honours response_format: strip prose/```json fences
-      # around the JSON before ADK's strict output_schema validation.
+      # Nothing else validates the shape now that output_schema is gone: strip
+      # prose/```json fences here, parse and shape-check in collect_reranked_tools.
       after_model: [sanitize_json_output]
       after_agent: [collect_reranked_tools]
 
@@ -498,10 +574,7 @@ agents:
     description: Agent to score found web MCP servers given already available local MCP servers for given task.
     prompt: tool_scoring
     output_key: reranked_web_servers
-    output_schema: mcp_ranking
     callbacks:
-      # Not every provider honours response_format: strip prose/```json fences
-      # around the JSON before ADK's strict output_schema validation.
       after_model: [sanitize_json_output]
       after_agent: [collect_reranked_mcps]
 
@@ -514,29 +587,57 @@ agents:
     description: >-
       Runs computational/experimental sub-tasks by directly using the
       dynamically-provisioned MCP tools (ReAct: think → call tool → observe).
+    reasoning: low
     prompt: experiment_react
     # dynamic_tools surfaces the task's selected MCP servers (filtered_tools /
     # deployed_mcps) as native tools, resolved per turn — the same servers
     # FEDOT.MAS used to receive, but the agent calls them itself.
-    tools: [dynamic_tools, task_tracker, graph, research_graph]
+    tools: [dynamic_tools, sleep, task_tracker, graph, research_graph]
     output_key: fedot_results
     callbacks:
       # Abstain → recommend CoderAgent when the tool-prep pipeline found no tool
       # that actually matches the task (instead of running a nearest-but-wrong one).
-      before_agent: [redirect_when_no_tools, before_get_task, inject_research_context]
-      # Capture figure/table artifact URLs the MCP tools return (e.g. presigned
-      # MinIO PNGs) into state['mcp_artifacts'] so the report collector downloads them.
-      after_tool: [capture_mcp_artifacts]
+      before_agent: [redirect_when_no_tools, before_get_task, inject_research_context, user_links]
+      before_model: [redact_link_urls]
+      before_tool: [resolve_link_refs]
+      after_model: [expand_link_refs]
+      # register_tool_result_links catches a URL an MCP tool returns for the
+      # link registry; capture_mcp_artifacts separately stashes figure/table
+      # artifact URLs (e.g. presigned MinIO PNGs) into state['mcp_artifacts']
+      # so the report collector downloads them. Two different jobs, same hook.
+      after_tool: [register_tool_result_links, capture_mcp_artifacts]
 
-  # Disabled for now — FEDOT.MAS isn't reliable yet. Kept (built, not attached)
-  # so the agent, its prompt and the `fedot` tool stay available; re-enable by
-  # setting enabled: true and making it (instead of ExperimentAgent) the child.
+  # Picks ONE of its children per task. ExperimentAgent normally; FedotAgent only
+  # when the tool reranker never actually judged the retrieved candidates (an
+  # unreadable reply, and the local cross-encoder could not stand in either) —
+  # `filtered_tools` is then empty for a reason that says nothing about
+  # relevance, and FEDOT.MAS's meta-agent can do the selection itself over the
+  # whole unfiltered pool. A switch rather than two siblings in the sequence
+  # because AgentTool returns the LAST content event of the agent it wraps, so a
+  # sibling standing down after the real executor ran would overwrite its answer.
+  ExecutorSwitchAgent:
+    class: custom:executor_switch
+    description: >-
+      Runs the task's executor: the ReAct MCP executor normally, or the
+      FEDOT.MAS fallback when the tool reranker produced no usable ranking.
+    children: [ExperimentAgent, FedotAgent]
+
+  # FEDOT.MAS is not reliable enough to be the primary executor, but it does
+  # cope with a large, unfiltered set of MCP servers — which is exactly what the
+  # reranker-failure path has to hand somebody. Gated by the same setting
+  # ExecutorSwitchAgent routes on, so one switch turns the whole path off.
   FedotAgent:
     class: llm
-    enabled: false
+    enabled: "${web.fedot_fallback_enabled}"
     description: Agent to invoke FEDOT.MAS for solving given task. Uses MCP tools
     prompt: fedot
     tools: [fedot, task_tracker, graph]
     output_key: fedot_results
     callbacks:
-      before_agent: [redirect_when_no_tools, before_get_task]
+      # No redirect_when_no_tools here: this agent IS the no-usable-ranking path,
+      # and abstaining to CoderAgent is precisely what it exists to avoid.
+      before_agent: [inject_fedot_candidates, before_get_task, user_links]
+      before_model: [redact_link_urls]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
+      after_model: [expand_link_refs]

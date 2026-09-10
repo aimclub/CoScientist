@@ -104,11 +104,15 @@ def _resolve_model(cfg: AgentConfig, system: SystemConfig):
     from CoScientist.agents.common import make_coder_llm, make_llm
 
     ref = cfg.model or system.defaults.model
+    deadline_s = cfg.llm_timeout
+    # An agent that says nothing about reasoning inherits `defaults.reasoning`;
+    # an unset default sends no reasoning kwargs at all.
+    reasoning = cfg.reasoning if cfg.reasoning is not None else system.defaults.reasoning
     if ref == "main":
-        return make_llm()
+        return make_llm(deadline_s=deadline_s, reasoning=reasoning)
     if ref == "coder":
-        return make_coder_llm()
-    return make_llm(ref)
+        return make_coder_llm(deadline_s=deadline_s, reasoning=reasoning)
+    return make_llm(ref, deadline_s=deadline_s, reasoning=reasoning)
 
 
 def _resolve_tools(cfg: AgentConfig) -> List[ToolEntry]:
@@ -263,10 +267,17 @@ def _subordinate_instance(
 
 
 def _build_custom_agent(
-    cfg: AgentConfig, system: SystemConfig, class_key: str
+    cfg: AgentConfig,
+    system: SystemConfig,
+    class_key: str,
+    built: Optional[Dict[str, BaseAgent]] = None,
 ) -> BaseAgent:
     cls = REGISTRY.agent_class(class_key)
     kwargs = dict(name=cfg.name, description=cfg.description)
+    if cfg.children and built is not None:
+        kwargs["sub_agents"] = [
+            built[c] for c in cfg.children if system.agent(c).is_enabled()
+        ]
     if issubclass(cls, LlmAgent):
         tool_entries = _resolve_tools(cfg)
         ctx = PromptContext(config=cfg, system=system, tool_entries=tool_entries)
@@ -322,14 +333,18 @@ def build_system(
         elif cfg.cls in ("sequential", "parallel"):
             cls = SequentialAgent if cfg.cls == "sequential" else ParallelAgent
             sub_agents = [built[c] for c in cfg.children] if cfg.is_enabled() else []
+            ctx = PromptContext(config=cfg, system=config)
             agent = cls(
                 name=cfg.name,
                 description=cfg.description,
                 sub_agents=sub_agents,
+                **_callback_kwargs(cfg, ctx),
                 **cfg.resolved_options(),
             )
         else:  # custom:<key>
-            agent = _build_custom_agent(cfg, config, cfg.cls.split(":", 1)[1])
+            agent = _build_custom_agent(
+                cfg, config, cfg.cls.split(":", 1)[1], built
+            )
         built[name] = agent
 
     return AgentSystem(config=config, agents=built)

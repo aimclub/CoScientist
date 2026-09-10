@@ -33,6 +33,7 @@ from CoScientist.hitl import (
     HITLRequest,
     HITLResponse,
 )
+from CoScientist.utils.text import strip_thinking
 
 settings = get_settings()
 
@@ -135,10 +136,16 @@ class CoScientistManager:
         session_id: Optional[str] = None,
         hitl_handler: Optional[AbstractHITLHandler] = None,
         session_service: Optional[BaseSessionService] = None,
+        initial_state: Optional[dict] = None,
     ):
         self.app_name = app_name
         self.user_id = user_id or f"user_{uuid4().hex}"
         self.session_id = session_id or f"session_{uuid4().hex}"
+
+        # Extra session state to seed at session creation, for callers that
+        # drive the system programmatically (scripts, reproductions, harnesses)
+        # and need something in state before the first turn.
+        self._initial_state = dict(initial_state or {})
 
         # Web mode injects one shared service so managers can reopen existing
         # sessions. CLI mode falls back to a private in-memory service.
@@ -179,6 +186,9 @@ class CoScientistManager:
                     session_id=self.session_id,
                     state={
                         "active_tasks": [],
+                        **self._initial_state,
+                        # Written last: session scoping is the manager's own and
+                        # a caller must not be able to redirect it.
                         GRAPH_SCOPE_USER_KEY: self.user_id,
                         GRAPH_SCOPE_SESSION_KEY: self.session_id,
                     },
@@ -192,6 +202,7 @@ class CoScientistManager:
             from CoScientist.graph.research.validator import BackgroundValidatorPlugin
             from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
             from CoScientist.tools.mcp_artifact_plugin import McpArtifactCapturePlugin
+            from CoScientist.tools.session_scope_plugin import SessionScopePlugin
 
             # Build the agent system (reads start_mode + tunable params from settings).
             system = build_for_mode()
@@ -215,6 +226,10 @@ class CoScientistManager:
                     UsageMetricsPlugin(),
                     GraphMemoryPlugin(),
                     BackgroundValidatorPlugin(),
+                    # Fills user_id / session_id into the tool calls that declare
+                    # them, so an MCP server scopes its S3 keys correctly and the
+                    # model never has to copy an id by hand.
+                    SessionScopePlugin(),
                     # Capture artifact (figure/table) URLs from tool results BEFORE
                     # truncation can drop them, so the report collector downloads them.
                     McpArtifactCapturePlugin(),
@@ -260,7 +275,10 @@ class CoScientistManager:
             p.text for p in parts
             if getattr(p, "text", None) and not getattr(p, "thought", False)
         )
-        return answer or "\n".join(p.text for p in parts if getattr(p, "text", None)) or None
+        final = answer or "\n".join(p.text for p in parts if getattr(p, "text", None)) or None
+        if final:
+            final = strip_thinking(final)
+        return final or None
 
     async def run(
         self,

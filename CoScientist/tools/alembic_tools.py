@@ -13,7 +13,9 @@ find and continue an earlier build via ``list_mcp_builds``.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 import re
 import secrets
@@ -33,10 +35,15 @@ START_CHAIN = PROJECT_ROOT / "CoScientist" / "alembic" / "start_chain.py"
 # inside the build container; this is the start_chain wrapper output).
 LOG_DIR = PROJECT_ROOT / ".alembic" / "a2a_builds"
 
+logger = logging.getLogger(__name__)
+
 _LOG_TAIL_LINES = 15
 _MAX_JOBS = 200  # cap registry size; evict oldest finished jobs past this
 # Base for the absolute, clickable build-page link handed back to the agent.
-_WEB_BASE_URL = os.environ.get("COSCIENTIST_WEB_BASE_URL", "http://localhost:8000").rstrip("/")
+# Empty when nothing set it, and then no absolute link is offered at all: the
+# page only exists while the web UI is running, and a link that does not open
+# sends the agent looking for the build somewhere else on the host.
+_WEB_BASE_URL = os.environ.get("COSCIENTIST_WEB_BASE_URL", "").rstrip("/")
 
 _JOBS: Dict[str, Dict[str, Any]] = {}
 _LOCK = threading.Lock()
@@ -109,6 +116,22 @@ def _runner(rec: Dict[str, Any]) -> None:
         return
     with _LOCK:
         _finalize(rec, returncode)
+    # The catalogue entry is made here, when the build finishes, and not when
+    # someone asks about it. An agent that starts a build and reports the job_id
+    # back (which is what its prompt tells it to do) may never poll, and a tool
+    # that exists but is in no catalogue is a tool the next run rebuilds from
+    # scratch. Own thread, no event loop of its own, so asyncio.run is safe here.
+    #
+    # This thread is a daemon, so a host process that exits before the build
+    # ends takes it down and nothing here runs — the build container finishes
+    # regardless, but its result is lost. That is the same boundary the whole
+    # job registry has (``_JOBS`` lives in memory), and it does not bite the
+    # long-lived processes the system actually runs in: the web server, the A2A
+    # services and the REPL all outlive their builds.
+    try:
+        asyncio.run(_register_in_catalogue(rec))
+    except Exception as exc:  # noqa: BLE001 — the build itself succeeded
+        logger.warning("catalogue registration thread failed: %s", exc)
 
 
 def _snapshot(rec: Dict[str, Any], with_log_tail: bool = True) -> Dict[str, Any]:
@@ -119,12 +142,12 @@ def _snapshot(rec: Dict[str, Any], with_log_tail: bool = True) -> Dict[str, Any]
         "status": rec["status"],
         "elapsed_seconds": round((rec.get("finished_at") or time.time()) - rec["started_at"]),
         # Live build page in the CoScientist web UI (tails this build's log and
-        # renders the streamed pipeline events). ``progress_page`` is relative;
-        # ``progress_url`` is the absolute, clickable link (base from
-        # COSCIENTIST_WEB_BASE_URL, default http://localhost:8000).
+        # renders the streamed pipeline events). ``progress_page`` is relative
+        # and always present, since the web layer resolves it itself.
         "progress_page": f"/builds/{rec['job_id']}",
-        "progress_url": f"{_WEB_BASE_URL}/builds/{rec['job_id']}",
     }
+    if _WEB_BASE_URL:
+        out["progress_url"] = f"{_WEB_BASE_URL}/builds/{rec['job_id']}"
     text = _read_log(rec) if (with_log_tail or rec["status"] != "running") else ""
     stages = _STAGE_RE.findall(text)
     if stages:
@@ -134,8 +157,11 @@ def _snapshot(rec: Dict[str, Any], with_log_tail: bool = True) -> Dict[str, Any]
             out["log_tail"] = "\n".join(text.splitlines()[-_LOG_TAIL_LINES:])
         out["note"] = ("The build is still running (a full build takes tens of "
                        "minutes). Do other work and call "
-                       f"check_mcp_build('{rec['job_id']}') again later — do not "
-                       "poll in a tight loop.")
+                       f"check_mcp_build('{rec['job_id']}') again later; do not "
+                       "poll in a tight loop. That call is the only source of "
+                       "this build's result. An MCP server found any other way "
+                       "on this host belongs to some earlier build and says "
+                       "nothing about this one.")
     elif rec["status"] == "done":
         out["mcp_url"] = rec.get("mcp_url")
         out["image"] = rec.get("image")
@@ -210,7 +236,10 @@ async def build_mcp_server(
         "repo_url": repo_url,
         "note": ("Build started (base image → pipeline → docker commit → serve). "
                  "A full build takes tens of minutes: report the job_id back, do "
-                 f"other work, and call check_mcp_build('{job_id}') later."),
+                 f"other work, and call check_mcp_build('{job_id}') later. That "
+                 "call is the only source of this build's result; an MCP server "
+                 "found any other way on this host belongs to some earlier "
+                 "build."),
     }
 
 
@@ -233,7 +262,81 @@ async def check_mcp_build(
             return {"status": "error",
                     "error": f"unknown job_id {job_id!r} — use list_mcp_builds() "
                              "to see the builds known to this process."}
-        return _snapshot(rec)
+        out = _snapshot(rec)
+    # Outside the lock: publishing talks to the registry over the network.
+    await _publish_to_catalogue(rec, out, tool_context)
+    return out
+
+
+async def _register_in_catalogue(rec: Dict[str, Any]) -> None:
+    """Ingest a finished build's MCP server into the rag_tools registry, once.
+
+    This is the durable half: it needs nothing from the session, so it runs the
+    moment the build finishes and does not wait for an agent to ask. Called
+    again from a poll it is a no-op, because the attempt is recorded on the job.
+
+    Never raises — a registry that is down must not turn a successful build into
+    a failed tool call. The outcome is kept on the record and reported back to
+    the agent as ``registered``.
+    """
+    if rec.get("status") != "done" or not rec.get("mcp_url") or "registered" in rec:
+        return
+    rec["registered"] = True  # one attempt per build, however often it is polled
+
+    from CoScientist.tools.registry_bridge import register_mcp_server
+
+    name = _repo_name(rec["repo_url"])
+    try:
+        server = await register_mcp_server(
+            rec["mcp_url"], name, description=f"Alembic build of {rec['repo_url']}"
+        )
+    except Exception as exc:  # noqa: BLE001 — the build itself succeeded
+        logger.warning("catalogue registration failed for %s: %s", name, exc)
+        rec["registered"] = False
+        rec["registration_error"] = f"{type(exc).__name__}: {exc}"
+        return
+
+    # A server row with no tools behind it is not a registration: retrieval
+    # scores tools, so nothing will ever surface it. Say so instead of
+    # reporting success the agent cannot act on.
+    from rag_tools.storage.models import ToolStatus
+
+    if getattr(server, "status", None) == ToolStatus.ERROR:
+        rec["registered"] = False
+        rec["registration_error"] = (
+            f"{name} was added to the catalogue but its tools could not be "
+            "indexed, so retrieval will not find it"
+        )
+
+
+async def _publish_to_catalogue(
+    rec: Dict[str, Any], out: Dict[str, Any], tool_context: Optional[ToolContext]
+) -> None:
+    """Report the catalogue outcome and make the tool callable in this run.
+
+    By the time a poll gets here the build thread has normally registered the
+    server already; the call below only covers a record that never went through
+    that thread. What is left is the run-scoped half: putting the url into
+    ``deployed_mcps`` so the executor can call the tool without waiting for a
+    retrieval round.
+    """
+    if out.get("status") != "done" or not out.get("mcp_url"):
+        return
+    await _register_in_catalogue(rec)
+    out["registered"] = rec.get("registered", False)
+    if rec.get("registration_error"):
+        out["registration_error"] = rec["registration_error"]
+
+    if tool_context is not None:
+        from CoScientist.tools.registry_bridge import resolve_into_state
+
+        # ADK records a state change on assignment, so the list is rebuilt and
+        # put back whole instead of being appended to in place.
+        state = {"deployed_mcps": list(
+            (getattr(tool_context, "state", None) or {}).get("deployed_mcps") or []
+        )}
+        resolve_into_state(state, out["mcp_url"], _repo_name(rec["repo_url"]))
+        tool_context.state["deployed_mcps"] = state["deployed_mcps"]
 
 
 async def list_mcp_builds(tool_context: Optional[ToolContext] = None) -> Dict[str, Any]:
@@ -300,8 +403,9 @@ def web_build_snapshot(job_id: str) -> Optional[Dict[str, Any]]:
     text = log.read_text(encoding="utf-8", errors="replace")
     status = _status_from_log(text)
     out: Dict[str, Any] = {"job_id": job_id, "status": status,
-                           "progress_page": f"/builds/{job_id}",
-                           "progress_url": f"{_WEB_BASE_URL}/builds/{job_id}"}
+                           "progress_page": f"/builds/{job_id}"}
+    if _WEB_BASE_URL:
+        out["progress_url"] = f"{_WEB_BASE_URL}/builds/{job_id}"
     if status == "done":
         url = _URL_RE.search(text)
         image = _IMAGE_RE.search(text)
@@ -349,6 +453,42 @@ def parse_event_line(line: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+# ── Session-bundle helpers ────────────────────────────────────────────────────
+# Called by session_bundle.py to snapshot / restore the in-memory job registry
+# when exporting or importing a .cossession.zip archive.
+
+_SNAPSHOT_KEYS = ("job_id", "repo_url", "status", "mcp_url", "image",
+                  "container", "started_at", "finished_at", "log_file")
+
+
+def export_jobs_snapshot() -> list:
+    """Serialisable snapshot of every job in the process-wide registry."""
+    with _LOCK:
+        return [{k: rec.get(k) for k in _SNAPSHOT_KEYS} for rec in _JOBS.values()]
+
+
+def import_jobs_snapshot(jobs: list) -> None:
+    """Restore job records from a previously exported snapshot.
+
+    * ``running`` → ``failed`` (the original process is gone).
+    * ``log_file`` is repointed to this process's LOG_DIR.
+    * Existing records with the same job_id are NOT overwritten.
+    """
+    with _LOCK:
+        for rec in jobs:
+            jid = rec.get("job_id")
+            if not jid or jid in _JOBS:
+                continue
+            entry = dict(rec)
+            if entry.get("status") == "running":
+                entry["status"] = "failed"
+                entry["error"] = "Build was running when the session was exported."
+                entry.setdefault("finished_at", entry.get("started_at"))
+            entry["log_file"] = str(LOG_DIR / f"{jid}.log")
+            _JOBS[jid] = entry
+
+
 __all__ = ["ALEMBIC_TOOLS", "build_mcp_server", "check_mcp_build", "list_mcp_builds",
            "web_build_log_file", "web_build_snapshot", "web_list_builds",
-           "parse_event_line"]
+           "parse_event_line", "export_jobs_snapshot", "import_jobs_snapshot",
+           "LOG_DIR"]

@@ -25,6 +25,13 @@ MODEL_TOP_P       = os.environ.get("MODEL_TOP_P")
 # old single-task spelling, still honoured.
 TASKS = os.environ.get("ALEMBIC_TASKS") or os.environ.get("ALEMBIC_TARGET_TASK")
 
+# Optional SOFT hint(s) for the explorer only (env: ALEMBIC_HINTS). Free-form
+# text describing the kind of tool(s) the caller hopes to see mined among the
+# others — NO forced name/signature and NO plan-gate enforcement, unlike TASKS.
+# Composable with TASKS (required tools stay pinned; the hint just steers the
+# rest). Unset => explorer proposes fully autonomously.
+HINTS = os.environ.get("ALEMBIC_HINTS")
+
 APP_NAME = "alembic_app"
 USER_ID  = "user_1"
 
