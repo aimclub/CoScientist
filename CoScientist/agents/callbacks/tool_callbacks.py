@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from difflib import SequenceMatcher, get_close_matches
 
 from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmRequest, LlmResponse
@@ -8,7 +9,7 @@ from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.tool_context import ToolContext
 from google.genai import types
 
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence
 
 import logging
 logger = logging.getLogger(__name__)
@@ -25,6 +26,10 @@ logger = logging.getLogger(__name__)
 
 # State key carrying the executor's tool-match verdict for the redirect guard.
 TOOL_MATCH_STATE_KEY = "executor_tool_match"
+
+# Set after a successful fedot_tool capture so Fedot/Coder cannot re-enter.
+FEDOT_DELIVERABLE_READY_KEY = "fedot_deliverable_ready"
+FEDOT_DELIVERABLE_READY_TOKEN = "FEDOT_DELIVERABLE_READY"
 
 RERANK_SCORED = "scored"                  # the model ranked the candidates
 RERANK_RECOVERED = "recovered_local"      # ranked by the local cross-encoder instead
@@ -213,20 +218,216 @@ def inject_fedot_candidates(callback_context: CallbackContext) -> None:
 def before_tool_reranker_model(
     callback_context: CallbackContext, llm_request: LlmRequest
 ) -> None:
-    """Skips ToolRetriever context"""
+    """Drop ToolRetriever/ToolReranker dumps from the next LLM request.
 
-    new_contents = []
-
-    for content in llm_request.contents:
-        # A content may have empty parts or a non-text first part (function
-        # call/response) — guard before reading .text.
-        first_text = content.parts[0].text if content.parts else None
-        if first_text == 'For context:':
+    ADK often prefixes sibling output as ``For context:[Agent] …`` (one part),
+    so an exact ``== 'For context:'`` match never fired and the planner saw the
+    full retrieve_tools novels — then invented tools absent from inventory.
+    """
+    kept: List[Any] = []
+    for content in llm_request.contents or []:
+        parts = list(getattr(content, "parts", None) or [])
+        blob = "\n".join(str(getattr(p, "text", None) or "") for p in parts).lstrip()
+        if blob.startswith("For context:"):
             continue
-        new_contents.append(content)
+        if "[ToolRetrieverAgent]" in blob or "[ToolReranker]" in blob:
+            continue
+        kept.append(content)
+    llm_request.contents = kept
 
-    llm_request.contents = new_contents
-    return
+
+# Set when ToolReranker scores were applied from after_model (skip after_agent).
+_TOOL_RERANK_APPLIED_KEY = "_tool_rerank_applied"
+
+
+def _score_items_from_reranked_state(raw: Any) -> List[Dict[str, Any]]:
+    """Normalize ``reranked_tools`` state (dict / model / list) to score dicts."""
+    if raw is None:
+        return []
+    if hasattr(raw, "model_dump"):
+        raw = raw.model_dump()
+    if isinstance(raw, dict):
+        tools = raw.get("tools") or []
+    elif isinstance(raw, list):
+        tools = raw
+    else:
+        return []
+    out: List[Dict[str, Any]] = []
+    for t in tools:
+        if hasattr(t, "model_dump"):
+            t = t.model_dump()
+        if not isinstance(t, dict):
+            continue
+        try:
+            out.append({"index": int(t["index"]), "score": float(t["score"])})
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
+def _llm_response_text(llm_response: LlmResponse, *, include_thoughts: bool) -> str:
+    content = getattr(llm_response, "content", None)
+    parts = getattr(content, "parts", None) if content is not None else None
+    if not parts:
+        return ""
+    chunks: List[str] = []
+    for p in parts:
+        text = getattr(p, "text", None)
+        if not text:
+            continue
+        if not include_thoughts and getattr(p, "thought", False):
+            continue
+        chunks.append(text)
+    return "".join(chunks)
+
+
+def _score_items_from_llm_response(llm_response: LlmResponse) -> Optional[List[Dict[str, Any]]]:
+    """Parse ToolRanking scores from the model response (not from output_key state).
+
+    Prefer non-thought text (post-sanitize path); fall back to thoughts — GLM often
+    parks the JSON ranking in a thought part while the logger shows the plain text empty.
+    """
+    from CoScientist.agents.callbacks.json_output import _extract_json, _normalize_ranking_payload
+
+    for include_thoughts in (False, True):
+        text = _llm_response_text(llm_response, include_thoughts=include_thoughts)
+        if not text.strip():
+            continue
+        extracted = _extract_json(text)
+        if extracted is None:
+            continue
+        items = _score_items_from_reranked_state(_normalize_ranking_payload(extracted))
+        if items:
+            return items
+    return None
+
+
+def _tool_rank_key(tool: Dict[str, Any]) -> int:
+    # Prefer explicit tool_index; fall back to 1-based list position.
+    raw = tool.get("tool_index", tool.get("index"))
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return -1
+
+
+def apply_tool_rerank_scores(
+    state: Any,
+    score_items: List[Dict[str, Any]],
+    *,
+    reason: str = RERANK_SCORED,
+) -> None:
+    """Filter ``accumulated_tools`` by rerank scores; set match verdict + filtered_tools.
+
+    Records WHY the tool set came out as it did (see the RERANK_* constants), so
+    the guards downstream can tell "judged, nothing relevant" (abstain to
+    CoderAgent) apart from "we could not read the answer" (recover locally, or
+    hand the unfiltered candidates to the FEDOT.MAS fallback).
+    """
+    from CoScientist.config import get_settings
+
+    web_settings = get_settings().web
+    keep_score = web_settings.executor_tool_keep_score
+    abstain_score = web_settings.executor_tool_abstain_score
+    rerank_map: Dict[int, float] = {int(t["index"]): float(t["score"]) for t in score_items}
+    acc_tools: List[Dict[str, Any]] = list(state.get("accumulated_tools") or [])
+
+    filtered_tools: List[Dict[str, Any]] = [
+        tool for tool in acc_tools
+        if rerank_map.get(_tool_rank_key(tool), 0) >= keep_score
+    ]
+    # Some models emit 0-based indices while tool_index is 1-based (or vice versa).
+    if not filtered_tools and rerank_map and acc_tools:
+        shifted = {
+            tool for tool in acc_tools
+            if rerank_map.get(_tool_rank_key(tool) - 1, 0) >= keep_score
+            or rerank_map.get(_tool_rank_key(tool) + 1, 0) >= keep_score
+        }
+        if shifted:
+            filtered_tools = list(shifted)
+
+    best_score = max(rerank_map.values(), default=0.0)
+    matched = bool(filtered_tools)
+
+    if not filtered_tools and best_score >= abstain_score:
+        # Marginal salvage: nothing cleared _KEEP but the best is not hopeless —
+        # take top-2 and proceed cautiously (preserves the old behaviour here).
+        top_ids = {
+            idx for idx, _ in sorted(
+                rerank_map.items(), key=lambda x: x[1], reverse=True
+            )[:2]
+        }
+        filtered_tools = [t for t in acc_tools if _tool_rank_key(t) in top_ids]
+        if not filtered_tools:
+            filtered_tools = [
+                t for t in acc_tools
+                if (_tool_rank_key(t) - 1) in top_ids or (_tool_rank_key(t) + 1) in top_ids
+            ]
+        matched = bool(filtered_tools)
+    # else (best < _ABSTAIN): ABSTAIN — leave filtered_tools empty so the
+    # redirect guard on ExperimentAgent sends the task to CoderAgent instead of
+    # running an unrelated tool. Only for a reason that actually judged them.
+
+    # Record the verdict for the redirect guard / the orchestrator's critic /
+    # the FEDOT hard-stop (a False "matched" here means a DIFFERENT capability
+    # is being asked for, so fedot_artifact_handoff.should_hard_stop_fedot must
+    # let this step through even if a prior deliverable is already captured).
+    state[TOOL_MATCH_STATE_KEY] = {
+        "matched": matched,
+        "best_score": round(best_score, 3),
+        "kept": len(filtered_tools),
+        "reason": reason,
+        "candidates": len(acc_tools),
+    }
+    state["filtered_tools"] = filtered_tools
+
+    if reason in UNJUDGED_REASONS:
+        # Keep the candidate pool: FedotAgent builds its MCP server set out of
+        # `accumulated_tools`, and clearing it here is what would make an
+        # unreadable reranker answer unrecoverable.
+        logger.warning(
+            "reranker verdict=%s — keeping %d candidate(s) for the FEDOT.MAS fallback",
+            reason, len(acc_tools),
+        )
+        return
+
+    state["accumulated_tools"] = []
+    state[_RERANK_SHORTLIST_KEY] = []
+    state[_SHORTLIST_SCORES_KEY] = {}
+    state["retrieval_queries"] = []
+    state[_TOOL_RERANK_APPLIED_KEY] = True
+    # Drop process-global buffer so the next discovery pass starts clean.
+    try:
+        from CoScientist.tools.retrieval_tools import clear_session_accumulated_tools
+
+        clear_session_accumulated_tools()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def after_tool_reranker_model(
+    callback_context: CallbackContext, llm_response: LlmResponse
+) -> Optional[LlmResponse]:
+    """after_model: apply ToolReranker scores from the response body.
+
+    ``output_key`` is often invisible in ``after_agent`` (ADK state-delta timing),
+    which produced false ``best_score=0.0`` / empty ``filtered_tools``. Reading the
+    ranking JSON here (after ``sanitize_json_output``) avoids that race.
+    """
+    if any(
+        getattr(p, "function_call", None)
+        for p in (getattr(getattr(llm_response, "content", None), "parts", None) or [])
+    ):
+        return None
+    items = _score_items_from_llm_response(llm_response)
+    if not items:
+        logger.warning(
+            "[%s] after_model tool rerank: no parseable scores in response",
+            _agent_name(callback_context),
+        )
+        return None
+    apply_tool_rerank_scores(callback_context.state, items, reason=RERANK_SCORED)
+    return None
 
 
 def after_tool_reranker_agent(
@@ -234,50 +435,41 @@ def after_tool_reranker_agent(
 ) -> None:
     """Turn ToolReranker's output into ``filtered_tools`` + a reasoned verdict.
 
-    Records WHY the tool set came out as it did (see the RERANK_* constants), so
-    the guards downstream can tell "judged, nothing relevant" (abstain to
-    CoderAgent) apart from "we could not read the answer" (recover locally, or
-    hand the unfiltered candidates to the FEDOT.MAS fallback). Conflating the two
-    is how a single malformed JSON reply silently throws away tools that
-    retrieval found correctly.
+    Preferred path: ``sanitize_json_output`` / ``after_tool_reranker_model``
+    apply ToolRanking scores when the JSON is parsed — avoids ADK output_key
+    timing races. This after_agent hook is the upstream-compatible fallback
+    and also recovers from an unreadable ranking via the local cross-encoder.
     """
-    from CoScientist.config import get_settings
-    web_settings = get_settings().web
-    keep_score = web_settings.executor_tool_keep_score
-    abstain_score = web_settings.executor_tool_abstain_score
-
     current_state = callback_context.state
-    acc_tools: List[Dict[str, Any]] = current_state.get('accumulated_tools') or []
+    if current_state.get(_TOOL_RERANK_APPLIED_KEY):
+        return None
 
+    acc_tools: List[Dict[str, Any]] = current_state.get("accumulated_tools") or []
     rerank_map: Dict[int, float] = {}
     reason = RERANK_SCORED
     try:
-        payload = _output_key_json(current_state.get('reranked_tools'))
+        payload = _output_key_json(current_state.get("reranked_tools"))
     except RerankParseError as exc:
         logger.warning("reranker output unusable — %s", exc)
         reason = RERANK_PARSE_FAILED
     else:
-        rerank_map = _score_map(payload.get('tools'), cast=float)
-        if not rerank_map and acc_tools:
-            # Readable JSON, no usable pairs: a renamed key ("tool_index" for
-            # "index" — the prompt names both), a stringified index, a score that
-            # is not a number. Indistinguishable from "all irrelevant" by score
-            # alone, which is exactly why it needs its own reason.
-            logger.warning(
-                "reranker returned no usable {index, score} pairs for %d candidate(s)",
-                len(acc_tools),
-            )
-            reason = RERANK_EMPTY_RANKING
+        rerank_map = _score_map(payload.get("tools"), cast=float)
+        if not rerank_map:
+            # HEAD's looser parser (model_dump / list payloads).
+            score_items = _score_items_from_reranked_state(current_state.get("reranked_tools"))
+            if score_items:
+                rerank_map = {int(t["index"]): float(t["score"]) for t in score_items}
+            elif acc_tools:
+                logger.warning(
+                    "reranker returned no usable {index, score} pairs for %d candidate(s)",
+                    len(acc_tools),
+                )
+                reason = RERANK_EMPTY_RANKING
 
     if not acc_tools:
         reason = RERANK_NO_CANDIDATES
 
     if reason in UNJUDGED_REASONS:
-        # Recovery layer 1 — free and deterministic: the cross-encoder already
-        # scored every candidate against this same task in
-        # `shortlist_reranker_tools`, on one scale. Prefer it over any further
-        # LLM work. Only when it has nothing to say do we stay "unjudged" and let
-        # the FEDOT.MAS fallback take the whole candidate set.
         recovered = {
             idx: score
             for idx, score in (current_state.get(_SHORTLIST_SCORES_KEY) or {}).items()
@@ -291,53 +483,9 @@ def after_tool_reranker_agent(
                 len(rerank_map),
             )
 
-    filtered_tools: List[Dict[str, Any]] = [
-        tool for tool in acc_tools
-        if rerank_map.get(tool.get('tool_index', -1), 0) >= keep_score
-    ]
-
-    best_score = max(rerank_map.values(), default=0.0)
-    matched = bool(filtered_tools)
-
-    if not filtered_tools and best_score >= abstain_score:
-        # Marginal salvage: nothing cleared _KEEP but the best is not hopeless —
-        # take top-2 and proceed cautiously (preserves the old behaviour here).
-        top_ids = {
-            idx for idx, _ in sorted(
-                rerank_map.items(), key=lambda x: x[1], reverse=True
-            )[:2]
-        }
-        filtered_tools = [t for t in acc_tools if t.get('tool_index', -1) in top_ids]
-        matched = bool(filtered_tools)
-    # else (best < _ABSTAIN): ABSTAIN — leave filtered_tools empty so the
-    # redirect guard on ExperimentAgent sends the task to CoderAgent instead of
-    # running an unrelated tool. Only for a reason that actually judged them.
-
-    # Record the verdict for the redirect guard / the orchestrator's critic.
-    callback_context.state[TOOL_MATCH_STATE_KEY] = {
-        "matched": matched,
-        "best_score": round(best_score, 3),
-        "kept": len(filtered_tools),
-        "reason": reason,
-        "candidates": len(acc_tools),
-    }
-    callback_context.state['filtered_tools'] = filtered_tools
-
-    if reason in UNJUDGED_REASONS:
-        # Keep the candidate pool: FedotAgent builds its MCP server set out of
-        # `accumulated_tools`, and clearing it here is what would make an
-        # unreadable reranker answer unrecoverable.
-        logger.warning(
-            "reranker verdict=%s — keeping %d candidate(s) for the FEDOT.MAS fallback",
-            reason, len(acc_tools),
-        )
-        return
-
-    callback_context.state['accumulated_tools'] = []
-    callback_context.state[_RERANK_SHORTLIST_KEY] = []
-    callback_context.state[_SHORTLIST_SCORES_KEY] = {}
-    callback_context.state['retrieval_queries'] = []
-    return
+    score_items = [{"index": idx, "score": score} for idx, score in rerank_map.items()]
+    apply_tool_rerank_scores(current_state, score_items, reason=reason)
+    return None
 
 
 def after_fullset_reranker_agent(
@@ -544,17 +692,154 @@ def redirect_when_no_tools(
     return types.Content(role="model", parts=[types.Part(text=message)])
 
 
+def _artifact_urls(artifacts: Any) -> List[str]:
+    urls: List[str] = []
+    for art in artifacts or []:
+        if isinstance(art, dict):
+            for key in ("results_presigned_url", "url", "presigned_url"):
+                val = art.get(key)
+                if val:
+                    urls.append(str(val))
+                    break
+        elif isinstance(art, str) and art.strip():
+            urls.append(art.strip())
+    return urls
+
+
+def refuse_when_fedot_deliverable(
+    callback_context: CallbackContext,
+) -> Optional[types.Content]:
+    """before_agent: hard-stop route agents once the ask's deliverable is done.
+
+    Soft prompt STOP alone does not prevent ADK re-entry after a successful
+    compute/MCP capture. Uses ``should_hard_stop_fedot`` (conservative predicate
+    shared with the FEDOT tool path): it does NOT fire when the current step's
+    tool-match verdict abstained or names a new tool — e.g. gen→dock handoff or
+    a distinct Coder step — so retries for *new* work still run.
+
+    Also useful under Experiment Module retries: re-entering Fedot/Coder for the
+    same already-captured tool set is refused; ``retry_task`` / new attempt with
+    a different tool match still proceeds.
+    """
+    from CoScientist.tools.fedot_artifact_handoff import should_hard_stop_fedot
+
+    state = callback_context.state
+    if not should_hard_stop_fedot(state):
+        return None
+    urls = _artifact_urls(state.get("fedot_artifacts"))
+    if not urls:
+        # EM managed captures may live outside fedot_artifacts.
+        manifest = state.get("experiment_artifacts_manifest") or []
+        if isinstance(manifest, list):
+            for item in manifest:
+                if isinstance(item, dict):
+                    for key in ("presigned_url", "url", "resolved_url"):
+                        val = item.get(key)
+                        if isinstance(val, str) and val.strip():
+                            urls.append(val.strip())
+    body = "\n".join(urls) if urls else "(see session artifact state)"
+    message = (
+        f"{FEDOT_DELIVERABLE_READY_TOKEN}: S3/artifacts already captured. "
+        "Do NOT call fedot_tool, CoderAgent, or retrieve again. "
+        "Hand these URLs to the orchestrator for Final Response:\n"
+        f"{body}"
+    )
+    logger.info(
+        "[%s] refusing re-entry — deliverable already ready (%s url(s))",
+        _agent_name(callback_context),
+        len(urls),
+    )
+    state["fedot_results"] = message
+    return types.Content(role="model", parts=[types.Part(text=message)])
+
+
+
+# ResearchAgent as AgentTool dies if we replace a function_call with model text:
+# that text is the sub-agent's final answer. Rewrite known aliases in-place so
+# the real tool runs and the agent gets another turn.
+_SHELL_PROGRAMS = frozenset({
+    "awk", "cat", "cd", "chmod", "cp", "echo", "find", "git", "grep", "head",
+    "ls", "mkdir", "mv", "pwd", "rm", "sed", "tail", "touch", "wc",
+})
+_TOOL_ALIASES: Dict[str, Sequence[str]] = {
+    "download_papers": ("download_papers_from_search",),
+    "explore_literature": (
+        "search_papers", "explore_chemistry_database", "tavily_search",
+    ),
+    "explore_papers": ("explore_my_papers", "search_papers"),
+    "explore_scientific_database": (
+        "search_papers", "explore_chemistry_database", "tavily_search",
+    ),
+    "pubmed_search": ("search_papers", "tavily_search"),
+    "search_literature": ("search_papers", "tavily_search"),
+    "search_scientific_database": ("search_papers", "tavily_search"),
+    "search_scientific_papers": ("search_papers",),
+}
+_QUERY_KEYS = ("query", "question", "task", "request", "q")
+_QUERY_TARGETS = frozenset({
+    "download_papers_from_search", "search_papers", "tavily_search",
+})
+_QUESTION_TARGETS = frozenset({
+    "explore_chemistry_database", "explore_my_papers",
+})
+
+
+def _function_call_args(fc: Any) -> Dict[str, Any]:
+    raw = getattr(fc, "args", None) or {}
+    if hasattr(raw, "model_dump"):
+        raw = raw.model_dump()
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _remap_hallucinated_args(target: str, args: Dict[str, Any]) -> Dict[str, Any]:
+    out = dict(args)
+    if target in _QUERY_TARGETS and "query" not in out:
+        for key in _QUERY_KEYS:
+            if key in out and key != "query":
+                out["query"] = out.pop(key)
+                break
+    if target in _QUESTION_TARGETS and "question" not in out:
+        for key in _QUERY_KEYS:
+            if key in out and key != "question":
+                out["question"] = out.pop(key)
+                break
+    return out
+
+
+def resolve_hallucinated_tool(name: str, valid: Iterable[str]) -> Optional[str]:
+    """Map a hallucinated tool name onto exactly one real tool, or None."""
+    valid_set = {item for item in valid if item}
+    if not name or name in valid_set:
+        return None
+    for candidate in _TOOL_ALIASES.get(name, ()):
+        if candidate in valid_set:
+            return candidate
+    if name.lower() in _SHELL_PROGRAMS:
+        return None
+    close = get_close_matches(name, valid_set, n=2, cutoff=0.78)
+    if len(close) == 1:
+        return close[0]
+    if len(close) >= 2:
+        first = SequenceMatcher(None, name, close[0]).ratio()
+        second = SequenceMatcher(None, name, close[1]).ratio()
+        if first - second >= 0.08:
+            return close[0]
+    return None
+
+
 def make_unknown_tool_guard(valid_names: Iterable[str]) -> Callable:
     """Build an after_model_callback that intercepts hallucinated tool calls.
 
     When the LLM emits a function call whose name is NOT a real tool of the
     agent, ADK raises and kills the whole run before any tool/agent callback can
     react (e.g. CoderAgent calling `find` directly instead of
-    `execute_bash("find ...")`). This guard catches that in the model response
-    and replaces it with a corrective message, so the agent re-plans on its next
-    turn instead of crashing the orchestration.
+    `execute_bash("find ...")`).
+
+    Prefer rewriting a known alias (or a uniquely close name) into a real
+    function_call so AgentTool sub-agents keep a turn. Only unmatched names
+    become a corrective text reply.
     """
-    valid = set(valid_names)
+    valid = {name for name in valid_names if name}
 
     def guard(
         callback_context: CallbackContext, llm_response: LlmResponse
@@ -563,27 +848,56 @@ def make_unknown_tool_guard(valid_names: Iterable[str]) -> Callable:
         parts = getattr(content, "parts", None) if content is not None else None
         if not parts:
             return None
-        unknown = []
-        for p in parts:
-            fc = getattr(p, "function_call", None)
+        rewritten: List[Any] = []
+        unresolved: List[str] = []
+        changed = False
+        for part in parts:
+            fc = getattr(part, "function_call", None)
             name = getattr(fc, "name", None) if fc is not None else None
-            if name and name not in valid:
-                unknown.append(name)
-        if not unknown:
-            return None
-        bad = ", ".join(sorted(set(unknown)))
-        allowed = ", ".join(sorted(valid))
-        logger.warning("[%s] hallucinated tool call(s): %s", _agent_name(callback_context), bad)
-        msg = (
-            f"The tool(s) `{bad}` do not exist — they are not in your tool list. "
-            f"Your only tools are: {allowed}. Shell programs (find, grep, ls, cat, "
-            "wc, git, sed, awk, …) are NOT tools — run them INSIDE execute_bash, "
-            "e.g. execute_bash(command=\"find . -name '*.py' | wc -l\"). "
-            "Re-issue your request calling ONLY a tool from the list above."
-        )
-        return LlmResponse(
-            content=types.Content(role="model", parts=[types.Part(text=msg)])
-        )
+            if not name or name in valid:
+                rewritten.append(part)
+                continue
+            alias = resolve_hallucinated_tool(name, valid)
+            if alias:
+                logger.warning(
+                    "[%s] rewriting hallucinated tool %s → %s",
+                    _agent_name(callback_context),
+                    name,
+                    alias,
+                )
+                rewritten.append(
+                    types.Part.from_function_call(
+                        name=alias,
+                        args=_remap_hallucinated_args(alias, _function_call_args(fc)),
+                    )
+                )
+                changed = True
+            else:
+                unresolved.append(name)
+                rewritten.append(part)
+        if unresolved:
+            bad = ", ".join(sorted(set(unresolved)))
+            allowed = ", ".join(sorted(valid))
+            logger.warning(
+                "[%s] hallucinated tool call(s): %s",
+                _agent_name(callback_context),
+                bad,
+            )
+            msg = (
+                f"The tool(s) `{bad}` do not exist — they are not in your tool list. "
+                f"Your only tools are: {allowed}. Shell programs (find, grep, ls, cat, "
+                "wc, git, sed, awk, …) are NOT tools — run them INSIDE execute_bash, "
+                "e.g. execute_bash(command=\"find . -name '*.py' | wc -l\"). "
+                "Re-issue your request calling ONLY a tool from the list above."
+            )
+            return LlmResponse(
+                content=types.Content(role="model", parts=[types.Part(text=msg)])
+            )
+        if changed:
+            return LlmResponse(
+                content=types.Content(role="model", parts=rewritten)
+            )
+        return None
 
     return guard
 
@@ -724,20 +1038,54 @@ class SearchLimiter:
     def __init__(self, max_searches: int = 5):
         self.max_searches = max_searches
 
-    def limit_searches(self, tool, args: dict, tool_context: ToolContext) -> Optional[dict]:
-        # Match "search" as a whole name token, NOT as a substring: otherwise
-        # "re-search" tools (research_commit, research_context_slice, …) are
-        # wrongly counted as searches and blocked once the cap is hit, which
-        # stops agents recording anything in the research graph.
-        tokens = re.split(r"[^a-z]+", tool.name.lower())
-        if "search" not in tokens:
+    def reset_search_budget(self, callback_context: CallbackContext) -> None:
+        """before_agent: cap is per ResearchAgent invocation, not per session."""
+        try:
+            callback_context.state[self._STATE_KEY] = 0
+        except Exception:
             return None
+        return None
 
-        count = tool_context.state.get(self._STATE_KEY, 0)
-        count += 1
-        tool_context.state[self._STATE_KEY] = count
+    @staticmethod
+    def is_counted_search(name: str) -> bool:
+        """Count OpenAlex / web search only — not downloads or research_*.
 
-        if count > self.max_searches:
+        Token ``search`` used to match ``download_papers_from_search`` and eat
+        the whole ResearchAgent budget after one 429, so Tavily never ran.
+        """
+        tokens = [tok for tok in re.split(r"[^a-z]+", (name or "").lower()) if tok]
+        if "search" not in tokens:
+            return False
+        if "download" in tokens:
+            return False
+        if tokens[:1] == ["research"]:
+            return False
+        return True
+
+    @staticmethod
+    def is_failed_search_response(tool_response: Any) -> bool:
+        if tool_response is None:
+            return True
+        blob = tool_response
+        if isinstance(tool_response, dict):
+            if tool_response.get("isError") is True:
+                return True
+            blob = tool_response
+        text = str(blob).lower()
+        markers = (
+            "error calling tool",
+            "too many requests",
+            "429",
+            "sslerror",
+            "max retries exceeded",
+        )
+        return any(marker in text for marker in markers)
+
+    def limit_searches(self, tool, args: dict, tool_context: ToolContext) -> Optional[dict]:
+        if not self.is_counted_search(getattr(tool, "name", "")):
+            return None
+        count = int(tool_context.state.get(self._STATE_KEY, 0) or 0)
+        if count >= self.max_searches:
             return {
                 "result": (
                     f"Search limit reached ({self.max_searches} searches allowed). "
@@ -745,6 +1093,25 @@ class SearchLimiter:
                     "Do NOT attempt any more searches."
                 )
             }
+        return None
+
+    def record_search_result(
+        self,
+        tool,
+        args: dict,
+        tool_context: ToolContext,
+        tool_response: Any,
+    ) -> None:
+        if not self.is_counted_search(getattr(tool, "name", "")):
+            return None
+        if self.is_failed_search_response(tool_response):
+            logger.info(
+                "search failed, not counting toward limiter: %s",
+                getattr(tool, "name", ""),
+            )
+            return None
+        count = int(tool_context.state.get(self._STATE_KEY, 0) or 0) + 1
+        tool_context.state[self._STATE_KEY] = count
         return None
 
 def inject_original_query(

@@ -15,9 +15,9 @@ structure.
 """
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from CoScientist.hitl.field_status import FieldStatus, OPEN_STATUSES
 
@@ -85,6 +85,17 @@ CANONICAL_FRAME_BLOCKS: Tuple[str, ...] = tuple(e[0] for e in FRAME_SPEC)
 _SPEC_BY_TITLE = {e[0]: e for e in FRAME_SPEC}
 
 
+class FrameOperation(BaseModel):
+    """One executable deliverable slot committed by ContextInit / HITL.
+
+    Inventory chooses the route for this slot; the planner must not invent,
+    merge, or drop it. Narrative-only report slots are omitted.
+    """
+
+    operation_id: str = Field(description="Stable id, e.g. OP-1")
+    statement: str = Field(description="Deliverable copied from the ask / operator")
+
+
 class FrameField(BaseModel):
     """One field of a block: |Поле|Значение|Статус|."""
 
@@ -119,7 +130,34 @@ class ResearchFrame(BaseModel):
 
     original_request: str = Field(
         default="", description="Исходный запрос пользователя дословно")
+    operations: List[FrameOperation] = Field(
+        default_factory=list,
+        description="Executable slots: one non-optional plan task each",
+    )
     blocks: List[FrameBlock] = Field(default_factory=list)
+
+    @field_validator("operations", mode="before")
+    @classmethod
+    def coerce_operations(cls, value: Any) -> Any:
+        if not value:
+            return []
+        if not isinstance(value, list):
+            return value
+        out: List[dict[str, str]] = []
+        for i, item in enumerate(value, 1):
+            if isinstance(item, FrameOperation):
+                stmt = str(item.statement or "").strip()
+                if stmt:
+                    out.append({"operation_id": f"OP-{len(out) + 1}", "statement": stmt})
+                continue
+            if isinstance(item, str) and item.strip():
+                out.append({"operation_id": f"OP-{len(out) + 1}", "statement": item.strip()})
+                continue
+            if isinstance(item, dict):
+                stmt = str(item.get("statement") or item.get("content") or "").strip()
+                if stmt:
+                    out.append({"operation_id": f"OP-{len(out) + 1}", "statement": stmt})
+        return out
 
     def block(self, title: str) -> Optional[FrameBlock]:
         for b in self.blocks:
@@ -168,7 +206,17 @@ class ResearchFrame(BaseModel):
                     fields.append(FrameField(name=n))
             blocks.append(FrameBlock(
                 title=title, kind=kind, subtype=subtype, usage=usage, fields=fields))
-        return ResearchFrame(original_request=self.original_request, blocks=blocks)
+        ops = [
+            FrameOperation(
+                operation_id=f"OP-{i}",
+                statement=str(op.statement or "").strip(),
+            )
+            for i, op in enumerate(self.operations or [], 1)
+            if str(getattr(op, "statement", "") or "").strip()
+        ]
+        return ResearchFrame(
+            original_request=self.original_request, operations=ops, blocks=blocks,
+        )
 
 
 __all__ = [
@@ -176,5 +224,6 @@ __all__ = [
     "FRAME_SPEC",
     "FrameBlock",
     "FrameField",
+    "FrameOperation",
     "ResearchFrame",
 ]

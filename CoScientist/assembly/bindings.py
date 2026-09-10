@@ -12,6 +12,8 @@ does not construct MCP sessions or read service settings.
 """
 from __future__ import annotations
 
+from importlib import import_module
+
 from CoScientist.assembly.registry import (
     REGISTRY,
     CallbackEntry,
@@ -92,6 +94,12 @@ def _sandbox():
 def _task_tracker():
     from CoScientist.tools import task_tracker_instance
     return task_tracker_instance
+
+
+def _experiment_control():
+    from CoScientist.experiments.runtime import experiment_control_toolset
+    return experiment_control_toolset
+
 
 def _create_plan_tool():
     from CoScientist.tools.task_tracker import create_plan_tool
@@ -198,8 +206,16 @@ REGISTRY.register_tool(ToolEntry(
     runtime_resolved=True,
     docs=(
         ToolDoc(
+            name="explore_scientific_database",
+            signature="explore_scientific_database(task)",
+            purpose=(
+                "RAG over the internal scientific-literature corpus "
+                "(deployed paper-analysis MCP)."
+            ),
+        ),
+        ToolDoc(
             name="explore_chemistry_database",
-            signature="explore_chemistry_database(question)",
+            signature="explore_chemistry_database(task)",
             purpose="RAG search over an internal scientific literature database.",
         ),
         ToolDoc(
@@ -245,16 +261,21 @@ REGISTRY.register_tool(ToolEntry(
     docs=(
         ToolDoc(
             name="search_papers",
-            signature="search_papers(query, filters)",
+            signature="search_papers(keywords)",
             purpose=(
-                "Searches scientific papers in OpenAlex using metadata and "
-                "search filters. Does NOT download full paper files."
+                "Searches scientific papers in OpenAlex using keywords. "
+                "Does NOT download full paper files. Argument name is "
+                "`keywords`, not `query`. Optional `email` / `api_key` overlay "
+                "OpenAlex credentials from env/headers."
             ),
         ),
         ToolDoc(
             name="download_papers_from_search",
-            signature="download_papers_from_search(query)",
-            purpose="Searches and downloads papers for downstream analysis.",
+            signature="download_papers_from_search(keywords)",
+            purpose=(
+                "Searches and downloads papers for downstream analysis. "
+                "Optional `email` / `api_key` overlay OpenAlex credentials."
+            ),
         ),
     ),
 ))
@@ -341,6 +362,49 @@ _GRAPH_DOCS = (
         purpose="Global knowledge memory shared across users and sessions.",
     ),
 )
+
+REGISTRY.register_tool(ToolEntry(
+    key="experiment_control",
+    factory=_experiment_control,
+    runtime_resolved=True,
+    docs=(
+        ToolDoc(
+            name="get_experiment_plan",
+            signature="get_experiment_plan()",
+            purpose="Read the approved experiment plan and task/attempt runtime.",
+        ),
+        ToolDoc(
+            name="start_task",
+            signature="start_task(task_id)",
+            purpose="Create one fresh attempt and immutable scoped route envelope.",
+        ),
+        ToolDoc(
+            name="record_result",
+            signature="record_result(task_id, attempt_id, result)",
+            purpose="Validate and persist the attempt's only terminal TaskResult.",
+        ),
+        ToolDoc(
+            name="retry_task",
+            signature="retry_task(task_id)",
+            purpose="Authorize a retryable failure to use a new attempt.",
+        ),
+        ToolDoc(
+            name="fallback_task",
+            signature="fallback_task(task_id, reason)",
+            purpose="Advance to the next route in the finite acyclic fallback chain.",
+        ),
+        ToolDoc(
+            name="skip_task",
+            signature="skip_task(task_id, reason)",
+            purpose="Skip an optional task and persist a skipped TaskResult.",
+        ),
+        ToolDoc(
+            name="amend_task",
+            signature="amend_task(task_id, patch, reason)",
+            purpose="Amend an unstarted runtime task; material changes return to review.",
+        ),
+    ),
+))
 
 REGISTRY.register_tool(ToolEntry(
     key="graph",
@@ -839,6 +903,11 @@ def _collect_reranked_tools():
     return after_tool_reranker_agent
 
 
+def _collect_reranked_tools_from_model():
+    from CoScientist.agents.callbacks import after_tool_reranker_model
+    return after_tool_reranker_model
+
+
 def _collect_reranked_mcps():
     from CoScientist.agents.callbacks import after_fullset_reranker_agent
     return after_fullset_reranker_agent
@@ -847,6 +916,11 @@ def _collect_reranked_mcps():
 def _redirect_when_no_tools():
     from CoScientist.agents.callbacks import redirect_when_no_tools
     return redirect_when_no_tools
+
+
+def _refuse_when_fedot_deliverable():
+    from CoScientist.agents.callbacks import refuse_when_fedot_deliverable
+    return refuse_when_fedot_deliverable
 
 
 def _inject_fedot_candidates():
@@ -861,6 +935,13 @@ def _before_get_task():
 def _inject_original_query():
     from CoScientist.agents.callbacks import inject_original_query
     return inject_original_query
+
+def _inject_upstream_artifacts():
+    # Kept for default system.yaml / non-EM profiles. EM uses
+    # seed_upstream_from_resolved_inputs at start_task instead.
+    from CoScientist.tools.fedot_artifact_handoff import inject_upstream_artifacts
+    return inject_upstream_artifacts
+
 
 def _inject_graph_root():
     from CoScientist.agents.callbacks import inject_graph_root
@@ -915,6 +996,18 @@ def _web_search_limiter():
     from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
     from CoScientist.config import get_settings
     return SearchLimiter(max_searches=get_settings().web.max_searches).limit_searches
+
+
+def _count_research_searches():
+    from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
+    from CoScientist.config import get_settings
+    return SearchLimiter(max_searches=get_settings().web.max_searches).record_search_result
+
+
+def _reset_research_searches():
+    from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
+    from CoScientist.config import get_settings
+    return SearchLimiter(max_searches=get_settings().web.max_searches).reset_search_budget
 
 
 def _sanitize_json_output():
@@ -993,6 +1086,22 @@ def _hitl_before_model():
     return make_hitl_before_callback(hitl_handler)
 
 
+def _ask_pipeline_scope():
+    from CoScientist.agents.common import hitl_handler
+    from CoScientist.hitl.pipeline_scope import make_ask_pipeline_scope_callback
+    return make_ask_pipeline_scope_callback(hitl_handler)
+
+
+def _enforce_pipeline_scope_hops():
+    from CoScientist.hitl.pipeline_scope import enforce_pipeline_scope_hops
+    return enforce_pipeline_scope_hops
+
+
+def _mark_pipeline_scope_lane():
+    from CoScientist.hitl.pipeline_scope import mark_pipeline_scope_lane
+    return mark_pipeline_scope_lane
+
+
 # Plain callbacks are registered through tiny lazy factories that ignore the
 # context — so importing bindings never drags in S3/opik/etc. transitively.
 _cb("save_uploaded_artifacts", "before_model", factory=lambda ctx: _save_uploaded_artifacts())
@@ -1006,13 +1115,32 @@ _cb("skip_retriever_context", "before_model", factory=lambda ctx: _skip_retrieve
 # Cross-encoder pre-pass: hand the LLM reranker a short list, not everything.
 _cb("shortlist_reranker_tools", "before_agent", factory=lambda ctx: _shortlist_reranker_tools())
 _cb("collect_reranked_tools", "after_agent", factory=lambda ctx: _collect_reranked_tools())
+_cb(
+    "collect_reranked_tools_from_model",
+    "after_model",
+    factory=lambda ctx: _collect_reranked_tools_from_model(),
+)
 _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranked_mcps())
 # Coder↔Executor redirect: abstain to CoderAgent when no tool matched the task.
 _cb("redirect_when_no_tools", "before_agent", factory=lambda ctx: _redirect_when_no_tools())
+# Hard-stop route-agent re-entry once S3 artifacts are already captured (never
+# fires while a genuinely new/different tool is pending — see should_hard_stop_fedot).
+_cb(
+    "refuse_when_fedot_deliverable",
+    "before_agent",
+    factory=lambda ctx: _refuse_when_fedot_deliverable(),
+)
 # Reranker fallback: show FedotAgent the candidate pool fedot_tool will receive.
 _cb("inject_fedot_candidates", "before_agent", factory=lambda ctx: _inject_fedot_candidates())
 # Load active tasks into agent state before the agent runs.
 _cb("before_get_task", "before_agent", factory=lambda ctx: _before_get_task())
+# Project prior MCP CSV columns onto the current tools' input_schema arg names.
+# EM profile omits this — start_task seeds via seed_upstream_from_resolved_inputs.
+_cb(
+    "inject_upstream_artifacts",
+    "before_agent",
+    factory=lambda ctx: _inject_upstream_artifacts(),
+)
 _cb("inject_original_query", "before_model", factory=lambda ctx: _inject_original_query())
 # Give the orchestrator/planner the knowledge-graph root (agents + history) up front.
 _cb("inject_graph_root", "before_agent", factory=lambda ctx: _inject_graph_root())
@@ -1032,8 +1160,21 @@ _cb("expand_link_refs", "after_model", factory=lambda ctx: _expand_link_refs())
 # Human-In-The-Loop approval callback before model/agent execution.
 _cb("hitl_before_model", "before_model", factory=lambda ctx: _hitl_before_model())
 _cb("hitl_before_agent", "before_agent", factory=lambda ctx: _hitl_before_model())
+_cb("ask_pipeline_scope", "before_agent", factory=lambda ctx: _ask_pipeline_scope())
+_cb(
+    "enforce_pipeline_scope_hops",
+    "after_model",
+    factory=lambda ctx: _enforce_pipeline_scope_hops(),
+)
+_cb(
+    "mark_pipeline_scope_lane",
+    "after_tool",
+    factory=lambda ctx: _mark_pipeline_scope_lane(),
+)
 # Limit web search calls per agent turn.
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
+_cb("count_research_searches", "after_tool", factory=lambda ctx: _count_research_searches())
+_cb("reset_research_searches", "before_agent", factory=lambda ctx: _reset_research_searches())
 # Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.
 _cb("guard_unknown_tools", "after_model", factory=_guard_unknown_tools)
 # End the planner's turn once its plan is registered, so it cannot loop
@@ -1047,6 +1188,58 @@ _cb("sanitize_json_output", "after_model", factory=lambda ctx: _sanitize_json_ou
 _cb("save_tz_document", "after_agent", factory=lambda ctx: _save_tz_document())
 # Save the ТЗ + literature queries as shareable Markdown & HTML for hand-off.
 _cb("export_tz_and_queries", "after_agent", factory=lambda ctx: _export_tz_and_queries())
+# ── Experiment Module callbacks ──────────────────────────────────────────────
+# Every EM callback is a plain (context-independent) function, so they are
+# registered table-driven: (registry key, hook, "package:attr"), one lazy
+# import per resolve. Keys and hooks must stay in sync with experiments.yaml.
+_EM = "CoScientist.experiments"
+_EM_CALLBACKS: tuple[tuple[str, str, str], ...] = (
+    # Bounded planner context plus hard AgentTool route guard.
+    ("build_experiment_context", "before_agent", f"{_EM}.context:build_experiment_context"),
+    ("commit_experiment_hypotheses", "after_agent", f"{_EM}.hypotheses:commit_experiment_hypotheses"),
+    ("persist_experiment_em_request", "before_agent", f"{_EM}.hypotheses:persist_experiment_em_request"),
+    ("bootstrap_research_question_if_empty", "before_agent", f"{_EM}.hypotheses:bootstrap_research_question_if_empty"),
+    ("seed_hypotheses_from_em_request", "before_model", f"{_EM}.hypotheses:seed_hypotheses_from_em_request"),
+    ("enforce_hypothesis_research_commit", "after_model", f"{_EM}.hypotheses:enforce_hypothesis_research_commit"),
+    ("normalize_em_hypothesis_commit", "after_model", f"{_EM}.hypotheses:normalize_em_hypothesis_commit"),
+    ("capture_hypotheses_after_research_commit", "after_tool", f"{_EM}.hypotheses:capture_hypotheses_after_research_commit"),
+    ("reset_experiment_retrieval_budget", "before_agent", f"{_EM}.context:reset_experiment_retrieval_budget"),
+    ("enforce_experiment_retrieval_budget", "after_model", f"{_EM}.context:enforce_experiment_retrieval_budget"),
+    ("snapshot_experiment_discovered_capabilities", "after_agent", f"{_EM}.context:snapshot_experiment_discovered_capabilities"),
+    ("stash_experiment_retrieved_capabilities", "before_agent", f"{_EM}.context:stash_experiment_retrieved_capabilities"),
+    # Same snapshot, after ToolRetriever finishes (reranker clears accumulated_tools).
+    ("persist_experiment_retrieved_capabilities", "after_agent", f"{_EM}.context:stash_experiment_retrieved_capabilities"),
+    ("skip_executor_without_runtime", "before_agent", f"{_EM}.context:skip_executor_without_runtime"),
+    # After ToolPreparer: lit/knowledge asks with no compute signal → NO_MATCHING_TOOL
+    # before Hypotheses/Plan/Coder burn budget on unrelated inventory.
+    ("assess_experiment_inventory_feasibility", "after_agent", f"{_EM}.runtime:assess_experiment_inventory_feasibility"),
+    ("skip_when_experiment_not_feasible", "before_agent", f"{_EM}.runtime:skip_when_experiment_not_feasible"),
+    ("skip_when_experiment_stage_complete", "before_agent", f"{_EM}.runtime:skip_when_experiment_stage_complete"),
+    ("guard_experiment_route", "before_tool", f"{_EM}.runtime:guard_route_agent_tool"),
+    ("pin_alembic_build_args", "before_tool", f"{_EM}.runtime:pin_alembic_build_args"),
+    ("pin_fedot_alembic_task", "before_tool", f"{_EM}.runtime:pin_fedot_alembic_task"),
+    ("await_alembic_job_if_experiment", "after_tool", f"{_EM}.runtime:await_alembic_job_if_experiment"),
+    ("force_schema_s3_upload", "before_tool", f"{_EM}.runtime:force_schema_s3_upload"),
+    ("force_molecule_generator_s3_upload", "before_tool", f"{_EM}.runtime:force_molecule_generator_s3_upload"),
+    ("mark_experiment_route_returned", "after_tool", f"{_EM}.runtime:on_route_agent_returned"),
+    ("enforce_pending_record_result", "after_model", f"{_EM}.runtime:enforce_pending_record_result"),
+    ("enforce_continue_until_reporting", "after_model", f"{_EM}.runtime:enforce_continue_until_reporting"),
+    ("rewrite_mismatched_control_action", "after_model", f"{_EM}.runtime:rewrite_mismatched_control_action"),
+    # Collapse parallel ExperimentModuleAgent fan-out into one merged request.
+    ("coalesce_experiment_module_calls", "after_model", f"{_EM}.runtime:coalesce_experiment_module_calls"),
+    ("suppress_experiment_module_after_completed", "after_model", f"{_EM}.runtime:suppress_experiment_module_after_completed"),
+    ("enforce_experiment_module_first", "after_model", f"{_EM}.runtime:enforce_experiment_module_first"),
+)
+
+
+def _em_lazy_factory(path: str):
+    module_name, attr = path.split(":", 1)
+    return lambda ctx: getattr(import_module(module_name), attr)
+
+
+for _key, _hook, _path in _EM_CALLBACKS:
+    _cb(_key, _hook, factory=_em_lazy_factory(_path))
+
 # Critic callbacks: their LLM prompts embed the orchestrator's current roster.
 _cb("pre_action_critique", "after_model", factory=_pre_action_critique)
 _cb("post_action_critique", "after_tool", factory=_post_action_critique)
@@ -1062,6 +1255,7 @@ def _register_classes() -> None:
     from CoScientist.hitl.session_agent import SessionAgent
     from CoScientist.microfluidics.tz_agent import TZSessionAgent
     from CoScientist.context_init.agent import ContextInitSessionAgent
+    from CoScientist.experiments.review import ExperimentReviewSessionAgent
 
     REGISTRY.register_agent_class("session", SessionAgent)
     REGISTRY.register_agent_class("web_tools_deployer", WebToolsDeployerAgent)
@@ -1072,12 +1266,19 @@ def _register_classes() -> None:
     # Context-init pre-stage: the review shows a STRUCTURED FORM (research frame)
     # and seeds the confirmed frame into the research graph.
     REGISTRY.register_agent_class("context_init_session", ContextInitSessionAgent)
+    REGISTRY.register_agent_class("experiment_review", ExperimentReviewSessionAgent)
 
 
 def _register_schemas() -> None:
     from CoScientist.storage import MCPRanking, ToolRanking
     from CoScientist.microfluidics.models import LiteratureQueries, StructuredTZ
     from CoScientist.context_init.models import ResearchFrame
+    from CoScientist.experiments.schemas import (
+        ExperimentPlan,
+        ExperimentTask,
+        PlanCritique,
+        TaskResult,
+    )
 
     REGISTRY.register_output_schema("tool_ranking", ToolRanking)
     REGISTRY.register_output_schema("mcp_ranking", MCPRanking)
@@ -1087,6 +1288,10 @@ def _register_schemas() -> None:
     REGISTRY.register_output_schema("tz_literature_queries", LiteratureQueries)
     # Framing entities of the meta-model, filled per run (context_init pre-stage).
     REGISTRY.register_output_schema("research_frame", ResearchFrame)
+    REGISTRY.register_output_schema("experiment_plan", ExperimentPlan)
+    REGISTRY.register_output_schema("experiment_task", ExperimentTask)
+    REGISTRY.register_output_schema("task_result", TaskResult)
+    REGISTRY.register_output_schema("plan_critique", PlanCritique)
 
 
 def _register_planners() -> None:

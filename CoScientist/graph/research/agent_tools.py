@@ -20,6 +20,7 @@ request).
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -36,6 +37,10 @@ logger = logging.getLogger(__name__)
 
 FOCUS_STATE_KEY = "research_focus"
 CONTEXT_STATE_KEY = "research_context"
+# Canonical top-level goal the orchestrator declared via research_init. The
+# module-first gate prefers it over a downstream (possibly reworded) delegation
+# brief, so the Experiment Module receives the real intent, not "find literature".
+ROOT_GOAL_STATE_KEY = "orchestrator_root_goal"
 
 
 def _agent(tool_context: Optional[ToolContext]) -> str:
@@ -142,6 +147,7 @@ class ResearchGraphToolset(BaseToolset):
         nodes: Optional[List[Dict[str, Any]]] = None,
         edges: Optional[List[Dict[str, Any]]] = None,
         status_updates: Optional[List[Dict[str, Any]]] = None,
+        **kwargs: Any,
     ) -> Dict[str, Any]:
         """Record your results in the shared research graph in ONE transaction.
 
@@ -151,10 +157,9 @@ class ResearchGraphToolset(BaseToolset):
         is allowed (see the RESEARCH GRAPH section of your prompt).
 
         Args:
-            nodes: list of node ops. CREATE: {"type": "Evidence", "attrs": {...},
-                "status": "obtained" (optional), "ref": "e1" (optional local
-                handle)}. ENRICH an existing node's attrs: {"id": "EB1",
-                "attrs": {...}} (no "type").
+            nodes: list of node ops. CREATE: {"type": "<allowed_node_type>", "attrs": {...},
+                "status": "..." (optional), "ref": "local_handle" (optional)}.
+                ENRICH an existing node's attrs: {"id": "N1", "attrs": {...}} (no "type").
             edges: list of {"type": "supports", "from": "E4", "to": "H2"}. To
                 point at a node created in THIS call, use its ref with a leading
                 "#", e.g. "from": "#e1".
@@ -166,6 +171,49 @@ class ResearchGraphToolset(BaseToolset):
             on success, or {"ok": false, "errors": [...], "hint": ...} — read the
             errors, fix the payload, and call research_commit again.
         """
+        # Robust fallback for LLMs that serialize the node/edge list into kwargs or keys
+        if (nodes is None or edges is None) and kwargs:
+            for k, v in list(kwargs.items()):
+                # Check key first
+                if isinstance(k, str):
+                    k_str = k.strip()
+                    if k_str.startswith("[") or k_str.startswith("{"):
+                        try:
+                            parsed = json.loads(k_str)
+                            if isinstance(parsed, list):
+                                if parsed and isinstance(parsed[0], dict) and ("from" in parsed[0] or "to" in parsed[0]):
+                                    edges = edges or parsed
+                                elif nodes is None:
+                                    nodes = parsed
+                            elif isinstance(parsed, dict):
+                                nodes = nodes or parsed.get("nodes")
+                                edges = edges or parsed.get("edges")
+                                status_updates = status_updates or parsed.get("status_updates")
+                        except Exception:
+                            pass
+                # Check val
+                if isinstance(v, str):
+                    v_str = v.strip()
+                    if v_str.startswith("[") or v_str.startswith("{"):
+                        try:
+                            parsed = json.loads(v_str)
+                            if isinstance(parsed, list):
+                                if parsed and isinstance(parsed[0], dict) and ("from" in parsed[0] or "to" in parsed[0]):
+                                    edges = edges or parsed
+                                elif nodes is None:
+                                    nodes = parsed
+                            elif isinstance(parsed, dict):
+                                nodes = nodes or parsed.get("nodes")
+                                edges = edges or parsed.get("edges")
+                                status_updates = status_updates or parsed.get("status_updates")
+                        except Exception:
+                            pass
+                elif isinstance(v, list):
+                    if v and isinstance(v[0], dict) and ("from" in v[0] or "to" in v[0]):
+                        edges = edges or v
+                    elif nodes is None and (k in ("nodes", "node_list", "hypotheses", "node_ops", "items", "args") or (len(v) > 0 and isinstance(v[0], dict) and ("type" in v[0] or "attrs" in v[0]))):
+                        nodes = v
+
         # If the orchestrator set a focus hypothesis before delegating, evidence
         # this worker records is auto-linked to it (relates_to) so it is never
         # orphaned — the background validator then decides its polarity.
@@ -215,6 +263,11 @@ class ResearchGraphToolset(BaseToolset):
             empirical_bases=empirical_bases,
         )
         if out.get("ok"):
+            if self._is_root and isinstance(question, str) and question.strip():
+                try:
+                    tool_context.state[ROOT_GOAL_STATE_KEY] = question.strip()
+                except Exception:  # noqa: BLE001
+                    pass
             _refresh_context_state(tool_context, self._is_root)
         return out
 

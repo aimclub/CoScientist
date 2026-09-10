@@ -284,13 +284,23 @@ class BackgroundValidatorPlugin(BasePlugin):
             # research_commit callback.
             self._inflight.discard(key)
 
-    async def after_tool_callback(self, *, tool, tool_args, tool_context, result) -> None:
-        if not _enabled() or getattr(tool, "name", "") != "research_commit":
-            return None
+    def schedule_for_graph(self, graph: Any) -> int:
+        """Enqueue judgments for hypotheses that have evidence but no verdict.
+
+        Used by the ``research_commit`` plugin hook and by the Experiment
+        Module graph bridge (privileged ``store.commit``, no tool call).
+        Returns how many tasks were scheduled. No-op without a running loop.
+        """
+        if not _enabled() or graph is None:
+            return 0
         try:
-            graph = get_research_graph(tool_context)
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return 0
+        try:
             research_id = _research_id(graph)
             self._activate_research(graph, research_id)
+            scheduled = 0
             for item in queries.unresolved_hypotheses(graph)["items"]:
                 key = self._key(graph, research_id, item)
                 if key in self._completed or key in self._inflight:
@@ -298,7 +308,7 @@ class BackgroundValidatorPlugin(BasePlugin):
                 self._inflight.add(key)
                 logger.info("[validator] scheduling background judgment for %s",
                             item["hypothesis"])
-                task = asyncio.create_task(
+                task = loop.create_task(
                     self._run_validation(
                         key=key,
                         graph=graph,
@@ -308,6 +318,16 @@ class BackgroundValidatorPlugin(BasePlugin):
                 )
                 _TASKS.add(task)
                 task.add_done_callback(_TASKS.discard)
+                scheduled += 1
+            return scheduled
+        except Exception:  # noqa: BLE001 — background work is best-effort
+            return 0
+
+    async def after_tool_callback(self, *, tool, tool_args, tool_context, result) -> None:
+        if not _enabled() or getattr(tool, "name", "") != "research_commit":
+            return None
+        try:
+            self.schedule_for_graph(get_research_graph(tool_context))
         except Exception:  # noqa: BLE001
             pass
         return None

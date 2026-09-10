@@ -183,9 +183,9 @@ def build_for_mode():
             patched.agents[name].root = False
             patched.agents[name].enabled = False
 
-    # Add PlannerAgent to OrchestratorAgent's subordinates (if not already).
+    # Add PlannerAgent to OrchestratorAgent's subordinates (if not already and present in agents).
     orch_subs = patched.agents["OrchestratorAgent"].subordinates
-    if "PlannerAgent" not in orch_subs:
+    if "PlannerAgent" in patched.agents and "PlannerAgent" not in orch_subs:
         orch_subs.insert(0, "PlannerAgent")
 
     # Re-validate the patched config and build.

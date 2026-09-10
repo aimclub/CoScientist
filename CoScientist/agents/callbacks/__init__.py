@@ -29,6 +29,7 @@ from CoScientist.agents.callbacks.research_callbacks import (
 from CoScientist.agents.callbacks.tool_callbacks import (
     after_fullset_reranker_agent,
     after_tool_reranker_agent,
+    after_tool_reranker_model,
     before_get_task,
     before_tool_reranker_model,
     shortlist_reranker_tools,
@@ -38,9 +39,11 @@ from CoScientist.agents.callbacks.tool_callbacks import (
     inject_graph_root,
     make_plan_registration_guard,
     make_unknown_tool_guard,
+    resolve_hallucinated_tool,
     inject_original_query,
     print_research_agent_tool_call,
     redirect_when_no_tools,
+    refuse_when_fedot_deliverable,
 )
 
 __all__ = [
@@ -55,11 +58,14 @@ __all__ = [
     "before_tool_reranker_model",
     "shortlist_reranker_tools",
     "after_tool_reranker_agent",
+    "after_tool_reranker_model",
     "after_fullset_reranker_agent",
     "print_research_agent_tool_call",
     "capture_mcp_artifacts",
     "redirect_when_no_tools",
+    "refuse_when_fedot_deliverable",
     "make_unknown_tool_guard",
+    "resolve_hallucinated_tool",
     "make_plan_registration_guard",
     "inject_original_query",
     "before_get_task",

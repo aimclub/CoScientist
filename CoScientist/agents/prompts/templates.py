@@ -25,6 +25,7 @@ from CoScientist.config import settings
 from CoScientist.agents.prompts.builder import render_template
 from CoScientist.assembly.prompting import PromptContext
 from CoScientist.assembly.registry import REGISTRY, render_tool_docs
+from CoScientist.hitl.pipeline_scope import SCOPE_BASKETS_ALL as _EM_SCOPE_BASKETS
 
 
 def _register(name: str):
@@ -193,6 +194,22 @@ def hypotheses(ctx: PromptContext) -> str:
     # graph tools when the graph is off would make the model call a tool it does
     # not have.
     if ctx.has_tool("research_graph"):
+        research_example = '''\n\nExample research_commit call:
+research_commit(
+    nodes=[
+        {"type": "Hypothesis", "ref": "h1", "attrs": {"formulation": "...", "status": "formulated", "priority": "high", "selected": "true"}},
+        {"type": "Hypothesis", "ref": "h2", "attrs": {"formulation": "...", "status": "postponed", "priority": "medium"}},
+        {"type": "VerificationMethod", "ref": "vm1", "attrs": {"method_type": "computational", "description": "..."}},
+        {"type": "ConfirmationCriteria", "ref": "cc1", "attrs": {"threshold": "..."}}
+    ],
+    edges=[
+        {"type": "motivates", "from": "Q1", "to": "#h1"},
+        {"type": "motivates", "from": "Q1", "to": "#h2"},
+        {"type": "tested_by", "from": "#h1", "to": "#vm1"},
+        {"type": "evaluated_by", "from": "#vm1", "to": "#cc1"}
+    ]
+)
+ALWAYS pass `nodes` and `edges` as explicit named arguments (lists of dictionaries) in your `research_commit` tool call.'''
         if single:
             selection = '''### ONE ACTIVE HYPOTHESIS (hard rule)
 The research verifies ONE hypothesis at a time — verifying several at once burns
@@ -247,6 +264,7 @@ so in the commit warnings — better to make the choice yourself, deliberately.'
                               "one-line list, explicitly\n  marked as NOT to be "
                               "started now.")
     else:
+        research_example = ""
         if single:
             selection = '''### ONE ACTIVE HYPOTHESIS (hard rule)
 The research verifies ONE hypothesis at a time — verifying several at once burns
@@ -284,7 +302,9 @@ validated for a given task — and to hand the orchestrator exactly <<SELECT_WOR
 ### Instructions:
 
 1. Understand the task and its constraints.
-2. Propose a small set (2–5) of distinct, realistic hypotheses or approaches.
+2. Propose hypotheses that can be tested by the DISTINCT operations in the
+   user's ask (one hypothesis per distinct operation the user asked to execute).
+   Do not invent extra endpoints beyond those operations.
 3. Keep them concise and actionable.
 4. Prefer testable and experimentally verifiable ideas.
 5. If relevant, briefly note assumptions or required conditions.
@@ -331,7 +351,7 @@ Context of tasks:
 
 Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
 Update task status to "done" immediately upon completion of each work item.
-''', SELECTION=selection, ANSWER_HEAD=answer_head,
+''' + research_example, SELECTION=selection, ANSWER_HEAD=answer_head,
         ANSWER_BACKLOG=answer_backlog, RESEARCH=render_research_protocol(ctx),
         SELECT_WORD=select_word, HAND_RULE=hand_rule, BACKLOG_RULE=backlog_rule)
 
@@ -353,34 +373,42 @@ def research(ctx: PromptContext) -> str:
 
     steps, n = [], 1
     if paper_analysis:
-        # 1) If user has uploaded papers (S3 keys) analyse them first.
         steps.append(
             f"{n}. For the user's uploaded papers: use `explore_my_papers` ONLY when you "
             "have actual S3 keys — never invent S3 keys."
         )
         n += 1
-        # 2) Otherwise (or if no uploaded papers) always call explore_chemistry_database first
         steps.append(
-            f"{n}. If there are NO user-uploaded papers, ALWAYS call `explore_chemistry_database` before other literature tools. "
-            "Do this even if you plan to use `search_papers` or `download_papers_from_search` afterwards."
-        )
-    n += 1
-    
-    # 3) Use papers search
-    if papers_search:
-        steps.append(
-            f"{n}. If evidence is still insufficient: use `download_papers_from_search`"
-        + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else ".")
-        + " When calling `download_papers_from_search`, aim to find at least *10* "
-        "papers that might contain the answer. OpenAlex indexes n-grams: pass keywords "
-        "as a single space-separated string, no quotes around phrases. "
-        "Use up to 3 short exact phrases (2–3 words each) taken verbatim from the query; "
-        "do not paraphrase, stem, or replace Unicode symbols."
-        "If no papers found, retry up to 3 times with shorter or differently-split phrase combinations."
+            f"{n}. If there are NO user-uploaded papers, ALWAYS call the internal "
+            "scientific literature database first: `explore_scientific_database` "
+            "(argument `task`). If that name is not in your tool list, call "
+            "`explore_chemistry_database` instead. Do this even if you plan to use "
+            "`search_papers` afterwards. Do not treat the RAG answer as the end of "
+            "a literature review."
         )
         n += 1
 
-    # 4) Final fallback to tavily
+    if papers_search:
+        steps.append(
+            f"{n}. Then, for a literature / publication / citation review, ALWAYS call "
+            "`search_papers` (exact name) with argument `keywords` (not `query`). "
+            "Do this even when no user papers are uploaded and even if the internal "
+            "database already returned an answer. OpenAlex indexes n-grams: pass "
+            "keywords as a single space-separated string, no quotes around phrases. "
+            "Use up to 3 short exact phrases (2–3 words each) taken verbatim from "
+            "the query; do not paraphrase, stem, or replace Unicode symbols."
+        )
+        n += 1
+        steps.append(
+            f"{n}. If evidence is still insufficient or full text is required: use "
+            "`download_papers_from_search`"
+            + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else ".")
+            + " Aim to find at least *10* papers that might contain the answer. "
+            "If no papers found, retry up to 3 times with shorter or differently-split "
+            "phrase combinations."
+        )
+        n += 1
+
     if lit:
         steps.append(
             f"{n}. If literature tools still cannot answer, fall back to `tavily_search`. "
@@ -421,13 +449,23 @@ WORKFLOW
 RULES
 --------------------------------------------------
 
-<<PREFER_LINE>>- Stop once sufficient evidence is obtained
+<<PREFER_LINE>>- Stop once sufficient evidence is obtained. An internal-database
+  (`explore_scientific_database` / `explore_chemistry_database`) answer alone
+  is NOT sufficient for a literature / publication review — still
+  call `search_papers`.
+- If a literature tool returned papers or hits, finish with those findings.
+  Do not mark the task FAILED for "insufficient literature" after a tool hit;
+  state remaining gaps in the notes.
 - Clearly communicate uncertainty or conflicting findings
 - Never hallucinate papers, repositories, or citations — if you cannot find the
   exact source the user named, say so rather than substituting a different one
 - Synthesize findings instead of copying abstracts
 - Be concise, try to fit the answer within 2000 characters
 - Use tools to answer, it is prohibited to answer directly without them
+- Never invent tool names. Copy them exactly from the tool list.
+  For the internal scientific literature database use
+  `explore_scientific_database(task=…)` (or `explore_chemistry_database` if
+  that is the name in your tool list). For OpenAlex use `search_papers(keywords=…)`.
 
 --------------------------------------------------
 OUTPUT FORMAT
@@ -473,12 +511,22 @@ You are a TOOL RETRIEVAL SPECIALIST. Your ONLY job is to find and accumulate rel
 <<TOOLS>>
 
 ## Workflow:
-1. Break the task into capabilities
-2. Call retrieve_tools with different queries if needed
-3. Tools are AUTOMATICALLY accumulated across calls
+1. Call retrieve_tools once with a short query for the main operation.
+2. Optionally call retrieve_tools ONCE more with a different short query if a
+   clearly distinct second capability is still missing.
+3. Tools are AUTOMATICALLY accumulated across calls — then STOP and summarize.
+
+## HARD STOP (non-negotiable):
+- MAXIMUM 3 retrieve_tools calls total. Treat 2 as the normal budget.
+- Do NOT repeat the same or near-duplicate query.
+- Do NOT call get_server_info in a loop. At most ONE get_server_info call, and
+  only if a server_id is required and missing from retrieve_tools output.
+- As soon as any returned tool covers the requested operation, STOP — do not
+  keep searching for a "better" wording of the same capability.
+- After the last retrieve_tools call, write the brief summary and end your turn.
+  Never continue tool-calling once coverage exists.
 
 ## CRITICAL RULES:
-- Call retrieve_tools as many times as needed with different queries
 - DO NOT memorize or write down any server_ids
 - DO NOT try to pass IDs to other tools — they are handled automatically
 - Simply report what was retrieved to the user
@@ -514,16 +562,34 @@ You are given list of AVAILABLE TOOLS:
 ## YOUR TASK
 
 Evaluate how relevant each tool is for solving the ORIGINAL TASK.
+Use each tool's FULL description and input_schema (when present), not only its name.
 
 ## SCORING RULES
 
 Assign a relevance score from 0.0 to 1.0:
 
-- 1.0 → critically relevant
-- 0.7–0.9 → very relevant
-- 0.4–0.6 → probably relevant
-- 0.1–0.3 → probably irrelevant
-- 0.0 →  irrelevant
+- 1.0 → critically relevant (operation + object/constraints match; schema can take the needed args)
+- 0.7–0.9 → very relevant (right operation; minor arg/coverage gaps)
+- 0.4–0.6 → probably relevant (partial match; may need another tool to finish)
+- 0.1–0.3 → probably irrelevant (same domain, wrong operation or wrong object)
+- 0.0 → irrelevant
+
+## MATCH PRIORITY (apply in order)
+
+1. Operation match beats domain match. Same scientific area ≠ same tool.
+2. Specific beats generic when the ask narrows the object (named target, disease,
+   case, dataset, or property constraint advertised in a tool's schema/description).
+   If BOTH a generic generator and a case/target-conditioned generator are in the
+   list, and the ask names a target/disease that the case tool's schema/description
+   covers, score the case/specific tool HIGHER (typically ≥0.8) and the generic
+   tool LOWER (typically ≤0.5) — "drug-like" wording alone must not prefer generic.
+3. Capability gaps lower the score: if the ask requires an output the tool's
+   description/schema does not promise, do not score it as critically relevant.
+4. On a near-tie, prefer the tool whose required inputs align with entities
+   already present in the user ask.
+
+Do NOT invent disease cases, tool names, or arguments that are absent from the
+tool descriptions/schemas you were given.
 
 ## STRICT CONSTRAINTS
 
@@ -571,6 +637,9 @@ You are an MCP DISCOVERY SPECIALIST. Your ONLY job is to find MCP servers releva
 <<TOOLS>>
 
 ## Workflow:
+0. If the request already names a specific local MCP tool and/or server_id to
+   *execute* (not discover), do NOT search public registries — reply in one short
+   paragraph that web discovery is unnecessary and stop.
 1. Analyze the task and identify 2–5 distinct capabilities the user actually needs.
 2. Run ONE focused search per capability. Keep queries short (1–4 words), using canonical names where possible (e.g. "github", "postgres", "slack", "pubmed", "stripe").
 3. Results accumulate automatically — do not re-copy them between calls.
@@ -631,10 +700,12 @@ WEB MCP SERVERS:
 3. A web server earns DEPLOY only if it provides a capability genuinely absent from local tools AND meaningfully advances the task
 
 ## Scoring Rules:
-- If local tools cover the task well enough → SKIP all web tools
+- If local tools cover the task end-to-end (right operation + needed outputs) →
+  SKIP all web tools (score false for every web index)
 - If a web server duplicates a local tool → SKIP
-- If a web server fills a critical gap → DEPLOY
-- If there are several web servers with same functionality → leave only one for deploynment
+- If a web server fills a critical gap that no local tool's description/schema
+  promises → DEPLOY
+- If there are several web servers with same functionality → leave only one for deployment
 - Prefer fewer deployments — only deploy what clearly adds value
 - When uncertain, SKIP (deployment cost is real; marginal gains are not worth it)
 
@@ -653,6 +724,16 @@ Return:
 
 
 ''')
+
+
+# Shared FEDOT scoping canon — kept in one place instead of copied verbatim into
+# the planner and orchestrator prompts. Injected via the <<GEN_CHOICE>> sentinel.
+_GEN_TOOL_CHOICE = (
+    "When the ask names a concrete target/disease/case that a retrieved tool's "
+    "description or input_schema covers (e.g. a case/enum field), prefer that "
+    "SPECIFIC generation tool over a generic \"drug-like\" generator; use the "
+    "generic tool only if no specific match exists. Populate only schema-supported args."
+)
 
 
 # ── ExperimentAgent (FEDOT.MAS) ──────────────────────────────────────────────
@@ -684,13 +765,30 @@ grounds to refuse.
 Candidate tools for this task:
 {fedot_candidates?}
 
-## Steps
+- Only when a retrieved tool (or a sensible combination of them) genuinely
+  performs the requested operation should you proceed below. Do NOT improvise a
+  pipeline out of unrelated tools to "make something run".
+
+Retrieved tools for this task:
+{filtered_tools?}
+
+Upstream tabular inputs already projected from prior MCP artifacts onto the
+current tools' input_schema argument names (empty if none):
+{upstream_artifact_inputs?}
+
+## If the tools cover the task:
 1. Understand the task and expected output.
 2. Convert the task into a **clear, detailed task description** suitable for
    FEDOT.MAS (goals, inputs, constraints, desired outputs; note whether it is
    research, data processing, or experiments).
+   If `upstream_artifact_inputs` is non-empty, paste those values into the
+   description (do not invent replacements for those keys). <<GEN_CHOICE>>
 3. Call fedot_tool with the task description.
-4. Return the result.
+4. Return the result (include artifact URLs/values verbatim).
+   After status=success with non-empty artifacts: STOP unless the orchestrator
+   just retrieved a *new* consumer tool that needs those artifacts (e.g. dock/
+   score after generate) — then call fedot_tool once more with upstream inputs.
+   Do not escalate to CoderAgent when artifacts already cover the ask.
 
 ### TASK_MANAGEMENT
 Context of tasks:
@@ -702,7 +800,7 @@ Update task status to "done" immediately upon completion of each work item.
 Do NOT solve the task manually — delegate to FEDOT.MAS.
 
 <<HITL>>
-''', TOOLS=ctx.render_tools(), HITL=ctx.render_hitl())
+''', TOOLS=ctx.render_tools(), HITL=ctx.render_hitl(), GEN_CHOICE=_GEN_TOOL_CHOICE)
 
 
 @_register("experiment_react")
@@ -760,6 +858,25 @@ Use update_task_status REGULARLY; set a task to DONE immediately on completion.
 # MCP-tool pipeline or the sandbox coder — and delegates. Every decision rule is
 # gated on the corresponding subordinate actually being wired, so re-parenting a
 # path out of the router removes its rules instead of advertising a phantom.
+
+# Compute-executor roster name: Experiment Module replaces TaskExecutor when present.
+_COMPUTE_EXECUTOR_NAMES = ("ExperimentModuleAgent", "TaskExecutorAgent")
+
+
+def _compute_executor_name(ctx: PromptContext) -> str | None:
+    for name in _COMPUTE_EXECUTOR_NAMES:
+        if ctx.has_subordinate(name):
+            return name
+    return None
+
+
+def _sibling_compute_executor_name(ctx: PromptContext) -> str | None:
+    sibling_names = {s.name for s in ctx.siblings()}
+    for name in _COMPUTE_EXECUTOR_NAMES:
+        if name in sibling_names:
+            return name
+    return None
+
 
 @_register("task_router")
 def task_router(ctx: PromptContext) -> str:
@@ -935,10 +1052,12 @@ def coder(ctx: PromptContext) -> str:
         # offers ready-made tool execution — under the router that sibling is the
         # tool pipeline, standalone under the orchestrator it was the executor.
         boundary = ""
-        ready_tools_path = next(
-            (s.name for s in ctx.siblings()
-             if s.name in ("ToolPipelineAgent", "TaskExecutorAgent")),
-            "",
+        ready_tools_path = (
+            _sibling_compute_executor_name(ctx)
+            or next(
+                (s.name for s in ctx.siblings() if s.name == "ToolPipelineAgent"),
+                "",
+            )
         )
         if ready_tools_path:
             boundary = f'''
@@ -1114,7 +1233,7 @@ data or invent rows, columns, ids, or statistics.
     * ChEMBL (bioactivity, IC50/Ki, targets): `pip install chembl_webresource_client`
       then query activities/targets/molecules.
     * PubChem (compound properties, identifiers): `pip install pubchempy`.
-    * OpenAlex (paper metadata, no key): query `https://api.openalex.org/works?filter=...`.
+    * OpenAlex (paper metadata; pass `api_key` and `mailto`/`email`): query `https://api.openalex.org/works?filter=...`.
 - **Web / direct URL** — when a source gives a downloadable file or table, fetch
   it directly (curl/wget) or scrape the table; use web search to locate it.
 
@@ -1215,23 +1334,28 @@ its code -> build and serve a FastMCP server in Docker).
 
 <<TOOLS>>
 
+## repo_url comes from your request
+Your caller's request JSON always carries the exact repo_url to build —
+read it from there. Never invent, guess, or reuse a repo_url from an example
+in a tool description (including whitead/synspace); never ask the caller for
+one — it is already in your request payload. Pass that exact URL to
+build_mcp_server; never substitute a different repository.
+
 {links_context?}
 ## The build is a long, asynchronous job — protocol
-A full build takes TENS OF MINUTES. You never wait for it inline:
+A full build takes TENS OF MINUTES.
 1. Before starting a new build, ALWAYS call list_mcp_builds() first to check
    whether this repository already has a build in this process.
 2. If there is no existing build for the repository (or the caller explicitly
-   asked to rebuild), call build_mcp_server(repo_url). It returns immediately
-   with a job_id — report the job_id back and say the build is running; do
-   NOT poll check_mcp_build in a tight loop waiting for it to finish.
-3. On a later turn (a fresh delegation, a follow-up message), use the job_id
-   you (or list_mcp_builds) already have and call check_mcp_build(job_id) —
-   or list_mcp_builds() if the job_id was lost — to see the current state:
-   still "running" (report the stage and that it is still building), "failed"
-   (report the error), or "done".
-4. Once a build reports "done", hand back the concrete result: mcp_url (the
-   served MCP endpoint), image, and container. That is the deliverable — do
-   not just say "the build succeeded" without these fields.
+   asked to rebuild), call build_mcp_server(repo_url) WITHOUT force_rebuild.
+   Do not pass force_rebuild=true unless the caller explicitly asked to rebuild.
+3. If build_mcp_server returns status=done with mcp_url, that is the
+   deliverable — report mcp_url, image, and container immediately. The runtime
+   may have waited for the Docker job; do not start another build.
+4. If it returns status=running with a job_id, report the job_id and that the
+   build is still running. Do NOT invent success. Do NOT fallback to another
+   repo. On a later turn call check_mcp_build(job_id).
+5. On failed: report the error and the job_id. Do not silently switch repos.
 
 ## Do not rebuild for nothing
 - Never start a new build for a repository that already has a running or done
@@ -1506,8 +1630,10 @@ _PLANNING_STEP_NO_PLANNER = (
 @_register("orchestrator")
 def orchestrator(ctx: PromptContext) -> str:
     # Which agents are on the roster decides which guidance lines appear.
-    has_exec = ctx.has_subordinate("TaskExecutorAgent")
+    exec_name = _compute_executor_name(ctx)
+    has_exec = exec_name is not None
     has_coder = ctx.has_subordinate("CoderAgent")
+    has_mcp_builder = ctx.has_subordinate("McpBuilderAgent")
     has_research = ctx.has_subordinate("ResearchAgent")
     exec_routes_to_coder = has_exec and _executor_routes_to_coder(ctx)
     has_retrieval = ctx.has_tool("retrieval")
@@ -1537,12 +1663,22 @@ def orchestrator(ctx: PromptContext) -> str:
             "   yourself, then carry them out. There is NO planner tool — do not call one."
         )
 
+    scope_hitl_on = (
+        exec_name == "ExperimentModuleAgent"
+        and settings.web.scope_hitl
+        and settings.web.hitl_enabled
+    )
+    if scope_hitl_on:
+        steps.append("{pipeline_scope_directive?}")
+
     # The tool-discovery gate — an EARLY, mandatory step so it is read before
     # routing. Without it the model pattern-matches "generate/find <scientific
     # thing>" straight to ResearchAgent and fans out research calls.
-    if has_retrieval:
+    # When scope HITL is on, retrieve FIRST lives in SKIP_DIRECTIVE (skip branch)
+    # or the custom render_directive (only if EM is named) — not in this base.
+    if has_retrieval and not scope_hitl_on:
         prefer = (
-            "delegate it to TaskExecutorAgent and NAME the retrieved tools in your\n"
+            f"delegate it to {exec_name} and NAME the retrieved tools in your\n"
             "   request"
             if has_exec else
             "route it to the agent that can run those tools"
@@ -1559,25 +1695,37 @@ def orchestrator(ctx: PromptContext) -> str:
             discovery_clause = (
                 "\n   Discovering WHICH tools exist is YOUR job — call `retrieve_tools`"
                 " yourself.\n   Do NOT delegate \"check if a tool exists\" to "
-                "TaskExecutorAgent: delegating to it\n   starts real execution. Use "
+                f"{exec_name}: delegating to it\n   starts real execution. Use "
                 "what you retrieved to ENRICH the delegation — NAME\n   the relevant "
                 "tools in your request. Finding nothing is NOT a reason to skip\n"
-                "   TaskExecutorAgent: it will then do the work as engineering itself."
+                f"   {exec_name}: it will then do the work as engineering itself."
             )
         elif has_exec:
             discovery_clause = (
                 "\n   Discovering WHICH tools exist is YOUR job — call `retrieve_tools`"
-                " yourself.\n   Do NOT delegate \"check if a tool exists\" to "
-                "TaskExecutorAgent: delegating to it\n   runs the full discover→deploy"
-                "→FEDOT pipeline (which executes even when nothing\n   matches). "
-                "Delegate to TaskExecutorAgent only to RUN a computation you have\n"
+                f" yourself.\n   Do NOT delegate \"check if a tool exists\" to "
+                f"{exec_name}: delegating to it\n   runs the full discover→plan"
+                "→execute pipeline (which executes even when nothing\n   matches). "
+                f"Delegate to {exec_name} only to RUN a computation you have\n"
                 "   already confirmed a tool covers."
             )
         else:
             discovery_clause = ""
         steps.append(
-            "BEFORE delegating, call `retrieve_tools` to discover which ready-made MCP\n"
-            "   tools exist for the task. Run one or two focused `retrieve_tools` queries per capability\n"
+            # Here stood an exception: do NOT call retrieve_tools for literature
+            # searches. A task whose FIRST stage is a literature review fell under it
+            # wholesale, so the orchestrator lawfully skipped the inventory check, went
+            # to the literature lane and stopped there. Measured 2026-09-04 on the
+            # Heracleum task: 0 retrieve_tools calls, 0 module entries, 0 of 6 planned
+            # tasks executed. The check is unconditional now: first find out WHAT can
+            # compute the task, only then pick a lane.
+            "ALWAYS call `retrieve_tools` FIRST, before choosing a lane, to find out whether\n"
+            "   ready-made MCP tools can carry out this task. This is a feasibility check:\n"
+            "   a task that opens with a literature stage may still have computational ones,\n"
+            "   so judge by what the task REQUIRES overall, not by how its first line reads.\n"
+            "   If suitable tools exist the task IS executable as an experiment - send those\n"
+            f"   stages to {exec_name}.\n"
+            "   Run one or two focused `retrieve_tools` queries per capability\n"
             f"   (e.g. \"molecule generation\", \"inhibitor design\"); if a relevant tool\n"
             f"   exists, {prefer}.{research_clause}"
             f"{discovery_clause}\n"
@@ -1594,17 +1742,19 @@ def orchestrator(ctx: PromptContext) -> str:
         alternatives = []
         if has_exec:
             alternatives.append(
-                "executed (TaskExecutorAgent — ready tools or code)"
-                if exec_routes_to_coder else "computed (TaskExecutorAgent)"
+                f"executed ({exec_name} — ready tools or code)"
+                if exec_routes_to_coder else f"computed ({exec_name})"
             )
         if has_coder:
             alternatives.append("produced by writing/running code (CoderAgent)")
-        steps.append(
+        nature_research = (
             "Do NOT open with ResearchAgent (and never fan out several Research calls\n"
-            "   at once) for work that can instead be "
+            "   at once) for work that is purely computational without literature review and can instead be "
             + " or ".join(alternatives)
-            + ". Research is a fallback for genuine knowledge gaps, not the first move."
+            + ". (If the user explicitly requests literature/papers/scientific knowledge or full-cycle research, start with ResearchAgent)."
         )
+        if not scope_hitl_on:
+            steps.append(nature_research)
 
     # With the coder under the executor there is no Executor-vs-Coder decision
     # left for the orchestrator: it delegates the OUTCOME once and the router
@@ -1631,18 +1781,76 @@ def orchestrator(ctx: PromptContext) -> str:
     # by ExperimentAgent; the orchestrator must honour it.
     if has_exec and has_coder:
         steps.append(
-            "Distinguish TaskExecutorAgent from CoderAgent by whether an EXISTING tool\n"
+            f"Distinguish {exec_name} from CoderAgent by whether an EXISTING tool\n"
             "   does EXACTLY the asked operation — not merely something similar. A tool\n"
             "   that shares only the verb but not the object is NOT a match (e.g. a\n"
             "   \"train a GAN\" tool does NOT satisfy \"train a transformer\"). Route to\n"
             "   CoderAgent when the task names a specific repository / URL / example code,\n"
             "   requires a specific architecture or method no retrieved tool implements,\n"
             "   or otherwise needs custom code — even if a superficially-similar tool\n"
-            "   exists. If TaskExecutorAgent returns NO_MATCHING_TOOL (or recommends\n"
+            f"   exists. If {exec_name} returns NO_MATCHING_TOOL (or recommends\n"
             "   CoderAgent), re-route that step to CoderAgent — do NOT re-delegate it to\n"
-            "   TaskExecutorAgent."
+            f"   {exec_name}."
         )
 
+    # Experiment Module owns detailed tasking: never fan-out one stage into N calls.
+    if exec_name == "ExperimentModuleAgent":
+        if not scope_hitl_on:
+            steps.append(_EM_SCOPE_BASKETS)
+        steps.append(
+            "ExperimentModuleAgent is ONE computational-experiment stage, not a\n"
+            "   per-bullet worker. For a compute/analysis ask, call it\n"
+            "   EXACTLY ONCE with the FULL self-contained brief (goal, hypotheses/\n"
+            "   literature context, constraints, data refs, required outcomes).\n"
+            "   Do NOT split the stage into several ExperimentModuleAgent calls in\n"
+            "   the same turn or as a parallel fan-out — the module builds the\n"
+            "   detailed ExperimentPlan and runs tasks in order internally.\n"
+            "   A second ExperimentModuleAgent call is allowed ONLY if the previous stage\n"
+            "   failed (tasks_ok=false) and needs recovery, or the user explicitly asks for\n"
+            "   a new stage. Once phase=completed with tasks_ok=true, STOP."
+        )
+        steps.append(
+            "If the research graph already holds a seeded frame (question,\n"
+            "   constraints, budgets, confirmation criteria), honour it — do not\n"
+            "   re-elicit the frame. Pass the original user ask to the module; it\n"
+            "   reads graph constraints itself."
+        )
+        if not has_retrieval:
+            steps.append(
+                "You do NOT discover MCP tools yourself — ExperimentModuleAgent's\n"
+                "   ToolPreparer owns retrieve/rerank inventory. Delegate the brief to\n"
+                "   ExperimentModuleAgent immediately; do not call retrieve_tools or\n"
+                "   invent tool/server ids, and do NOT try to decide up-front whether a\n"
+                "   tool exists — the module decides that from its own inventory."
+            )
+        if not has_coder:
+            # Compute/engineering is EM-only (no shadow-science bypass): custom
+            # code, sandbox shells, named repos/URLs to RUN, and FEDOT loops are
+            # Executor routes INSIDE the module, not orchestrator lanes.
+            infra_clause = (
+                "\n   The ONE exception is an EXPLICIT ask to wrap/register/build a\n"
+                "   REUSABLE MCP tool server (infrastructure, not an experiment):\n"
+                "   that goes to McpBuilderAgent. A named package or repo to RUN\n"
+                "   (pubchempy, synspace, 'implement using library X', a GitHub URL\n"
+                "   without wrap/register wording) is ExperimentModuleAgent — never\n"
+                "   a first hop to McpBuilderAgent."
+                if has_mcp_builder else ""
+            )
+            steps.append(
+                "You have no direct CoderAgent lane. Custom code, sandbox shells,\n"
+                "   named repos/URLs to run, data assembly, and FEDOT loops are handled\n"
+                "   INSIDE ExperimentModuleAgent (Executor routes). Never write/run code\n"
+                "   yourself — pass those asks as one ExperimentModuleAgent brief."
+                + infra_clause
+            )
+        if has_research:
+            research_fallback = (
+                "Use ResearchAgent for open-ended literature and scientific knowledge searches.\n"
+                "   If ExperimentModuleAgent returns NO_MATCHING_TOOL (its inventory covers nothing),\n"
+                "   you may fall back to ResearchAgent with the original ask."
+            )
+            if not scope_hitl_on:
+                steps.append(research_fallback)
     if has_coder or exec_routes_to_coder:
         steps.append(
             "Execute CoderAgent delegations strictly ONE AT A TIME (sequentially) — never issue multiple CoderAgent calls in parallel."
@@ -1692,8 +1900,8 @@ def orchestrator(ctx: PromptContext) -> str:
         trust_examples.append("CoderAgent runs real commands in a real\nsandbox")
     if has_exec:
         trust_examples.append(
-            "TaskExecutorAgent runs real tools and real code in a\nreal sandbox"
-            if exec_routes_to_coder else "TaskExecutorAgent runs real tools"
+            f"{exec_name} runs real tools and real code in a\nreal sandbox"
+            if exec_routes_to_coder else f"{exec_name} runs real tools"
         )
     trust_intro = "Sub-agents really execute their work" + (
         " — " + ", ".join(trust_examples) if trust_examples else ""
@@ -1766,16 +1974,15 @@ def orchestrator(ctx: PromptContext) -> str:
                 "(postponed→formulated) and verify those.\n"
             )
         research_graph_section += (
-            "- Consult `research_triggers` before each step and act on them:\n"
-            "  • READY hypothesis (tools available) ⇒ verify it in this ORDER: "
+            "- Consult `research_triggers` before each step and act on them (when verification is requested):\n"
+            f"  • READY hypothesis (tools available) ⇒ verify it in this ORDER: "
             "call `research_set_focus(<hypothesis id>)` FIRST, THEN delegate the "
-            "evidence-gathering (ResearchAgent for literature, TaskExecutorAgent "
+            f"evidence-gathering (ResearchAgent for literature, {exec_name or 'ExperimentModuleAgent'} "
             "for computation/engineering), NAMING the hypothesis in your request. "
-            "Setting focus "
-            "is the KEY step — every piece of evidence the worker records is then "
+            "Setting focus is the KEY step — every piece of evidence the worker records is then "
             "auto-attached to that hypothesis, which moves it to under_verification "
             "and lets the background validator judge it. Do NOT skip set_focus, and "
-            "do NOT set the verdict yourself.\n"
+            "do NOT set the verdict yourself. (Skip verification if the user asked only for hypotheses or literature search without experiments).\n"
             "  • REFUTE SIGNAL ⇒ review/close that branch; do not keep verifying it.\n"
             "  • NEEDS VERDICT (a hypothesis has evidence) ⇒ you do NOTHING here: a "
             "background validator judges it automatically (confirmed/refuted) and "
@@ -1796,7 +2003,8 @@ def orchestrator(ctx: PromptContext) -> str:
             "write these yourself and never wait for them.\n"
             "- WORKERS: Hypotheses/Methods/Criteria (HypothesesAgent), Evidence "
             "(Research/Medical/Coder/Experiment), Tools & code/data (Coder). You "
-            "do NOT create Hypotheses, Conclusions, Methods, Resources or EmpiricalBases mid-run. "
+            "CANNOT create Hypotheses, Conclusions, Methods, Tools, "
+            "Resources or EmpiricalBases mid-run — the graph will reject it. Never try to call research_commit with Hypothesis nodes. "
             "If a worker reported findings only as text without committing them to the graph, "
             "record them directly as Evidence attached to the hypothesis via `research_commit` — "
             "do NOT re-delegate just for graph commitment.\n"
@@ -1872,7 +2080,9 @@ with the graph tools (read_research_graph / get_graph_history / get_agents_info)
 
 @_register("pre_action_critic")
 def pre_action_critic(ctx: PromptContext) -> str:
-    has_exec = ctx.has_subordinate("TaskExecutorAgent")
+    exec_name = _compute_executor_name(ctx)
+    has_exec = exec_name is not None
+    exec_label = exec_name or "TaskExecutorAgent"
     has_coder = ctx.has_subordinate("CoderAgent")
     has_research = ctx.has_subordinate("ResearchAgent")
     # When the executor routes to the coder, the tool-vs-code boundary is not
@@ -1884,8 +2094,8 @@ def pre_action_critic(ctx: PromptContext) -> str:
         alternatives = []
         if has_exec:
             alternatives.append(
-                "TaskExecutorAgent (ready tool or code)"
-                if exec_routes_to_coder else "TaskExecutorAgent (ready tool exists)"
+                f"{exec_label} (ready tool or code)"
+                if exec_routes_to_coder else f"{exec_label} (ready tool exists)"
             )
         if has_coder:
             alternatives.append("CoderAgent")
@@ -1896,25 +2106,25 @@ def pre_action_critic(ctx: PromptContext) -> str:
 
     boundary_section = ""
     if exec_routes_to_coder:
-        boundary_section = '''
+        boundary_section = f'''
 ### Execution is routed, not chosen here
-  TaskExecutorAgent decides internally between running an existing MCP tool and
+  {exec_label} decides internally between running an existing MCP tool and
   writing/running code, so do NOT reject or revise one of its calls on the
   grounds that "this needs code, not a tool" (or the reverse) — that boundary is
   its call, not the orchestrator's. Judge only WHETHER execution is the right
   move and whether the request carries the concrete details the work needs.
 '''
     elif has_exec and has_coder:
-        boundary_section = '''
+        boundary_section = f'''
 ### Experiment vs Coder boundary
   Do NOT reject a call merely because it is "computational". The two compute
   agents serve different needs:
-  - TaskExecutorAgent fits when an EXISTING MCP tool can produce the result
+  - {exec_label} fits when an EXISTING MCP tool can produce the result
     (e.g. compute a standard property, run docking).
   - CoderAgent fits when the work requires engineering: writing/running code,
     shell or git operations, collecting/processing data, environment setup.
   A CoderAgent call for code/shell/git/data work is correct — do not reject it
-  in favor of TaskExecutorAgent. Conversely, only revise toward CoderAgent if
+  in favor of {exec_label}. Conversely, only revise toward CoderAgent if
   the task plainly needs custom engineering rather than an existing tool.
 
   Tool-MATCH check (use the RETRIEVED TOOLS block below when present):
@@ -1922,12 +2132,12 @@ def pre_action_critic(ctx: PromptContext) -> str:
     same object. A tool sharing only the verb is NOT a match (a "train a GAN"
     tool does NOT satisfy "train a transformer"; "generate images" does NOT
     satisfy "generate molecules").
-  - REJECT a TaskExecutorAgent call when the task names a specific repository /
+  - REJECT a {exec_label} call when the task names a specific repository /
     URL / example code, or requires a specific architecture or method that no
     retrieved tool implements — that work belongs to CoderAgent even if a
     superficially-similar tool was retrieved. Tell the orchestrator to use
     CoderAgent.
-  - Symmetrically, REVISE a CoderAgent call toward TaskExecutorAgent only when a
+  - Symmetrically, REVISE a CoderAgent call toward {exec_label} only when a
     retrieved tool does EXACTLY the asked operation.
 '''
 
@@ -2338,6 +2548,12 @@ def context_init(ctx: PromptContext) -> str:
   «100 / 100») там, где это применимо.
 - В каждом блоке заполни usage — одну фразу, как блок используется дальше.
 - Поле original_request заполни исходным запросом пользователя дословно.
+- Поле operations — обязательный список исполнимых слотов. Если в запросе есть
+  пронумерованные или отдельные шаги того, что нужно СДЕЛАТЬ — скопируй каждый
+  в operations[] как {"operation_id": "OP-n", "statement": "<шаг дословно>"}.
+  Не сливай два шага, не выдумывай новые endpoints. Пропусти только
+  нарративный отчёт / выводы / write-up — его пишет ResultAggregator.
+  Если запрос — одно действие, operations может содержать один элемент.
 - Отвечай ТОЛЬКО валидным JSON без пояснений и без обрамления ```.
 
 ОБРАБОТКА ОТВЕТОВ ОПЕРАТОРА (при перегенерации после ревью):
@@ -2351,6 +2567,9 @@ def context_init(ctx: PromptContext) -> str:
 обязательные блоки и их поля):
 {
   "original_request": "<исходный запрос пользователя дословно>",
+  "operations": [
+    {"operation_id": "OP-1", "statement": "<первый исполнимый шаг из запроса>"}
+  ],
   "blocks": [
     {
       "title": "Вопрос исследования",

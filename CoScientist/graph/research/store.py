@@ -228,17 +228,23 @@ class ResearchGraphStore:
                nodes: Optional[List[Dict[str, Any]]] = None,
                edges: Optional[List[Dict[str, Any]]] = None,
                status_updates: Optional[List[Dict[str, Any]]] = None,
-               autolink_focus: Optional[str] = None) -> CommitResult:
+               autolink_focus: Optional[str] = None,
+               enforce_permissions: bool = True) -> CommitResult:
         """Transactional write: validate EVERYTHING, then apply all-or-nothing.
 
         `autolink_focus` (a Hypothesis id): any Evidence created in this commit
         that isn't already linked to a hypothesis is auto-linked to it with a
         `relates_to` edge — so evidence a worker records while focused on a
         hypothesis is never orphaned, and the background validator can pick it up
-        and decide its polarity."""
+        and decide its polarity.
+
+        `enforce_permissions=False` is the privileged code-path (same contract as
+        ``init_research``): structural validation stays, only the per-agent ACL
+        is skipped. Reserved for deterministic module hooks — never LLM tools."""
         with self._lock:
             result = self._commit_locked(source, list(nodes or []),
                                          list(edges or []), list(status_updates or []),
+                                         enforce_permissions=enforce_permissions,
                                          autolink_focus=autolink_focus)
             if result.ok:
                 self._save()

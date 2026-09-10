@@ -42,3 +42,11 @@ class HITLResponse(BaseModel):
         description="Per-field answers from a structured form: "
                     "{block_title: {field_name: value}}.")
     approved: bool = Field(default=False, description="Whether the action was approved")
+    timed_out: bool = Field(
+        default=False,
+        description="Whether a fail-closed review paused because no human responded",
+    )
+    stop_review_loop: bool = Field(
+        default=False,
+        description="Internal signal that a terminal review decision was recorded",
+    )

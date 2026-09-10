@@ -363,7 +363,7 @@ class RetryingLiteLlm(LiteLlm):
 
 MODEL = settings.llm.main_model
 litellm.api_key = settings.llm.openai_api_key
-litellm.request_timeout = 45.0
+litellm.request_timeout = 600.0
 # Silence litellm's "Provider List: https://docs.litellm.ai/docs/providers" spam.
 # It fires when litellm can't map a model prefix (e.g. "qwen/...") to a known
 # provider during cost/token bookkeeping — harmless, but it floods the console.

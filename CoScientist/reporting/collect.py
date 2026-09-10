@@ -56,9 +56,14 @@ _MEDIA_URL_RE = re.compile(
 )
 
 
-def report_dir_for(session_id: str, reports_root: Path | str = "logs/reports") -> Path:
+def _default_reports_root_str() -> str:
+    return os.getenv("REPORTS_ROOT") or os.getenv("EXPERIMENTS__REPORTS_DIR") or "logs/reports"
+
+
+def report_dir_for(session_id: str, reports_root: Path | str | None = None) -> Path:
     """The per-run report folder for a session."""
-    return Path(reports_root) / session_id
+    root = reports_root or _default_reports_root_str()
+    return Path(root) / session_id
 
 
 def _url_filename(url: str, default_ext: str) -> str:
@@ -184,7 +189,7 @@ def _download(url: str, dest: Path, timeout: int = 30) -> bool:
 def collect_artifacts(
     session_id: str,
     state: Optional[Dict[str, Any]] = None,
-    reports_root: Path | str = "logs/reports",
+    reports_root: Path | str | None = None,
     workspace_root: Path | str = "workspace",
     graph_nodes: Optional[List[Dict[str, Any]]] = None,
     index_key: Optional[tuple] = None,

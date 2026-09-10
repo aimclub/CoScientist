@@ -131,6 +131,19 @@ class SessionAgent(LlmAgent):
         pipeline moves on. Default: nothing."""
         return iter(())
 
+        return iter(())
+
+    def _should_run_review(self) -> bool:
+        """Whether this turn enters ``_review_decision``.
+
+        Default: only when a handler is wired *and* the global HITL switch is
+        on. Experiment plan/result review overrides this so deterministic
+        validate + ``initialize_runtime`` still run in headless smokes
+        (``HITL__ENABLED`` off, ``COSCIENTIST_EXPERIMENT_HITL_AUTO_APPROVE=1``).
+        """
+        from CoScientist.config import get_settings
+        return bool(self.hitl_handler and get_settings().web.hitl_enabled)
+
     async def _emit_final(
         self, ctx: InvocationContext, final_event: Event, output_text
     ) -> AsyncGenerator[Event, None]:
@@ -187,6 +200,7 @@ class SessionAgent(LlmAgent):
         while True:
             output_text = ""
             final_event = None
+            last_model_text = ""
 
             # Never review a stale plan from an earlier attempt/session turn if
             # the current planner run fails before create_plan succeeds.
@@ -206,16 +220,38 @@ class SessionAgent(LlmAgent):
 
             async with Aclosing(super()._run_async_impl(ctx)) as agen:
                 async for event in agen:
+                    event_text = "".join(
+                        part.text or ""
+                        for part in (event.content.parts if event.content else [])
+                    )
+                    if event_text.strip():
+                        last_model_text = event_text
                     if event.is_final_response():
                         final_event = event
                         # Earlier text events contain reasoning and tool-call
-                        # narration. Only the final response may reach HITL.
-                        output_text = "".join(
-                            part.text or ""
-                            for part in (event.content.parts if event.content else [])
-                        )
+                        # narration. Prefer the final response for HITL when present.
+                        output_text = event_text
                     else:
                         yield event
+
+            if self.output_key:
+                # ADK State cannot delete keys; clearers set them to None. Treat
+                # None as "missing" so we keep the live final-event text.
+                # Structured-output planners may also land the payload only in
+                # state (no is_final_response event) — still review that value.
+                stored = ctx.session.state.get(self.output_key)
+                if stored is not None:
+                    if isinstance(stored, (dict, list)):
+                        output_text = json.dumps(stored, ensure_ascii=False)
+                    else:
+                        output_text = str(stored)
+
+            if not output_text.strip() and last_model_text.strip():
+                # Some providers emit the structured plan as a non-final text
+                # event; still feed it to deterministic review.
+                output_text = last_model_text
+
+            usable = (output_text or "").strip()
 
             # ── Critic review ────────────────────────────────────────────
             # Runs before the human sees anything and regardless of whether
@@ -260,26 +296,48 @@ class SessionAgent(LlmAgent):
 
                 logger.info("%s: plan critic approved the output", self.name)
 
-            from CoScientist.config import get_settings
-            hitl_on = bool(self.hitl_handler and get_settings().web.hitl_enabled)
-
-            if not hitl_on or final_event is None:
-                # No HITL or not a final event (e.g. tool call): just pass and exit
-                if not hitl_on:
-                    logger.info(
-                        "%s: HITL disabled (hitl_enabled=False) — "
-                        "output passed through without human review", self.name,
-                    )
+            if not self._should_run_review():
+                # No HITL (or a subclass that opted out): pass the model output
+                # through. Do not treat a missing final-event flag as "skip
+                # review" — some providers emit the plan as a non-final text
+                # event; subclasses that must review still get the usable text
+                # below after synthesizing a final event.
+                logger.info(
+                    "%s: HITL disabled (hitl_enabled=False) — "
+                    "output passed through without human review", self.name,
+                )
                 if final_event is not None:
                     async for event in self._emit_final(ctx, final_event, output_text):
                         yield event
                 break
 
-            if self.output_key:
-                output_text = ctx.session.state.get(self.output_key, output_text)
+            if not usable:
+                # Empty final / failed structured output — do not invent a review turn.
+                if final_event is not None:
+                    yield final_event
+                break
+
+            if final_event is None:
+                final_event = Event(
+                    invocation_id=ctx.invocation_id,
+                    author=self.name,
+                    branch=ctx.branch,
+                    content=types.Content(
+                        role="model",
+                        parts=[types.Part(text=usable)],
+                    ),
+                )
 
             # Perform HITL check (subclasses may run a multi-step dialogue).
-            response = await self._review_decision(ctx, output_text)
+            response = await self._review_decision(ctx, usable)
+
+            if response.timed_out or response.stop_review_loop:
+                # A specialised review agent has recorded a pause or terminal
+                # decision in its runtime. Stop instead of silently approving
+                # or regenerating forever.
+                if final_event is not None:
+                    yield final_event
+                break
 
             if response.approved:
                 if response.instructions and response.action != HITLAction.EDIT:

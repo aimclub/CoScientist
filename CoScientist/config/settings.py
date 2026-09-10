@@ -3,10 +3,10 @@ Application configuration using Pydantic Settings.
 """
 import os as _os
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Literal, Optional, Union
 
 from dotenv import find_dotenv as _find_dotenv, load_dotenv as _load_dotenv
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 _load_dotenv(_find_dotenv())
@@ -272,6 +272,7 @@ class WebSettings(BaseModel):
     max_retries: int = int(_os.getenv("LLM_MAX_RETRIES", "3"))
     hitl_enabled: bool = _os.getenv("HITL__ENABLED", "false").lower() in ("true", "1", "yes")
     hitl_auto_approve_timeout: int = int(_os.getenv("HITL_AUTO_APPROVE_TIMEOUT", _os.getenv("HITL__AUTO_APPROVE_TIMEOUT", _os.getenv("HITL_TIMEOUT_SECONDS", "300"))))
+    scope_hitl: bool = _os.getenv("ORCHESTRATOR__SCOPE_HITL", "false").lower() in ("true", "1", "yes")
     use_planner: bool = _os.getenv("ORCHESTRATOR__USE_PLANNER", "true").lower() in ("true", "1", "yes")
     planner_retrieval_enabled: bool = _os.getenv("PLANNER__RETRIEVAL_ENABLED", "true").lower() in ("true", "1", "yes")
     planner_graph_enabled: bool = _os.getenv("PLANNER__GRAPH_ENABLED", "true").lower() in ("true", "1", "yes")
@@ -321,6 +322,83 @@ class ResearchGraphSettings(BaseModel):
 
 
 # =========================
+# EXPERIMENT MODULE (v0)
+# =========================
+class ExperimentsSettings(BaseModel):
+    """Settings for the isolated Experiment Module profile.
+
+    Values are read through the main ``Settings`` object, so the canonical
+    environment names use the nested ``EXPERIMENTS__*`` form.
+    """
+
+    route_fedot: bool = True
+    route_coder_mcp: bool = False
+    route_alembic: bool = False
+    task_max_attempts: int = Field(default=2, ge=1, le=2)
+    max_plan_tasks: int = Field(default=8, ge=1, le=20)
+    # How many times a rejected result review may send the module back to
+    # planning. `task_max_attempts` bounds retries of ONE task; nothing used to
+    # bound redoing the whole plan, and a stale phase turned that into an
+    # unbounded loop (observed 2026-09-01: five plans in one run, the first of
+    # which had already finished every task successfully). 0 disables replanning
+    # entirely; the cap is counted across the whole experiment run.
+    max_replan_rounds: int = Field(default=1, ge=0, le=5)
+    # Outer hops after a result-review reject. Skip planner at replan_count >=
+    # this. The dispatch budget in coalesce.py reads this one because it lives on
+    # the orchestrator State, i.e. it survives the AgentTool boundary, unlike the
+    # counter kept inside the runtime.
+    max_replans: int = Field(default=2, ge=1, le=8)
+    # Inner schema/critique regenerations of ExperimentPlan within one planner
+    # hop, counted as CONSECUTIVE failures and reset on every plan that
+    # validates. Was 8 hardcoded, which is up to six wasted rounds on a costly
+    # planner; 2 proved too tight once a human HITL edit re-entered planning, so
+    # this leaves room for one human round plus a couple of genuine planner
+    # mistakes without letting a broken plan burn eight planner calls.
+    max_plan_revisions: int = Field(default=4, ge=1, le=8)
+    # Which FEDOT engine backs the fedot_mas route.
+    #
+    # "mas" (default) is the single-shot routing config. "maw" is a fixed
+    # Sequential/Parallel/Loop pipeline whose config is designed in two calls -
+    # an agent pool, then the pipeline tree. MAW was tried as a fix for config
+    # generation failures and measured WORSE on the same ask (2026-09-02): 3 of
+    # 11 pipelines completed against MAS's 25 of 46, and 4010s against 499s.
+    # The reason is that the dominant failure is not config size but the model
+    # not writing to output_key at all, so splitting the call into two just
+    # doubles the places that can fail, each with its own 4-attempt retry.
+    # Kept selectable because the pipeline shape is still the better model for
+    # deterministic multi-step work once generation is reliable.
+    fedot_engine: Literal["maw", "mas"] = "mas"
+    require_task_design: bool = True
+    # When True (default), schema invents baselines/metrics for weak planners so
+    # completeness majors for unspecified/empty design cannot fire. Set False
+    # (EXPERIMENTS__LENIENT_PLANNER=false) to preserve unspecified* sentinels.
+    lenient_planner: bool = True
+    # Route fallback chains after a failed attempt. Default: fedot → react → coder.
+    # Override via EXPERIMENTS__FALLBACK_*.
+    fallback_fedot_mas: list[str] = Field(
+        default_factory=lambda: ["fedot_mas", "react_tools", "coder"]
+    )
+    fallback_react_tools: list[str] = Field(default_factory=lambda: ["react_tools", "coder"])
+    fallback_coder: list[str] = Field(default_factory=lambda: ["coder"])
+    fallback_alembic_build: list[str] = Field(
+        default_factory=lambda: ["alembic_build", "coder"]
+    )
+    fallback_research: list[str] = Field(default_factory=lambda: ["research"])
+    fallback_medical: list[str] = Field(default_factory=lambda: ["medical"])
+
+    alembic_timeout_s: float = Field(default=1800.0, gt=0)
+    alembic_poll_s: float = Field(default=5.0, gt=0)
+    fedot_timeout_s: float = Field(default=600.0, gt=0)
+    react_timeout_s: float = Field(default=600.0, gt=0)
+    coder_timeout_s: float = Field(default=7200.0, gt=0)
+    research_timeout_s: float = Field(default=600.0, gt=0)
+    medical_timeout_s: float = Field(default=600.0, gt=0)
+    plan_review_timeout_s: float = Field(default=300.0, gt=0)
+    result_review_timeout_s: float = Field(default=300.0, gt=0)
+    complexity_warning_tasks: int = Field(default=6, ge=1, le=8)
+
+
+# =========================
 # CRITIC
 # =========================
 class CriticSettings(BaseModel):
@@ -364,6 +442,7 @@ class Settings(BaseSettings):
     mcp: MCPSettings = MCPSettings()
     web: WebSettings = WebSettings()
     research_graph: ResearchGraphSettings = ResearchGraphSettings()
+    experiments: ExperimentsSettings = ExperimentsSettings()
     critic: CriticSettings = CriticSettings()
 
     model_config = SettingsConfigDict(
