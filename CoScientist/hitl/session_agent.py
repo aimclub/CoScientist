@@ -131,6 +131,8 @@ class SessionAgent(LlmAgent):
         pipeline moves on. Default: nothing."""
         return iter(())
 
+        return iter(())
+
     def _should_run_review(self) -> bool:
         """Whether this turn enters ``_review_decision``.
 
@@ -141,6 +143,27 @@ class SessionAgent(LlmAgent):
         """
         from CoScientist.config import get_settings
         return bool(self.hitl_handler and get_settings().web.hitl_enabled)
+
+    async def _emit_final(
+        self, ctx: InvocationContext, final_event: Event, output_text
+    ) -> AsyncGenerator[Event, None]:
+        """Yield the final event, then any subclass follow-up events.
+
+        When ``_post_final_events`` actually publishes something (a rendered
+        summary/document standing in for the raw model output — e.g.
+        ContextInitSessionAgent's frame summary, the ТЗ agent's document),
+        showing ``final_event``'s raw text too would double the chat message.
+        ``final_event`` is still yielded unchanged otherwise — its
+        state_delta (e.g. ``output_key``) and its place in session history
+        must survive — only its visible text is blanked, which the chat feed
+        treats as nothing to display.
+        """
+        extras = list(self._post_final_events(ctx, output_text))
+        if extras and final_event.content and final_event.content.parts:
+            final_event.content.parts[0].text = ""
+        yield final_event
+        for extra in extras:
+            yield extra
 
     async def _review_decision(self, ctx: InvocationContext, output_text) -> HITLResponse:
         """One review round with the human; returns the final decision.
@@ -284,9 +307,8 @@ class SessionAgent(LlmAgent):
                     "output passed through without human review", self.name,
                 )
                 if final_event is not None:
-                    yield final_event
-                    for extra in self._post_final_events(ctx, output_text):
-                        yield extra
+                    async for event in self._emit_final(ctx, final_event, output_text):
+                        yield event
                 break
 
             if not usable:
@@ -354,9 +376,8 @@ class SessionAgent(LlmAgent):
                 if not response.free_input and response.action != HITLAction.EDIT:
                     # HITL approved — now emit the (possibly updated) final event and exit
                     if final_event is not None:
-                        yield final_event
-                        for extra in self._post_final_events(ctx, output_text):
-                            yield extra
+                        async for event in self._emit_final(ctx, final_event, output_text):
+                            yield event
                     break
 
             # Rejected or "Edit" requested — feed feedback back into the agent

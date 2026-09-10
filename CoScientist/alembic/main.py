@@ -712,7 +712,7 @@ async def _call_debugger(name, session_service, metrics, message, memory=None) -
     mem = ("\n\nPrevious fix attempts this run (do NOT repeat them):\n- "
            + "\n- ".join(m[:200] for m in memory)) if memory else ""
     try:
-        final, steps, tokens, _ = await asyncio.wait_for(
+        final, steps, tokens, sm = await asyncio.wait_for(
             run_agent(debugger_agent, session_service, sid, message + mem),
             timeout=config.DEBUGGER_CALL_TIMEOUT)
     except asyncio.TimeoutError:
@@ -720,6 +720,7 @@ async def _call_debugger(name, session_service, metrics, message, memory=None) -
         return "debugger timed out"
     metrics["total_actions"] += steps
     metrics["total_tokens"] += tokens
+    metrics["total_cost_usd"] = metrics.get("total_cost_usd", 0.0) + sm.get("cost_usd", 0.0)
     return final
 
 
@@ -759,11 +760,14 @@ async def _wrap(name, session_service, metrics):
         await session_service.create_session(app_name=config.APP_NAME, user_id=config.USER_ID,
                                              session_id=sid)
         try:
-            await asyncio.wait_for(
+            _, steps, tokens, sm = await asyncio.wait_for(
                 run_agent(wrapper_agent, session_service, sid,
                           f"The generated server.py fails its compile/import gate.\n"
                           f"Output dir: {out}\nError:\n{gate['error']}"),
                 timeout=config.WRAPPER_CALL_TIMEOUT)
+            metrics["total_actions"] += steps
+            metrics["total_tokens"] += tokens
+            metrics["total_cost_usd"] = metrics.get("total_cost_usd", 0.0) + sm.get("cost_usd", 0.0)
         except asyncio.TimeoutError:
             logger.warning("[wrapper] fallback agent timed out.")
         gate = check_server()
@@ -863,7 +867,8 @@ def _new_metrics() -> dict:
     return {"actions_per_stage": {}, "tokens_per_stage": {}, "durations_per_stage": {},
             "tool_calls_per_stage": {}, "guard_retries_per_stage": {},
             "transient_fault_retries_per_stage": {}, "abort_reason_per_stage": {},
-            "failures_by_class": {}, "total_actions": 0, "total_tokens": 0}
+            "failures_by_class": {}, "total_actions": 0, "total_tokens": 0,
+            "cost_usd_per_stage": {}, "total_cost_usd": 0.0}
 
 
 def _accumulate_stage(metrics, stage, duration, steps, tokens, sm) -> None:
@@ -873,6 +878,9 @@ def _accumulate_stage(metrics, stage, duration, steps, tokens, sm) -> None:
     metrics["tokens_per_stage"][stage] = metrics["tokens_per_stage"].get(stage, 0) + tokens
     metrics["total_actions"] += steps
     metrics["total_tokens"] += tokens
+    cost = sm.get("cost_usd", 0.0) if sm else 0.0
+    metrics["cost_usd_per_stage"][stage] = metrics["cost_usd_per_stage"].get(stage, 0.0) + cost
+    metrics["total_cost_usd"] += cost
     if sm:
         for key, mkey in [("tool_calls", "tool_calls_per_stage"),
                           ("guard_retries", "guard_retries_per_stage"),

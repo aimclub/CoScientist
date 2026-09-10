@@ -552,7 +552,7 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.43.32" },
     { name = "fedotmas", git = "https://github.com/ITMO-NSS-team/FEDOT.MAS.git?subdirectory=packages%2Ffedotmas" },
     { name = "google-adk", specifier = ">=2.3.0" },
-    { name = "greenlet", specifier = ">=3.0" },
+    { name = "greenlet", specifier = ">=3.5.2" },
     { name = "json-repair", specifier = ">=0.30.0" },
     { name = "langchain-text-splitters", specifier = ">=1.1.2" },
     { name = "langfuse", specifier = ">=4.14.0" },

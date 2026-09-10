@@ -916,8 +916,45 @@ except OSError:
     pass
 
 
+# ── Session-bundle helpers ────────────────────────────────────────────────────
+# Called by session_bundle.py to snapshot / restore the in-memory job registry
+# when exporting or importing a .cossession.zip archive.
+
+_SNAPSHOT_KEYS = ("job_id", "repo_url", "status", "mcp_url", "image",
+                  "container", "started_at", "finished_at", "log_file")
+
+
+def export_jobs_snapshot() -> list:
+    """Serialisable snapshot of every job in the process-wide registry."""
+    with _LOCK:
+        return [{k: rec.get(k) for k in _SNAPSHOT_KEYS} for rec in _JOBS.values()]
+
+
+def import_jobs_snapshot(jobs: list) -> None:
+    """Restore job records from a previously exported snapshot.
+
+    * ``running`` → ``failed`` (the original process is gone).
+    * ``log_file`` is repointed to this process's LOG_DIR.
+    * Existing records with the same job_id are NOT overwritten.
+    """
+    with _LOCK:
+        for rec in jobs:
+            jid = rec.get("job_id")
+            if not jid or jid in _JOBS:
+                continue
+            entry = dict(rec)
+            if entry.get("status") == "running":
+                entry["status"] = "failed"
+                entry["error"] = "Build was running when the session was exported."
+                entry.setdefault("finished_at", entry.get("started_at"))
+            entry["log_file"] = str(LOG_DIR / f"{jid}.log")
+            _JOBS[jid] = entry
+
+
 __all__ = ["ALEMBIC_TOOLS", "build_mcp_server", "check_mcp_build", "list_mcp_builds",
            "peek_mcp_build", "wait_mcp_build", "list_served_mcp_tools",
            "enrich_snapshot_with_tools",
            "web_build_log_file", "web_build_snapshot", "web_list_builds",
-           "parse_event_line", "reload_mcp_builds"]
+           "parse_event_line", "reload_mcp_builds",
+           "export_jobs_snapshot", "import_jobs_snapshot",
+           "LOG_DIR"]

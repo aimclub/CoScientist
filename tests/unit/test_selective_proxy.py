@@ -127,3 +127,30 @@ def test_closing_one_handler_client_does_not_affect_another(proxy):
         assert not client_b.is_closed
 
     asyncio.run(_run())
+
+
+def test_toggling_evicts_litellm_cached_http_clients(proxy):
+    """Flipping the proxy must take effect on the very next call.
+
+    litellm caches an ``AsyncHTTPHandler`` per (params, provider) for an hour,
+    and each handler owns the ``httpx.AsyncClient`` ``create_client`` built for
+    it — proxy setting baked in. Restoring the factory alone therefore changes
+    nothing for traffic that reuses a cached handler: with a proxy whose VPN is
+    down, every LLM call still stalls until it times out, long after the user
+    turned the proxy off.
+    """
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+
+    async def _run():
+        proxy.enable()
+        params = {"ssl_verify": None}
+        proxied = get_async_httpx_client(llm_provider="openrouter", params=params)
+        # Same key -> the cache hands back the very same handler.
+        assert get_async_httpx_client(llm_provider="openrouter", params=params) is proxied
+
+        proxy.disable()
+
+        direct = get_async_httpx_client(llm_provider="openrouter", params=params)
+        assert direct is not proxied
+
+    asyncio.run(_run())

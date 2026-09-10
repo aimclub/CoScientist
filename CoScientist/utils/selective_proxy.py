@@ -62,6 +62,30 @@ class LiteLLMProxy:
         """The proxied session ``httpx.AsyncClient``, or *None* before first :meth:`enable`."""
         return self._session_client
 
+    @staticmethod
+    def _flush_litellm_client_cache() -> None:
+        """Drop litellm's cached HTTP handlers so a toggle takes effect at once.
+
+        litellm caches one ``AsyncHTTPHandler`` per (params, provider) for an
+        hour in ``in_memory_llm_clients_cache``. Each handler OWNS the
+        ``httpx.AsyncClient`` that ``create_client`` built for it, with the
+        proxy setting baked in — so restoring the factory in :meth:`disable` is
+        not enough: every already-cached handler keeps sending through the old
+        proxy until its TTL expires. With a proxy whose VPN is down that reads
+        as the app hanging on every LLM call long after the user turned the
+        proxy off (the handler answers nothing until the request times out).
+
+        Eviction deliberately does not close the clients: an in-flight request
+        may still hold one (litellm's own cache documents the same rule).
+        """
+        cache = getattr(litellm, "in_memory_llm_clients_cache", None)
+        if cache is None:
+            return
+        try:
+            cache.flush_cache()
+        except Exception as err:  # noqa: BLE001 — never block the toggle
+            _logger.warning("Could not flush litellm client cache: %s", err)
+
     def enable(self) -> None:
         """Start routing litellm HTTP traffic through the proxy. Idempotent."""
         if self._is_enabled:
@@ -80,6 +104,8 @@ class LiteLLMProxy:
 
         # Path 2: Non-OpenAI providers (OpenRouter, etc.) — override client factory.
         self._install_create_client_override()
+        # Handlers cached from before the toggle still hold a direct client.
+        self._flush_litellm_client_cache()
 
         self._is_enabled = True
         _logger.info("LiteLLM proxy enabled → %s", self._proxy_url)
@@ -91,6 +117,8 @@ class LiteLLMProxy:
 
         litellm.aclient_session = None
         AsyncHTTPHandler.create_client = self._orig_create_client
+        # Restoring the factory only affects handlers built from now on.
+        self._flush_litellm_client_cache()
 
         self._is_enabled = False
         _logger.info("LiteLLM proxy disabled")

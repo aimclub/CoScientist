@@ -33,6 +33,7 @@ from CoScientist.hitl import (
     HITLRequest,
     HITLResponse,
 )
+from CoScientist.utils.text import strip_thinking
 
 settings = get_settings()
 
@@ -205,6 +206,7 @@ class CoScientistManager:
             from CoScientist.graph.research.validator import BackgroundValidatorPlugin
             from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
             from CoScientist.tools.mcp_artifact_plugin import McpArtifactCapturePlugin
+            from CoScientist.tools.session_scope_plugin import SessionScopePlugin
 
             # Build the agent system (reads start_mode + tunable params from settings).
             system = build_for_mode()
@@ -228,6 +230,10 @@ class CoScientistManager:
                     UsageMetricsPlugin(),
                     GraphMemoryPlugin(),
                     BackgroundValidatorPlugin(),
+                    # Fills user_id / session_id into the tool calls that declare
+                    # them, so an MCP server scopes its S3 keys correctly and the
+                    # model never has to copy an id by hand.
+                    SessionScopePlugin(),
                     # Capture artifact (figure/table) URLs from tool results BEFORE
                     # truncation can drop them, so the report collector downloads them.
                     McpArtifactCapturePlugin(),
@@ -273,7 +279,10 @@ class CoScientistManager:
             p.text for p in parts
             if getattr(p, "text", None) and not getattr(p, "thought", False)
         )
-        return answer or "\n".join(p.text for p in parts if getattr(p, "text", None)) or None
+        final = answer or "\n".join(p.text for p in parts if getattr(p, "text", None)) or None
+        if final:
+            final = strip_thinking(final)
+        return final or None
 
     async def run(
         self,

@@ -27,10 +27,17 @@ def get_multi_agent_tracer():
     if cache_key in _tracers:
         return _tracers[cache_key]
 
+    url_override = settings.opik.url_override
+
     if api_key:
         os.environ["OPIK_API_KEY"] = api_key
     else:
         os.environ.pop("OPIK_API_KEY", None)
+    if url_override:
+        os.environ["OPIK_URL_OVERRIDE"] = url_override
+    else:
+        os.environ.pop("OPIK_URL_OVERRIDE", None)
+    os.environ["OPIK_PROJECT_NAME"] = project_name
 
     url_override = settings.opik.url_override
     if url_override:
@@ -48,9 +55,22 @@ def get_multi_agent_tracer():
     # Don't let an opik misconfiguration (no key, no network) take down the app
     # on import — tracing is best-effort.
     try:
-        opik.configure(use_local=False)
+        opik.configure(
+            api_key=api_key or None,
+            url_override=url_override or None,
+            project_name=project_name,
+            use_local=False,
+            install_mcp=False,
+            #automatic_approvals=True,
+        )
     except Exception as e:  # pragma: no cover - best-effort tracing setup
         print(f"[opik] configure failed, tracing may be disabled: {e!r}")
+
+    if api_key:
+        os.environ["OPIK_API_KEY"] = api_key
+    if url_override:
+        os.environ["OPIK_URL_OVERRIDE"] = url_override
+    os.environ["OPIK_PROJECT_NAME"] = project_name
 
     from opik.integrations.adk import OpikTracer
 

@@ -10,9 +10,10 @@ from google.adk.tools import BaseTool, ToolContext
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.agents.readonly_context import ReadonlyContext
 
-from fedotmas import HttpMCPServer
+from fedotmas import MAS, HttpMCPServer
 from fedotmas.plugins import LangfusePlugin, LoggingPlugin, WebSearchLimitPlugin
 
+from CoScientist.logging.metrics import UsageMetricsPlugin
 from CoScientist.tools.fedot_artifact_plugin import ArtifactCapturePlugin, merge_artifacts
 from CoScientist.tools.fedot_artifact_handoff import (
     bind_upstream_inputs_to_task,
@@ -35,6 +36,7 @@ settings = get_settings()
 
 # Duplicated from tool_callbacks.FEDOT_DELIVERABLE_READY_KEY (avoid import cycle).
 _FEDOT_DELIVERABLE_READY_KEY = "fedot_deliverable_ready"
+
 
 class FedotMASToolset(BaseToolset):
     """Toolset for fedotmas usage"""
@@ -65,7 +67,8 @@ class FedotMASToolset(BaseToolset):
             Result of the executed MAS pipeline.
         """
         state = tool_context.state if tool_context is not None else {}
-        filtered_tools = state.get('filtered_tools', [])
+        filtered_tools = state.get('filtered_tools') or []
+        candidates = filtered_tools or state.get('accumulated_tools') or []
         from CoScientist.experiments.runtime.alembic_bridge import (
             alembic_post_build_context,
             compose_alembic_fedot_task,
@@ -100,7 +103,8 @@ class FedotMASToolset(BaseToolset):
                     description=srv.get("description", "")
                 )
 
-        for t in filtered_tools:
+        lookup_tools = filtered_tools or candidates
+        for t in lookup_tools:
             if isinstance(t, dict) and t.get("url"):
                 sname = t.get("server_name") or t.get("name") or t.get("server_id") or "mcp"
                 if sname not in servers_payload:
@@ -124,7 +128,11 @@ class FedotMASToolset(BaseToolset):
             try:
                 await postgres.initialize()
                 try:
-                    server_ids = set([t['server_id'] for t in filtered_tools if isinstance(t, dict) and t.get('server_id')])
+                    server_ids = {
+                        t['server_id']
+                        for t in lookup_tools
+                        if isinstance(t, dict) and t.get('server_id')
+                    }
                     servers = [await postgres.get_server(server_id) for server_id in server_ids]
                 finally:
                     await postgres.close()
@@ -153,7 +161,7 @@ class FedotMASToolset(BaseToolset):
         tables = tables_from_state(state)
         if tables and tool_context is not None and not state.get("fedot_artifact_tables"):
             tool_context.state["fedot_artifact_tables"] = tables
-        task_description = bind_upstream_inputs_to_task(task_description, tables, filtered_tools)
+        task_description = bind_upstream_inputs_to_task(task_description, tables, lookup_tools)
         envelope = state.get("experiment_active_envelope") or {}
         launch_params = (envelope.get("task") or {}).get("launch_params") or {}
         if isinstance(launch_params, dict) and launch_params:
@@ -175,17 +183,22 @@ class FedotMASToolset(BaseToolset):
         # paraphrase them away / hallucinate molecules.
         # NB: passing plugins= REPLACES MAS defaults, so re-include them.
         cap = ArtifactCapturePlugin()
-        # Cap runaway MAS/MCP hangs (e.g. an MCP server stuck retrying a dead
-        # connection). Artifacts already captured before the timeout are still
-        # returned below — a link produced before a failure/timeout is never lost.
-        if state.get("experiment_runtime"):
-            from CoScientist.config import get_settings as get_app_settings
-            fedot_timeout_s = float(
-                get_app_settings().experiments.fedot_timeout_s
-            )
-        else:
-            fedot_timeout_s = float(os.getenv("COSCIENTIST_FEDOT_TIMEOUT_S", "600"))
+        from CoScientist.config import get_settings as get_app_settings
         web_search_limit = int(os.getenv("COSCIENTIST_FEDOT_WEB_SEARCH_LIMIT", "4"))
+        # EM owns a bounded budget. The reranker-fallback path (nobody chose
+        # FEDOT; a malformed ranking did) also gets a budget. Every other path
+        # stays unbounded unless COSCIENTIST_FEDOT_TIMEOUT_S is set — confirm
+        # correct results first (upstream F015), then tighten latency.
+        if state.get("experiment_runtime"):
+            fedot_timeout_s = float(get_app_settings().experiments.fedot_timeout_s)
+        elif not filtered_tools and candidates:
+            try:
+                fedot_timeout_s = get_app_settings().web.fedot_fallback_timeout_s or None
+            except Exception:  # noqa: BLE001 — no budget is better than no run
+                fedot_timeout_s = None
+        else:
+            env_timeout = os.getenv("COSCIENTIST_FEDOT_TIMEOUT_S")
+            fedot_timeout_s = float(env_timeout) if env_timeout else None
         result = None
         status, err = "success", None
         try:
@@ -200,11 +213,13 @@ class FedotMASToolset(BaseToolset):
             # never about config size — 82 of 88 were the missing-output-key
             # error, which MetaJsonRecoveryPlugin below addresses directly.
             # EXPERIMENTS__FEDOT_ENGINE=maw switches engines for a re-measure.
-            from CoScientist.config import get_settings as _app_settings
-            engine = str(_app_settings().experiments.fedot_engine).lower()
+            engine = str(get_app_settings().experiments.fedot_engine).lower()
             engine_cls = PatchedMAS if engine == "mas" else PatchedMAW
             mas = engine_cls(
                 mcp_servers=servers_payload,
+                # UsageMetricsPlugin bills FEDOT.MAS sub-agents' own LLM traffic
+                # against them, same as any other AgentTool sub-runner — without
+                # it their model calls are invisible to the cost ledger.
                 plugins=[
                     LoggingPlugin(),
                     WebSearchLimitPlugin(max_calls_per_agent=web_search_limit),
@@ -213,6 +228,7 @@ class FedotMASToolset(BaseToolset):
                     # store — the single largest cause of FEDOT route failures here.
                     MetaJsonRecoveryPlugin(),
                     cap,
+                    UsageMetricsPlugin(),
                 ],
             )
             result = await mas.run(task_description, timeout=fedot_timeout_s)
@@ -310,7 +326,7 @@ class FedotMASToolset(BaseToolset):
             tool_context.state["fedot_artifact_tables"] = tables
             # Even on timeout: if we already have S3 links, treat as delivered.
             tool_context.state[_FEDOT_DELIVERABLE_READY_KEY] = True
-            record_fedot_producer_tools(tool_context.state, filtered_tools)
+            record_fedot_producer_tools(tool_context.state, lookup_tools)
 
         ret = {"status": status, "artifacts": cap.captured}
         if result is not None:

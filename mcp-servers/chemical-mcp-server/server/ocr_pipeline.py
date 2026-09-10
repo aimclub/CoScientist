@@ -2,11 +2,11 @@ import uuid
 from typing import Any, Dict, Optional
 from urllib.parse import unquote, urlparse
 
-from .service_resources import chem_service, s3_service
+from .service_resources import chem_service
+from .utils import vault
 from .utils.image_utils import download_url_to_bytes, draw_bboxes_on_image
 
-ANNOTATED_IMAGES_S3_PREFIX = "chemical_mcp/annotated_images"
-ANNOTATED_IMAGE_PRESIGN_SECONDS = 3600
+ANNOTATED_IMAGES_FEATURE = "annotated_images"
 
 
 def _label_from_image_url(url: str) -> str:
@@ -24,23 +24,22 @@ def _label_from_image_url(url: str) -> str:
     return unquote(name) if name else "image"
 
 
-def _upload_annotated_jpeg_and_presign(jpeg_bytes: bytes) -> str:
+def _upload_annotated_jpeg(jpeg_bytes: bytes, user_id: Optional[str],
+                           session_id: Optional[str]) -> Dict:
     """
-    Uploads annotated bytes to S3 and returns a time-limited download URL.
+    Uploads annotated bytes under the session prefix.
 
     Args:
         jpeg_bytes (bytes): image data.
+        user_id (str | None): session owner.
+        session_id (str | None): session identifier.
 
     Returns:
-        str: Presigned URL valid for ANNOTATED_IMAGE_PRESIGN_SECONDS.
+        Dict: bucket, s3_key and presigned_url of the stored image.
     """
-    key = s3_service.upload_bytes(
-        ANNOTATED_IMAGES_S3_PREFIX,
-        f"{uuid.uuid4()}.jpg",
-        jpeg_bytes,
-    )
-    return s3_service.generate_presigned_url(
-        key, expiration=ANNOTATED_IMAGE_PRESIGN_SECONDS
+    return vault.upload(
+        user_id, session_id, ANNOTATED_IMAGES_FEATURE,
+        f"{uuid.uuid4()}.jpg", jpeg_bytes,
     )
 
 
@@ -61,7 +60,8 @@ def _normalize_figure_response(raw: Any) -> tuple[list, Optional[Any]]:
     return [], None
 
 
-def extract_molecules_from_image_url(image_url: str) -> Dict:
+def extract_molecules_from_image_url(image_url: str, user_id: Optional[str] = None,
+                                     session_id: Optional[str] = None) -> Dict:
     """
     Extracts molecule SMILES and bounding boxes from a single figure URL.
 
@@ -69,7 +69,7 @@ def extract_molecules_from_image_url(image_url: str) -> Dict:
         image_url (str): URL of the image to analyze.
 
     Returns:
-        Dict: Keys "answer" (label → smiles/errors) and "metadata" (annotated_image_presigned_urls, source_url).
+        Dict: Keys "answer" (label → smiles/errors) and "metadata" (annotated_images, source_url).
     """
     label = _label_from_image_url(image_url)
     img_bytes = download_url_to_bytes(image_url)
@@ -92,21 +92,22 @@ def extract_molecules_from_image_url(image_url: str) -> Dict:
             if bbox is not None:
                 bboxes.append(bbox)
 
-    annotated_urls: list[str] = []
+    annotated: list[Dict] = []
     if bboxes:
         annotated_jpeg = draw_bboxes_on_image(img_bytes, {"molecules": bboxes})
-        annotated_urls.append(_upload_annotated_jpeg_and_presign(annotated_jpeg))
+        annotated.append(_upload_annotated_jpeg(annotated_jpeg, user_id, session_id))
 
     return {
         "answer": {label: {"smiles": smiles, "errors": errors}},
         "metadata": {
-            "annotated_image_presigned_urls": annotated_urls,
+            "annotated_images": annotated,
             "source_url": image_url.strip(),
         },
     }
 
 
-def extract_reactions_from_image_url(image_url: str) -> Dict:
+def extract_reactions_from_image_url(image_url: str, user_id: Optional[str] = None,
+                                     session_id: Optional[str] = None) -> Dict:
     """
     Extracts reactions (reactants, products, conditions) from a single figure URL.
 
@@ -115,7 +116,7 @@ def extract_reactions_from_image_url(image_url: str) -> Dict:
 
     Returns:
         Dict: Keys "answer" (label → per-reaction structure and errors) and "metadata"
-              (annotated_image_presigned_urls, source_url).
+              (annotated_images, source_url).
     """
     label = _label_from_image_url(image_url)
     img_bytes = download_url_to_bytes(image_url)
@@ -165,21 +166,22 @@ def extract_reactions_from_image_url(image_url: str) -> Dict:
                     if t not in (None, [], ""):
                         per_image[key]["conditions"].append(t)
 
-    annotated_urls: list[str] = []
+    annotated: list[Dict] = []
     if any(bboxes.values()):
         annotated_jpeg = draw_bboxes_on_image(img_bytes, bboxes)
-        annotated_urls.append(_upload_annotated_jpeg_and_presign(annotated_jpeg))
+        annotated.append(_upload_annotated_jpeg(annotated_jpeg, user_id, session_id))
 
     return {
         "answer": {label: per_image},
         "metadata": {
-            "annotated_image_presigned_urls": annotated_urls,
+            "annotated_images": annotated,
             "source_url": image_url.strip(),
         },
     }
 
 
-def extract_molecules_from_image_urls(image_urls: list[str]) -> Dict:
+def extract_molecules_from_image_urls(image_urls: list[str], user_id: Optional[str] = None,
+                                      session_id: Optional[str] = None) -> Dict:
     """
     Runs molecule extraction over multiple image URLs.
 
@@ -191,14 +193,14 @@ def extract_molecules_from_image_urls(image_urls: list[str]) -> Dict:
               annotated URLs, source URLs, and optional "failed" entries per URL.
     """
     combined: Dict[str, Any] = {}
-    annotated: list[str] = []
+    annotated: list[Dict] = []
     source_urls: list[str] = []
     failures: list[Dict[str, str]] = []
 
     urls = [u.strip() for u in image_urls if u and str(u).strip()]
     for i, url in enumerate(urls):
         try:
-            one = extract_molecules_from_image_url(url)
+            one = extract_molecules_from_image_url(url, user_id, session_id)
         except Exception as e:
             failures.append({"url": url, "error": str(e)})
             continue
@@ -207,11 +209,11 @@ def extract_molecules_from_image_urls(image_urls: list[str]) -> Dict:
             if key in combined:
                 key = f"{k}__{i}"
             combined[key] = v
-        annotated.extend(one["metadata"].get("annotated_image_presigned_urls", []))
+        annotated.extend(one["metadata"].get("annotated_images", []))
         source_urls.append(one["metadata"].get("source_url", url))
 
     meta: Dict[str, Any] = {
-        "annotated_image_presigned_urls": annotated,
+        "annotated_images": annotated,
         "source_urls": source_urls,
     }
     if failures:
@@ -221,7 +223,8 @@ def extract_molecules_from_image_urls(image_urls: list[str]) -> Dict:
     return {"answer": combined, "metadata": meta}
 
 
-def extract_reactions_from_image_urls(image_urls: list[str]) -> Dict:
+def extract_reactions_from_image_urls(image_urls: list[str], user_id: Optional[str] = None,
+                                      session_id: Optional[str] = None) -> Dict:
     """
     Runs reaction extraction over multiple image URLs.
 
@@ -233,14 +236,14 @@ def extract_reactions_from_image_urls(image_urls: list[str]) -> Dict:
               annotated URLs, source URLs, and optional "failed" entries per URL.
     """
     combined: Dict[str, Any] = {}
-    annotated: list[str] = []
+    annotated: list[Dict] = []
     source_urls: list[str] = []
     failures: list[Dict[str, str]] = []
 
     urls = [u.strip() for u in image_urls if u and str(u).strip()]
     for i, url in enumerate(urls):
         try:
-            one = extract_reactions_from_image_url(url)
+            one = extract_reactions_from_image_url(url, user_id, session_id)
         except Exception as e:
             failures.append({"url": url, "error": str(e)})
             continue
@@ -249,11 +252,11 @@ def extract_reactions_from_image_urls(image_urls: list[str]) -> Dict:
             if key in combined:
                 key = f"{k}__{i}"
             combined[key] = v
-        annotated.extend(one["metadata"].get("annotated_image_presigned_urls", []))
+        annotated.extend(one["metadata"].get("annotated_images", []))
         source_urls.append(one["metadata"].get("source_url", url))
 
     meta: Dict[str, Any] = {
-        "annotated_image_presigned_urls": annotated,
+        "annotated_images": annotated,
         "source_urls": source_urls,
     }
     if failures:

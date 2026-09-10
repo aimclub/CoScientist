@@ -6,12 +6,12 @@ readme = "README.md"
 requires-python = ">=3.12.11"
 dependencies = [
     "aiosqlite>=0.22.1",
-    "greenlet>=3.0",
     "asyncpg>=0.31.0",
     "beautifulsoup4>=4.15.0",
     "boto3>=1.43.32",
     "fedotmas",
     "google-adk>=2.3.0",
+    "greenlet>=3.5.2",
     "json-repair>=0.30.0",
     "langchain-text-splitters>=1.1.2",
     "langfuse>=4.14.0",
