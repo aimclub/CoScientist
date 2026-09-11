@@ -16,11 +16,11 @@ class PublishStep(ETLStep):
     def run(self, ctx: ETLContext) -> None:
         article_id = ctx.article.id
         
-        manifest_data = ctx.artifact_store.get_metadata(article_id, "paper_summarisation")
+        manifest_data = ctx.artifact_store.get_metadata(article_id, "metadata_extraction")
         if not manifest_data:
             raise RuntimeError(f"{self.name} step requires processing metadata")
         
-        summary_data = manifest_data["summary"]
+        paper_metadata = manifest_data["paper_metadata"]
         
         chunks_to_upload = []
         vectors_to_upload = []
@@ -51,7 +51,7 @@ class PublishStep(ETLStep):
             if not pdf_data:
                 raise RuntimeError(f"{self.name} step requires source PDF file")
             
-            html = ctx.artifact_store.get_html(article_id, "paper_summarisation")
+            html = ctx.artifact_store.get_html(article_id, "metadata_extraction")
             if not html:
                 raise RuntimeError(f"{self.name} step requires HTML")
             
@@ -62,9 +62,8 @@ class PublishStep(ETLStep):
             }
             
             ctx.public_store.publish_article(
-                domain=summary_data["domain"],
+                domain=paper_metadata["domain"],
                 article_id=article_id,
-                paper_summary=summary_data["paper_summary"],
                 html=html,
                 images=images,
                 metadata=manifest_data,
@@ -84,5 +83,5 @@ class PublishStep(ETLStep):
         except Exception as e:
             logger.error(f"[{self.name}] Error publishing {article_id}. Rolling back vector and artifact stores...")
             ctx.vector_store.delete_by_article_id(article_id)
-            ctx.public_store.delete_article(summary_data["domain"], article_id)
+            ctx.public_store.delete_article(paper_metadata["domain"], article_id)
             raise e

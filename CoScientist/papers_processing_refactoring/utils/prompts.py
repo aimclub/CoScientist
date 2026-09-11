@@ -1,3 +1,11 @@
+from CoScientist.paper_analysis.research_taxonomy import (
+    format_domain_subdomain_mapping_for_prompt,
+)
+
+
+OPENALEX_TAXONOMY_FOR_PROMPT = format_domain_subdomain_mapping_for_prompt()
+
+
 summarisation_prompt = (
     "You are a professional research analyst specializing in scientific indexing and semantic search. "
     "Your task is to extract metadata and create a comprehensive summary from the provided scientific article (HTML). "
@@ -19,6 +27,25 @@ summarisation_prompt = (
     "- Maintain a neutral, academic tone.\n"
     "- Do not add any conversational filler or meta-comments about the task.\n"
     "- Ensure all extracted data is strictly based on the provided text.\n\n"
+    "Article in HTML markup:\n"
+)
+
+metadata_extraction_prompt = (
+    "You are a professional research analyst specializing in scientific indexing and semantic search. "
+    "Your task is to extract metadata from the provided scientific article (HTML). This data will be used for RAG "
+    "(Retrieval-Augmented Generation), so prioritize accuracy and consistency.\n\n"
+
+    "### FIELD GUIDELINES:\n"
+    "1. paper_title: Extract the full title. If missing, use 'NO TITLE'.\n"
+    "2. publication_year: Extract as an integer. If missing, use 9999.\n"
+    "3. authors: List as 'First Last, First Last'. If missing, use 'NO AUTHORS'.\n"
+    "4. source: Journal name, conference, or publisher. If missing, use 'UNDEFINED'.\n"
+
+    "### CONSTRAINTS:\n"
+    "- Maintain a neutral, academic tone.\n"
+    "- Do not add any conversational filler or meta-comments about the task.\n"
+    "- Ensure all extracted data is strictly based on the provided text.\n"
+    "- Return only the fields required by the structured output schema.\n\n"
     "Article in HTML markup:\n"
 )
 
@@ -125,4 +152,18 @@ classification_prompt = (
     "correspondence of the article to the selected field.\n"
     "5. Provide the justification (1-2 sentences), referencing specific terms from the abstract or "
     "title.\n\nInput Data:\nTitle: {TITLE}\n\nPaper summary:{PAPER_SUMMARY}"
+)
+
+classification_from_content_prompt = (
+    "You are an expert bibliometric system tasked with classifying scientific publications. Your goal is to determine "
+    "the SINGLE most relevant Field and its corresponding Domain strictly according to the OpenAlex taxonomy.\n\n"
+    f"Available OpenAlex Taxonomy:\n{OPENALEX_TAXONOMY_FOR_PROMPT}\n\n"
+    "Classification Instructions:\n"
+    "1. Analyze the provided title and article content to identify key subject indicators and research methodology.\n"
+    "2. If the article is interdisciplinary, select the SINGLE dominant field that most accurately reflects the main "
+    "contribution or focus of the work.\n"
+    "3. Domain and field names must exactly match the English names from the taxonomy above.\n"
+    "4. Assign a confidence_score from 0.00 to 1.00.\n"
+    "5. Provide a brief justification based on specific terms from the title or article content.\n\n"
+    "Title: {TITLE}\n\nArticle content:\n{ARTICLE_CONTENT}"
 )
