@@ -214,3 +214,95 @@ All settings are passed through environment variables (`.env` or shell):
 | `TAVILY_API_KEY` | — | Optional; enables web search inside the Explorer |
 | `MCP_PORT` | `8000` | Port the FastMCP server listens on inside the container |
 | `ALEMBIC_WORKDIR` | `/work/.alembic` | In-container working directory for repos and reports |
+| `S3__ENDPOINT_URL` | — | S3-compatible endpoint; set together with the three below to enable S3 file pass-through |
+| `S3__ACCESS_KEY` | — | S3 access key |
+| `S3__SECRET_KEY` | — | S3 secret key |
+| `S3__BUCKET_NAME` | — | Default S3 bucket for uploaded output files |
+| `S3_REGION` | `us-east-1` | Region passed to boto3; botocore requires one even against a fully custom endpoint |
+| `S3_PRESIGN_EXPIRATION` | `3600` (1 hour) | Seconds a presigned URL for an uploaded output file stays valid (clamped to 1–604800) |
+| `S3_HTTP_TIMEOUT` | `300` | Seconds before an `http(s)://` input download times out |
+| `S3_HTTP_MAX_BYTES` | `1073741824` (1 GiB) | Size cap for an `http(s)://` input download; exceeding it aborts the call |
+
+### S3 file pass-through
+
+`S3__ENDPOINT_URL`/`S3__ACCESS_KEY`/`S3__SECRET_KEY`/`S3__BUCKET_NAME` are
+all-or-nothing: with all four set, the generated `server.py` (via
+`helpers/s3_transfer.py`) handles files at the served MCP boundary instead of
+requiring local paths that only exist inside the build container. With any of
+the four unset, `server.py` behaves exactly as it did before this existed.
+These are the vault contract's own names — the main app's nested-settings
+spelling (see `config/settings.py:S3Settings`) — and are read first. Each is
+also accepted under its bare legacy spelling (`ENDPOINT_URL`, `ACCESS_KEY`,
+`SECRET_KEY`, `BUCKET_NAME`) as a **deprecated** fallback, kept only so an old
+`.env` keeps working until those names are retired; a `.env` written today
+should use the `S3__*` names. A missing or broken `helpers/s3_transfer.py`
+degrades the same way (S3 off) rather than breaking the server's import.
+
+- **Convention.** Any tool parameter or result field named `*_path` or
+  `*_file` (case-insensitive) is treated as a file reference.
+- **Input.** A `*_path`/`*_file` argument given as `s3://bucket/key` or
+  `http(s)://...` (scheme matched case-insensitively) is downloaded to its own
+  scratch subdirectory before the tool runs, and the tool sees a local path —
+  same as any other input. A plain local path is never intercepted. Two
+  different input URIs that happen to share a basename never collide — each
+  download gets an isolated subdirectory.
+- **Output.** A `*_path`/`*_file` result field that is an existing local file
+  outside the cloned repo and outside the per-call scratch dir is uploaded and
+  presigned after the tool returns; the original local field is kept, and one
+  nested `<field>_s3` entry — `{"bucket", "s3_key", "presigned_url"}` — is
+  added alongside it. Not flat `<field>_s3_key` / `<field>_presigned_url`
+  siblings: the framework's artifact walker
+  (`CoScientist/utils/s3_refs.py:_walk`) only recognises a durable reference
+  from a dict that carries both `bucket` and `s3_key` together, same as every
+  MCP server's own return contract (see
+  `mcp-servers/chemical-mcp-server/server/utils/vault.py:contract`). Two
+  output fields sharing a basename still get distinct S3 keys — the field
+  name is part of the key (see Key layout). A tool that echoes a downloaded
+  input path back in its result gets no `_s3` entry for it: that file is the
+  caller's own input, and its local copy is deleted right after the call.
+- **Error asymmetry.** A failed *input* download raises and fails the whole
+  tool call — a tool must never silently run on the wrong or missing data. A
+  failed *output* upload only logs
+  `[s3] upload failed for <path>: <TypeName>: <message[:200]>` to stderr
+  (visible in `docker logs`) and is otherwise silent — an otherwise-successful
+  tool call is never turned into a failure just because publishing its result
+  to S3 didn't work.
+- **Key layout.**
+  `ephemeral/<user>/<session>/alembic_<repo>/<tool>/<call-id>/<field>/<file>`
+  for an uploaded output file — the vault contract's own layout (see
+  `mcp-servers/vault-mcp-server/vault_server.py`): every object lands under
+  `ephemeral/` (what the bucket's lifecycle rule filters on to reclaim it),
+  and promotion to `permanent/` is the framework's job, not this server's.
+  `<user>`/`<session>` come from the `user_id`/`session_id` scope params
+  every generated tool declares when both are set — filled in automatically
+  at the ADK tool-call boundary by `SessionScopePlugin`
+  (`CoScientist/tools/session_scope_plugin.py`) — falling back to the
+  `X-Coscientist-User` / `X-Coscientist-Session` request headers (a dormant
+  fallback: nothing in this codebase sends those headers today) when the
+  params are empty, and to `local`/`default` when neither source has
+  anything — a shared namespace, not a per-caller one. A tool whose own
+  signature already names a `user_id`/`session_id` parameter of its own
+  (domain data, e.g. a database row id) does not get that value used for
+  scope either — it still reaches the tool as a normal argument, but the S3
+  prefix falls back to headers/`local`/`default` for that slot, so a tool's
+  own id can never leak into the bucket layout. That "reaches the tool as a
+  normal argument" only holds for a *non-empty* value: `SessionScopePlugin`
+  fills in ANY declared param left blank at the ADK boundary, scope-named or
+  not, so a caller that leaves the tool's own `user_id`/`session_id` empty
+  gets it silently populated from the graph's scope, same as the dedicated
+  scope params.
+- **Not a security boundary.** Neither the param- nor the header-derived
+  scoping is a security boundary, just a namespacing convenience; a presigned
+  URL grants access to anyone who holds it, and nothing here authenticates
+  the caller.
+- **`build_serve.sh`** forwards all S3 variables (`ENDPOINT_URL`/
+  `ACCESS_KEY`/`SECRET_KEY`/`BUCKET_NAME`/`S3_REGION`/`S3_PRESIGN_EXPIRATION`/
+  `S3_HTTP_TIMEOUT`/`S3_HTTP_MAX_BYTES`, plus the four `S3__*` names) to the
+  serve container straight from the calling shell's environment — it does
+  **not** read `.env` (that's `start_chain.py`'s job); export them yourself
+  before invoking it.
+- **Serve-only, by design.** `start_chain.py` never forwards these into the
+  *build* container (it runs arbitrary repository code) — only into *serve*.
+  A consequence: a tool whose recorded `sample_args` references an `s3://`
+  URI will fail the validator's live-invocation check during the build
+  (S3 isn't configured there) even though the same call succeeds once served.

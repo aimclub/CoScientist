@@ -13,7 +13,10 @@ from alembic.tools.shell import record_env_command
 # The MCP runtime the generated server.py needs at serve time. `pytest` lives in
 # the *tools* venv (it runs the tests), so it is ensured separately; fastmcp+mcp
 # must be importable inside the *server* venv or the committed image cannot serve.
-SERVER_PACKAGES = ("fastmcp", "mcp")
+# `boto3` backs helpers/s3_transfer.py (lazy-imported there, so it costs nothing
+# when S3 is unconfigured) — this list is duplicated in
+# docker/alembic/serve.Dockerfile's `uv pip install`; keep the two in sync.
+SERVER_PACKAGES = ("fastmcp", "mcp", "boto3")
 
 
 def _pip_install(use_uv: bool, python: str, venv_dir: Path, *args: str) -> None:
@@ -259,9 +262,10 @@ def ensure_pytest(python: str) -> str | None:
 
 
 def ensure_server_packages(server_python: str) -> str | None:
-    """Guarantee the MCP server runtime (fastmcp + mcp) is importable inside the
-    *server* venv. Returns the first blocking error, or None. The wrapper's
-    deterministic codegen and G4 both assume this holds."""
+    """Guarantee the MCP server runtime (fastmcp + mcp + boto3, the S3
+    pass-through's lazy dependency) is importable inside the *server* venv.
+    Returns the first blocking error, or None. The wrapper's deterministic
+    codegen and G4 both assume this holds."""
     for pkg in SERVER_PACKAGES:
         err = ensure_pkg(server_python, pkg)
         if err:
