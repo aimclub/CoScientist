@@ -5,7 +5,9 @@
       { name: "OrchestratorAgent", icon: "hub", desc: "Master Orchestrator" },
       { name: "PlannerAgent", icon: "map", desc: "Roadmap Planner" },
       { name: "ToolsViewer", icon: "science", desc: "Tools Viewer" },
-      { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Knowledge Graph", id: "graph-link", href: "/graph" },
+      // The knowledge memory is gone; this graph is the research record.
+      { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Research Graph", id: "graph-link", href: "/graph" },
+      { name: "SessionTrace", icon: "schedule", desc: "Session Trace", id: "trace-link", href: "/trace" },
       { name: "MCPBuilds", icon: "build", desc: "MCP Builds", href: "/builds" },
       { name: "CoderSandbox", icon: "terminal", desc: "CoderSandbox", id: "coder-sandbox-link", href: "http://localhost:8884/" },
       { name: "__settings__", icon: "settings", desc: "Settings" },
@@ -49,15 +51,15 @@
         openRoadmapEditor();
       } else if (name === "ToolsViewer") {
         openToolsViewer();
-      } else if (name === "KnowledgeGraph") {
-        const link = document.getElementById('graph-link');
-        if (link && link.href) {
-          window.open(link.href, '_blank');
-        } else if (activeUser && activeSession) {
-          window.open(`/graph?user_id=${encodeURIComponent(activeUser.id)}&session_id=${encodeURIComponent(activeSession.id)}`, '_blank');
-        } else {
-          window.open('/graph', '_blank');
-        }
+      } else if (name === "KnowledgeGraph" || name === "SessionTrace") {
+        // Scope to the open session FIRST. The rail's own href carries no
+        // session, so preferring it opened whichever session the page happened
+        // to fall back to — the graph of a different run.
+        const page = name === "SessionTrace" ? '/trace' : '/graph';
+        const scoped = (activeUser && activeSession)
+          ? `${page}?user_id=${encodeURIComponent(activeUser.id)}&session_id=${encodeURIComponent(activeSession.id)}`
+          : page;
+        window.open(scoped, '_blank');
       } else if (name === "MCPBuilds") {
         window.open('/builds', '_blank');
       } else if (name === "CoderSandbox") {

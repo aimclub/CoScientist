@@ -3,7 +3,7 @@
 NOT an ADK sub-agent and NOT dependent on the orchestrator. It is a plugin that
 watches the graph: whenever evidence lands on a hypothesis, it fires a
 fire-and-forget asyncio task that judges the hypothesis (confirmed / refuted /
-postponed) and writes the Conclusion. The main orchestration loop never awaits
+inconclusive) and writes the Conclusion. The main orchestration loop never awaits
 it — on the web's persistent event loop the verdict lands in the graph a moment
 later and the live viewer shows it. Judgment runs in a SMALL focused context
 (one hypothesis' slice), not the orchestrator's.
@@ -32,6 +32,19 @@ SOURCE = "ValidatorAgent"
 # Module-level refs so fire-and-forget tasks are not garbage-collected mid-flight.
 _TASKS: set = set()
 
+
+async def drain_validations(timeout: float = 90.0) -> None:
+    """Await outstanding background validations so their verdicts + Conclusions
+    land in the graph before a run reports 'done'. Best-effort and bounded — a
+    stuck judgment can never hang the run."""
+    pending = [t for t in list(_TASKS) if not t.done()]
+    if not pending:
+        return
+    try:
+        await asyncio.wait(pending, timeout=timeout)
+    except Exception:  # noqa: BLE001 — draining must never break a run
+        pass
+
 _SYSTEM = (
     "You are a rigorous scientific hypothesis validator. You are given ONE "
     "hypothesis, its confirmation criteria, and the evidence attached to it. Some "
@@ -40,9 +53,12 @@ _SYSTEM = (
     "irrelevant). Then weigh it against the criteria and return a verdict. Be "
     "conservative: confirm only when supporting evidence is strong, consistent and "
     "meets the criteria; refute when there is decisive contradicting evidence; "
-    "otherwise postpone. Reply with STRICT JSON only, no prose:\n"
+    "otherwise the branch is INCONCLUSIVE — it was tested and the evidence did "
+    "not settle it. Say what is missing in `reason`. Do not use inconclusive "
+    "for a hypothesis nobody worked on; that is the orchestrator's backlog, not "
+    "a verdict. Reply with STRICT JSON only, no prose:\n"
     '{"evidence":{"<evidence_id>":"supports|refutes|refines|irrelevant"},'
-    '"verdict":"confirmed|refuted|postponed",'
+    '"verdict":"confirmed|refuted|inconclusive",'
     '"criteria":{"<criteria_id>":"met|not_met"},'
     '"conclusion":"one-paragraph synthesis of the finding",'
     '"validity_bounds":"limits of validity",'
@@ -69,6 +85,7 @@ async def _complete(system: str, user: str) -> str:
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": user}],
         temperature=0,
+        timeout=s.request_timeout,
     )
     # Judged in the background, off the agent tree: the ambient session binding
     # is what keeps this call attached to the run that triggered it.
@@ -95,6 +112,44 @@ def _research_id(graph: Any) -> str:
     return str(full.get("research_id") or "")
 
 
+#: Bookkeeping attrs that say nothing about what was found.
+_EVIDENCE_SKIP = frozenset({"subtype", "reliability", "commit_note", "source",
+                            "hypothesis", "hypothesis_id", "verification_method",
+                            "confirmation_criteria", "evidence_type"})
+
+
+def _evidence_text(node: Dict[str, Any], budget: int = 1200) -> str:
+    """Everything an Evidence node actually says, not just its `content`.
+
+    Workers record results under whatever key fits the result — `metrics`,
+    `threshold_check`, `value`, `description` — and reading only `content` made a
+    node full of measurements arrive here as an empty string. The judge then
+    concluded, correctly given what it was shown, that no evidence existed, and
+    a hypothesis whose criteria had in fact all passed was set aside.
+    """
+    attrs = node.get("attrs") or {}
+    content = str(attrs.get("content") or "").strip()
+
+    # Numbers and verdicts first: the budget must not be spent on file paths
+    # before the judge has seen what was measured.
+    priority = ("metrics", "threshold_check", "description", "finding", "summary",
+                "value", "metric", "observation", "architecture", "generation")
+
+    def order(key: str) -> tuple:
+        return (priority.index(key) if key in priority else len(priority), key)
+
+    rest = []
+    for key in sorted(attrs, key=order):
+        if key in _EVIDENCE_SKIP or key == "content":
+            continue
+        value = attrs[key]
+        if value in (None, "", [], {}):
+            continue
+        rest.append(f"{key}={value}")
+    text = "; ".join([t for t in [content, *rest] if t]) or "(no attributes recorded)"
+    return text[:budget] + ("…" if len(text) > budget else "")
+
+
 def _build_user(slice_: Dict[str, Any], hid: str) -> str:
     """Render the focused judging prompt from the hypothesis' context slice."""
     by_id = {n["id"]: n for n in slice_.get("nodes", [])}
@@ -115,7 +170,7 @@ def _build_user(slice_: Dict[str, Any], hid: str) -> str:
         if evs:
             lines.append(f"{label} EVIDENCE:")
             lines += [f"- {e['id']} ({(e.get('attrs') or {}).get('subtype','')}): "
-                      f"{(e.get('attrs') or {}).get('content','')}" for e in evs]
+                      f"{_evidence_text(e)}" for e in evs]
             lines.append("")
     return "\n".join(lines)
 
@@ -149,7 +204,13 @@ async def judge_hypothesis(
         if not data:
             return None
         verdict = str(data.get("verdict", "")).strip().lower()
-        if verdict not in ("confirmed", "refuted", "postponed"):
+        # `postponed` used to be accepted here and written onto the hypothesis,
+        # which recorded an hour of testing as "never attempted" and left the
+        # study reading as idle. It is still tolerated on input, since a model
+        # may reach for the old word, and mapped to the verdict it means.
+        if verdict == "postponed":
+            verdict = "inconclusive"
+        if verdict not in ("confirmed", "refuted", "inconclusive"):
             return None
 
         # The LLM call yields control for long enough that the same store may
@@ -310,6 +371,13 @@ class BackgroundValidatorPlugin(BasePlugin):
                 task.add_done_callback(_TASKS.discard)
         except Exception:  # noqa: BLE001
             pass
+        return None
+
+    async def after_run_callback(self, *, invocation_context, **kwargs) -> None:
+        """When the run finishes, wait (bounded) for outstanding validations so
+        their verdicts + Conclusions are in the graph before the answer is
+        reported — otherwise a completed run can still look 'all formulated'."""
+        await drain_validations()
         return None
 
 

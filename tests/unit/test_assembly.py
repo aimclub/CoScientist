@@ -425,7 +425,7 @@ def test_build_for_mode_planner(monkeypatch):
     from CoScientist.agents import build_for_mode
 
     settings = get_settings()
-    for mode in ("planner"):
+    for mode in ("init", "planner"):
         monkeypatch.setattr(settings.web, "start_mode", mode)
         system = build_for_mode()
         assert system is not None
@@ -488,7 +488,7 @@ def test_build_for_mode_planner_run_root(monkeypatch):
 
     settings = get_settings()
     monkeypatch.setattr(settings.context_init, "enabled", True)
-    for mode in ("planner"):
+    for mode in ("init", "planner"):
         monkeypatch.setattr(settings.web, "start_mode", mode)
 
         system = build_for_mode()

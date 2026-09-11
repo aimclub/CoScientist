@@ -16,6 +16,7 @@ from typing import Literal
 FieldStatus = Literal[
     "задано заказчиком",
     "уточнено оператором",
+    "предложено агентом",
     "не задано",
     "свободный комментарий",
     "рассчитывается агентом",
@@ -24,8 +25,14 @@ FieldStatus = Literal[
 # Statuses that mean "there is no usable value here yet".
 OPEN_STATUSES = ("не задано", "рассчитывается агентом")
 
-# The operator set this value by hand in a HITL form.
+# The operator set this value by hand in a HITL form. ONLY apply_form_values may
+# write this: it is what makes a node count as human-sourced downstream
+# (context_init/commit.py::_HUMAN_STATUSES), so an agent stamping its own guess
+# with it would forge the provenance the operator badge relies on.
 OPERATOR_STATUS = "уточнено оператором"
+
+# A working value the agent proposed from domain context — usable, but NOT human.
+AGENT_PROPOSED_STATUS = "предложено агентом"
 
 
 def is_open(status: str) -> bool:
@@ -33,4 +40,5 @@ def is_open(status: str) -> bool:
     return status in OPEN_STATUSES
 
 
-__all__ = ["FieldStatus", "OPEN_STATUSES", "OPERATOR_STATUS", "is_open"]
+__all__ = ["FieldStatus", "OPEN_STATUSES", "OPERATOR_STATUS",
+           "AGENT_PROPOSED_STATUS", "is_open"]

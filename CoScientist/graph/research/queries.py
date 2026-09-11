@@ -8,6 +8,8 @@ all of them into the digest the orchestrator sees before every turn.
 """
 from __future__ import annotations
 
+import re
+
 from typing import Any, Dict, List, Optional
 
 from CoScientist.graph.research.store import (
@@ -305,6 +307,127 @@ def unresolved_hypotheses(store: Optional[ResearchGraphStore] = None) -> Dict[st
     return {"items": items, "rendered": "\n".join(lines)}
 
 
+def verdict_without_evidence(store: Optional[ResearchGraphStore] = None) -> Dict[str, Any]:
+    """Branches being tested that have nothing attached, and criteria never measured.
+
+    A run once benchmarked for an hour, wrote a table of p-values into its chat
+    answer, and committed none of it. The validator reads the graph, found no
+    measurement, and rejected a result that existed — so the answer and the
+    record contradicted each other and neither could be trusted.
+
+    The condition is computable before that happens: a hypothesis under
+    verification with no evidence, or with criteria none of which has been
+    marked met or not met, means the work is happening somewhere the record
+    cannot see.
+    """
+    g = _graph(store).full_graph()
+    stalled = []
+    for h in sorted(_nodes_of(g, "Hypothesis"), key=_id_order):
+        if _status(g, h) != "under_verification":
+            continue
+        evidence = set(_in(g, h, "supports")) | set(_in(g, h, "refutes")) \
+            | set(_in(g, h, "relates_to"))
+        criteria = [c for c in _in(g, h, "formulated_for")
+                    if g.nodes[c].get("type") == "ConfirmationCriteria"]
+        untouched = [c for c in criteria if _status(g, c) == "not_met"]
+        if evidence and len(untouched) < len(criteria):
+            continue
+        stalled.append({"hypothesis": h, "label": _label(g, h),
+                        "evidence": len(evidence),
+                        "criteria": len(criteria), "untouched": len(untouched)})
+
+    lines = []
+    for item in stalled:
+        missing = ("no evidence is attached" if not item["evidence"]
+                   else f"none of its {item['criteria']} criteria has been measured")
+        lines.append(
+            f"WORK NOT IN THE RECORD: {item['hypothesis']} is under verification and "
+            f"{missing}. Whatever was run has to be committed as Evidence, with the "
+            f"criteria it meets marked met, BEFORE any verdict or final answer "
+            f"cites it — an answer the graph cannot support will be rejected.")
+    return {"items": stalled, "rendered": "\n".join(lines)}
+
+
+def study_open(store: Optional[ResearchGraphStore] = None) -> Dict[str, Any]:
+    """Whether the study may be called finished — as a graph condition.
+
+    A run used to end whenever the orchestrator judged it had answered enough.
+    The backlog was rendered as advice only, so a first confirmed hypothesis
+    ended the study with its alternatives never tested and never explicitly
+    dropped: the reviewers' objection was that nothing recorded *why* they were
+    not tested.
+
+    The condition is now computable. The study is open while any hypothesis
+    carries neither a verdict nor a recorded reason for being set aside, and it
+    offers exactly two ways to settle each one: verify it, or record
+    `attrs.not_tested_reason` stating why the verdict already obtained makes
+    testing it unnecessary. Either is a write to the graph, so the decision is
+    auditable instead of being a silence.
+
+    `postponed_reason` deliberately does not count. The store writes that itself
+    when it files the alternatives of one commit as a backlog, so accepting it
+    here would mark every hypothesis settled the moment it was created.
+    """
+    g = _graph(store).full_graph()
+    settled, unsettled = [], []
+    for h in sorted(_nodes_of(g, "Hypothesis"), key=_id_order):
+        status = _status(g, h)
+        attrs = g.nodes[h].get("attrs") or {}
+        reason = str(attrs.get("not_tested_reason") or "").strip()
+        if status in ("confirmed", "refuted"):
+            settled.append({"hypothesis": h, "status": status})
+        elif status == "inconclusive":
+            # Tested and not settled. It counts as work done — the study is not
+            # idle — but the question it was asked is still open, so it is
+            # reported separately rather than as a verdict.
+            settled.append({"hypothesis": h, "status": "inconclusive",
+                            "reason": str(attrs.get("inconclusive_reason") or "").strip()})
+        elif reason:
+            settled.append({"hypothesis": h, "status": "not tested", "reason": reason})
+        else:
+            unsettled.append({"hypothesis": h, "label": _label(g, h), "status": status})
+
+    verdicts = [i for i in settled
+                if i["status"] in ("confirmed", "refuted", "inconclusive")]
+    active = [h for h in sorted(_nodes_of(g, "Hypothesis"), key=_id_order)
+              if _status(g, h) == "under_verification"]
+
+    # A branch still being tested means the study is open, whatever the answer
+    # being drafted says. This is the case that produced a final report reading
+    # "H1 SUPPORTED", with tables and p-values, while the graph still held the
+    # literature-only evidence the branch started with: the work happened and
+    # was never committed, so the validator judged what it could see and
+    # disagreed with the answer the user was given.
+    if active:
+        return {
+            "items": unsettled, "settled": settled, "open": True,
+            "rendered": (
+                "STUDY NOT FINISHED: "
+                + ", ".join(f"{h} \"{_label(g, h)}\"" for h in active)
+                + " is still under verification. Do NOT report a verdict in your "
+                  "answer that the graph does not hold. Commit the evidence you "
+                  "obtained (research_commit) and let the validator write the "
+                  "verdict; if you have no evidence to commit, say so instead of "
+                  "concluding."),
+        }
+
+    rendered = ""
+    if unsettled and verdicts:
+        rendered = (
+            "STUDY NOT FINISHED: "
+            + ", ".join(f"{i['hypothesis']} \"{i['label']}\" ({i['status']})"
+                        for i in unsettled)
+            + " still carry no verdict while "
+            + ", ".join(i["hypothesis"] for i in verdicts)
+            + " already has one. Do NOT report the study as complete. For each, "
+              "either revive it (postponed→formulated) and verify it next, or "
+              "commit attrs.not_tested_reason saying why the verdict already "
+              "obtained makes testing it unnecessary."
+        )
+    return {"items": unsettled, "settled": settled,
+            "open": bool(unsettled), "rendered": rendered}
+
+
 def progress(store: Optional[ResearchGraphStore] = None) -> Dict[str, Any]:
     g = _graph(store).full_graph()
     counts: Dict[str, Dict[str, int]] = {}
@@ -328,13 +451,125 @@ def _num(value) -> Optional[float]:
 
 # ── the digest the orchestrator consumes ─────────────────────────────────────
 
+# Evaluation metrics and methodological norms, with the spellings they actually
+# appear in. Matching is deterministic and explainable on purpose: a research is
+# told which WORD it recorded and never thresholded, so the finding can be checked
+# by reading two nodes. Extend per domain; unknown vocabulary simply is not audited.
+_METRIC_LEXICON: Dict[str, tuple] = {
+    "validity": ("validity", "valid smiles", "% valid", "chemically valid"),
+    "uniqueness": ("uniqueness", "unique molecules", "% unique", "duplicate rate"),
+    "novelty": ("novelty", "novel molecules", "not in the training set"),
+    "diversity": ("diversity", "internal diversity", "scaffold diversity"),
+    "target hit rate": ("hit rate", "hit fraction", "target hit", "target-property hit"),
+    "synthetic accessibility": ("synthetic accessibility", "sa score", "sa>", "sa >"),
+    "drug-likeness": ("qed", "drug-likeness", "druglikeness"),
+    "distribution match": ("fcd", "frechet", "kl divergence to the data"),
+    "accuracy": ("accuracy", "top-1", "error rate"),
+    # Bare "precision"/"recall" are dropped: they matched "precision medicine" in
+    # a literature abstract. Only spellings that cannot mean anything else.
+    "precision/recall/F1": ("f1", "f1-score", "f-score", "precision and recall",
+                            "precision/recall"),
+    "auc": ("auc", "roc", "average precision"),
+    "regression error": ("rmse", "mae", "r2", "r^2"),
+    "baseline comparison": ("baseline", "compared against", "vs. random"),
+    "statistical significance": ("p-value", "p <", "significance", "z-score",
+                                 "confidence interval", "effect size"),
+    "ablation": ("ablation",),
+    "cross-validation": ("cross-validation", "cross validation", "held-out", "hold-out"),
+    "reproducibility": ("reproducib", "fixed seed", "random seed"),
+}
+
+# Nodes that may CARRY a norm (what the field expects) and nodes that IMPOSE it
+# (what this research actually committed to check).
+_NORM_SOURCES = ("Evidence", "Constraint")
+_NORM_CONSTRAINT_SUBTYPES = ("methodological_norms", "domain_standards", "expert_knowledge")
+
+
+def _text_of(g, node_id: str) -> str:
+    attrs = (g.nodes[node_id].get("attrs") or {}) if node_id in g.nodes else {}
+    return " ".join(str(v) for v in attrs.values() if v).lower()
+
+
+def _spelling_re(s: str):
+    # Plain substring matching is not safe here: short metric names live inside
+    # identifiers — "f1" matches the PDB code 5F19, "auc" matches "glaucoma" —
+    # and a false gap is worse than a missed one, because it sends the run off to
+    # add a threshold nobody asked for. The boundary is only applied on the sides
+    # that end in a word character: "sa>" is followed by the threshold value
+    # ("sa>3"), and demanding a non-alphanumeric there would miss every use.
+    head = r"(?<![a-z0-9])" if s[:1].isalnum() else ""
+    tail = r"(?![a-z0-9])" if s[-1:].isalnum() else ""
+    return re.compile(head + re.escape(s) + tail)
+
+
+_METRIC_RE = {name: tuple(_spelling_re(s) for s in spellings)
+              for name, spellings in _METRIC_LEXICON.items()}
+
+
+def _metrics_in(text: str) -> List[str]:
+    return sorted({name for name, patterns in _METRIC_RE.items()
+                   if any(p.search(text) for p in patterns)})
+
+
+def criteria_coverage(store: Optional[ResearchGraphStore] = None) -> Dict[str, Any]:
+    """Confirmation criteria that omit a metric this research itself recorded.
+
+    A run can pass every threshold it set and still be void, because the
+    thresholds never covered what the field requires. Both halves of that
+    comparison are nodes here — the norm arrives as literature Evidence or a
+    methodological Constraint, the threshold lives in ConfirmationCriteria — so
+    the omission is a query rather than a matter of noticing. Cheap enough to run
+    before a costly VerificationMethod, which is the point: it fires while the
+    experiment can still be changed.
+    """
+    g = _graph(store).full_graph()
+
+    recorded: Dict[str, List[str]] = {}
+    for ntype in _NORM_SOURCES:
+        for nid in _nodes_of(g, ntype):
+            attrs = g.nodes[nid].get("attrs") or {}
+            if ntype == "Constraint":
+                sub = str(attrs.get("subtype") or "").lower()
+                if sub not in _NORM_CONSTRAINT_SUBTYPES:
+                    continue
+            for m in _metrics_in(_text_of(g, nid)):
+                recorded.setdefault(m, []).append(nid)
+
+    items = []
+    for cc in _nodes_of(g, "ConfirmationCriteria"):
+        thresholded = set(_metrics_in(_text_of(g, cc)))
+        missing = sorted(set(recorded) - thresholded)
+        hyps = _in(g, cc, "formulated_for") or _out(g, cc, "formulated_for")
+        if missing:
+            items.append({
+                "criteria": cc,
+                "hypotheses": hyps,
+                "thresholded": sorted(thresholded),
+                "missing": missing,
+                "recorded_in": {m: recorded[m] for m in missing},
+            })
+
+    lines = [
+        f"CRITERIA GAP: {i['criteria']} thresholds {', '.join(i['thresholded']) or 'nothing measurable'} "
+        f"but this research recorded {', '.join(i['missing'])} "
+        f"(in {', '.join(sorted({n for ns in i['recorded_in'].values() for n in ns}))}) "
+        f"— add them before running the experiment, or state why they do not apply"
+        for i in items
+    ]
+    return {"items": items, "rendered": "\n".join(lines),
+            "recorded_metrics": sorted(recorded)}
+
+
 TRIGGERS = {
+    "criteria_coverage": criteria_coverage,
     "ready_hypotheses": ready_hypotheses,
     "blocked_hypotheses": blocked_hypotheses,
     "postponed_hypotheses": postponed_hypotheses,
     "refuting_evidence": refuting_evidence,
     "unresolved_hypotheses": unresolved_hypotheses,
     "closable_hypotheses": closable_hypotheses,
+    "study_open": study_open,
+    "verdict_without_evidence": verdict_without_evidence,
     "pending_conclusions": pending_conclusions,
     "missing_tools": missing_tools,
     "resources_low": resources_low,

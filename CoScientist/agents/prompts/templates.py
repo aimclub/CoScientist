@@ -141,6 +141,14 @@ def render_research_protocol(ctx: PromptContext) -> str:
         "`research_context_slice(id)`, `research_overview()`, "
         "`research_provenance(id)`.",
         "",
+        "BEFORE you implement anything, read the Tool nodes in your slice. They "
+        "name the libraries and services this research is built on and carry "
+        "`location` — a repo URL, path or endpoint. If one covers what you are "
+        "about to write, READ THE CODE THERE and build on it; writing your own "
+        "version of a tool the research already declared is the single most "
+        "common way a run ends up answering a different question. If the tool you "
+        "need has no `location`, say so and ask rather than substituting one.",
+        "",
         "Via a SINGLE `research_commit` at the end of your turn you may ONLY:",
         "  • create nodes: " + ("; ".join(perm["create"]) or "(none)"),
     ]
@@ -296,6 +304,14 @@ validated for a given task — and to hand the orchestrator exactly <<SELECT_WOR
 
 Do not perform experiments or retrieve external information — focus only on generating hypotheses.
 
+### CRITICAL — this system has NO physical laboratory
+You are a COMPUTATIONAL / literature research assistant. The only ways it can
+gather evidence are: (a) reviewing published literature, (b) computation
+(modelling, docking, simulation, statistics, ML on existing data), and (c)
+existing ready-made MCP tools / writing code. It CANNOT run wet-lab experiments
+or use physical instruments (HPLC, mass spec, cell culture, animal studies,
+crystallography you would perform, clinical trials).
+
 <<SELECTION>>
 
 For the selected hypothesis(es), propose HOW each would be verified: a
@@ -303,13 +319,41 @@ VerificationMethod (what procedure yields evidence) and ConfirmationCriteria
 (when the evidence is sufficient). Record all of this in the research graph so
 the orchestrator can schedule verification.
 
-If a method needs a Tool that is not yet in the graph, CREATE it in the same
-commit with status "needs_adaptation" (you are flagging a NEED, not confirming
-availability) and link it with `requires`/`uses` — the orchestrator/coder
-resolves its real availability later. For `consumes`, only reference Resource
-nodes that already exist (declared at init); do not invent resource ids.
+So every VerificationMethod you propose MUST be doable this way — a literature
+review, a computational analysis, or use of an existing dataset/tool. Do NOT
+propose a method whose only route is a physical experiment, and do NOT declare
+Tools that are physical lab instruments. If a hypothesis can ONLY be settled by
+wet-lab work, still record it but set its priority low and note in its rationale
+that it is "out of scope (requires wet-lab)" — the orchestrator will postpone it
+rather than try to build a physical instrument.
+
+For the selected hypothesis(es), propose HOW each would be verified: a
+VerificationMethod (what literature/computational procedure yields evidence) and
+ConfirmationCriteria (when the evidence is sufficient). Record all of this in the
+research graph so the orchestrator can schedule verification.
+
+The criteria must threshold every metric this research has already recorded as a
+methodological norm — if the literature evidence names uniqueness and novelty as
+standard, criteria that only threshold validity will pass a model that repeats one
+molecule. State explicitly which recorded norms a criterion covers.
+
+Most literature/computational methods need NO tool node at all — only add a Tool
+when the method truly needs a specific COMPUTATIONAL/informational capability
+(a library, an API, a dataset), with status "needs_adaptation", linked via
+`requires`/`uses`. Never add a physical-instrument Tool. For `consumes`, only
+reference Resource nodes that already exist (declared at init).
+
+Every Tool MUST carry `location` — the repo URL, local path, MCP server or API
+endpoint. A Tool that is only a name is useless to whoever has to run it: told
+to "use GOLEM" with no path, a worker writes its own optimiser instead, and the
+run quietly stops using the library the research is about. If a prior research
+already recorded that tool, carry its location across rather than inventing a
+substitute; if you genuinely do not know where it lives, say so in the attrs
+instead of leaving the field out.
 
 <<RESEARCH>>
+
+<<HITL>>
 
 ### YOUR ANSWER
 The orchestrator acts on your text, so <<HAND_RULE>>.
@@ -333,7 +377,8 @@ Use update_task_status tool REGULARLY to maintain task visibility and provide us
 Update task status to "done" immediately upon completion of each work item.
 ''', SELECTION=selection, ANSWER_HEAD=answer_head,
         ANSWER_BACKLOG=answer_backlog, RESEARCH=render_research_protocol(ctx),
-        SELECT_WORD=select_word, HAND_RULE=hand_rule, BACKLOG_RULE=backlog_rule)
+        SELECT_WORD=select_word, HAND_RULE=hand_rule, BACKLOG_RULE=backlog_rule,
+        HITL=ctx.render_hitl())
 
 
 # NOTE: hypothesis validation (verdict + Conclusion) is a fully-async BACKGROUND
@@ -835,7 +880,7 @@ Each path's own routing guidance:
 
 ## Delegating
 - Restate the task in the request you send: every concrete detail you were given
-  (names, ids, paths, numeric thresholds, required output format). The
+  (names, ids, paths, URLs, numeric thresholds, required output format). The
   sub-agent does NOT see the conversation you were called with — anything you
   leave out is lost.
 - If any links are available, write the reference for it — copied exactly
@@ -857,6 +902,9 @@ Each path's own routing guidance:
   exact error, and what is missing — an honest blocker is a valid answer.
 - Do not end a turn by announcing a delegation ("I will now call X") — emit the
   call. Prose alone is treated as your final answer.
+- A sub-agent's "done" is not evidence: if it reported an artifact (dataset,
+  checkpoint, generated set), the result must carry the actual counts. Zero
+  produced items is a FAILURE to route back, not a finished step.
 - If a sub-agent saved an artifact/file and provided an Executive Summary or key findings, accept that result. Never request a sub-agent to read back or dump a full file verbatim; ask targeted questions directly if a specific detail is needed.
 
 <<HITL>>
@@ -1071,8 +1119,11 @@ You do not plan, design, split or reason about the work. You are a pipe:
 - If it reports a blocker or an error, pass that through as the answer — an honest failure is a valid result.
 - Do NOT try to solve, debug or second-guess the work yourself, and do NOT ask it to dump file contents or raw source back to you. Never ask for verbatim pastes of full files; ask specific targeted questions or request an Executive Summary.
 
+<<RESEARCH>>
+
 <<HITL>>
-''', TOOLS=ctx.render_tools(), HITL=ctx.render_hitl())
+''', TOOLS=ctx.render_tools(), RESEARCH=render_research_protocol(ctx),
+        HITL=ctx.render_hitl())
 
 
 # ── DatasetCollectorAgent ────────────────────────────────────────────────────
@@ -1144,6 +1195,13 @@ data or invent rows, columns, ids, or statistics.
 <<RESEARCH>>
 
 <<HITL>>
+
+## When the data must be GENERATED, not found
+If the dataset can only be produced by RUNNING something (a simulation, an
+evolutionary optimizer, a model) rather than downloaded, do NOT search the web
+for it: say so in one sentence and hand it back — the CoderAgent runs the code.
+Searching for a substitute dataset is how a run silently drifts off the task.
+Never repeat the same query: if two searches did not find it, it is not there.
 ''', TOOLS=ctx.render_tools(), SHELL_NOTE=shell_note,
         RESEARCH=render_research_protocol(ctx), HITL=ctx.render_hitl())
 
@@ -1525,7 +1583,7 @@ def orchestrator(ctx: PromptContext) -> str:
             "Context of tasks:\n"
             "{active_tasks}\n"
         )
-    elif settings.orchestrator.use_planner or settings.web.start_mode in ("planner", "orchestrator_planner", "orchestrator_plan"):
+    elif settings.orchestrator.use_planner or settings.web.start_mode in ("init", "planner", "orchestrator_planner", "orchestrator_plan"):
         steps.append(
             "### TASK_MANAGEMENT\n"
             "Context of tasks:\n"
@@ -1616,7 +1674,7 @@ def orchestrator(ctx: PromptContext) -> str:
             "   dataset\". It routes to the right path itself, so do NOT pre-judge\n"
             "   whether a ready tool exists, and do not split a step by execution\n"
             "   mechanism. Delegate the OUTCOME you need, with every concrete\n"
-            "   detail (names, ids, thresholds, output format), writing any link\n"
+            "   detail (names, ids, URLs, thresholds, output format), writing any link\n"
             "   as its reference, copied exactly from the links section,\n"
             "   instead of typing the URL out.\n"
             "   If it reports\n"
@@ -1714,8 +1772,17 @@ def orchestrator(ctx: PromptContext) -> str:
     research_graph_section = ""
     if has_research_graph:
         approval_line = (
-            "\n- Use `request_approval` before approving a Conclusion "
-            "(draft→approved) or the research profile."
+            "\n\n#### Co-build the graph with the human (HITL is on)\n"
+            "- After a sub-agent proposes Hypotheses, have the human validate them "
+            "(`request_selection` / `request_approval`) before verification.\n"
+            "- A Hypothesis MUST have acceptance criteria (a metric + threshold that "
+            "would confirm or refute it) before it is verified. If the human gave "
+            "none, you MUST ask them explicitly and record the answer as its "
+            "ConfirmationCriteria — never verify a hypothesis with no criteria.\n"
+            "- Use `request_approval` before approving a Conclusion (draft→approved) "
+            "or the research profile.\n"
+            "- The human may reply with a free-text \"other\" instead of a plain "
+            "yes/no or the offered options — treat it as an instruction and follow it."
             if ctx.hitl_attached else ""
         )
         research_graph_section = (
@@ -1726,6 +1793,10 @@ def orchestrator(ctx: PromptContext) -> str:
             "chat history — is where you read what has been established. Current "
             "state and active triggers:\n"
             "{research_context?}\n\n"
+            "This system has NO physical lab — evidence comes ONLY from literature "
+            "review, computation, or existing tools. NEVER try to build a physical "
+            "instrument (HPLC, mass spec, wet-lab) via CoderAgent, and never loop "
+            "on tool creation.\n"
             "Protocol (for research investigations):\n"
             "- The context-initialization pre-stage normally SEEDS the graph "
             "(root question + framing frame) before you run. Only if the graph is "
@@ -1776,6 +1847,11 @@ def orchestrator(ctx: PromptContext) -> str:
             "auto-attached to that hypothesis, which moves it to under_verification "
             "and lets the background validator judge it. Do NOT skip set_focus, and "
             "do NOT set the verdict yourself.\n"
+            "  • BLOCKED hypothesis (its Tool isn't available) ⇒ if the tool is a "
+            "COMPUTATIONAL capability the Coder can build, delegate that once; but if "
+            "it is a physical instrument or otherwise out of scope, POSTPONE the "
+            "hypothesis (status → postponed, reason 'requires wet-lab / out of scope') "
+            "and move on. Do NOT keep trying to build it.\n"
             "  • REFUTE SIGNAL ⇒ review/close that branch; do not keep verifying it.\n"
             "  • NEEDS VERDICT (a hypothesis has evidence) ⇒ you do NOTHING here: a "
             "background validator judges it automatically (confirmed/refuted) and "
@@ -2327,7 +2403,9 @@ def context_init(ctx: PromptContext) -> str:
   оставляй — они показывают пробелы, которые заполнит оператор).
 - Значения, прямо названные пользователем, помечай статусом «задано заказчиком».
 - Обоснованные рабочие значения из контекста домена помечай статусом
-  «уточнено оператором».
+  «предложено агентом». Статус «уточнено оператором» ставит ТОЛЬКО форма
+  оператора — не помечай им свои значения, иначе догадка агента попадёт в граф
+  как данные от человека.
 - Значения, которые определятся на следующих этапах (напр. фактические
   бюджеты), помечай статусом «рассчитывается агентом».
 - Для блока «Режим и завершение»: ai_application_model — один из

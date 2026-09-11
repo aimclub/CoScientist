@@ -211,7 +211,9 @@ def _build_llm_agent(
 
     if hitl_attached:
         from CoScientist.hitl.tool import get_hitl_tools
-        tools.extend(get_hitl_tools())
+        # Only the A2A ROOT can use the native pause: a pause inside a sub-agent
+        # is swallowed by the parent's AgentTool (see get_hitl_tools).
+        tools.extend(get_hitl_tools(a2a_root=bool(cfg.root)))
         tool_entries = tool_entries + [
             ToolEntry(key="hitl", factory=lambda: None, docs=HITL_TOOL_DOCS)
         ]

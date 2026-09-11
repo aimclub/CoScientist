@@ -242,6 +242,7 @@ async def run_sandbox_task(
     task: str,
     dataset_url: str = None,
     new_sandbox: bool = False,
+    sandbox_id: str = None,
     tool_context: ToolContext = None,
 ) -> Dict[str, Any]:
     """
@@ -276,6 +277,11 @@ async def run_sandbox_task(
             sandbox `/workspace`.
         new_sandbox: Set true ONLY to start an independent experiment from a
             clean machine. Everything the previous sandbox produced is lost.
+        sandbox_id: Continue inside a SPECIFIC sandbox instead of the one bound
+            to your session. Use it when a previous task's files live in a
+            container this session is no longer bound to — the id is in that
+            task's result and in its watch_url. Without it a new container is
+            created, with an EMPTY /workspace, and the earlier work is not there.
 
     Returns:
         Dict with status ("success" | "running" | "busy" | "error"), the
@@ -288,6 +294,7 @@ async def run_sandbox_task(
         task,
         dataset_url=dataset_url,
         new_sandbox=new_sandbox,
+        sandbox_id=sandbox_id,
         session_id=_session(tool_context),
         tool_context=tool_context,
         timeout=RUN_WAIT,

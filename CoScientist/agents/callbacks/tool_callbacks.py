@@ -399,15 +399,16 @@ def before_get_task(callback_context: CallbackContext):
 
 
 def inject_graph_root(callback_context: CallbackContext):
-    """Give the agent the session graph root and relevant global memory.
+    """Give the agent the session graph root: every agent, its capabilities and
+    this session's trace, rendered via the {graph_root?} placeholder.
 
-    state['graph_root'] (rendered via the {graph_root?} placeholder) gets:
-      1. the system root — every agent + its capabilities + this session's trace;
-      2. relevant facts accumulated by all completed local research sessions,
-         retrieved for the current query so agents build on prior findings.
     Best-effort — the graph must never break a run. Yields nothing when the
-    knowledge graph is switched off, so the placeholder stays empty instead of
+    execution graph is switched off, so the placeholder stays empty instead of
     describing a feature the agent no longer has tools for.
+
+    What earlier sessions established is no longer injected here. It is served by
+    the research graph's cross-run index, which a run consults deliberately
+    rather than receiving as ambient context.
     """
     try:
         from CoScientist.config import get_settings
@@ -417,25 +418,13 @@ def inject_graph_root(callback_context: CallbackContext):
     except Exception:  # noqa: BLE001
         pass
 
-    parts = []
-    query = ""
+    summary = ""
     try:
         from CoScientist.graph.memory import get_knowledge_graph
-        knowledge_graph = get_knowledge_graph(callback_context)
-        parts.append(knowledge_graph.root_summary())
-        goals = [h for h in knowledge_graph.history(limit=50) if h.get("kind") == "goal"]
-        query = goals[-1]["label"] if goals else ""
+        summary = get_knowledge_graph(callback_context).root_summary()
     except Exception:  # noqa: BLE001
         pass
-    try:
-        from CoScientist.graph.memory_store import get_knowledge_memory
-        knowledge_memory = get_knowledge_memory(callback_context)
-        mem = knowledge_memory.relevant_summary(query)
-        if mem:
-            parts.append(mem)
-    except Exception:  # noqa: BLE001
-        pass
-    callback_context.state['graph_root'] = "\n\n".join(p for p in parts if p)
+    callback_context.state['graph_root'] = summary
     return None
 
 

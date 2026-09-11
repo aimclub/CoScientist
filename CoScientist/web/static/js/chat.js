@@ -33,9 +33,48 @@
 
     marked.setOptions({ breaks: true, gfm: true });
 
+    const THINKING_RE = /<(think|thought)>([\s\S]*?)(?:<\/\1>|$)/gi;
+
     function stripThinking(text) {
       if (!text || typeof text !== 'string') return '';
-      return text.replace(/<(think|thought)>[\s\S]*?(?:<\/\1>|$)/gi, '').trim();
+      return text.replace(THINKING_RE, '').trim();
+    }
+
+    // The reasoning an agent shows on the way to an answer is worth reading —
+    // it is how you tell a considered answer from a lucky one — but it is not
+    // the answer, and printed inline it buries it. So it is kept, marked as
+    // reasoning, and folded when long.
+    function takeThinking(text) {
+      if (!text || typeof text !== 'string') return '';
+      const parts = [];
+      String(text).replace(THINKING_RE, (_, _tag, body) => {
+        const t = String(body || '').trim();
+        if (t) parts.push(t);
+        return '';
+      });
+      return parts.join('\n\n');
+    }
+
+    // Reasoning folds shorter than a deliverable: it is context, not the point.
+    const THINKING_FOLD = 420;
+
+    function thinkingBlock(text) {
+      const thinking = takeThinking(text);
+      if (!thinking) return '';
+      const folded = thinking.length > THINKING_FOLD;
+      const toggle = folded
+        ? `<button onclick="toggleAgentOutput(this)"
+             class="self-start text-[10px] font-mono uppercase tracking-widest text-outline-variant hover:text-on-surface transition-colors">
+             Show full reasoning</button>`
+        : '';
+      return `
+        <div class="flex flex-col gap-1.5 mb-2 pb-2 border-b border-outline-variant/15">
+          <span class="self-start text-[9px] font-mono uppercase tracking-widest text-outline-variant bg-outline-variant/10 border border-outline-variant/20 px-1.5 py-0.5 rounded">Thinking</span>
+          <div class="${folded ? 'max-h-24 overflow-hidden' : ''}">
+            <div class="text-xs text-outline-variant leading-relaxed md-body">${renderMarkdown(thinking)}</div>
+          </div>
+          ${toggle}
+        </div>`;
     }
 
     function renderMarkdown(text) {
@@ -138,6 +177,7 @@
           <span class="text-[10px] text-outline-variant">${ts(timestamp)}</span>
         </div>
         <div class="bg-surface-container-high p-4 rounded-xl rounded-tl-none border border-outline-variant/5">
+          ${thinkingBlock(text)}
           <div class="text-sm text-on-surface leading-relaxed md-body">${renderMarkdown(cleanText)}</div>
         </div>
       </div>
@@ -175,6 +215,7 @@
           <span class="text-[10px] text-outline-variant">${ts(timestamp)}</span>
         </div>
         <div class="flex flex-col gap-2 bg-surface-container-high p-4 rounded-xl rounded-tl-none border border-secondary/20">
+          ${thinkingBlock(text)}
           <div class="${folded ? 'max-h-64 overflow-hidden' : ''}">
             <div class="text-sm text-on-surface leading-relaxed break-words md-body">${renderMarkdown(body)}</div>
           </div>
@@ -187,9 +228,14 @@
     function toggleAgentOutput(button) {
       const box = button.previousElementSibling;
       if (!box) return;
-      const collapsed = box.classList.toggle('max-h-64');
+      // Reasoning folds shorter than a deliverable, so the height class differs
+      // per block; remember the button's own label for the same reason.
+      const height = [...box.classList].find(c => c.startsWith('max-h-')) || button.dataset.fold;
+      if (height) button.dataset.fold = height;
+      if (!button.dataset.label) button.dataset.label = button.textContent.trim();
+      const collapsed = box.classList.toggle(button.dataset.fold);
       box.classList.toggle('overflow-hidden', collapsed);
-      button.textContent = collapsed ? 'Show full output' : 'Collapse';
+      button.textContent = collapsed ? button.dataset.label : 'Collapse';
       if (collapsed) box.scrollIntoView({ block: 'nearest' }); else scrollChat();
     }
 

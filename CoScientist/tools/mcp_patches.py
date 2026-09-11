@@ -25,6 +25,8 @@ from mcp.client import streamable_http as _sh
 from mcp.shared.message import SessionMessage
 from mcp.types import ErrorData, JSONRPCError, JSONRPCMessage
 
+from google.adk.tools.base_tool import BaseTool as _BaseTool
+
 logger = logging.getLogger(__name__)
 
 # JSON-RPC "Parse error" — the payload was not valid JSON.
@@ -132,8 +134,66 @@ _orig_handle_resumption_request = _sh.StreamableHTTPTransport._handle_resumption
 _applied = False
 
 
+# ── a tool the model asked for and does not have ─────────────────────────────
+# ADK raises ValueError out of `_get_tool` when the model names a tool that is
+# not registered, which ends the whole query. That is the wrong failure mode
+# here: the commonest cause is a remote MCP server that could not be reached,
+# so its tools are absent while the prompt still documents them. The agent is
+# left with no way to notice or adapt — the run simply dies.
+#
+# The call now comes back as a tool error naming what IS available, which the
+# model can read and route around, exactly as it does for any other failing
+# tool.
+
+class _MissingTool(_BaseTool):
+    """Stands in for a tool the model named but the agent does not have."""
+
+    def __init__(self, name: str, available: list) -> None:
+        super().__init__(
+            name=name,
+            description="This tool is not available in this run.",
+        )
+        self._available = available
+
+    async def run_async(self, *, args, tool_context):  # noqa: ANN001
+        logger.warning("agent called missing tool %r; available: %s",
+                       self.name, ", ".join(self._available) or "none")
+        return {
+            "status": "error",
+            "error": f"The tool '{self.name}' is not available in this run.",
+            "hint": ("It may need a credential or a remote server that is not "
+                     "reachable. Do not call it again — use one of the tools "
+                     "listed below, or say in your answer that the capability "
+                     "is unavailable."),
+            "available_tools": self._available,
+        }
+
+
+def _patch_missing_tool_call() -> None:
+    from google.adk.flows.llm_flows import functions as _functions
+
+    if getattr(_functions, "_coscientist_missing_tool_patch", False):
+        return
+
+    def _get_tool(function_call, tools_dict):
+        tool = tools_dict.get(function_call.name)
+        if tool is None:
+            return _MissingTool(function_call.name, sorted(tools_dict))
+        return tool
+
+    _functions._get_tool = _get_tool
+    _functions._coscientist_missing_tool_patch = True
+    logger.debug("patched ADK _get_tool to answer missing tools with an error")
+
+
 def apply() -> None:
-    """Install the backport (idempotent; no-op on fixed mcp versions)."""
+    """Install the patches (idempotent).
+
+    The missing-tool patch is unconditional: it does not depend on the mcp
+    version, and a run that dies because a tool is absent is never wanted.
+    """
+    _patch_missing_tool_call()
+
     global _applied
     if _applied or not _mcp_is_broken():
         return

@@ -27,6 +27,12 @@ def main(argv=None) -> None:
     for name, value in agent_cfg.a2a.env.items():
         os.environ.setdefault(name, value)
 
+    # Served over A2A: HITL must not block on a console that isn't there. Set
+    # BEFORE build_system() so the assembler attaches the A2A (long-running)
+    # HITL tools, which put the task into `input-required` for the caller to
+    # answer instead of hanging the server.
+    os.environ.setdefault("COSCIENTIST_A2A_MODE", "1")
+
     import uvicorn
 
     from CoScientist.a2a.config import AGENT_PORTS

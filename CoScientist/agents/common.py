@@ -53,6 +53,10 @@ _RETRYABLE_TYPES = (
 )
 _LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 
+# Seconds a single model call may take, and — separately — the longest silence
+# tolerated between streamed chunks. A provider that goes quiet raises nothing
+# on its own, so without this the agent waits forever.
+REQUEST_TIMEOUT = settings.llm.request_timeout
 # Provider-side throttles clear on their own, but on the provider's clock, not
 # ours: OpenRouter's 402 "in_flight_budget_exhausted" (a cap on concurrent spend
 # — NOT an empty balance) ships a Retry-After of a minute or two. The generic
@@ -242,6 +246,41 @@ class RetryingLiteLlm(LiteLlm):
                 f"and proxy is accessible: {err}"
             ) from err
 
+    async def _stream(self, llm_request: LlmRequest, stream: bool):
+        """Yield the upstream response, bounding the wait between chunks.
+
+        `deadline_s` below covers time-to-first-response and is disarmed the
+        moment the provider answers, and litellm's own `timeout` covers getting
+        the request away. Neither bounds the silence *after* the stream opens: a
+        provider that sends one chunk and then stops leaves `async for` waiting
+        on a chunk that never comes — socket established, nothing raised, the
+        agent parked for good.
+
+        Timing each chunk separately closes that gap without re-arming a whole
+        stream deadline: the clock measures only the wait for the next chunk, so
+        a legitimately long generation is safe and — unlike a deadline left
+        armed across the `yield` — the consumer's own work is never timed.
+        """
+        source = super().generate_content_async(llm_request, stream=stream)
+        try:
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(
+                        source.__anext__(), timeout=REQUEST_TIMEOUT
+                    )
+                except StopAsyncIteration:
+                    return
+                except asyncio.TimeoutError:
+                    # Bare TimeoutError carries no message; say what happened so
+                    # `_is_transient` recognises it and the log names the cause.
+                    raise TimeoutError(
+                        f"model sent nothing for {REQUEST_TIMEOUT}s — request timed out"
+                    ) from None
+                yield chunk
+        finally:
+            # Drop the stalled HTTP response rather than leaking the connection.
+            await source.aclose()
+
     async def generate_content_async(
         self, llm_request: LlmRequest, stream: bool = False
     ) -> AsyncGenerator[LlmResponse, None]:
@@ -251,12 +290,12 @@ class RetryingLiteLlm(LiteLlm):
             yielded = False
             try:
                 if self._deadline_s is None:
-                    async for resp in super().generate_content_async(llm_request, stream=stream):
+                    async for resp in self._stream(llm_request, stream=stream):
                         yielded = True
                         yield resp
                 else:
                     async with asyncio.timeout(self._deadline_s) as deadline:
-                        async for resp in super().generate_content_async(
+                        async for resp in self._stream(
                             llm_request, stream=stream
                         ):
                             # The provider answered, so stop the clock. The budget
@@ -445,7 +484,8 @@ def make_llm(
 ) -> LiteLlm:
     """Return a (retry-wrapped) LiteLlm for the main model (or an override)."""
     return RetryingLiteLlm(
-        model=model, deadline_s=deadline_s, **_reasoning_kwargs(model, reasoning)
+        model=model, deadline_s=deadline_s, timeout=REQUEST_TIMEOUT,
+        **_reasoning_kwargs(model, reasoning)
     )
 
 
@@ -456,5 +496,6 @@ def make_coder_llm(
     return RetryingLiteLlm(
         model=CODER_MODEL,
         deadline_s=deadline_s,
+        timeout=REQUEST_TIMEOUT,
         **_reasoning_kwargs(CODER_MODEL, reasoning),
     )
