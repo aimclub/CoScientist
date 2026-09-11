@@ -32,11 +32,30 @@ for the next review round. ``structured_tz_agent_fill`` holds what is left.
 ``edit_tz_section`` rewrites ONE section of an already assembled ТЗ. It is
 registered (``edit_tz_section`` in assembly/bindings.py) but deliberately not
 attached to any agent yet.
+
+PARALLEL assembly (``TZSessionAgent.parallel_build``): the sections are split
+into ``SECTION_GROUPS`` — parts of the ТЗ that do not depend on each other —
+and one worker per group fills its part at the same time. A worker's tool
+(``make_group_fill_tool``) is the same ``fill_tz_section`` — one section per
+call, in order, progress and next section in every answer — but it is scoped
+to the group's sections and saves them to the group's own state key
+(``structured_tz_part_<group>``): workers never write the same key, so they
+cannot overwrite each other. ``assemble_groups`` puts the parts together into
+the one ТЗ (canonical section order) the rest of the pipeline reads.
+
+The fields the operator leaves empty are filled the same way: the request is
+shared out among the groups (``group_fill_delta``, key
+``structured_tz_agent_fill_<group>``), each group's worker fills its share with
+its own ``fill_agent_fields`` (``make_group_agent_fill_tool``) — the values stay
+in the share — and ``apply_group_fills`` writes them into the ТЗ afterwards.
+``agent_fill_pending`` merges the shares into one view, so the panel and the
+review read the parallel request as they read the sequential one.
 """
 from __future__ import annotations
 
 import logging
-from typing import Any, List, Optional, Tuple, get_args
+from dataclasses import dataclass
+from typing import Any, Callable, List, Optional, Tuple, get_args
 
 from google.adk.tools import ToolContext
 from pydantic import BaseModel, Field
@@ -55,6 +74,7 @@ logger = logging.getLogger(__name__)
 
 TZ_STATE_KEY = "structured_tz"
 TZ_BUILD_STATE_KEY = "structured_tz_build"
+TZ_PART_STATE_PREFIX = "structured_tz_part_"
 AGENT_FILL_STATE_KEY = "structured_tz_agent_fill"
 FILL_TOOL_NAME = "fill_tz_section"
 AGENT_FILL_TOOL_NAME = "fill_agent_fields"
@@ -150,6 +170,58 @@ SECTION_GUIDE: dict[str, str] = {
 }
 
 
+@dataclass(frozen=True)
+class SectionGroup:
+    """A part of the ТЗ one parallel worker fills on its own."""
+
+    key: str                    # suffix of the worker's name and state key
+    title: str
+    sections: Tuple[str, ...]   # in canonical order
+
+
+# No field of one group needs a value from another. Sections that share a
+# field sit in the same group so the value agrees: минимальная масса образца
+# («Критерии качества», «Масштаб результата»), запрещённые вещества
+# («Ограничения по сырью», «Безопасность и регуляторика»), оборудование and
+# the technology it constrains.
+SECTION_GROUPS: Tuple[SectionGroup, ...] = (
+    SectionGroup("task", "Задача и продукт", (
+        "Тип задачи",
+        "Целевой продукт",
+        "Область применения",
+        "Приоритеты отбора",
+        "Форма результата",
+    )),
+    SectionGroup("quality", "Свойства и качество", (
+        "Требуемые свойства",
+        "Критерии качества",
+        "Масштаб результата",
+        "Аналитические методы",
+    )),
+    SectionGroup("limits", "Ограничения и ресурсы", (
+        "Ограничения по сырью",
+        "Ограничения по поставкам",
+        "Ограничения по себестоимости",
+        "Ограничения по технологии",
+        "Доступное оборудование",
+        "Известные данные заказчика",
+        "Безопасность и регуляторика",
+    )),
+)
+
+
+def _check_groups() -> None:
+    grouped = [t for g in SECTION_GROUPS for t in g.sections]
+    if sorted(grouped) != sorted(CANONICAL_BLOCKS):
+        raise RuntimeError("SECTION_GROUPS must cover every ТЗ section exactly once")
+    for g in SECTION_GROUPS:
+        if list(g.sections) != sorted(g.sections, key=CANONICAL_BLOCKS.index):
+            raise RuntimeError(f"SECTION_GROUPS «{g.title}»: sections out of canonical order")
+
+
+_check_groups()
+
+
 # ── helpers ──────────────────────────────────────────────────────────────────
 
 def _norm(text: Any) -> str:
@@ -169,9 +241,14 @@ def _canonical_index(title: str) -> Optional[int]:
     return None
 
 
-def _section_ref(index: int) -> str:
-    """«раздел 4 «Требуемые свойства»» — 0-based index to the reader's numbering."""
-    return f"раздел {index + 1} «{CANONICAL_BLOCKS[index]}»"
+def _order_index(order: Tuple[str, ...], title: str) -> Optional[int]:
+    wanted = _norm(title)
+    return next((i for i, t in enumerate(order) if _norm(t) == wanted), None)
+
+
+def _section_ref(title: str) -> str:
+    """«раздел 4 «Требуемые свойства»» — numbered as in the whole ТЗ."""
+    return f"раздел {CANONICAL_BLOCKS.index(title) + 1} «{title}»"
 
 
 def load_tz(value: Any) -> Optional[StructuredTZ]:
@@ -188,7 +265,7 @@ def load_tz(value: Any) -> Optional[StructuredTZ]:
         return None
 
 
-def _edition(state: Any, invocation_id: str) -> Optional[StructuredTZ]:
+def tz_edition(state: Any, invocation_id: str) -> Optional[StructuredTZ]:
     """The ТЗ being assembled in THIS invocation's current edition, if any."""
     build = state.get(TZ_BUILD_STATE_KEY)
     if not isinstance(build, dict) or build.get("invocation_id") != invocation_id:
@@ -196,9 +273,10 @@ def _edition(state: Any, invocation_id: str) -> Optional[StructuredTZ]:
     return load_tz(state.get(TZ_STATE_KEY))
 
 
-def _request_text(tool_context: Any) -> str:
-    """The customer's request verbatim — the user turn this invocation answers."""
-    content = getattr(tool_context, "user_content", None)
+def request_text(context: Any) -> str:
+    """The customer's request verbatim — the user turn this invocation answers
+    (``context``: a ToolContext or an InvocationContext)."""
+    content = getattr(context, "user_content", None)
     parts = getattr(content, "parts", None) or []
     return "".join(getattr(p, "text", None) or "" for p in parts).strip()
 
@@ -210,8 +288,9 @@ def _batch_position(tool_context: Any) -> Tuple[int, int]:
     session = getattr(tool_context, "session", None)
     if not call_id or session is None:
         return 0, 1
-    # The model response is appended to the session before its calls execute.
-    for event in reversed(list(getattr(session, "events", None) or [])[-5:]):
+    # The model response is appended to the session before its calls execute;
+    # parallel workers may append a few events of their own in between.
+    for event in reversed(list(getattr(session, "events", None) or [])[-20:]):
         try:
             calls = event.get_function_calls()
         except Exception:  # noqa: BLE001
@@ -301,7 +380,7 @@ def validate_section_fields(
 def unfinished_feedback(state: Any, invocation_id: str) -> Optional[str]:
     """Feedback for an agent that ended its turn before the ТЗ was complete
     (None when it is complete): where it stopped and which section is next."""
-    tz = _edition(state, invocation_id)
+    tz = tz_edition(state, invocation_id)
     filled = len(tz.blocks) if tz is not None else 0
     if filled >= TOTAL_SECTIONS:
         return None
@@ -314,27 +393,155 @@ def unfinished_feedback(state: Any, invocation_id: str) -> Optional[str]:
     return (
         f"Вы завершили ход, заполнив только {filled}/{TOTAL_SECTIONS} разделов ТЗ — "
         f"ТЗ не собрано. Продолжайте: теперь вы должны заполнить "
-        f"{_section_ref(filled)} (вызов {FILL_TOOL_NAME}). Уже сохранённые "
-        "разделы повторять не нужно."
+        f"{_section_ref(CANONICAL_BLOCKS[filled])} (вызов {FILL_TOOL_NAME}). Уже "
+        "сохранённые разделы повторять не нужно."
     )
 
 
-def _rejected(step: int, filled: int, errors: List[str], hint: str = "") -> dict:
-    expected = CANONICAL_BLOCKS[step - 1]
+def _rejected(
+    order: Tuple[str, ...], step: int, errors: List[str], hint: str = ""
+) -> dict:
+    total = len(order)
+    expected = order[step - 1]
     message = (
         f"Раздел НЕ сохранён (ошибок: {len(errors)}). Исправьте ошибки и повторите "
-        f"вызов {FILL_TOOL_NAME} для раздела {step} «{expected}». "
-        f"Заполнено по-прежнему {filled}/{TOTAL_SECTIONS}."
+        f"вызов {FILL_TOOL_NAME} для раздела {CANONICAL_BLOCKS.index(expected) + 1} "
+        f"«{expected}». Заполнено по-прежнему {step - 1}/{total}."
     )
     if hint:
         message += " " + hint
-    logger.info("fill_tz_section rejected at step %d/%d: %s", step, TOTAL_SECTIONS, errors)
+    logger.info("fill_tz_section rejected at step %d/%d: %s", step, total, errors)
     return {
         "status": "error",
-        "step": f"{step}/{TOTAL_SECTIONS}",
+        "step": f"{step}/{total}",
         "expected_section": expected,
         "errors": errors,
         "message": message,
+    }
+
+
+def _fill_next_section(
+    tool_context: Any,
+    section: str,
+    usage: str,
+    fields: Any,
+    *,
+    order: Tuple[str, ...],
+    blocks: List[TZBlock],
+    save: Callable[[TZBlock], None],
+    group: Optional[SectionGroup] = None,
+    hint: str = "",
+) -> dict:
+    """Check and save the next section of ``order`` (``blocks`` are the ones
+    saved so far) — the body of both the sequential ``fill_tz_section`` (order =
+    the whole ТЗ) and a parallel worker's (order = its ``group``)."""
+    total = len(order)
+    filled = len(blocks)
+    done = "ТЗ собрано" if group is None else "ваша часть ТЗ собрана"
+
+    if filled >= total:
+        return {
+            "status": "error",
+            "step": f"{total}/{total}",
+            "errors": [
+                ("ТЗ уже собрано" if group is None else "Ваша часть ТЗ уже собрана")
+                + f" полностью ({total}/{total}) — раздел «{section}» не сохранён."
+            ],
+            "message": (
+                f"Больше вызывать {FILL_TOOL_NAME} не нужно: ответьте одной "
+                f"короткой фразой, что {done}."
+            ),
+        }
+
+    step = filled + 1
+    expected = order[filled]
+
+    position, batch = _batch_position(tool_context)
+    if position > 0:
+        # Only the first call of the batch runs; what is next depends on it.
+        return {
+            "status": "error",
+            "errors": [
+                f"В одном ответе вызвано {batch} {FILL_TOOL_NAME}, а разделы "
+                f"заполняются по одному: выполняется только первый вызов, этот "
+                f"(вызов №{position + 1}, раздел «{section}») отклонён и не сохранён."
+            ],
+            "message": (
+                "Смотрите ответ на первый вызов — он называет раздел, который "
+                "нужно заполнить следующим. Делайте один вызов за ответ."
+            ),
+        }
+
+    index = _order_index(order, section)
+    if index is None:
+        canonical = _canonical_index(section)
+        if group is not None and canonical is not None:
+            error = (
+                f"Шаг {step}/{total}: {_section_ref(CANONICAL_BLOCKS[canonical])} "
+                f"заполняет другой агент — ваша часть «{group.title}»: "
+                + ", ".join(f"«{t}»" for t in order)
+                + f". Сейчас нужно заполнить {_section_ref(expected)}."
+            )
+        else:
+            error = (
+                f"Шаг {step}/{total}: раздела «{section}» нет в структуре ТЗ. "
+                f"Сейчас нужно заполнить {_section_ref(expected)} — передайте в "
+                "section именно это название."
+            )
+        return _rejected(order, step, [error], hint)
+    if index < filled:
+        return _rejected(order, step, [
+            f"Шаг {step}/{total}: {_section_ref(order[index])} уже сохранён на шаге "
+            f"{index + 1}/{total}, повторно его заполнять нельзя. Сейчас нужно "
+            f"заполнить {_section_ref(expected)}."
+        ], hint)
+    if index > filled:
+        return _rejected(order, step, [
+            f"Шаг {step}/{total}: передан {_section_ref(order[index])}, но разделы "
+            f"заполняются строго по порядку — сейчас нужно заполнить "
+            f"{_section_ref(expected)}."
+        ], hint)
+
+    where = f"Шаг {step}/{total}, раздел «{expected}»"
+    rows, errors = validate_section_fields(fields, where=where)
+    if not str(usage or "").strip():
+        errors.insert(0, (
+            f"{where}: не указан usage — одна фраза о том, как раздел "
+            "используется дальше по пайплайну."
+        ))
+    if errors:
+        return _rejected(order, step, errors, hint)
+
+    save(TZBlock(title=expected, usage=str(usage).strip(), fields=rows))
+    filled += 1
+
+    open_count = sum(1 for r in rows if r.status in OPEN_STATUSES)
+    saved = f"раздел «{expected}» сохранён (полей: {len(rows)}, из них открытых: {open_count})"
+    tag = FILL_TOOL_NAME if group is None else f"{FILL_TOOL_NAME}[{group.key}]"
+    logger.info("%s: %d/%d — %s", tag, filled, total, saved)
+
+    if filled == total:
+        whole = "Все разделы ТЗ заполнены" if group is None else "Все разделы вашей части заполнены"
+        return {
+            "status": "complete",
+            "progress": f"{filled}/{total}",
+            "message": (
+                f"Вы заполнили {filled}/{total}: {saved}. {whole} — {done}. "
+                f"Ответьте одной короткой фразой, что {done}; {FILL_TOOL_NAME} "
+                "больше не вызывайте."
+            ),
+        }
+
+    next_section = order[filled]
+    return {
+        "status": "ok",
+        "progress": f"{filled}/{total}",
+        "message": (
+            f"Вы заполнили {filled}/{total}: {saved}. Продолжайте — "
+            f"теперь вы должны заполнить {_section_ref(next_section)}."
+        ),
+        "next_section": next_section,
+        "next_section_fields": SECTION_GUIDE[next_section],
     }
 
 
@@ -364,25 +571,8 @@ def fill_tz_section(
     """
     state = tool_context.state
     invocation_id = tool_context.invocation_id
-    tz = _edition(state, invocation_id)
-    filled = len(tz.blocks) if tz is not None else 0
+    tz = tz_edition(state, invocation_id)
 
-    if filled >= TOTAL_SECTIONS:
-        return {
-            "status": "error",
-            "step": f"{TOTAL_SECTIONS}/{TOTAL_SECTIONS}",
-            "errors": [
-                f"ТЗ уже собрано полностью ({TOTAL_SECTIONS}/{TOTAL_SECTIONS}) — "
-                f"раздел «{section}» не сохранён."
-            ],
-            "message": (
-                f"Больше вызывать {FILL_TOOL_NAME} не нужно: ответьте одной "
-                "короткой фразой, что ТЗ собрано."
-            ),
-        }
-
-    step = filled + 1
-    expected = CANONICAL_BLOCKS[filled]
     # A marker cleared to None (not merely absent or from another invocation)
     # = a reviewer asked for a rewrite of the ТЗ still in state.
     hint = ""
@@ -396,85 +586,132 @@ def fill_tz_section(
             "разделами по порядку."
         )
 
-    position, batch = _batch_position(tool_context)
-    if position > 0:
-        # Only the first call of the batch runs; what is next depends on it.
-        return {
-            "status": "error",
-            "errors": [
-                f"В одном ответе вызвано {batch} {FILL_TOOL_NAME}, а разделы "
-                f"заполняются по одному: выполняется только первый вызов, этот "
-                f"(вызов №{position + 1}, раздел «{section}») отклонён и не сохранён."
-            ],
-            "message": (
-                "Смотрите ответ на первый вызов — он называет раздел, который "
-                "нужно заполнить следующим. Делайте один вызов за ответ."
-            ),
-        }
+    def save(block: TZBlock) -> None:
+        # The first section opens a new edition.
+        edition = tz or StructuredTZ(original_request=request_text(tool_context))
+        edition.blocks.append(block)
+        state[TZ_STATE_KEY] = edition.model_dump()
+        state[TZ_BUILD_STATE_KEY] = {"invocation_id": invocation_id}
 
-    index = _canonical_index(section)
-    if index is None:
-        return _rejected(step, filled, [
-            f"Шаг {step}/{TOTAL_SECTIONS}: раздела «{section}» нет в структуре ТЗ. "
-            f"Сейчас нужно заполнить {_section_ref(filled)} — передайте в section "
-            "именно это название."
-        ], hint)
-    if index < filled:
-        return _rejected(step, filled, [
-            f"Шаг {step}/{TOTAL_SECTIONS}: {_section_ref(index)} уже сохранён на шаге "
-            f"{index + 1}/{TOTAL_SECTIONS}, повторно его заполнять нельзя. Сейчас "
-            f"нужно заполнить {_section_ref(filled)}."
-        ], hint)
-    if index > filled:
-        return _rejected(step, filled, [
-            f"Шаг {step}/{TOTAL_SECTIONS}: передан {_section_ref(index)}, но разделы "
-            f"заполняются строго по порядку — сейчас нужно заполнить "
-            f"{_section_ref(filled)}."
-        ], hint)
+    return _fill_next_section(
+        tool_context, section, usage, fields,
+        order=CANONICAL_BLOCKS,
+        blocks=list(tz.blocks) if tz is not None else [],
+        save=save,
+        hint=hint,
+    )
 
-    where = f"Шаг {step}/{TOTAL_SECTIONS}, раздел «{expected}»"
-    rows, errors = validate_section_fields(fields, where=where)
-    if not str(usage or "").strip():
-        errors.insert(0, (
-            f"{where}: не указан usage — одна фраза о том, как раздел "
-            "используется дальше по пайплайну."
-        ))
-    if errors:
-        return _rejected(step, filled, errors, hint)
 
-    if tz is None:  # the first section opens a new edition
-        tz = StructuredTZ(original_request=_request_text(tool_context))
-    tz.blocks.append(TZBlock(title=expected, usage=str(usage).strip(), fields=rows))
-    state[TZ_STATE_KEY] = tz.model_dump()
-    state[TZ_BUILD_STATE_KEY] = {"invocation_id": invocation_id}
-    filled += 1
+# ── parallel assembly: one worker per section group ──────────────────────────
 
-    open_count = sum(1 for r in rows if r.status in OPEN_STATUSES)
-    saved = f"раздел «{expected}» сохранён (полей: {len(rows)}, из них открытых: {open_count})"
-    logger.info("fill_tz_section: %d/%d — %s", filled, TOTAL_SECTIONS, saved)
+def group_part_key(group: SectionGroup) -> str:
+    """State key holding the sections ``group``'s worker has saved."""
+    return f"{TZ_PART_STATE_PREFIX}{group.key}"
 
-    if filled == TOTAL_SECTIONS:
-        return {
-            "status": "complete",
-            "progress": f"{filled}/{TOTAL_SECTIONS}",
-            "message": (
-                f"Вы заполнили {filled}/{TOTAL_SECTIONS}: {saved}. Все разделы ТЗ "
-                "заполнены — ТЗ собрано. Ответьте одной короткой фразой, что ТЗ "
-                f"готово; {FILL_TOOL_NAME} больше не вызывайте."
-            ),
-        }
 
-    next_section = CANONICAL_BLOCKS[filled]
-    return {
-        "status": "ok",
-        "progress": f"{filled}/{TOTAL_SECTIONS}",
-        "message": (
-            f"Вы заполнили {filled}/{TOTAL_SECTIONS}: {saved}. Продолжайте — "
-            f"теперь вы должны заполнить {_section_ref(filled)}."
-        ),
-        "next_section": next_section,
-        "next_section_fields": SECTION_GUIDE[next_section],
+def group_blocks(state: Any, invocation_id: str, group: SectionGroup) -> List[TZBlock]:
+    """The sections of ``group`` saved in THIS invocation, in order."""
+    part = state.get(group_part_key(group))
+    if not isinstance(part, dict) or part.get("invocation_id") != invocation_id:
+        return []
+    try:
+        return [TZBlock.model_validate(b) for b in part.get("blocks") or []]
+    except Exception:  # noqa: BLE001 — an unreadable part is treated as empty
+        return []
+
+
+def unfinished_groups(state: Any, invocation_id: str) -> List[SectionGroup]:
+    """The groups whose worker has not saved all its sections yet."""
+    return [
+        g for g in SECTION_GROUPS
+        if len(group_blocks(state, invocation_id, g)) < len(g.sections)
+    ]
+
+
+def assemble_groups(
+    state: Any, invocation_id: str, original_request: str = ""
+) -> StructuredTZ:
+    """The ТЗ put together from the group parts, sections in canonical order.
+    A section no worker has saved yet is simply absent."""
+    saved = {
+        b.title: b
+        for g in SECTION_GROUPS
+        for b in group_blocks(state, invocation_id, g)
     }
+    return StructuredTZ(
+        original_request=original_request,
+        blocks=[saved[t] for t in CANONICAL_BLOCKS if t in saved],
+    )
+
+
+def groups_unfinished_feedback(state: Any, invocation_id: str) -> Optional[str]:
+    """Feedback when the parallel workers stopped before the ТЗ was complete
+    (None when it is complete): which parts are unfinished and where each
+    worker resumes. Only the workers of those parts run again."""
+    pending = unfinished_groups(state, invocation_id)
+    if not pending:
+        return None
+    filled = sum(len(group_blocks(state, invocation_id, g)) for g in SECTION_GROUPS)
+    parts = []
+    for g in pending:
+        n = len(group_blocks(state, invocation_id, g))
+        parts.append(
+            f"«{g.title}» — заполнено {n}/{len(g.sections)}, следующий "
+            f"{_section_ref(g.sections[n])}"
+        )
+    return (
+        f"ТЗ собрано не полностью ({filled}/{TOTAL_SECTIONS} разделов). Не "
+        f"закончены части: {'; '.join(parts)}. Агент каждой из этих частей "
+        f"продолжает с раздела, на котором остановился (вызов {FILL_TOOL_NAME}); "
+        "уже сохранённые разделы повторять не нужно."
+    )
+
+
+def make_group_fill_tool(group: SectionGroup) -> Callable[..., dict]:
+    """``fill_tz_section`` for the worker of ``group``: the same one-section-
+    per-call contract, scoped to the group's sections and saving them to the
+    group's own state key."""
+
+    def fill_tz_section(
+        section: str,
+        usage: str,
+        fields: list[TZFieldRow],
+        tool_context: ToolContext,
+    ) -> dict:
+        state = tool_context.state
+        invocation_id = tool_context.invocation_id
+        blocks = group_blocks(state, invocation_id, group)
+
+        def save(block: TZBlock) -> None:
+            state[group_part_key(group)] = {
+                "invocation_id": invocation_id,
+                "blocks": [b.model_dump() for b in blocks + [block]],
+            }
+
+        return _fill_next_section(
+            tool_context, section, usage, fields,
+            order=group.sections, blocks=blocks, save=save, group=group,
+        )
+
+    fill_tz_section.__doc__ = f"""Save the NEXT section of YOUR part of the ТЗ
+    («{group.title}») — one section per call, in order.
+
+    Args:
+        section: title of the section being filled — exactly the section the
+            previous answer named as next (the first call: «{group.sections[0]}»).
+        usage: one phrase — how this section is used further down the pipeline.
+        fields: the rows of the section table, each
+            {{"name": ..., "value": ..., "status": ...}}; status is one of
+            «задано заказчиком», «уточнено оператором», «не задано»,
+            «свободный комментарий», «рассчитывается агентом».
+
+    Returns:
+        status "ok" with the progress of your part (k/N) and the section to
+        fill next; "complete" once your last section is saved; "error" naming
+        the exact step, section and field that were rejected — nothing is
+        saved then.
+    """
+    return fill_tz_section
 
 
 def edit_tz_section(
@@ -568,8 +805,8 @@ def agent_fill_request(
     }
 
 
-def agent_fill_pending(state: Any, invocation_id: str) -> Optional[dict]:
-    """This invocation's unfinished request to fill operator-left fields."""
+def _sequential_fill_request(state: Any, invocation_id: str) -> Optional[dict]:
+    """The sequential agent's unfinished fill request (``AGENT_FILL_STATE_KEY``)."""
     request = state.get(AGENT_FILL_STATE_KEY)
     if (
         not isinstance(request, dict)
@@ -578,6 +815,31 @@ def agent_fill_pending(state: Any, invocation_id: str) -> Optional[dict]:
     ):
         return None
     return request
+
+
+def agent_fill_pending(state: Any, invocation_id: str) -> Optional[dict]:
+    """This invocation's unfinished request to fill operator-left fields.
+
+    When the groups' workers fill them (parallel mode), their shares are merged
+    into one view of the same shape — the panel, the review and the progress
+    read it as they read the sequential request."""
+    shares = [
+        r for g in SECTION_GROUPS
+        if (r := group_fill_request(state, invocation_id, g)) is not None
+    ]
+    if not shares:
+        return _sequential_fill_request(state, invocation_id)
+    pending = sorted(
+        (p for r in shares for p in r.get("pending") or []),
+        key=lambda p: _canonical_index(p["section"]) or 0,
+    )
+    if not pending:
+        return None
+    return {
+        "invocation_id": invocation_id,
+        "total": sum(int(r.get("total") or 0) for r in shares),
+        "pending": pending,
+    }
 
 
 def _fill_target(request: dict) -> Tuple[int, int, str, List[str]]:
@@ -614,31 +876,23 @@ def agent_fill_feedback(state: Any, invocation_id: str) -> Optional[str]:
     )
 
 
-def fill_agent_fields(
+def _fill_agent_section(
     section: str,
-    fields: list[AgentFieldValue],
-    tool_context: ToolContext,
+    fields: Any,
+    tool_context: Any,
+    *,
+    request: Optional[dict],
+    save: Callable[[StructuredTZ, str, dict, List[dict]], None],
+    group: Optional[SectionGroup] = None,
 ) -> dict:
-    """Fill the fields the operator left EMPTY in ONE section — the next one named.
-
-    Args:
-        section: title of the section the previous answer (or the request)
-            named as next.
-        fields: a value for every field of that section left to you, each
-            {"name": ..., "value": ...}; the status is set automatically
-            («заполнено агентом»), other fields of the ТЗ cannot be changed.
-
-    Returns:
-        status "ok" with the progress (k/K) and the section to fill next;
-        "complete" once every field left to you is filled; "error" naming the
-        exact step, section and field that were rejected — nothing is saved then.
-    """
-    state = tool_context.state
-    request = agent_fill_pending(state, tool_context.invocation_id)
+    """Check the values for the next section of ``request`` and ``save`` them
+    (``save(tz, section, values, remaining_pending)``) — the body of both the
+    sequential ``fill_agent_fields`` and a parallel worker's."""
     if request is None:
+        yours = "" if group is None else " в вашей части ТЗ"
         return {
             "status": "error",
-            "errors": ["Нет полей, которые оператор оставил заполнить агенту."],
+            "errors": [f"Нет полей{yours}, которые оператор оставил заполнить агенту."],
             "message": f"Вызывать {AGENT_FILL_TOOL_NAME} сейчас не нужно.",
         }
 
@@ -720,41 +974,200 @@ def fill_agent_fields(
     if errors:
         return rejected(errors)
 
-    tz = load_tz(state.get(TZ_STATE_KEY))
+    tz = load_tz(tool_context.state.get(TZ_STATE_KEY))
     block = tz.block(expected) if tz is not None else None
-    rows = {f.name: f for f in block.fields} if block is not None else {}
+    rows = {f.name for f in block.fields} if block is not None else set()
     lost = [n for n in values if n not in rows]
     if lost:
         return rejected([f"{where}: в ТЗ нет полей {_names(lost)} — ТЗ изменилось."])
-    for name, value in values.items():
-        rows[name].value = value
-        rows[name].status = AGENT_FILLED_STATUS
 
     remaining = [dict(p) for p in request["pending"][1:]]
-    state[TZ_STATE_KEY] = tz.model_dump()
-    state[AGENT_FILL_STATE_KEY] = dict(request, pending=remaining)
-    logger.info("fill_agent_fields: %d/%d — «%s» (%d field(s))", step, total, expected, len(values))
+    save(tz, expected, values, remaining)
+    tag = AGENT_FILL_TOOL_NAME if group is None else f"{AGENT_FILL_TOOL_NAME}[{group.key}]"
+    logger.info("%s: %d/%d — «%s» (%d field(s))", tag, step, total, expected, len(values))
 
     saved = f"раздел «{expected}» дозаполнен (полей: {len(values)})"
     if not remaining:
+        done = (
+            "Все поля, оставленные оператором, заполнены — ТЗ снова уйдёт оператору "
+            "на проверку." if group is None else
+            "Все поля вашей части, оставленные оператором, заполнены."
+        )
         return {
             "status": "complete",
             "progress": f"{total}/{total}",
             "message": (
-                f"Вы дозаполнили {total}/{total}: {saved}. Все поля, оставленные "
-                "оператором, заполнены — ТЗ снова уйдёт оператору на проверку. "
-                f"Ответьте одной короткой фразой; {AGENT_FILL_TOOL_NAME} больше не вызывайте."
+                f"Вы дозаполнили {total}/{total}: {saved}. {done} Ответьте одной "
+                f"короткой фразой; {AGENT_FILL_TOOL_NAME} больше не вызывайте."
             ),
         }
-    nxt = state[AGENT_FILL_STATE_KEY]
+    nxt = dict(request, pending=remaining)
     return {
         "status": "ok",
         "progress": f"{step}/{total}",
         "message": f"Вы дозаполнили {step}/{total}: {saved}. Продолжайте. "
                    + agent_fill_instruction(nxt),
-        "next_section": nxt["pending"][0]["section"],
-        "next_fields": list(nxt["pending"][0]["fields"]),
+        "next_section": remaining[0]["section"],
+        "next_fields": list(remaining[0]["fields"]),
     }
+
+
+def _set_agent_values(tz: StructuredTZ, section: str, values: dict) -> None:
+    rows = {f.name: f for f in tz.block(section).fields}
+    for name, value in values.items():
+        if name in rows:
+            rows[name].value = value
+            rows[name].status = AGENT_FILLED_STATUS
+
+
+def fill_agent_fields(
+    section: str,
+    fields: list[AgentFieldValue],
+    tool_context: ToolContext,
+) -> dict:
+    """Fill the fields the operator left EMPTY in ONE section — the next one named.
+
+    Args:
+        section: title of the section the previous answer (or the request)
+            named as next.
+        fields: a value for every field of that section left to you, each
+            {"name": ..., "value": ...}; the status is set automatically
+            («заполнено агентом»), other fields of the ТЗ cannot be changed.
+
+    Returns:
+        status "ok" with the progress (k/K) and the section to fill next;
+        "complete" once every field left to you is filled; "error" naming the
+        exact step, section and field that were rejected — nothing is saved then.
+    """
+    state = tool_context.state
+    request = _sequential_fill_request(state, tool_context.invocation_id)
+
+    def save(tz: StructuredTZ, section: str, values: dict, remaining: List[dict]) -> None:
+        _set_agent_values(tz, section, values)
+        state[TZ_STATE_KEY] = tz.model_dump()
+        state[AGENT_FILL_STATE_KEY] = dict(request, pending=remaining)
+
+    return _fill_agent_section(section, fields, tool_context, request=request, save=save)
+
+
+# ── parallel agent fill: the groups' workers fill their own sections ─────────
+
+def group_fill_key(group: SectionGroup) -> str:
+    """State key holding ``group``'s share of the fill request (parallel mode)."""
+    return f"{AGENT_FILL_STATE_KEY}_{group.key}"
+
+
+def group_fill_request(
+    state: Any, invocation_id: str, group: SectionGroup
+) -> Optional[dict]:
+    """``group``'s share of THIS invocation's fill request, finished or not:
+    ``pending`` sections still to fill, ``filled`` [{section, values}] done."""
+    request = state.get(group_fill_key(group))
+    if not isinstance(request, dict) or request.get("invocation_id") != invocation_id:
+        return None
+    return request
+
+
+def _group_of(section: str) -> SectionGroup:
+    return next((g for g in SECTION_GROUPS if section in g.sections), SECTION_GROUPS[0])
+
+
+def group_fill_delta(request: Optional[dict]) -> dict:
+    """State delta sharing ``request`` out among the groups — a value for EVERY
+    group key, so it replaces whatever an earlier round left; None clears all."""
+    delta: dict = {group_fill_key(g): None for g in SECTION_GROUPS}
+    if not request:
+        return delta
+    shares: dict[str, list] = {}
+    for p in request.get("pending") or []:
+        shares.setdefault(_group_of(p["section"]).key, []).append((p["section"], p["fields"]))
+    for g in SECTION_GROUPS:
+        if g.key in shares:
+            share = agent_fill_request(request["invocation_id"], shares[g.key])
+            delta[group_fill_key(g)] = dict(share, filled=[])
+    return delta
+
+
+def unfinished_fill_groups(state: Any, invocation_id: str) -> List[SectionGroup]:
+    """The groups whose worker still has operator-left fields to fill."""
+    return [
+        g for g in SECTION_GROUPS
+        if (group_fill_request(state, invocation_id, g) or {}).get("pending")
+    ]
+
+
+def apply_group_fills(
+    state: Any, invocation_id: str, tz: StructuredTZ
+) -> StructuredTZ:
+    """``tz`` with the values the groups' workers have filled so far (a copy;
+    applying twice changes nothing)."""
+    tz = tz.model_copy(deep=True)
+    for g in SECTION_GROUPS:
+        for item in (group_fill_request(state, invocation_id, g) or {}).get("filled") or []:
+            if tz.block(item["section"]) is not None:
+                _set_agent_values(tz, item["section"], item["values"])
+    return tz
+
+
+def groups_agent_fill_feedback(state: Any, invocation_id: str) -> Optional[str]:
+    """Feedback when the groups' workers stopped with operator-left fields
+    still empty (None when there are none). Only those workers run again."""
+    request = agent_fill_pending(state, invocation_id)
+    if request is None:
+        return None
+    step, total, _section, _fields = _fill_target(request)
+    parts = []
+    for g in unfinished_fill_groups(state, invocation_id):
+        share = group_fill_request(state, invocation_id, g)
+        parts.append(f"«{g.title}» — следующий раздел «{share['pending'][0]['section']}»")
+    return (
+        f"Поля, оставленные оператором, дозаполнены не все ({step - 1}/{total} "
+        f"разделов). Не закончены части: {'; '.join(parts)}. Агент каждой из этих "
+        f"частей продолжает с раздела, на котором остановился (вызов "
+        f"{AGENT_FILL_TOOL_NAME})."
+    )
+
+
+def make_group_agent_fill_tool(group: SectionGroup) -> Callable[..., dict]:
+    """``fill_agent_fields`` for ``group``'s worker: the same one-section-per-
+    call contract over the group's share of the request. The values are kept
+    in that share — the ТЗ itself is updated by the agent once the workers
+    are done, so concurrent workers never write the same key."""
+
+    def fill_agent_fields(
+        section: str,
+        fields: list[AgentFieldValue],
+        tool_context: ToolContext,
+    ) -> dict:
+        state = tool_context.state
+        request = group_fill_request(state, tool_context.invocation_id, group)
+        if request is not None and not request.get("pending"):
+            request = None
+
+        def save(_tz: StructuredTZ, section: str, values: dict, remaining: List[dict]) -> None:
+            filled = list(request.get("filled") or []) + [{"section": section, "values": values}]
+            state[group_fill_key(group)] = dict(request, pending=remaining, filled=filled)
+
+        return _fill_agent_section(
+            section, fields, tool_context, request=request, save=save, group=group,
+        )
+
+    fill_agent_fields.__doc__ = f"""Fill the fields the operator left EMPTY in ONE
+    section of YOUR part of the ТЗ («{group.title}») — the next one named.
+
+    Args:
+        section: title of the section your instruction or the previous answer
+            named as next.
+        fields: a value for every field of that section left to you, each
+            {{"name": ..., "value": ...}}; the status is set automatically
+            («заполнено агентом»), other fields of the ТЗ cannot be changed.
+
+    Returns:
+        status "ok" with the progress (k/K) and the section to fill next;
+        "complete" once every field left to you is filled; "error" naming the
+        exact step, section and field that were rejected — nothing is saved then.
+    """
+    return fill_agent_fields
 
 
 __all__ = [
@@ -767,15 +1180,33 @@ __all__ = [
     "agent_fill_instruction",
     "agent_fill_pending",
     "agent_fill_request",
+    "apply_group_fills",
     "fill_agent_fields",
     "is_empty_value",
+    "SECTION_GROUPS",
     "SECTION_GUIDE",
+    "SectionGroup",
     "TOTAL_SECTIONS",
     "TZ_BUILD_STATE_KEY",
+    "TZ_PART_STATE_PREFIX",
     "TZ_STATE_KEY",
+    "assemble_groups",
     "edit_tz_section",
     "fill_tz_section",
+    "group_blocks",
+    "group_fill_delta",
+    "group_fill_key",
+    "group_fill_request",
+    "group_part_key",
+    "groups_agent_fill_feedback",
+    "groups_unfinished_feedback",
     "load_tz",
+    "make_group_agent_fill_tool",
+    "make_group_fill_tool",
+    "request_text",
+    "tz_edition",
     "unfinished_feedback",
+    "unfinished_fill_groups",
+    "unfinished_groups",
     "validate_section_fields",
 ]

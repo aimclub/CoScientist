@@ -101,6 +101,17 @@ agents:
     # "done" line. edit_tz_section (per-section edits of an assembled ТЗ) is
     # registered but deliberately NOT attached yet.
     #
+    # parallel_build: the 16 sections are split into 3 independent parts
+    # (SECTION_GROUPS in tz_builder.py: «Задача и продукт», «Свойства и
+    # качество», «Ограничения и ресурсы») and one worker per part — same
+    # model, its own prompt and scoped fill_tz_section — fills its part AT
+    # THE SAME TIME, instead of this agent's LLM walking all 16 in a row.
+    # The fields the operator leaves empty are filled the same way: each
+    # part's fill worker (its prompt shows the whole current ТЗ) fills the
+    # ones in its sections, all at once. Workers appear in the metrics as
+    # TZSpecAgent_<part> and TZSpecAgent_<part>_fill. Set it to false to go
+    # back to this agent's own sequential build and fill.
+    #
     # Review: the operator fills the ТЗ as a form in the web ТЗ panel; fields
     # left empty are filled by the agent through fill_agent_fields (one
     # section per call, highlighted as «заполнено агентом») and the ТЗ goes
@@ -114,6 +125,8 @@ agents:
     prompt: microfluidics_tz
     tools: [fill_tz_section, fill_agent_fields]
     hitl: true
+    options:
+      parallel_build: true
 
   TZQueryGenAgent:
     class: custom:session

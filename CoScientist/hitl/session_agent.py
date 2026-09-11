@@ -105,6 +105,14 @@ class SessionAgent(LlmAgent):
         pass, before any reviewer sees the output. Default: always complete."""
         return None
 
+    def _produce(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
+        """One pass producing the output: the agent's own LLM turn by default.
+
+        Subclasses may produce it another way — e.g. the microfluidics ТЗ agent
+        fans the sections out to parallel workers. The last final response
+        yielded is the pass's output, reviewed like the LLM's."""
+        return super()._run_async_impl(ctx)
+
     def _rewrite_state_delta(self, ctx: InvocationContext) -> dict:
         """State to carry with a reviewer's (critic or human) feedback — e.g. a
         reset so the next pass starts over instead of continuing. Default:
@@ -230,7 +238,7 @@ class SessionAgent(LlmAgent):
                     ),
                 )
 
-            async with Aclosing(super()._run_async_impl(ctx)) as agen:
+            async with Aclosing(self._produce(ctx)) as agen:
                 async for event in agen:
                     if event.is_final_response():
                         final_event = event
