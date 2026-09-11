@@ -1,5 +1,4 @@
 import logging
-import os
 import re
 import time
 from typing import Any
@@ -7,6 +6,7 @@ from typing import Any
 import requests
 
 from CoScientist.paper_analysis.research_taxonomy import DOMAIN_TO_SUBDOMAINS
+from CoScientist.papers_processing_refactoring.app.settings import OpenAlexSettings
 
 
 OPENALEX_WORKS_URL = "https://api.openalex.org/works"
@@ -57,12 +57,11 @@ def _request_json(
 
 def _openalex_params(params: dict[str, str]) -> dict[str, str]:
     params = dict(params)
-    email = os.getenv("SERVICES__OPENALEX_EMAIL") or os.getenv("OPENALEX_EMAIL")
-    api_key = os.getenv("SERVICES__OPENALEX_API_KEY") or os.getenv("OPENALEX_API_KEY")
-    if email:
-        params["mailto"] = email
-    if api_key:
-        params["api_key"] = api_key
+    settings = OpenAlexSettings()
+    if settings.email:
+        params["mailto"] = settings.email
+    if settings.api_key:
+        params["api_key"] = settings.api_key.get_secret_value()
     return params
 
 
@@ -116,9 +115,9 @@ def _find_doi_in_openalex(title: str, publication_year: int) -> str | None:
 
 def _find_doi_in_crossref(title: str, publication_year: int) -> str | None:
     params = {"query.title": title, "rows": "10"}
-    email = os.getenv("SERVICES__OPENALEX_EMAIL") or os.getenv("OPENALEX_EMAIL")
-    if email:
-        params["mailto"] = email
+    settings = OpenAlexSettings()
+    if settings.email:
+        params["mailto"] = settings.email
     if publication_year != 9999:
         params["filter"] = (
             f"from-pub-date:{publication_year}-01-01,"

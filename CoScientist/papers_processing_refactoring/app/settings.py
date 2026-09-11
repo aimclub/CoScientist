@@ -18,6 +18,17 @@ class LLMSettings(BaseSettings):
     )
 
 
+class OpenAlexSettings(BaseSettings):
+
+    email: str | None = None
+    api_key: SecretStr | None = None
+
+    model_config = SettingsConfigDict(
+        env_prefix="SERVICES__OPENALEX_",
+        extra="ignore",
+    )
+
+
 class EmbeddingSettings(BaseSettings):
 
     type: str = Field(default="api")
@@ -117,6 +128,7 @@ class AppSettings(BaseSettings):
     s3: S3Settings = Field(default_factory=S3Settings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    openalex: OpenAlexSettings = Field(default_factory=OpenAlexSettings)
     files: FilesSettings = Field(default_factory=FilesSettings)
     
     model_config = SettingsConfigDict(
