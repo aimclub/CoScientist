@@ -225,6 +225,10 @@
 
   // ── Visual View Rendering ────────────────────────────────────────────────
   function renderRoadmapVisual() {
+    // Every change to the task list ends in this render, so the sidebar
+    // tracker is refreshed here too — even while the modal is closed.
+    if (window.PlanTracker) window.PlanTracker.render(currentTasks);
+
     const listEl = document.getElementById('roadmap-tasks-list');
     const emptyEl = document.getElementById('roadmap-empty-state');
     if (!listEl) return;
@@ -1025,9 +1029,9 @@
         }
       }
     } else if (data.type === 'session_snapshot') {
-      if (Array.isArray(data.active_tasks)) {
-        updateTasks(data.active_tasks, false);
-      }
+      // The snapshot describes the whole session: no task list means no plan,
+      // not "keep the previous session's one".
+      updateTasks(Array.isArray(data.active_tasks) ? data.active_tasks : [], false);
     } else if (data.type === 'tasks_updated') {
       if (Array.isArray(data.tasks)) {
         updateTasks(data.tasks, false);
@@ -1041,6 +1045,7 @@
     updateTasks: updateTasks,
     handleSingleTaskUpdate: handleSingleTaskUpdate,
     getTasks: () => currentTasks,
+    normalizeStatus: normalizeStatus,
   };
   window.openRoadmapEditor = openRoadmapEditor;
   window.closeRoadmapEditor = closeRoadmapEditor;
