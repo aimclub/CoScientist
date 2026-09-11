@@ -20,6 +20,7 @@ request).
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -40,6 +41,81 @@ CONTEXT_STATE_KEY = "research_context"
 
 def _agent(tool_context: Optional[ToolContext]) -> str:
     return getattr(tool_context, "agent_name", None) or "unknown"
+
+
+def _recent_tool_calls(tool_context: Any, agent: str,
+                       limit: int = 6) -> List[Dict[str, Any]]:
+    """The calling agent's most recent EXECUTION tool calls (from the execution
+    graph) — the concrete `tavily_search` / `execute_bash` / MCP calls that
+    produced the finding. Attached to Evidence as provenance so every piece of
+    evidence is traceable back to the exact call + result that yielded it.
+
+    The graph must be the session-scoped one. Reading the module-level default
+    instead took the ids from a different, usually empty graph, so every
+    recorded `exec_id` pointed at a node the execution view does not contain and
+    the provenance link in the UI could never resolve.
+    """
+    try:
+        from CoScientist.graph.memory import get_knowledge_graph
+        hist = get_knowledge_graph(tool_context).history(limit=60)
+    except Exception:  # noqa: BLE001
+        return []
+    calls = [h for h in hist
+             if h.get("kind") == "tool_call" and h.get("agent") == agent
+             and not str(h.get("label", "")).startswith("research_")]
+    out = []
+    for h in calls[-limit:]:
+        out.append({"exec_id": h.get("id"), "tool": h.get("label"),
+                    "result": (h.get("output") or "")[:400]})
+    return out
+
+
+def _as_op_list(value: Any, field: str) -> Optional[List[Dict[str, Any]]]:
+    """Coerce a commit argument into the list of operations it was meant to be.
+
+    Accepts what models actually send: the list itself, a JSON string holding
+    that list, or a single operation object. Raises ValueError with a message
+    the agent can act on when the value cannot be one.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{field}: expected a JSON array of objects, got a "
+                             f"string that is not valid JSON ({exc.msg})") from exc
+    if isinstance(value, dict):          # one op passed unwrapped
+        value = [value]
+    if not isinstance(value, list):
+        raise ValueError(f"{field}: expected a list of objects, got "
+                         f"{type(value).__name__}")
+    bad = [i for i, item in enumerate(value) if not isinstance(item, dict)]
+    if bad:
+        raise ValueError(f"{field}: items {bad} are not objects")
+    return value
+
+
+def _attach_provenance(nodes: Optional[List[Dict[str, Any]]], agent: str,
+                       tool_context: Any = None) -> Optional[List[Dict[str, Any]]]:
+    """Stamp each newly-created Evidence node with the producing tool calls."""
+    if not nodes:
+        return nodes
+    prov = None
+    out = []
+    for n in nodes:
+        n = dict(n)
+        # only CREATE ops for Evidence (id-merges keep their existing provenance)
+        if not n.get("id") and str(n.get("type", "")).strip().lower() in ("evidence", "свидетельство"):
+            attrs = dict(n.get("attrs") or {})
+            if "_provenance" not in attrs:
+                if prov is None:
+                    prov = _recent_tool_calls(tool_context, agent)
+                if prov:
+                    attrs["_provenance"] = prov
+            n["attrs"] = attrs
+        out.append(n)
+    return out
 
 
 def _context_budget() -> int:
@@ -128,6 +204,7 @@ class ResearchGraphToolset(BaseToolset):
                 FunctionTool(self.research_init),
                 FunctionTool(self.research_triggers),
                 FunctionTool(self.research_set_focus),
+                FunctionTool(self.research_prior),
             ]
         return tools
 
@@ -174,11 +251,35 @@ class ResearchGraphToolset(BaseToolset):
             focus = (tool_context.state or {}).get(FOCUS_STATE_KEY)
         except Exception:  # noqa: BLE001
             focus = None
-        research_graph = get_research_graph(tool_context)
-        result = research_graph.commit(
-            source=_agent(tool_context), nodes=nodes, edges=edges,
-            status_updates=status_updates, autolink_focus=focus,
-        )
+
+        # Models routinely hand structured arguments over as a JSON STRING. That
+        # used to reach the store as text and raise deep inside it — and the
+        # exception escaped the tool, killing the delegation chain up to the
+        # orchestrator and losing a run that had already produced its result.
+        # Parse what was meant, and if anything still fails, hand the agent an
+        # error it can act on instead of ending the run.
+        try:
+            nodes, edges, status_updates = (_as_op_list(nodes, "nodes"),
+                                            _as_op_list(edges, "edges"),
+                                            _as_op_list(status_updates, "status_updates"))
+        except ValueError as exc:
+            return {"ok": False, "errors": [str(exc)],
+                    "hint": "pass nodes/edges/status_updates as JSON arrays of "
+                            "objects (not a string, not a single object)"}
+
+        try:
+            research_graph = get_research_graph(tool_context)
+            agent = _agent(tool_context)
+            result = research_graph.commit(
+                source=agent, nodes=_attach_provenance(nodes, agent, tool_context),
+                edges=edges,
+                status_updates=status_updates, autolink_focus=focus,
+            )
+        except Exception as exc:  # noqa: BLE001 — a bad payload must not end the run
+            logger.exception("research_commit failed")
+            return {"ok": False, "errors": [f"{type(exc).__name__}: {exc}"],
+                    "hint": "the commit was rejected, nothing was written — fix "
+                            "the payload and call research_commit again"}
         if result.ok:
             _refresh_context_state(tool_context, self._is_root)
         return result.model_dump(exclude_none=True)
@@ -253,6 +354,36 @@ class ResearchGraphToolset(BaseToolset):
         status and label (no attribute detail). Use it to find node ids."""
         return get_research_graph(tool_context).overview()
 
+    def research_prior(self, tool_context: ToolContext, query: str,
+                       limit: int = 3) -> Dict[str, Any]:
+        """Search PAST researches (previous runs) for work related to `query`.
+
+        Use before planning: a hypothesis this system already confirmed or
+        refuted, and the method/tools it used, should be reused rather than
+        re-derived. Matching is deterministic token overlap, and every hit
+        reports the tokens that matched so you can judge relevance yourself.
+
+        Args:
+            query: the current question or topic, in your own words.
+            limit: how many prior researches to return (default 3).
+
+        Returns:
+            {"found": n, "priors": [{question, score, matched_tokens, counts,
+             hypotheses[{status, formulation}], methods, conclusions, tools}]}.
+        """
+        try:
+            from CoScientist.graph.research.index import get_research_index
+            graph = get_research_graph(tool_context)
+            hits = get_research_index().search(
+                query, limit=max(1, min(int(limit or 3), 10)),
+                exclude_id=getattr(graph, "_research_id", "") or "")
+        except Exception as exc:  # noqa: BLE001 — never break a run on the index
+            return {"found": 0, "priors": [], "error": str(exc)[:200]}
+        slim = [{k: h.get(k) for k in ("question", "score", "matched_tokens", "counts",
+                                       "hypotheses", "methods", "conclusions", "tools",
+                                       "research_id")} for h in hits]
+        return {"found": len(slim), "priors": slim}
+
     def research_provenance(self, tool_context: ToolContext, node_id: str) -> Dict[str, Any]:
         """Trace a node back to the root research question: the chain of nodes,
         edges and their sources (who produced each step)."""
@@ -272,6 +403,36 @@ class ResearchGraphToolset(BaseToolset):
 
 # ── before_agent injection callback ────────────────────────────────────────────
 
+def _prior_research_digest(callback_context, research_graph) -> str:
+    """Digest of related PAST researches, appended to the orchestrator context."""
+    try:
+        from CoScientist.graph.research.index import format_priors, get_research_index
+        question = ""
+        try:
+            root = research_graph.root_id()
+            if root:
+                node = research_graph.full()["nodes"]
+                question = next((( n.get("attrs") or {}).get("formulation", "")
+                                 for n in node if n.get("id") == root), "")
+        except Exception:  # noqa: BLE001
+            question = ""
+        if not question:
+            # Before the graph is seeded, match on the user's request itself.
+            question = str(callback_context.state.get("user_query", ""))[:500]
+        if not question:
+            return ""
+        hits = get_research_index().search(
+            question, limit=3,
+            exclude_id=getattr(research_graph, "_research_id", "") or "")
+        if not hits:
+            return ""
+        return ("\n\nПРОШЛЫЕ ИССЛЕДОВАНИЯ (переиспользуй, не переоткрывай; "
+                "проверь актуальность прежде чем опираться):\n"
+                + format_priors(hits))
+    except Exception:  # noqa: BLE001
+        return ""
+
+
 def make_inject_research_context(is_root: bool):
     """Build the before_agent callback that seeds state['research_context'] for
     the {research_context?} prompt placeholder. Orchestrator gets the overview +
@@ -288,9 +449,13 @@ def make_inject_research_context(is_root: bool):
         try:
             research_graph = get_research_graph(callback_context)
             if is_root:
-                callback_context.state[CONTEXT_STATE_KEY] = _orchestrator_digest(
-                    research_graph
-                )
+                digest = _orchestrator_digest(research_graph)
+                # Cross-run reuse: surface what PAST runs already settled about
+                # this question, so the orchestrator builds on them instead of
+                # re-deriving. Best-effort and capped; absent priors change
+                # nothing.
+                digest += _prior_research_digest(callback_context, research_graph)
+                callback_context.state[CONTEXT_STATE_KEY] = digest
             else:
                 callback_context.state[CONTEXT_STATE_KEY] = _worker_context(
                     research_graph,

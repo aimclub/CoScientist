@@ -3,7 +3,7 @@ import asyncio
 import json
 import logging
 import os
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -31,6 +31,7 @@ from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.config import get_settings
 from CoScientist.tools.coder_tools.coder_tools import coder_toolset
 from CoScientist.agents.common import sync_proxy_session
+from CoScientist.utils.text import strip_thinking
 
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
@@ -75,10 +76,15 @@ SOCKET_SEND_TIMEOUT_SECONDS = 5.0
 # log and are never dropped, so only the tool stream is capped.
 MAX_TOOL_ACTIVITY_EVENTS = 600
 TOOL_ACTIVITY_TRIM_SLACK = 200
+# Untruncated tool args/results kept for on-demand fetch (ToolsViewer's "Show
+# full result"), keyed by call_id. Independent of MAX_TOOL_ACTIVITY_EVENTS
+# since most calls never need an entry here at all — only ones whose preview
+# was actually truncated get one.
+MAX_TOOL_FULL_VALUES = 300
 DATASET_URL_MAX_LENGTH = 2048
 # Graph stores the Settings modal can wipe. The derived ``knowledge`` view is
 # absent on purpose: it is a projection of ``execution`` plus ``memory``.
-GRAPH_DELETE_TARGETS = ("execution", "research", "memory")
+GRAPH_DELETE_TARGETS = ("execution", "research")
 
 
 def _validated_dataset_url(raw: Any) -> str:
@@ -272,6 +278,11 @@ class WebRuntime:
         self.stopping_runs: set[SessionKey] = set()
         self._closing = False
         self.agent_events: dict[SessionKey, list[dict[str, Any]]] = defaultdict(list)
+        # Full (untruncated) tool args/results, keyed by call_id — see
+        # MAX_TOOL_FULL_VALUES. Never broadcast; only served on demand.
+        self.tool_full_values: dict[SessionKey, "OrderedDict[str, dict[str, Any]]"] = (
+            defaultdict(OrderedDict)
+        )
         # Latest usage/cost snapshot per session — cumulative, so one entry is
         # the whole history and a reconnecting tab needs nothing older.
         self.metrics: dict[SessionKey, dict[str, Any]] = {}
@@ -288,6 +299,16 @@ class WebRuntime:
         self.hitl_handler.set_sender(self.send_socket)
         self.sockets: dict[SessionKey, list[WebSocket]] = defaultdict(list)
         self.active_runs: dict[SessionKey, asyncio.Task] = {}
+
+    def record_event(self, key: SessionKey, event: dict[str, Any]) -> None:
+        """Append a UI event to memory and to the session's on-disk transcript,
+        so the conversation can be reopened after a restart."""
+        self.agent_events[key].append(event)
+        try:
+            from CoScientist.web.session_store import append_event
+            append_event(key[0], key[1], event)
+        except Exception:  # noqa: BLE001 — persistence must never break a run
+            pass
 
     def control_lock(self, key: SessionKey) -> asyncio.Lock:
         """Serialize start/stop ownership changes for one public session."""
@@ -699,6 +720,30 @@ def _wire_sandbox_links(runtime: WebRuntime) -> None:
     sandbox_tools.set_sandbox_start_sink(deliver)
 
 
+def _wire_sandbox_plan(runtime: WebRuntime) -> None:
+    """Relay the sandbox agent's own plan to the tabs watching the session.
+
+    A sandbox task is the longest single thing the system does — one tool call
+    that can run for hours — and it reports nothing until it is over. The agent
+    in the container does keep a task list, though, and rewrites it as it goes;
+    the client relays each new revision here, which is what lets the status
+    line say *which step* is running instead of "writing and running code" for
+    the whole job.
+
+    Live-only, deliberately: the plan describes what is happening right now, a
+    replayed one would describe a container that is already gone. A tab that
+    reconnects mid-run picks the current revision up on the next poll.
+    """
+    from CoScientist.tools.coder_tools import sandbox_tools
+
+    async def deliver(key: SessionKey | None, info: dict[str, Any]) -> None:
+        if key is None or (key not in runtime.sockets and key not in runtime.active_runs):
+            return
+        await runtime.send(key, {"type": "sandbox_plan", **_json_safe(info)})
+
+    sandbox_tools.set_sandbox_plan_sink(deliver)
+
+
 def _wire_metrics(runtime: WebRuntime) -> None:
     """Stream the running cost of a session to the tabs watching it.
 
@@ -746,11 +791,32 @@ def _wire_tool_activity(runtime: WebRuntime) -> None:
             event for index, event in enumerate(events) if index not in dropped
         ]
 
+    def stash_full_values(key: SessionKey, event: dict[str, Any]) -> None:
+        """Pull the untruncated `*_full` fields out of the broadcast event and
+        keep them server-side under the call's id, so a client can fetch the
+        whole thing later without it ever going out over every tab's socket.
+        """
+        call_id = event.get("call_id")
+        full_fields = {
+            field: event.pop(key_name)
+            for field, key_name in (("args", "args_full"), ("result", "result_full"), ("error", "error_full"))
+            if key_name in event
+        }
+        if not call_id or not full_fields:
+            return
+        store = runtime.tool_full_values[key]
+        entry = store.setdefault(call_id, {})
+        entry.update(full_fields)
+        store.move_to_end(call_id)
+        while len(store) > MAX_TOOL_FULL_VALUES:
+            store.popitem(last=False)
+
     async def deliver(key: SessionKey, payload: dict[str, Any]) -> None:
         if key not in runtime.sockets and key not in runtime.active_runs:
             # A key we never served (e.g. the CLI default scope) has nowhere to go.
             return
         event = {"type": "tool_activity", **_json_safe(payload)}
+        stash_full_values(key, event)
         events = runtime.agent_events[key]
         events.append(event)
         trim(events)
@@ -774,6 +840,10 @@ def _wire_agent_output(runtime: WebRuntime) -> None:
         if key not in runtime.sockets and key not in runtime.active_runs:
             # A key we never served (e.g. the CLI default scope) has nowhere to go.
             return
+        if "content" in payload and isinstance(payload["content"], str):
+            payload["content"] = strip_thinking(payload["content"])
+            if not payload["content"].strip():
+                return
         event = {"type": "agent_output", **_json_safe(payload)}
         runtime.agent_events[key].append(event)
         await runtime.send(key, event)
@@ -852,11 +922,17 @@ def _clear_session_graphs(
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
+def _esc(text: str) -> str:
+    """Minimal XML escape for text embedded in an SVG error card."""
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+
+
 def create_app() -> FastAPI:
     os.environ["COSCIENTIST_WEB_MODE"] = "true"
     runtime = WebRuntime()
     _wire_hitl(runtime)
     _wire_sandbox_links(runtime)
+    _wire_sandbox_plan(runtime)
     _wire_tool_activity(runtime)
     _wire_agent_output(runtime)
     _wire_metrics(runtime)
@@ -1030,6 +1106,75 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse({"session": session}, status_code=201)
 
+    @app.post("/api/demo/replay")
+    async def start_replay(data: dict):
+        """Replay a recorded session into a fresh one, for a demonstration.
+
+        The study being shown took hours; a booth has minutes, and re-running it
+        on stage is not an option. This plays back what that run actually
+        recorded — its events and the growth of its research graph — into a new
+        session, at a chosen speed, so the screen shows the real run on a
+        different clock. Every replayed event carries a marker saying so.
+        """
+        from CoScientist.web.replay import ReplaySession, load_recording
+
+        bundle = str(data.get("bundle") or "").strip()
+        if not bundle:
+            raise HTTPException(status_code=400, detail="'bundle' is required")
+        user_id = str(data.get("user_id") or "").strip()
+        speed = float(data.get("speed") or 120)
+        max_gap = float(data.get("max_gap") or 2.5)
+        min_gap = float(data.get("min_gap") or 0.4)
+        warmup = float(data.get("warmup") if data.get("warmup") is not None else 25.0)
+        chat_gap = float(data.get("chat_gap") if data.get("chat_gap") is not None else 10.0)
+        thoughts = bool(data.get("thoughts", True))
+        title = str(data.get("title") or "Recorded study (replay)")
+
+        try:
+            events, graph = load_recording(bundle)
+        except (FileNotFoundError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        try:
+            if user_id:
+                runtime.registry.require_user(user_id)
+            else:
+                users = runtime.registry.list_users() or []
+                if not users:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="no user exists yet — open the UI once, then replay")
+                user_id = users[0]["id"]
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        session_id = f"session_{uuid4().hex}"
+        from CoScientist.graph.session_scope import (
+            GRAPH_SCOPE_SESSION_KEY,
+            GRAPH_SCOPE_USER_KEY,
+        )
+        await runtime.session_service.create_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id,
+            state={"active_tasks": [], GRAPH_SCOPE_USER_KEY: user_id,
+                   GRAPH_SCOPE_SESSION_KEY: session_id},
+        )
+        session = runtime.registry.create_session(user_id, title,
+                                                  session_id=session_id)
+
+        replay = ReplaySession(runtime, user_id, session_id, events=events,
+                               graph=graph, speed=speed, max_gap=max_gap,
+                               min_gap=min_gap, warmup=warmup, chat_gap=chat_gap,
+                               thoughts=thoughts, source=bundle)
+        asyncio.create_task(replay.run())
+        return JSONResponse({
+            "session": session, "user_id": user_id, "session_id": session_id,
+            "events": len(events), "nodes": len(graph.get("nodes") or []),
+            "speed": speed,
+            "projected_seconds": round(replay._event_wall_clock(), 1),
+            "open": f"/?user_id={user_id}&session_id={session_id}",
+            "graph": f"/graph?user_id={user_id}&session_id={session_id}",
+        }, status_code=201)
+
     @app.get("/api/users/{user_id}/sessions/{session_id}")
     async def get_user_session(user_id: str, session_id: str):
         try:
@@ -1097,23 +1242,50 @@ def create_app() -> FastAPI:
         filename = save_to_disk(bundle_bytes, title, user_id, session_id)
         return JSONResponse({"status": "success", "filename": filename})
 
-    @app.post("/api/users/{user_id}/import-session")
-    async def import_session_endpoint(user_id: str, request: Request):
-        """Import a session from an uploaded .cossession.zip bundle.
+    @app.post("/api/import-session/preview")
+    async def preview_import_endpoint(request: Request):
+        """Inspect a .cossession.zip bundle without importing it.
 
-        Accepts ``multipart/form-data`` with a ``file`` field, OR raw bytes
-        with ``application/zip``/``application/octet-stream``.
+        Returns manifest info and whether MCP builds are included.
         """
-        from CoScientist.web.session_bundle import import_session
+        from CoScientist.web.session_bundle import preview_bundle
 
         content_type = (request.headers.get("content-type") or "").lower()
         if "multipart" in content_type:
-            from fastapi import UploadFile
             form = await request.form()
             upload = form.get("file")
             if upload is None:
                 raise HTTPException(status_code=400, detail="No file uploaded.")
             bundle_bytes = await upload.read()
+        else:
+            bundle_bytes = await request.body()
+        if not bundle_bytes:
+            raise HTTPException(status_code=400, detail="Empty file.")
+        try:
+            result = preview_bundle(bundle_bytes)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(result)
+
+    @app.post("/api/users/{user_id}/import-session")
+    async def import_session_endpoint(user_id: str, request: Request):
+        """Import a session from an uploaded .cossession.zip bundle.
+
+        Accepts ``multipart/form-data`` with a ``file`` field (and an optional
+        ``rebuild_mcp`` field), OR raw bytes with
+        ``application/zip``/``application/octet-stream``.
+        """
+        from CoScientist.web.session_bundle import import_session
+
+        rebuild_mcp = False
+        content_type = (request.headers.get("content-type") or "").lower()
+        if "multipart" in content_type:
+            form = await request.form()
+            upload = form.get("file")
+            if upload is None:
+                raise HTTPException(status_code=400, detail="No file uploaded.")
+            bundle_bytes = await upload.read()
+            rebuild_mcp = str(form.get("rebuild_mcp", "")).lower() in ("true", "1", "yes")
         else:
             bundle_bytes = await request.body()
 
@@ -1123,7 +1295,8 @@ def create_app() -> FastAPI:
         # Always import into the ITMO_DEV user, ignoring the URL user_id
         target_nickname = "ITMO_DEV"
         try:
-            result = await import_session(runtime, target_nickname, bundle_bytes)
+            result = await import_session(runtime, target_nickname, bundle_bytes,
+                                          rebuild_mcp=rebuild_mcp)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse(result, status_code=201)
@@ -1148,12 +1321,29 @@ def create_app() -> FastAPI:
             bundle_bytes = read_saved_bundle(filename)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        rebuild_mcp = bool(data.get("rebuild_mcp", False))
         target_nickname = "ITMO_DEV"
         try:
-            result = await import_session(runtime, target_nickname, bundle_bytes)
+            result = await import_session(runtime, target_nickname, bundle_bytes,
+                                          rebuild_mcp=rebuild_mcp)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse(result, status_code=201)
+
+    @app.get("/api/saved-sessions/{filename}/events")
+    async def saved_session_events_endpoint(filename: str):
+        """The event log of a saved bundle, for replaying a run in the UI.
+
+        Feeds the status indicator's `?demo=<filename>` mode: the frontend can
+        drive its state machine off a real recorded run instead of costing a
+        live one.
+        """
+        from CoScientist.web.session_bundle import read_saved_events
+        try:
+            events = read_saved_events(filename)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"events": events})
 
     @app.delete("/api/saved-sessions/{filename}")
     async def delete_saved_session_endpoint(filename: str):
@@ -1207,59 +1397,60 @@ def create_app() -> FastAPI:
     # --- Knowledge graph (live view) ---
     @app.get("/graph", response_class=HTMLResponse)
     async def graph_page():
-        return (WEB_DIR / "templates" / "graph.html").read_text(encoding="utf-8")
+        # no-store: otherwise the browser heuristically caches graph.html and
+        # silently serves an OLD viewer after an update.
+        return HTMLResponse(
+            (WEB_DIR / "templates" / "graph.html").read_text(encoding="utf-8"),
+            headers={"Cache-Control": "no-store"},
+        )
 
-    @app.get("/api/knowledge")
-    async def api_global_knowledge():
-        """Return the installation-wide semantic Knowledge Memory."""
-        try:
-            from CoScientist.graph.memory_store import get_global_knowledge_memory
-            payload = get_global_knowledge_memory().full()
-            status_code = (
-                200 if payload.get("storage", {}).get("healthy") else 503
-            )
-            return JSONResponse(payload, status_code=status_code)
-        except Exception as exc:  # noqa: BLE001 - diagnostics must stay readable
-            return JSONResponse({
-                "scope": "global",
-                "nodes": [],
-                "edges": [],
-                "error": str(exc),
-            }, status_code=503)
+    @app.get("/trace", response_class=HTMLResponse)
+    async def trace_page():
+        """Sessions, newest first; pick one to see its requests in order."""
+        return HTMLResponse(
+            (WEB_DIR / "templates" / "trace.html").read_text(encoding="utf-8"),
+            headers={"Cache-Control": "no-store"},
+        )
 
-    def graph_payload(user_id: str, session_id: str, view: str):
-        """Return scoped graphs; ``memory`` aliases the global knowledge graph."""
+    def graph_payload(user_id: str, session_id: str, view: str,
+                      turn: str | None = None):
+        """Return one session's graph: research, execution, or execution
+        regrouped as a chronological trace (``view=trace``)."""
         runtime.registry.require_session(user_id, session_id)
         try:
             from CoScientist.graph.memory import get_knowledge_graph
-            from CoScientist.graph.memory_store import get_knowledge_memory
             from CoScientist.graph.research.store import get_research_graph
 
             if view == "research":
+                # One study at a time, and the session's others listed beside
+                # it — the same shape the execution log uses for requests.
                 return get_research_graph(
                     user_id=user_id,
                     session_id=session_id,
-                ).to_view()
-            if view == "memory":
-                return get_knowledge_memory(
-                    user_id=user_id,
-                    session_id=session_id,
-                ).full()
-
+                ).view_of(turn)
             execution = get_knowledge_graph(
                 user_id=user_id,
                 session_id=session_id,
             ).full()
-            if view == "knowledge":
-                from CoScientist.graph.knowledge import to_knowledge_graph
-                return to_knowledge_graph(
-                    execution,
-                    memory=get_knowledge_memory(
-                        user_id=user_id,
-                        session_id=session_id,
-                    ),
-                    user_id=user_id,
-                    session_id=session_id,
+            if view == "trace":
+                # The same records grouped by the prompt that caused them and
+                # ordered by time — what the call graph cannot show.
+                from CoScientist.graph.projection import turns
+                return turns(execution)
+            if view in ("", "execution"):
+                # One request at a time: roster and hub removed, placed on a
+                # clock. The payload also lists the session's other requests.
+                from CoScientist.graph.projection import execution_tree
+                return execution_tree(execution, turn=turn)
+            if view not in ("", "execution"):
+                # `knowledge` and `memory` were served here until the knowledge
+                # memory was removed. Falling through to the execution graph
+                # would answer a bookmark for one view with the contents of
+                # another, so say plainly that the view is gone.
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"unknown graph view '{view}' — use research, "
+                           f"execution or trace; the slide is at .../graph.svg",
                 )
             return execution
         except HTTPException:
@@ -1272,18 +1463,100 @@ def create_app() -> FastAPI:
         user_id: str,
         session_id: str,
         view: str = "execution",
+        # Which request (execution log) or which study (research graph) to draw.
+        turn: str | None = None,
     ):
         try:
-            payload = graph_payload(user_id, session_id, view)
+            payload = graph_payload(user_id, session_id, view, turn)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        status_code = (
-            503
-            if view == "memory"
-            and payload.get("storage", {}).get("healthy") is False
-            else 200
+        return JSONResponse(payload)
+
+    @app.get("/api/users/{user_id}/sessions/{session_id}/graph.svg")
+    async def api_session_graph_svg(user_id: str, session_id: str):
+        """The research graph as a presentation slide (same renderer as the CLI).
+
+        Served as SVG so the live view and an exported deck are the same artifact
+        — what the operator watches during a run is what goes into the report.
+        """
+        runtime.registry.require_session(user_id, session_id)
+        try:
+            from CoScientist.graph.research.slide_render import render_slide
+            from CoScientist.graph.research.store import get_research_graph
+
+            data = get_research_graph(user_id=user_id, session_id=session_id).full()
+            svg = render_slide(data)
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001 — never break the UI
+            svg = (
+                '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="80">'
+                '<rect width="600" height="80" fill="#0e1117"/>'
+                f'<text x="16" y="46" fill="#f0554d" font-family="Arial" font-size="13">'
+                f'slide render failed: {_esc(str(exc)[:90])}</text></svg>'
+            )
+        return Response(content=svg, media_type="image/svg+xml",
+                        headers={"Cache-Control": "no-store"})
+    @app.delete("/api/users/{user_id}/sessions/{session_id}/graph")
+    async def delete_session_graph(
+        user_id: str,
+        session_id: str,
+        view: str = "all",
+    ):
+        """Drop stored graph data on the operator's explicit request.
+
+        ``execution`` and ``research`` belong to this session alone; ``memory``
+        is the installation-wide semantic memory, so it disappears for every
+        session at once. Both the research graph and the semantic memory are
+        archived next to their files first; the execution graph is re-seeded
+        with the agent roster so the Graph view keeps rendering.
+        """
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        targets = GRAPH_DELETE_TARGETS if view == "all" else (view,)
+        unknown = [name for name in targets if name not in GRAPH_DELETE_TARGETS]
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"unknown graph view {unknown[0]!r}; expected one of "
+                    f"{', '.join((*GRAPH_DELETE_TARGETS, 'all'))}"
+                ),
+            )
+
+        deleted: dict[str, Any] = {}
+        failed = False
+        for name in targets:
+            try:
+                if name == "execution":
+                    from CoScientist.graph.memory import reset_knowledge_graph
+                    reset_knowledge_graph(user_id=user_id, session_id=session_id)
+                    deleted[name] = {"scope": "session", "cleared": True}
+                elif name == "research":
+                    from CoScientist.graph.research.store import get_research_graph
+                    archived = get_research_graph(
+                        user_id=user_id,
+                        session_id=session_id,
+                    ).reset(archive=True)
+                    deleted[name] = {
+                        "scope": "session",
+                        "cleared": True,
+                        "archived": archived,
+                    }
+            except Exception as exc:  # noqa: BLE001 — report every target's fate
+                logging.getLogger("CoScientist.web").warning(
+                    "Graph deletion failed for %s: %s", name, exc
+                )
+                deleted[name] = {"cleared": False, "error": str(exc)}
+                failed = True
+
+        return JSONResponse(
+            {"status": "error" if failed else "success", "deleted": deleted},
+            status_code=500 if failed else 200,
         )
-        return JSONResponse(payload, status_code=status_code)
 
     @app.delete("/api/users/{user_id}/sessions/{session_id}/graph")
     async def delete_session_graph(
@@ -1416,7 +1689,7 @@ def create_app() -> FastAPI:
         )
         if adk_session is None:
             raise HTTPException(status_code=404, detail="ADK session not found.")
-        tasks = adk_session.state.get("active_tasks", [])
+        tasks = adk_session.state.get("_master_active_tasks") or adk_session.state.get("active_tasks", [])
         return JSONResponse({
             "content": json.dumps(tasks, ensure_ascii=False, indent=2),
             "tasks": _json_safe(tasks),
@@ -1449,7 +1722,7 @@ def create_app() -> FastAPI:
             Event(
                 invocation_id=f"roadmap_{uuid4().hex}",
                 author="user",
-                actions=EventActions(state_delta={"active_tasks": tasks}),
+                actions=EventActions(state_delta={"active_tasks": tasks, "_master_active_tasks": tasks}),
             ),
         )
         runtime.registry.touch_session(user_id, session_id)
@@ -1499,20 +1772,28 @@ def create_app() -> FastAPI:
     # --- Agent info ---
     @app.get("/api/agents")
     async def get_agents():
-        """Return list of registered agents."""
+        """Return list of registered agents and system hierarchy."""
+        from CoScientist.assembly.schema import get_config
+        cfg = get_config()
+        hierarchy = cfg.agent_hierarchy_map()
+        agents_list = []
+        for name in cfg.build_order():
+            ac = cfg.agent(name)
+            agents_list.append({
+                "name": ac.name,
+                "class": ac.cls,
+                "role": ac.cls,
+                "description": ac.description,
+                "enabled": ac.is_enabled(),
+                "tools": list(ac.tools),
+                "subordinates": list(ac.subordinates),
+                "children": list(ac.children),
+                "is_root": bool(ac.root),
+            })
         return JSONResponse({
-            "agents": [
-                {"name": "OrchestratorAgent", "role": "orchestrator", "status": "idle"},
-                {"name": "PlannerAgent", "role": "planner", "status": "idle"},
-                {"name": "CoderAgent", "role": "coder", "status": "idle"},
-                {"name": "HypothesesAgent", "role": "hypothesis", "status": "idle"},
-                {"name": "ResearchAgent", "role": "research", "status": "idle"},
-                {"name": "ToolRetrieverAgent", "role": "tool_retriever", "status": "idle"},
-                {"name": "ToolRerankerAgent", "role": "tool_reranker", "status": "idle"},
-                {"name": "ToolWebSearcherAgent", "role": "tool_websearcher", "status": "idle"},
-                {"name": "ToolSearcherAgent", "role": "tool_searcher", "status": "idle"},
-                {"name": "ExperimentAgent", "role": "experiment", "status": "idle"},
-            ]
+            "agents": agents_list,
+            "hierarchy": hierarchy,
+            "delegatable_names": list(cfg.delegatable_names()),
         })
 
     # --- Events log ---
@@ -1522,7 +1803,56 @@ def create_app() -> FastAPI:
             runtime.registry.require_session(user_id, session_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return JSONResponse({"events": runtime.agent_events[(user_id, session_id)][-100:]})
+        key = (user_id, session_id)
+        events = runtime.agent_events.get(key) or []
+        if not events:
+            # Reopening a session from an earlier process: replay its transcript
+            # from disk and keep it in memory for subsequent requests.
+            try:
+                from CoScientist.web.session_store import load_events
+                events = load_events(user_id, session_id)
+                if events:
+                    runtime.agent_events[key] = list(events)
+            except Exception:  # noqa: BLE001
+                events = []
+        return JSONResponse({"events": events[-100:]})
+
+    # --- Usage and cost ---
+    @app.get("/api/users/{user_id}/sessions/{session_id}/metrics")
+    async def get_metrics(user_id: str, session_id: str, report: bool = False):
+        """What this session has spent, broken down by agent.
+
+        Read straight from the ledger rather than from the last pushed snapshot,
+        so the answer is current even when no tab is connected. ``?report=1``
+        adds the console rendering, for a quick look from the terminal.
+        """
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        from CoScientist.logging.metrics import format_report, snapshot
+
+        data = snapshot(key=(user_id, session_id))
+        if report:
+            data = {**data, "report": format_report(data)}
+        return JSONResponse(_json_safe(data))
+
+    # --- Full (untruncated) tool args/results, for the ToolsViewer's "Show
+    # full result" — the live socket stream only ever carries a preview.
+    @app.get("/api/users/{user_id}/sessions/{session_id}/tool-activity/{call_id}")
+    async def get_tool_activity_full(user_id: str, session_id: str, call_id: str):
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        entry = runtime.tool_full_values.get((user_id, session_id), {}).get(call_id)
+        if entry is None:
+            raise HTTPException(
+                status_code=404,
+                detail="No stored full result for this call (it may have expired or was never truncated)",
+            )
+        return JSONResponse({"call_id": call_id, **entry})
 
     # --- Usage and cost ---
     @app.get("/api/users/{user_id}/sessions/{session_id}/metrics")
@@ -1572,7 +1902,7 @@ def create_app() -> FastAPI:
             user=user,
             session=session_meta,
             active_tasks=(
-                adk_session.state.get("active_tasks", [])
+                (adk_session.state.get("_master_active_tasks") or adk_session.state.get("active_tasks", []))
                 if adk_session else []
             ),
         )
@@ -1712,7 +2042,7 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
         "message": query,
         "timestamp": datetime.now().isoformat(),
     }
-    runtime.agent_events[key].append(user_event)
+    runtime.record_event(key, user_event)
     await runtime.send(key, user_event)
 
     try:
@@ -1760,7 +2090,7 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
                 "is_final": True,
                 "timestamp": datetime.now().isoformat(),
             }
-            runtime.agent_events[key].append(agent_msg)
+            runtime.record_event(key, agent_msg)
             await runtime.send(key, agent_msg)
             await runtime.send(key, {
                 "type": "final_response",
@@ -1774,7 +2104,7 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
                 "timestamp": datetime.now().isoformat(),
             }
             await runtime.send(key, error_event)
-            runtime.agent_events[key].append(error_event)
+            runtime.record_event(key, error_event)
 
 
 async def _run_chat_invocation(
@@ -1833,10 +2163,17 @@ async def _run_chat_invocation(
                     # A model turn that only carries a function call often still
                     # ships a blank text part. Requiring real characters keeps
                     # it from surfacing as an empty message bubble.
-                    text_parts = [
-                        p.text for p in event.content.parts
-                        if p.text and p.text.strip()
-                    ]
+                    # Skip thinking/reasoning parts and strip inline thinking tags.
+                    text_parts = []
+                    for p in event.content.parts:
+                        if getattr(p, "thought", False):
+                            continue
+                        t = getattr(p, "text", None)
+                        if not t or not t.strip():
+                            continue
+                        cleaned = strip_thinking(t)
+                        if cleaned:
+                            text_parts.append(cleaned)
                     if text_parts:
                         event_data["content"] = "\n".join(text_parts)
 
@@ -1914,7 +2251,7 @@ async def _run_chat_invocation(
                         }
                     await runtime.send(key, hitl_payload)
 
-                runtime.agent_events[key].append(event_data)
+                runtime.record_event(key, event_data)
                 await runtime.send(key, event_data)
 
                 if not hitl_interrupt_event:

@@ -20,6 +20,12 @@ Bundle contents
     graphs/execution.json           — execution graph snapshot
     graphs/research_active.json     — research graph snapshot
     knowledge_memory_snapshot.json  — global memory snapshot (read-only, informational)
+    sandbox_trajectory.json         — full OpenHands sandbox trace, if any (read-only, best-effort)
+
+Sandbox trajectories can run to gigabytes of raw tool output and live on a
+separate server, so fetching one is a best-effort step: any failure (timeout,
+the container already gone, a bad response) is logged and skipped rather than
+failing the whole export — every other section is still saved.
 """
 
 from __future__ import annotations
@@ -52,6 +58,10 @@ _SETTINGS = "settings_snapshot.json"
 _GRAPH_EXECUTION = "graphs/execution.json"
 _GRAPH_RESEARCH = "graphs/research_active.json"
 _KNOWLEDGE_MEMORY = "knowledge_memory_snapshot.json"
+_SANDBOX_TRAJECTORY = "sandbox_trajectory.json"
+_MCP_BUILDS_JOBS = "mcp_builds/jobs.json"
+_MCP_BUILDS_LOGS = "mcp_builds/logs/"
+_MCP_BUILDS_BUNDLES = "mcp_builds/bundles/"
 
 
 def _json_bytes(obj: Any) -> bytes:
@@ -147,6 +157,56 @@ async def export_session(
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not read knowledge memory: %s", exc)
 
+    # 10. Sandbox trajectory (best-effort — can be huge, or the container
+    # behind it may already be gone; must never sink the rest of the export)
+    sandbox_trajectory: Optional[Dict[str, Any]] = None
+    try:
+        from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
+        sandbox_id = None
+        if adk_session_data and isinstance(adk_session_data.get("state"), dict):
+            sandbox_id = adk_session_data["state"].get(sandbox.SESSION_STATE_KEY)
+        if sandbox_id:
+            sandbox_trajectory = await sandbox.aget_sandbox_trajectory(
+                sandbox_id=str(sandbox_id),
+            )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not fetch sandbox trajectory: %s", exc)
+        sandbox_trajectory = None
+
+    # 11. MCP builds (Alembic): job metadata, build logs, docker-buildable bundles
+    mcp_jobs: Optional[list] = None
+    mcp_bundles: Dict[str, bytes] = {}  # repo_name -> zip bytes
+    mcp_logs: Dict[str, str] = {}       # job_id -> log text
+    try:
+        from CoScientist.tools.alembic_tools import (
+            export_jobs_snapshot, LOG_DIR,
+        )
+        snapshot = export_jobs_snapshot()
+        if snapshot:
+            mcp_jobs = snapshot
+            # Collect build logs from disk
+            if LOG_DIR.exists():
+                for log_file in LOG_DIR.glob("*.log"):
+                    mcp_logs[log_file.stem] = log_file.read_text(
+                        encoding="utf-8", errors="replace"
+                    )
+            # Collect docker-buildable bundles for completed builds
+            done_repos = {r["repo_url"] for r in snapshot
+                          if r.get("status") == "done" and r.get("repo_url")}
+            if done_repos:
+                try:
+                    from CoScientist.alembic.web.app import _bundle_zip
+                    for repo_url in done_repos:
+                        bundle_data = _bundle_zip(repo_url)
+                        if bundle_data:
+                            import re
+                            name = re.sub(r"\.git$", "", repo_url.rstrip("/").split("/")[-1])
+                            mcp_bundles[name] = bundle_data
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("Could not collect MCP bundles: %s", exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not collect MCP builds: %s", exc)
+
     # --- Build manifest ---
     manifest = {
         "bundle_version": BUNDLE_VERSION,
@@ -178,6 +238,17 @@ async def export_session(
             zf.writestr(_GRAPH_RESEARCH, _json_bytes(research_graph))
         if knowledge_memory is not None:
             zf.writestr(_KNOWLEDGE_MEMORY, _json_bytes(knowledge_memory))
+        if sandbox_trajectory is not None:
+            try:
+                zf.writestr(_SANDBOX_TRAJECTORY, _json_bytes(sandbox_trajectory))
+            except Exception as exc:  # noqa: BLE001 - a huge/odd trace must not sink the export
+                logger.warning("Could not include sandbox trajectory in export: %s", exc)
+        if mcp_jobs is not None:
+            zf.writestr(_MCP_BUILDS_JOBS, _json_bytes(mcp_jobs))
+        for jid, log_text in mcp_logs.items():
+            zf.writestr(f"{_MCP_BUILDS_LOGS}{jid}.log", log_text.encode("utf-8"))
+        for name, bundle_data in mcp_bundles.items():
+            zf.writestr(f"{_MCP_BUILDS_BUNDLES}{name}.zip", bundle_data)
 
     return buf.getvalue()
 
@@ -186,10 +257,42 @@ async def export_session(
 # Import
 # ---------------------------------------------------------------------------
 
+def preview_bundle(bundle_bytes: bytes) -> Dict[str, Any]:
+    """Read a bundle's manifest and MCP build info without importing.
+
+    Returns ``{title, exported_at, mcp_builds, has_mcp_builds}``.
+    """
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(bundle_bytes), "r")
+    except zipfile.BadZipFile as exc:
+        raise ValueError(f"Invalid bundle file: {exc}") from exc
+
+    manifest: Dict[str, Any] = {}
+    try:
+        manifest = json.loads(zf.read(_MANIFEST))
+    except (KeyError, json.JSONDecodeError):
+        pass
+
+    mcp_builds: list = []
+    try:
+        mcp_builds = json.loads(zf.read(_MCP_BUILDS_JOBS))
+    except (KeyError, json.JSONDecodeError):
+        pass
+
+    zf.close()
+    return {
+        "title": manifest.get("title", "session"),
+        "exported_at": manifest.get("exported_at", ""),
+        "mcp_builds": mcp_builds,
+        "has_mcp_builds": bool(mcp_builds),
+    }
+
+
 async def import_session(
     runtime: Any,           # WebRuntime
     target_user_id: str,    # user to assign the session to
     bundle_bytes: bytes,
+    rebuild_mcp: bool = False,
 ) -> Dict[str, Any]:
     """Unpack a session bundle and restore it into the running process.
 
@@ -308,6 +411,9 @@ async def import_session(
     # --- Restore graphs ---
     _restore_graph_files(user_id, session_id, execution_graph_data, research_graph_data)
 
+    # --- Restore MCP builds ---
+    _restore_mcp_builds(zf, rebuild_mcp)
+
     zf.close()
 
     return {"user": user, "session": session}
@@ -331,6 +437,50 @@ def _restore_graph_files(
     if research_data is not None:
         from CoScientist.graph.research.store import _default_file
         _write_json(session_dir / _default_file(), research_data)
+
+
+def _restore_mcp_builds(zf: zipfile.ZipFile, rebuild: bool) -> None:
+    """Restore MCP build artefacts from the bundle.
+
+    Always: restore build logs to LOG_DIR + repopulate the in-memory _JOBS.
+    If ``rebuild`` is True: launch ``build_mcp_server`` for every repo that
+    had a completed build in the exported session.
+    """
+    # 1. Read job metadata
+    try:
+        jobs = json.loads(zf.read(_MCP_BUILDS_JOBS))
+    except (KeyError, json.JSONDecodeError):
+        return  # no MCP builds in this bundle
+
+    # 2. Restore build logs
+    try:
+        from CoScientist.tools.alembic_tools import LOG_DIR, import_jobs_snapshot
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        for entry in zf.namelist():
+            if entry.startswith(_MCP_BUILDS_LOGS) and entry.endswith(".log"):
+                log_name = Path(entry).name
+                (LOG_DIR / log_name).write_bytes(zf.read(entry))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not restore MCP build logs: %s", exc)
+
+    # 3. Repopulate in-memory job registry
+    try:
+        import_jobs_snapshot(jobs)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not restore MCP job records: %s", exc)
+
+    # 4. Optionally rebuild
+    if rebuild:
+        done_repos = list({r["repo_url"] for r in jobs
+                          if r.get("status") == "done" and r.get("repo_url")})
+        for repo_url in done_repos:
+            try:
+                import asyncio
+                from CoScientist.tools.alembic_tools import build_mcp_server
+                asyncio.ensure_future(build_mcp_server(repo_url, force_rebuild=True))
+                logger.info("MCP rebuild launched for %s", repo_url)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Could not launch MCP rebuild for %s: %s", repo_url, exc)
 
 
 def _write_json(path: Path, data: Any) -> None:
@@ -397,6 +547,26 @@ def read_saved_bundle(filename: str) -> bytes:
     if not path.is_file():
         raise FileNotFoundError(f"No saved session '{safe}'.")
     return path.read_bytes()
+
+
+def read_saved_events(filename: str) -> list[Dict[str, Any]]:
+    """Return just the ``agent_events.json`` log of a saved bundle.
+
+    Reading the whole bundle to get at its event log means shipping the ADK
+    session, the graphs and possibly a sandbox trajectory to the browser — tens
+    of megabytes for a list the status indicator's demo mode replays in a few
+    seconds. This reads the one member and nothing else.
+    """
+    safe = Path(filename).name
+    path = _snapshots_dir() / safe
+    if not path.is_file():
+        raise FileNotFoundError(f"No saved session '{safe}'.")
+    with zipfile.ZipFile(path, "r") as zf:
+        try:
+            events = json.loads(zf.read(_AGENT_EVENTS))
+        except (KeyError, json.JSONDecodeError):
+            return []
+    return events if isinstance(events, list) else []
 
 
 def delete_saved_session(filename: str) -> bool:

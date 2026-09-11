@@ -112,10 +112,11 @@ def test_fedot_tool_resolves_selected_server_without_postgres(monkeypatch):
             self.description = description
 
     class FakeMAS:
-        def __init__(self, *, mcp_servers):
+        def __init__(self, *, mcp_servers, **kwargs):
             captured["servers"] = mcp_servers
+            captured["plugins"] = kwargs.get("plugins")
 
-        async def run(self, task_description):
+        async def run(self, task_description, **kwargs):
             return {"task": task_description}
 
     fake_fedotmas = ModuleType("fedotmas")
@@ -134,6 +135,7 @@ def test_fedot_tool_resolves_selected_server_without_postgres(monkeypatch):
 
             assert result["status"] == "success"
             assert captured["servers"]["chemical"].url == "http://chemical-mcp-server:7331/mcp"
+            assert captured["plugins"]
 
         asyncio.run(scenario())
     finally:

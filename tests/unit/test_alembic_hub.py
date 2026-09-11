@@ -12,17 +12,22 @@ import sys
 import tarfile
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "CoScientist"))
-
-from alembic.hub import (  # noqa: E402
-    HubCreds,
-    bundle_name,
-    choose_strategy,
-    hub_image_ref,
-    pack_artifacts,
-    push_commands,
-    unpack_bundle,
-)
+_ALEMBIC_PACKAGE_ROOT = str(Path(__file__).resolve().parents[2] / "CoScientist")
+sys.path.insert(0, _ALEMBIC_PACKAGE_ROOT)
+try:
+    from alembic.hub import (  # noqa: E402
+        HubCreds,
+        bundle_name,
+        choose_strategy,
+        hub_image_ref,
+        pack_artifacts,
+        push_commands,
+        unpack_bundle,
+    )
+finally:
+    # Do not leak the local ``a2a`` directory into the remaining test
+    # collection: it would shadow the third-party ``a2a-sdk`` package.
+    sys.path.remove(_ALEMBIC_PACKAGE_ROOT)
 
 
 # ── credentials ──────────────────────────────────────────────────────────────

@@ -51,6 +51,11 @@ class Node(BaseModel):
     verdict: Optional[str] = None  # critic verdict — the reward signal (Fact 1)
     t_start: Optional[float] = None
     t_end: Optional[float] = None
+    # The user prompt this node belongs to: ADK's invocation id for the turn.
+    # Agent nodes are one per agent for the whole session and carry none; a
+    # turn's shape is its goal, the calls under it, and its result, all of which
+    # do. Without it the only way to tell turns apart was to parse the goal id.
+    turn_id: Optional[str] = None
     semantic: Optional[Semantic] = None
 
 

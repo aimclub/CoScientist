@@ -2,182 +2,326 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>CoScientist — Knowledge Graph</title>
-  <!-- Vendored locally (CoScientist/web/static) so it works offline / behind a VPN. -->
+  <title>CoScientist — Research Graph</title>
   <script src="/static/vis-network.min.js"></script>
   <style>
-    html, body { margin: 0; height: 100%; background: #1e1e1e; color: #eee;
-                 font-family: -apple-system, Segoe UI, Roboto, sans-serif; }
-    #bar { position: fixed; top: 0; left: 0; right: 0; min-height: 42px; display: flex;
-           align-items: center; gap: 14px; padding: 4px 14px; background: #252526;
-           border-bottom: 1px solid #333; z-index: 10; font-size: 13px; flex-wrap: wrap; }
-    #bar b { color: #fff; }
-    #net { position: absolute; top: 50px; bottom: 0; left: 0; right: 0; }
-    .legend { display: flex; gap: 12px; margin-left: auto; flex-wrap: wrap; align-items: center; }
-    .legend span { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
-    .dot { width: 11px; height: 11px; border-radius: 3px; display: inline-block; }
-    label { cursor: pointer; user-select: none; }
-    #status { color: #9aa; }
-    #detail { position: fixed; top: 50px; right: 0; width: 380px; bottom: 0; background: #252526;
-              border-left: 1px solid #333; padding: 16px; overflow-y: auto; z-index: 9;
-              display: none; font-size: 13px; box-shadow: -8px 0 24px rgba(0,0,0,0.3); }
-    #detail h3 { margin: 0 0 4px; color: #00daf3; font-size: 15px; word-break: break-word; }
-    #detail .k { color: #8ab; font-weight: 600; }
-    #detail .attr { margin: 3px 0; }
-    #detail pre { white-space: pre-wrap; word-break: break-word; background: #1b1b1c; padding: 9px;
-                  border-radius: 6px; color: #ddd; font-size: 12px; line-height: 1.45; margin: 4px 0 0; }
-    #detail .close { float: right; cursor: pointer; color: #999; font-size: 18px; }
-    #detail .badge { display: inline-block; padding: 1px 9px; border-radius: 10px; color: #111;
-                     font-weight: 700; font-size: 11px; }
-    #detail .sub { color: #888; font-size: 12px; margin-bottom: 8px; }
+    :root {
+      --bg: #14161a; --surface: #1c1f26; --surface2: #23272f; --line: #2c313a;
+      --ink: #e8eaed; --ink2: #9aa3af; --ink3: #6b7280;
+      --good: #22c55e; --warn: #f59e0b; --crit: #ef4444; --info: #3b82f6;
+      --accent: #38bdf8; --orange: #f97316; --slate: #64748b; --violet: #8b5cf6;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
+      font-family: -apple-system, "Segoe UI", Roboto, Inter, sans-serif; font-size: 13px; }
+
+    /* top bar */
+    #bar { position: fixed; top: 0; left: 0; right: 0; height: 46px; display: flex;
+      align-items: center; gap: 16px; padding: 0 16px; background: var(--surface);
+      border-bottom: 1px solid var(--line); z-index: 20; }
+    #bar .brand { font-weight: 700; letter-spacing: .2px; }
+    #bar .brand .dot { color: var(--accent); }
+    #bar label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+      color: var(--ink2); user-select: none; }
+    #bar select, #bar button { background: var(--surface2); color: var(--ink);
+      border: 1px solid var(--line); border-radius: 7px; padding: 5px 9px; font-size: 12px; cursor: pointer; }
+    #bar button:hover { border-color: var(--accent); }
+    #status { color: var(--ink3); font-variant-numeric: tabular-nums; }
+    .spacer { margin-left: auto; }
+
+    /* research header (question + progress) */
+    #head { position: fixed; top: 46px; left: 0; right: 0; z-index: 15; padding: 12px 16px;
+      background: linear-gradient(180deg, var(--surface) 0%, rgba(28,31,38,.0) 100%);
+      pointer-events: none; }
+    #head.hidden { display: none; }
+    #question { font-size: 15px; font-weight: 650; color: var(--ink); max-width: 62%;
+      line-height: 1.35; margin-bottom: 10px; text-shadow: 0 2px 8px rgba(0,0,0,.5); }
+    #question .q { color: var(--accent); font-weight: 700; }
+    #tiles { display: flex; gap: 8px; flex-wrap: wrap; }
+    .tile { pointer-events: auto; background: var(--surface2); border: 1px solid var(--line);
+      border-radius: 10px; padding: 7px 12px; min-width: 76px; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+    .tile .n { font-size: 20px; font-weight: 750; line-height: 1; font-variant-numeric: tabular-nums; }
+    .tile .l { font-size: 10.5px; color: var(--ink2); margin-top: 3px; display: flex; align-items: center; gap: 4px; }
+    .tile .l .g { font-size: 11px; }
+    #pbar { pointer-events: auto; height: 8px; border-radius: 6px; overflow: hidden; display: flex;
+      margin-top: 10px; max-width: 640px; background: var(--surface2); border: 1px solid var(--line); }
+    #pbar span { height: 100%; }
+
+    /* canvas + panels */
+    #net { position: absolute; top: 46px; bottom: 0; left: 0; right: 0; }
+    #legend { position: fixed; bottom: 12px; left: 12px; z-index: 15; background: rgba(28,31,38,.92);
+      border: 1px solid var(--line); border-radius: 10px; padding: 9px 12px; display: flex; flex-wrap: wrap;
+      gap: 6px 14px; max-width: 62%; backdrop-filter: blur(6px); font-size: 11.5px; }
+    #legend .grp { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+    #legend b { color: var(--ink2); font-weight: 600; margin-right: 2px; }
+    #legend .item { display: inline-flex; align-items: center; gap: 5px; color: var(--ink2); white-space: nowrap; }
+    #legend .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+    #detail { position: fixed; top: 46px; right: 0; width: 400px; bottom: 0; background: var(--surface);
+      border-left: 1px solid var(--line); padding: 0; overflow-y: auto; z-index: 18; display: none;
+      box-shadow: -12px 0 32px rgba(0,0,0,.4); }
+    #detail .dhead { padding: 16px 18px 12px; border-bottom: 1px solid var(--line);
+      position: sticky; top: 0; background: var(--surface); }
+    #detail .dbody { padding: 14px 18px 24px; }
+    #detail h3 { margin: 0 0 4px; font-size: 16px; word-break: break-word; }
+    #detail .sub { color: var(--ink3); font-size: 12px; }
+    #detail .badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-weight: 700;
+      font-size: 11px; margin-top: 8px; }
+    #detail .close { float: right; cursor: pointer; color: var(--ink3); font-size: 20px; line-height: 1; }
+    #detail .close:hover { color: var(--ink); }
+    #detail .k { color: var(--accent); font-weight: 600; font-size: 11px; text-transform: uppercase;
+      letter-spacing: .4px; margin: 14px 0 4px; }
+    #detail .attr { margin: 3px 0; color: var(--ink); word-break: break-word; }
+    #detail .attr .ak { color: var(--ink2); }
+    .chars { color: var(--ink3); font-size: 10px; letter-spacing: 0;
+      text-transform: none; margin-left: 6px; }
+    #detail pre { white-space: pre-wrap; word-break: break-word; background: var(--bg); padding: 10px;
+      border-radius: 8px; color: var(--ink); font-size: 12px; line-height: 1.5; margin: 4px 0 0;
+      border: 1px solid var(--line);
+      /* The whole value is here; long ones scroll rather than being cut. */
+      max-height: 46vh; overflow-y: auto; }
+    #detail .prov { background: var(--bg); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+      border-radius: 8px; padding: 9px 11px; margin: 6px 0; cursor: pointer; transition: border-color .12s, background .12s; }
+    #detail .prov:hover { border-color: var(--accent); background: #1a1f28; }
+    #detail .prov .tool { font-weight: 700; color: var(--accent); font-family: ui-monospace, monospace; font-size: 12px; }
+    #detail .prov .jump { float: right; color: var(--accent); font-size: 10px; opacity: .65; }
+    #detail .prov .res { color: var(--ink2); font-size: 11.5px; margin-top: 5px; line-height: 1.5;
+      white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; }
+    #detail .empty { color: var(--ink3); font-style: italic; }
   </style>
 </head>
 <body>
   <div id="bar">
-    <b>CoScientist Graph</b>
-    <span id="status">connecting…</span>
-    <label><input type="checkbox" id="auto" checked /> live (1.5s)</label>
-    <button id="refresh">refresh</button>
-    <label>view:
+    <span class="brand">CoScientist <span class="dot">◆</span> Graph</span>
+    <label>view
       <select id="view">
-        <option value="research">research graph (blackboard)</option>
-        <option value="execution">execution (log)</option>
-        <option value="knowledge">knowledge (this session)</option>
-        <option value="memory">knowledge memory (global)</option>
+        <option value="research">research</option>
+        <option value="slide">research · slide</option>
+        <option value="execution">execution log</option>
       </select>
     </label>
-    <div class="legend" id="legend"></div>
+    <label id="turnWrap" style="display:none"><span id="turnLabel">request</span>
+      <select id="turn" style="max-width:340px"></select>
+    </label>
+    <label><input type="checkbox" id="auto" checked /> live</label>
+    <button id="refresh">↻</button>
+    <span class="spacer"></span>
+    <span id="status">connecting…</span>
+      <a id="totrace" href="/trace" style="margin-left:auto;background:var(--surface2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:5px 9px;font-size:12px;text-decoration:none">← session trace</a>
   </div>
+
+  <div id="head">
+    <div id="question"></div>
+    <div id="tiles"></div>
+    <div id="pbar"></div>
+  </div>
+
   <div id="net"></div>
+  <div id="slide" style="display:none;overflow:auto;padding:14px;background:#05070b;height:100%"></div>
+  <div id="legend"></div>
   <div id="detail"></div>
 
   <script>
-    // ── execution / knowledge / memory views (unchanged) ──────────────────────
-    const STATUS_COLOR = { running: "#f1c40f", success: "#2ecc71", failed: "#e74c3c", interrupted: "#e67e22", pruned: "#7f8c8d" };
-    const IDENTITY_COLOR = { system: "#f4c542", agent: "#7eb6ff",
-      question: "#ff9f43", fact: "#f6c453", hypothesis: "#b388ff", finding: "#2ecc71", method: "#1abc9c" };
-    const SHAPE = { system: "hexagon", agent: "dot", goal: "diamond",
-                    agent_call: "ellipse", tool_call: "box", result: "star",
-                    question: "diamond", fact: "box", finding: "star" };
-    const ENTITY_COLOR = { target: "#e84393", molecule: "#00cec9", metric: "#fdcb6e",
-      property: "#fab1a0", paper: "#74b9ff", hypothesis: "#b388ff", method: "#1abc9c",
-      dataset: "#a29bfe", finding: "#2ecc71", gene: "#ffeaa7", organism: "#55efc4" };
-    const ENTITY_SHAPE = { target: "star", molecule: "dot", metric: "triangle", paper: "box",
-      hypothesis: "ellipse", method: "box", dataset: "database" };
-    const etype = n => (n.semantic && n.semantic.type) || "entity";
-    function hashColor(s){ let h=0; s=s||"x"; for(let i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))>>>0;
-      const c=v=>(120+(v&0x5F)).toString(16).padStart(2,"0"); return "#"+c(h)+c(h>>6)+c(h>>12); }
-    const colorOf = n => n.kind === "entity" ? (ENTITY_COLOR[etype(n)] || hashColor(etype(n)))
-                       : (IDENTITY_COLOR[n.kind] || STATUS_COLOR[n.status] || "#dcdde1");
-    const shapeOf = n => n.kind === "entity" ? (ENTITY_SHAPE[etype(n)] || "dot") : (SHAPE[n.kind] || "box");
-    const labelOf = n => String(((["tool_call","result","goal","entity","fact","question"].includes(n.kind)) ? n.label : (n.executor_agent || n.label)) || n.id || "").slice(0, 40);
+    // ══════════════════════════════════════════════════════════════════════════
+    //  Encoding — COLOR = status (reserved status palette), ICON = type,
+    //  GLYPH = status (so identity is never colour-alone; CVD-safe).
+    // ══════════════════════════════════════════════════════════════════════════
+    const C = getComputedStyle(document.documentElement);
+    const col = n => C.getPropertyValue(n).trim();
+    const GOOD=col('--good'), WARN=col('--warn'), CRIT=col('--crit'), INFO=col('--info'),
+          ORANGE=col('--orange'), SLATE=col('--slate'), VIOLET=col('--violet'), INK=col('--ink');
 
-    // ── research view — status colour, type icon, epistemic layering ──────────
-    // Colour carries STATUS (the thing you care about); the type is the icon + id
-    // in the label; the ROW (level) is the epistemic layer: question → hypotheses
-    // → methods/tools/criteria → evidence → conclusions → artifacts.
-    const R_STATUS_COLOR = {
-      confirmed:"#2ecc71", validated:"#2ecc71", met:"#2ecc71", available:"#2ecc71",
-      done:"#27ae60", approved:"#2ecc71",                                   // green: settled/positive
-      refuted:"#e74c3c", rejected:"#e74c3c", failed:"#e74c3c", creation_failed:"#e74c3c", // red: dead/negative
-      under_verification:"#f39c12", running:"#f39c12", obtained:"#f1c40f", draft:"#f39c12", // amber: in progress
-      open:"#3498db", formulated:"#3498db", planned:"#3498db", not_met:"#5dade2",  // blue: pending/open
-      postponed:"#7f8c8d", needs_adaptation:"#e67e22", being_created:"#e67e22",
-      exhausted:"#7f8c8d", decomposed:"#5d6d7e",                            // grey/orange: waiting/blocked
-      active:"#8e44ad", created:"#95a5a6", closed:"#566573" };              // constraint / neutral
-    const R_ICON = { researchquestion:"❓", hypothesis:"💡", evidence:"🔬",
-      verificationmethod:"⚙️", confirmationcriteria:"🎯", tool:"🔧", resource:"🔋",
-      empiricalbase:"🗄️", constraint:"⚖️", codeartifact:"💻", generateddata:"📦",
-      report:"📑", publication:"📰", spec:"📋", efficiencyjustification:"📈",
-      costmodel:"💰", efficiencymetric:"📊" };
+    const R_STATUS = {  // status -> {color, glyph, label}
+      confirmed:{c:GOOD,g:'✓'}, validated:{c:GOOD,g:'✓'}, met:{c:GOOD,g:'✓'},
+      available:{c:GOOD,g:'✓'}, done:{c:GOOD,g:'✓'}, approved:{c:GOOD,g:'✓'},
+      refuted:{c:CRIT,g:'✗'}, rejected:{c:CRIT,g:'✗'}, failed:{c:CRIT,g:'✗'}, creation_failed:{c:CRIT,g:'✗'},
+      // Tested and not settled: neither a verdict nor an untouched branch.
+      inconclusive:{c:ORANGE,g:'≈'},
+      under_verification:{c:WARN,g:'⧗'}, running:{c:WARN,g:'⧗'}, obtained:{c:WARN,g:'●'}, draft:{c:WARN,g:'✎'},
+      formulated:{c:INFO,g:'○'}, open:{c:INFO,g:'○'}, planned:{c:INFO,g:'○'}, not_met:{c:INFO,g:'○'},
+      needs_adaptation:{c:ORANGE,g:'⚙'}, being_created:{c:ORANGE,g:'⚙'},
+      postponed:{c:SLATE,g:'⏸'}, exhausted:{c:SLATE,g:'∅'}, decomposed:{c:SLATE,g:'⊟'}, closed:{c:SLATE,g:'●'},
+      active:{c:VIOLET,g:'▮'}, created:{c:SLATE,g:'▢'},
+    };
+    const rStatus = s => R_STATUS[s] || {c:SLATE,g:'•'};
+
+    const R_ICON = { researchquestion:'❓', hypothesis:'💡', evidence:'🔬', conclusion:'✅',
+      verificationmethod:'⚙️', confirmationcriteria:'🎯', tool:'🔧', resource:'🔋',
+      empiricalbase:'🗄️', constraint:'⚖️', codeartifact:'💻', generateddata:'📦',
+      report:'📑', publication:'📰', spec:'📋', efficiencyjustification:'📈',
+      costmodel:'💰', efficiencymetric:'📊' };
     const R_LEVEL = { researchquestion:0, constraint:0, hypothesis:1, empiricalbase:1,
       verificationmethod:2, confirmationcriteria:2, tool:2,
       evidence:3, resource:3, generateddata:3, codeartifact:3, conclusion:4,
       report:5, publication:5, spec:5, efficiencyjustification:5, costmodel:5, efficiencymetric:5 };
-    const R_EDGE_COLOR = { supports:"#2ecc71", refutes:"#e74c3c", refines:"#f39c12" };
+    const R_EDGE = { supports:GOOD, refutes:CRIT, refines:WARN };
+    // Human-readable type names (shown as "Hypothesis 1" instead of the terse id
+    // "H1") and edge phrases, so a first-time viewer instantly reads the graph.
+    const R_TYPE_NAME = { researchquestion:"Question", hypothesis:"Hypothesis", evidence:"Evidence",
+      conclusion:"Conclusion", verificationmethod:"Method", confirmationcriteria:"Criteria",
+      tool:"Tool", resource:"Resource", empiricalbase:"Data source", constraint:"Constraint",
+      codeartifact:"Code", generateddata:"Dataset", report:"Report", publication:"Publication",
+      spec:"Spec", efficiencyjustification:"Efficiency", costmodel:"Cost model",
+      efficiencymetric:"Metric" };
+    const R_EDGE_NAME = { motivates:"motivates", tested_by:"tested by", requires:"requires",
+      uses:"uses", consumes:"consumes", produces:"produces", supports:"supports", refutes:"refutes",
+      refines:"refines", based_on:"based on", determines_sufficiency:"sufficiency for",
+      formulated_for:"criterion for", regulates:"regulates", constrains:"constrains",
+      derived_from:"derived from", contextualizes:"frames", defines_scope:"scope of",
+      relates_to:"relates to", applies_to:"applies to", via:"via" };
+    // The server now names the type and the status in the words a scientist
+    // uses; the client keeps its own table only as a fallback for older data.
+    const rTypeName = n => n.type_word || R_TYPE_NAME[n.kind] || n.kind || "";
+    const rStatusWord = n => n.status_word || String(n.status || "").replace(/_/g, " ");
     const RESEARCH_KINDS = new Set(Object.keys(R_LEVEL));
+    // hex -> "r,g,b" for translucent fills
+    function rgba(hex, a){ const m = hex.replace('#',''); const v = m.length===3
+      ? m.split('').map(x=>parseInt(x+x,16)) : [0,2,4].map(i=>parseInt(m.slice(i,i+2),16));
+      return `rgba(${v[0]},${v[1]},${v[2]},${a})`; }
+
+    // ── execution view styling ────────────────────────────────────────────────
+    const STATUS_COLOR = { running:"#f1c40f", success:"#22c55e", failed:"#ef4444", interrupted:"#e67e22", pruned:"#64748b" };
+    // Identity fills the node; status rings it. Colouring agents by identity
+    // alone made a stuck "running" agent look exactly like a finished one, so
+    // the only nodes that showed progress were goals and tool calls.
+    const IDENTITY_COLOR = { system:"#f4c542", agent:"#7eb6ff", agent_call:"#7eb6ff" };
+    // Every node in the log is a labelled box. Dots, diamonds and stars made a
+    // trace read as a diagram of shapes; a run reads better as a row of cards
+    // whose text you can scan.
+    const SHAPE = { system:"hexagon" };
+    const statusColor = n => STATUS_COLOR[n.status] || "#cbd5e1";
+    const colorOf = n => IDENTITY_COLOR[n.kind] || statusColor(n);
+    const borderOf = n => IDENTITY_COLOR[n.kind] ? statusColor(n) : "#20232a";
+    const shapeOf = n => SHAPE[n.kind] || "box";
+    const secsOf = n => (n.t_end && n.t_start)
+      ? ((n.t_end - n.t_start) < 1 ? (n.t_end - n.t_start).toFixed(2)
+                                   : (n.t_end - n.t_start).toFixed(1)) + "s" : "";
+    // When the call was made. The canvas already places nodes along a time
+    // axis, but reading a position off an axis is not the same as being told
+    // the hour — and it is what a reader matches against a log line.
+    const clockOf = n => {
+      if (!n.t_start) return "";
+      const d = new Date(n.t_start * 1000);
+      const pad = v => String(v).padStart(2, "0");
+      return pad(d.getHours()) + ":" + pad(d.getMinutes()) + ":" + pad(d.getSeconds());
+    };
+    // Started at, then how long it took, on one line so a card stays two deep.
+    const metaOf = n => [clockOf(n), secsOf(n)].filter(Boolean).join("  ·  ");
+    // Kind first, then what it was, then when and how long: the things a
+    // reader of a trace is after.
+    function labelOf(n){
+      const meta = metaOf(n);
+      const tail = meta ? "\n" + meta : "";
+      if (n.kind === "goal")
+        return "❯ " + String(n.label || "request").slice(0, 46) + tail;
+      if (n.kind === "result")
+        return "✔ answer" + tail;
+      if (n.kind === "agent" || n.kind === "agent_call")
+        return String(n.executor_agent || n.label || "").slice(0, 34) + tail;
+      return String(n.label || n.id || "").slice(0, 30) + tail;
+    }
 
     const isResearch = () => document.getElementById("view").value === "research";
-    function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
-    function rText(n){ return String(n.output || n.label || "").replace(/\s+/g," ").trim(); }
-    function researchLabel(n){
-      const icon = R_ICON[n.kind] || "•";
-      const txt = rText(n); const short = txt.length > 64 ? txt.slice(0,64)+"…" : txt;
-      return `<b>${icon} ${esc(n.id)}</b>\n${esc(short)}`;   // vis html-multiline
+    const isSlide = () => document.getElementById("view").value === "slide";
+
+    // Slide mode renders server-side (same renderer as the CLI/report), so the
+    // live view and the exported deck are literally the same artifact.
+    async function pollSlide(userId, sessionId){
+      const box = document.getElementById("slide");
+      const url = `/api/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/graph.svg?t=${Date.now()}`;
+      const r = await fetch(url, { cache: "no-store" });
+      box.innerHTML = await r.text();
+      const svg = box.querySelector("svg");
+      if (svg) { svg.removeAttribute("height"); svg.style.width = "100%"; svg.style.height = "auto"; }
     }
-    function rColor(n){ return R_STATUS_COLOR[n.status] || "#95a5a6"; }
+    function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+    function rText(n){ return String(n.output||n.label||"").replace(/\s+/g," ").trim(); }
+    // A card is a headline, not the document. Seven hundred characters of
+    // formulation per node turned the canvas into a wall of prose nobody scans;
+    // the whole text is one click away in the panel, so the card carries the
+    // first sentence and the facts you scan for: what it is, how it stands, who
+    // wrote it, and whether a tool call backs it.
+    function firstSentence(text, cap){
+      const trimmed = String(text || "").replace(/\s+/g, " ").trim();
+      if (trimmed.length <= cap) return trimmed;
+      const stop = trimmed.slice(0, cap).search(/[.!?;](?=\s|$)[^]*$/);
+      const cut = trimmed.lastIndexOf(" ", cap);
+      return trimmed.slice(0, stop > cap * 0.4 ? stop + 1 : (cut > 0 ? cut : cap)) + " …";
+    }
+    function researchLabel(n){
+      const st = rStatus(n.status); const icon = R_ICON[n.kind]||"•";
+      const sw = rStatusWord(n);
+      const head = `<b>${st.g} ${icon} ${esc(rTypeName(n))}${sw ? " · " + esc(sw) : ""}</b>`;
+      const body = esc(firstSentence(rText(n), 190));
+      const calls = Array.isArray(n.provenance) ? n.provenance.length : 0;
+      const by = n.executor_agent ? esc(shortAgent(n.executor_agent)) : "";
+      // The footer is what makes a verdict checkable without opening the logs:
+      // who recorded it, and how many tool calls it came from.
+      const foot = [by, calls ? `🛠️ ${calls} call${calls > 1 ? "s" : ""}` : ""]
+        .filter(Boolean).join("  ·  ");
+      return head + "\n" + body + (foot ? `\n<i>${foot}</i>` : "");
+    }
+    const shortAgent = a => String(a).replace(/Agent$/, "");
+    const titleOf = n => [ "id: "+n.id, "type: "+(n.kind||""),
+      n.executor_agent?"source: "+n.executor_agent:"", "status: "+(n.status||""),
+      n.output?String(n.output).slice(0,300):"" ].filter(Boolean).join("\n");
 
-    const titleOf = n => [
-      "id: " + n.id, "type: " + (n.kind||""),
-      n.executor_agent ? "source: " + n.executor_agent : "",
-      "status: " + (n.status || ""),
-      n.output ? String(n.output).slice(0,300) : "",
-    ].filter(Boolean).join("\n");
-
-    // ── network ───────────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
     const nodes = new vis.DataSet([]);
     const edges = new vis.DataSet([]);
     let network = null;
-
-    function optsFor(r) {
-      // Toggling layout.hierarchical at runtime via setOptions is unreliable in
-      // vis-network (the physics solver gets stuck on 'hierarchicalRepulsion' and
-      // the non-tree views collapse to a point). So we REBUILD the network per
-      // view with a clean, complete options object instead.
-      return {
-        nodes: { font: { color: "#eee", strokeWidth: 3, strokeColor: "#1e1e1e" }, borderWidth: 2 },
-        edges: { arrows: "to", color: { color: "#888" }, font: { color: "#bbb", size: 10 },
-                 smooth: r ? { type: "cubicBezier", forceDirection: "vertical", roundness: 0.55 }
-                           : { type: "cubicBezier" } },
-        layout: r
-          ? { hierarchical: { enabled: true, direction: "UD", levelSeparation: 130,
-                              nodeSpacing: 170, treeSpacing: 210, blockShifting: true,
-                              edgeMinimization: true } }
-          : { hierarchical: false, randomSeed: 2 },
-        physics: r
-          ? { enabled: false }
-          : { enabled: true, solver: "barnesHut", stabilization: { iterations: 200 },
-              barnesHut: { gravitationalConstant: -8000, springLength: 130 } },
-        interaction: { hover: true, tooltipDelay: 100 },
-      };
-    }
-
-    function rebuildNetwork() {
-      if (network) { try { network.destroy(); } catch (e) {} }
-      network = new vis.Network(document.getElementById("net"), { nodes, edges }, optsFor(isResearch()));
+    function makeNetwork(){
+      const r = isResearch();
+      // research = hierarchical top-down (epistemic layers). execution & memory =
+      // radial force layout that grows outward from the central system node.
+      if (network) network.destroy();
+      network = new vis.Network(document.getElementById("net"), { nodes, edges }, {
+        nodes: { borderWidth: 2, shadow: { enabled: true, color: "rgba(0,0,0,0.35)", size: 10, x: 0, y: 3 } },
+        edges: { arrows: { to: { scaleFactor: 0.55 } }, color: { color: "#3a4150", highlight: "#64748b" },
+                 font: { color: "#8b93a1", size: r ? 12 : 10, strokeWidth: 0 }, smooth: r
+                   ? { type: "cubicBezier", forceDirection: "vertical", roundness: 0.5 }
+                   : { type: "cubicBezier", forceDirection: "horizontal", roundness: 0.35 } },
+        // The research graph is a hierarchy, so vis lays it out. The log is a
+        // timeline: every node already carries the x its start time earns and
+        // the row of the agent that ran it, so vis must not move anything —
+        // hierarchical layout would collapse the clock back into columns.
+        layout: r ? { hierarchical: { enabled: true, direction: "UD",
+                    sortMethod: "directed", shakeTowards: "roots",
+                    levelSeparation: 220, nodeSpacing: 300, treeSpacing: 320,
+                    blockShifting: true, edgeMinimization: true, parentCentralization: true } }
+                  : { hierarchical: false, randomSeed: 1 },
+        physics: { enabled: false },
+        interaction: { hover: true, tooltipDelay: 120, navigationButtons: false },
+      });
       network.on("click", params => {
         if (!params.nodes.length) { closeDetail(); return; }
         selectedId = params.nodes[0];
+        lastDetailStamp = JSON.stringify(nodeData[selectedId]);
         showDetail(nodeData[selectedId]);
       });
     }
 
-    const EX_LEGEND =
-      '<span><b>status:</b></span>'
-      + '<span><i class="dot" style="background:#f1c40f"></i>running</span>'
-      + '<span><i class="dot" style="background:#2ecc71"></i>success</span>'
-      + '<span><i class="dot" style="background:#e74c3c"></i>failed</span>'
-      + '<span style="margin-left:8px"><b>type:</b></span>'
-      + '<span>⬡ system</span><span>● agent</span><span>◆ goal</span>'
-      + '<span>▭ tool</span><span>★ result</span>';
-    const R_LEGEND =
-      '<span><b>status:</b></span>'
-      + '<span><i class="dot" style="background:#2ecc71"></i>confirmed / validated / done</span>'
-      + '<span><i class="dot" style="background:#f39c12"></i>in&nbsp;progress</span>'
-      + '<span><i class="dot" style="background:#e74c3c"></i>refuted / failed</span>'
-      + '<span><i class="dot" style="background:#3498db"></i>open / formulated / planned</span>'
-      + '<span><i class="dot" style="background:#e67e22"></i>needs&nbsp;tool / being&nbsp;built</span>'
-      + '<span><i class="dot" style="background:#7f8c8d"></i>postponed / exhausted</span>'
-      + '<span style="margin-left:6px"><b>edge:</b></span>'
-      + '<span><i class="dot" style="background:#2ecc71"></i>supports</span>'
-      + '<span><i class="dot" style="background:#e74c3c"></i>refutes</span>'
-      + '<span style="margin-left:6px"><b>type:</b> ❓question 💡hypothesis 🔬evidence ⚙️method 🎯criteria 🔧tool</span>';
-    function updateLegend(){ document.getElementById("legend").innerHTML = isResearch() ? R_LEGEND : EX_LEGEND; }
+    // ── the research node card ────────────────────────────────────────────────
+    function researchNode(n){
+      const st = rStatus(n.status), c = st.c;
+      const node = {
+        id: n.id, title: titleOf(n), shape: "box", label: researchLabel(n),
+        level: R_LEVEL[n.kind] != null ? R_LEVEL[n.kind] : 3,
+        color: { background: rgba(c, 0.14), border: c,
+                 highlight: { background: rgba(c, 0.22), border: c } },
+        font: { color: INK, size: 16, multi: "html",
+                face: "-apple-system, Segoe UI, sans-serif", align: "left" },
+        borderWidth: 2, shapeProperties: { borderRadius: 9 },
+        widthConstraint: { minimum: 230, maximum: 320 }, margin: 12,
+      };
+      return node;
+    }
 
-    // ── polling ────────────────────────────────────────────────────────────────
+    // ══════════════════════════════════════════════════════════════════════════
     const seenEdges = new Set();
-    const nodeData = {};   // id -> full node, for the click-to-inspect panel
-    async function poll() {
+    const nodeData = {};
+    let lastGraph = { nodes: [], edges: [] };
+    async function poll(){
       try {
         const params = new URLSearchParams(location.search);
         const userId = params.get("user_id") || "";
@@ -185,99 +329,303 @@
         if (!userId || !sessionId) {
           throw new Error("Open the graph from an active CoScientist session.");
         }
-        const url = `/api/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/graph?view=${encodeURIComponent(document.getElementById("view").value)}`;
+        // Slide view is a server-rendered SVG, not a node-link canvas.
+        const netBox = document.getElementById("net"), slideBox = document.getElementById("slide");
+        if (isSlide()) {
+          netBox.style.display = "none"; slideBox.style.display = "block";
+          await pollSlide(userId, sessionId);
+          return;
+        }
+        netBox.style.display = ""; slideBox.style.display = "none";
+        // The same picker serves both views: a request in the log, a study in
+        // the research graph. Its value is cleared on a view change, so one
+        // view's selection can never be sent to the other.
+        const chosenTurn = document.getElementById("turn").value;
+        const url = `/api/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}`
+          + `/graph?view=${encodeURIComponent(document.getElementById("view").value)}`
+          + (chosenTurn ? `&turn=${encodeURIComponent(chosenTurn)}` : "");
         const r = await fetch(url, { cache: "no-store" });
-        const g = await r.json();
+        const g = await r.json(); lastGraph = g;
         const research = isResearch();
-        (g.nodes || []).forEach(n => {
+        // The log is drawn one request at a time; the payload lists the rest.
+        const turnWrap = document.getElementById("turnWrap"),
+              turnSel = document.getElementById("turn"),
+              turnLabel = document.getElementById("turnLabel");
+        const choices = research
+          ? (g.studies || []).map(x => ({
+              id: x.study_id,
+              text: (x.live ? "live · " : "archived · ") + (x.label || "study")
+                    + ` (${x.node_count})` }))
+          : (g.turns || []).map((t, i) => ({
+              id: t.turn_id, text: `${i + 1}. ${t.prompt || "request"}` }));
+        const current = research ? g.study_id : g.turn_id;
+        if (choices.length) {
+          turnWrap.style.display = "";
+          turnLabel.textContent = research ? "study" : "request";
+          const want = choices.map(c => c.id).join("|");
+          if (turnSel.dataset.keys !== want) {
+            turnSel.dataset.keys = want;
+            turnSel.innerHTML = choices.map(c =>
+              `<option value="${esc(c.id)}">${esc(String(c.text).slice(0, 64))}</option>`
+            ).join("");
+          }
+          if (current) turnSel.value = current;
+        } else { turnWrap.style.display = "none"; }
+        // The execution graph now carries only what ran: an agent node exists
+        // because the agent acted. The roster is no longer seeded into it, so
+        // there is nothing left here to filter out.
+        const hidden = new Set();
+        // Depth in the execution tree. Set explicitly rather than inferred from
+        // the arrows: an agent node is shared by every turn that called it, so
+        // inference would drag it to whatever depth the first caller had and
+        // bend the tree around it. Siblings are inserted in start order, which
+        // is how vis lays them out left to right, so reading across a level
+        // reads forward in time.
+        // Already ordered by (level, start time) upstream; siblings enter in the
+        // order they ran, which is the order vis lays them out.
+        const ordered = g.nodes || [];
+        ordered.forEach(n => {
+          if (hidden.has(n.id)) return;
           nodeData[n.id] = n;
-          const node = {
-            id: n.id, title: titleOf(n),
-            label: research ? researchLabel(n) : labelOf(n),
-            shape: research ? "box" : shapeOf(n),
-            color: { background: research ? rColor(n) : colorOf(n), border: "#20232a" },
-          };
-          if (research) {
-            node.level = R_LEVEL[n.kind] != null ? R_LEVEL[n.kind] : 3;
-            node.font = { color: "#fff", size: 14, multi: "html", face: "-apple-system, Segoe UI, sans-serif" };
-            node.widthConstraint = { maximum: 190 };
-            node.margin = 8; node.shapeProperties = { borderRadius: 6 };
-          } else {
-            node.font = { color: "#eee", strokeWidth: 3, strokeColor: "#1e1e1e" };
-          }
-          nodes.update(node);
-        });
-        if (selectedId && nodeData[selectedId]) showDetail(nodeData[selectedId]);  // live-refresh open panel
-        (g.edges || []).forEach(e => {
-          const id = e.src + "->" + e.dst + ":" + (e.type || "");
-          if (!seenEdges.has(id) && e.src && e.dst) {
-            seenEdges.add(id);
-            const edge = { id, from: e.src, to: e.dst, label: e.type || "" };
-            if (e.synthetic) {
-              // structural "context" tie for an orphan node — faint & dashed,
-              // no arrow, so it doesn't read as a real research relation.
-              edge.color = { color: "#3a3d44", highlight: "#555" };
-              edge.dashes = true; edge.width = 1; edge.arrows = "";
-              edge.font = { color: "#666", size: 8 };
-            } else if (research) {
-              const c = R_EDGE_COLOR[e.type];
-              edge.color = { color: c || "#5a5a5a", highlight: c || "#999" };
-              edge.width = c ? 2 : 1;
-              edge.font = { color: c || "#8a8a8a", size: 9, strokeWidth: 3, strokeColor: "#1e1e1e" };
+          if (research) { nodes.update(researchNode(n)); }
+          else {
+            // Cards, sized by what they are: the request opens the row, agents
+            // carry it, calls are the detail. Status is the border, identity the
+            // fill, so a failed call is visible without reading its label.
+            const isRoot = n.kind === "system";
+            const isAgent = n.kind === "agent" || n.kind === "agent_call";
+            const isGoal = n.kind === "goal", isResult = n.kind === "result";
+            const c = colorOf(n);
+            const node = { id:n.id, title:titleOf(n), label:labelOf(n), shape:shapeOf(n),
+              margin: { top:9, bottom:9, left:12, right:12 },
+              // Fixed, and the same number the server packs lanes with
+              // (projection._CARD_WIDTH). If the two disagree the cards overlap.
+              widthConstraint: { minimum: (n.card_width || 190) - 26,
+                                 maximum: (n.card_width || 190) - 26 },
+              color:{ background: rgba(c, isGoal || isResult ? 0.22 : 0.16),
+                      border: borderOf(n) === "#20232a" ? c : borderOf(n),
+                      highlight: { background: rgba(c, 0.32), border: c } },
+              borderWidth: 2,
+              font:{ color:"#e8eaed", multi:false, align:"left",
+                     size: isGoal?15:(isAgent?14:12), strokeWidth:0 } };
+            // Position comes from the server: x from when the call started, y
+            // from whose lane it belongs to. Pinned, so the picture stays put
+            // while it is being read and stretches as the run goes on.
+            if (n.x != null && n.y != null) {
+              node.x = n.x; node.y = n.y;
+              node.fixed = { x: true, y: true };
             }
-            edges.update(edge);
+            if (isGoal) { node.borderWidth = 3; node.font.color = "#ffffff"; }
+            else if (isRoot) { node.borderWidth = 3; node.color.border = "#38bdf8"; }
+            nodes.update(node);
           }
         });
+        // Only redraw the panel when the node it shows has actually changed.
+        // It was rebuilt on every poll, which threw away the scroll position:
+        // reading down a long tool result, the box snapped back to the top
+        // every 1.5 seconds.
+        if (selectedId && nodeData[selectedId]) {
+          const stamp = JSON.stringify(nodeData[selectedId]);
+          if (stamp !== lastDetailStamp) {
+            lastDetailStamp = stamp;
+            showDetail(nodeData[selectedId]);
+          }
+        }
+        (g.edges || []).forEach(e => {
+          if (!research && (hidden.has(e.src) || hidden.has(e.dst))) return;
+          const id = e.src + "->" + e.dst + ":" + (e.type||"");
+          if (seenEdges.has(id) || !e.src || !e.dst) return;
+          seenEdges.add(id);
+          // human-readable edge label ("tested by", "criterion for", …) in research
+          const rlabel = research ? (R_EDGE_NAME[e.type] || e.type || "") : (e.type || "");
+          const edge = { id, from:e.src, to:e.dst, label: e.provenance ? "" : rlabel };
+          if (e.synthetic) { edge.color={color:"#2c313a",highlight:"#3a4150"}; edge.dashes=true; edge.width=1; edge.arrows=""; edge.label=""; }
+          else if (research) { const c=R_EDGE[e.type];
+            edge.color={color:c||"#4a5160",highlight:c||"#64748b"}; edge.width=c?3:1.5;
+            edge.font={color:c||"#aeb6c2",size:12,strokeWidth:4,strokeColor:"#14161a"}; }
+          edges.update(edge);
+        });
+        if (research) renderHeader(g.nodes || []);
+        // A research graph outlives one prompt, so a session can be showing a
+        // study that has not moved since yesterday. Say when it last changed;
+        // otherwise "the new run produced nothing" looks like a stale view.
+        let age = "";
+        if (research && g.updated_at) {
+          const mins = (Date.now() / 1000 - g.updated_at) / 60;
+          age = " · last written "
+            + (mins < 2 ? "just now"
+             : mins < 90 ? Math.round(mins) + " min ago"
+             : mins < 60 * 36 ? Math.round(mins / 60) + " h ago"
+             : new Date(g.updated_at * 1000).toLocaleString());
+        }
         document.getElementById("status").textContent =
-          (g.nodes || []).length + " nodes · " + (g.edges || []).length + " edges";
-      } catch (err) {
-        document.getElementById("status").textContent = "error: " + err;
-      }
+          (g.nodes||[]).filter(n=>!hidden.has(n.id)).length + " nodes · " +
+          (g.edges||[]).filter(e=>!(!research && (hidden.has(e.src)||hidden.has(e.dst)))).length
+          + " edges" + age;
+      } catch (err) { document.getElementById("status").textContent = "error: " + err; }
     }
 
-    // ── click a node → detail panel ─────────────────────────────────────────────
+    // ── progress header (hero stat tiles + segmented bar) ─────────────────────
+    const HSTATES = [
+      { keys:["confirmed"], label:"confirmed", c:GOOD, g:"✓" },
+      { keys:["refuted"], label:"refuted", c:CRIT, g:"✗" },
+      { keys:["under_verification"], label:"under verification", c:WARN, g:"⧗" },
+      { keys:["formulated"], label:"formulated", c:INFO, g:"○" },
+      { keys:["postponed"], label:"postponed", c:SLATE, g:"⏸" },
+    ];
+    function renderHeader(gnodes){
+      const q = gnodes.find(n => n.kind === "researchquestion");
+      document.getElementById("question").innerHTML = q
+        ? `<span class="q">❓ ${esc(q.id)}</span> · ${esc(rText(q))}` : "";
+      const hyps = gnodes.filter(n => n.kind === "hypothesis");
+      const counts = {}; hyps.forEach(h => counts[h.status] = (counts[h.status]||0)+1);
+      const total = hyps.length || 1;
+      document.getElementById("tiles").innerHTML = HSTATES.map(s => {
+        const n = s.keys.reduce((a,k)=>a+(counts[k]||0),0);
+        return `<div class="tile"><div class="n" style="color:${n?s.c:'#4b5563'}">${n}</div>`
+          + `<div class="l"><span class="g" style="color:${s.c}">${s.g}</span>${s.label}</div></div>`;
+      }).join("");
+      document.getElementById("pbar").innerHTML = HSTATES.map(s => {
+        const n = s.keys.reduce((a,k)=>a+(counts[k]||0),0);
+        return n ? `<span style="width:${100*n/total}%;background:${s.c}" title="${s.label}: ${n}"></span>` : "";
+      }).join("");
+    }
+
+    // ── legend ────────────────────────────────────────────────────────────────
+    const R_LEGEND =
+      '<div class="grp"><b>status</b>'
+      + item(GOOD,"✓ confirmed / validated") + item(WARN,"⧗ under verification")
+      + item(CRIT,"✗ refuted / failed") + item(INFO,"○ formulated / open")
+      + item(ORANGE,"⚙ needs tool") + item(SLATE,"⏸ postponed") + '</div>'
+      + '<div class="grp"><b>edge</b>' + item(GOOD,"supports") + item(CRIT,"refutes") + '</div>'
+      + '<div class="grp"><b>type</b><span class="item">❓ question · 💡 hypothesis · 🔬 evidence · '
+      + '⚙️ method · 🎯 criteria · 🔧 tool · ✅ conclusion</span></div>';
+    const EX_LEGEND = '<div class="grp"><b>status</b>' + item("#f1c40f","running")
+      + item("#22c55e","success") + item("#ef4444","failed")
+      + '</div><div class="grp"><b>type</b><span class="item">⬡ system · ● agent · ◆ goal · ▭ tool · ★ result</span></div>';
+    function item(c, t){ return `<span class="item"><i class="sw" style="background:${c}"></i>${t}</span>`; }
+    function updateChrome(){
+      const r = isResearch();
+      document.getElementById("legend").innerHTML = r ? R_LEGEND : EX_LEGEND;
+      document.getElementById("head").classList.toggle("hidden", !r);
+      document.getElementById("net").style.top = "46px";
+    }
+
+    // ── detail panel (with provenance) ────────────────────────────────────────
     let selectedId = null;
-    function showDetailResearch(n){
+    function showDetail(n){
+      if (!n) return;
+      if (!isResearch() && !RESEARCH_KINDS.has(n.kind)) return showDetailClassic(n);
+      const st = rStatus(n.status);
       const attrs = (n.input && typeof n.input === "object") ? n.input : {};
       const rows = Object.keys(attrs).map(k =>
-        `<div class="attr"><span class="k">${esc(k)}:</span> ${esc(attrs[k])}</div>`).join("");
+        `<div class="attr"><span class="ak">${esc(k)}:</span> ${esc(attrs[k])}</div>`).join("");
+      const prov = Array.isArray(n.provenance) ? n.provenance : [];
+      // Only shown when there is a trace to show: a heading followed by "no
+      // tool-call trace captured" is a line of furniture on every other card.
+      const provHtml = (n.kind === "evidence" && prov.length)
+        ? `<div class="k">provenance — produced by</div>` + prov.map(p => {
+                const jump = p.exec_id ? ` onclick="jumpToExecution('${esc(String(p.exec_id))}')" title="open this call in the execution log"` : "";
+                return `<div class="prov"${jump}><span class="tool">🛠️ ${esc(p.tool||"call")}</span>`
+                  + (p.exec_id ? `<span class="jump">↗ execution log</span>` : "")
+                  + (p.result ? `<div class="res">${esc(p.result)}</div>` : "") + `</div>`;
+              }).join("")
+        : "";
       document.getElementById("detail").innerHTML =
-        `<span class="close" onclick="closeDetail()">✕</span>`
-        + `<h3>${R_ICON[n.kind] || "•"} ${esc(n.id)}</h3>`
-        + `<div class="sub">${esc(n.kind || "")}</div>`
-        + `<div><span class="badge" style="background:${rColor(n)}">${esc(n.status || "")}</span></div>`
-        + (n.executor_agent ? `<div class="attr" style="margin-top:8px"><span class="k">source:</span> ${esc(n.executor_agent)}</div>` : "")
-        + (rows ? `<div class="k" style="margin-top:10px">attributes:</div>${rows}` : "");
+        `<div class="dhead"><span class="close" onclick="closeDetail()">✕</span>`
+        + `<h3>${R_ICON[n.kind]||"•"} ${esc(rTypeName(n))}</h3>`
+        + `<div class="sub">${esc(n.id)}${n.executor_agent?" · by "+esc(n.executor_agent):""}</div>`
+        + `<span class="badge" style="background:${rgba(st.c,.18)};color:${st.c};border:1px solid ${st.c}">${st.g} ${esc(rStatusWord(n))}</span></div>`
+        + `<div class="dbody">`
+        // The node's own sentence first: the panel used to open on a list of
+        // attributes, so the thing the node actually says was somewhere in it.
+        + (n.label ? `<div class="k">what this says</div><pre>${esc(n.label)}</pre>` : "")
+        + (rows ? `<div class="k">details</div>${rows}` : "")
+        + provHtml + `</div>`;
       document.getElementById("detail").style.display = "block";
     }
-    function showDetail(n) {
-      if (!n) return;
-      if (isResearch()) { showDetailResearch(n); return; }
-      const row = (k, v) => (v || v === 0) ? `<div><span class="k">${k}:</span> ${esc(v)}</div>` : "";
-      const block = (k, v) => v ? `<div class="k" style="margin-top:10px">${k}:</div><pre>${esc(v)}</pre>` : "";
-      const dur = (n.t_start && n.t_end) ? (n.t_end - n.t_start).toFixed(2) + "s" : "";
-      const promptLabel = n.kind === "agent_call" ? "prompt the agent was called with"
-                        : (n.kind === "tool_call" ? "tool args" : "input");
-      document.getElementById("detail").innerHTML =
-        `<span class="close" onclick="closeDetail()">✕</span>`
-        + `<h3>${esc(labelOf(n))}</h3>`
-        + `<div><span class="badge" style="background:${colorOf(n)}">${esc(n.status || "")}</span></div>`
-        + row("kind", n.kind) + row("agent", n.executor_agent) + row("duration", dur) + row("id", n.id)
-        + block(promptLabel, typeof n.input === "object" ? JSON.stringify(n.input, null, 2) : n.input)
-        + block("output", n.output);
-      document.getElementById("detail").style.display = "block";
+    // The whole text, always, in a box that scrolls when it is long. The
+    // earlier fold-and-expand needed a button to work and the button did not;
+    // a scrollbar has no state to get wrong.
+    function textBlock(title, value){
+      if (value === null || value === undefined || value === "") return "";
+      const text = (typeof value === "object")
+        ? Object.entries(value).map(([k, v]) =>
+            `${k}: ${typeof v === "object" ? JSON.stringify(v, null, 2) : v}`).join("\n")
+        : String(value);
+      const size = text.length > 900
+        ? ` <span class="chars">${text.length.toLocaleString()} chars</span>` : "";
+      return `<div class="k">${title}${size}</div><pre>${esc(text)}</pre>`;
     }
-    function closeDetail() { selectedId = null; document.getElementById("detail").style.display = "none"; }
 
+    function showDetailClassic(n){
+      const row=(k,v)=>(v||v===0)?`<div class="attr"><span class="ak">${k}:</span> ${esc(v)}</div>`:"";
+      const dur=(n.t_start&&n.t_end)?(n.t_end-n.t_start).toFixed(2)+"s":"";
+      document.getElementById("detail").innerHTML =
+        `<div class="dhead"><span class="close" onclick="closeDetail()">✕</span>`
+        + `<h3>${esc(labelOf(n))}</h3><div class="sub">${esc(n.kind||"")}</div></div><div class="dbody">`
+        + row("agent",n.executor_agent)+row("status",n.status)
+        + row("called at",clockOf(n))+row("duration",dur)+row("id",n.id)
+        + textBlock("input", n.input) + textBlock("output", n.output) + `</div>`;
+      document.getElementById("detail").style.display = "block";
+    }
+    function closeDetail(){ selectedId=null; lastDetailStamp=null;
+      document.getElementById("detail").style.display="none"; }
+
+    // Jump from an Evidence's provenance to the exact tool-call node in the
+    // execution log (glues the research graph to the execution trace).
+    function jumpToExecution(execId){
+      const sel = document.getElementById("view");
+      if (sel.value !== "execution") { sel.value = "execution"; sel.onchange(); }
+      let tries = 0;
+      const t = setInterval(() => {
+        if (nodeData[execId] || tries++ > 16) {
+          clearInterval(t);
+          if (nodeData[execId]) {
+            try { network.selectNodes([execId]); network.focus(execId, { scale: 1.1, animation: true }); } catch(e){}
+            selectedId = execId; showDetail(nodeData[execId]);
+          } else {
+            document.getElementById("status").textContent = "call " + execId + " not in the current execution log";
+          }
+        }
+      }, 250);
+    }
+
+    // ── wiring ────────────────────────────────────────────────────────────────
+    let lastDetailStamp = null;
+    function hardReset(){ nodes.clear(); edges.clear(); seenEdges.clear(); lastDetailStamp = null;
+      for (const k in nodeData) delete nodeData[k]; closeDetail(); }
     document.getElementById("refresh").onclick = poll;
     document.getElementById("view").onchange = () => {
-      nodes.clear(); edges.clear(); seenEdges.clear();
-      for (const k in nodeData) delete nodeData[k];
-      closeDetail(); rebuildNetwork(); updateLegend(); poll();
+      const sel = document.getElementById("turn");
+      sel.innerHTML = ""; sel.dataset.keys = "";   // a request id is not a study id
+      hardReset(); makeNetwork(); updateChrome(); poll();
     };
-    let timer = null;
-    function loop() { if (document.getElementById("auto").checked) poll(); timer = setTimeout(loop, 1500); }
-    rebuildNetwork(); updateLegend(); poll(); loop();
+    document.getElementById("prov").onchange = () => { hardReset(); poll(); };
+    document.getElementById("turn").onchange = () => { hardReset(); poll(); };
+    let timer=null;
+    function loop(){ if (document.getElementById("auto").checked) poll(); timer=setTimeout(loop,1500); }
+    // Honour ?view= so a link can open the view it means. Without this the page
+    // always opened on research, and the trace page's "graph view" link landed
+    // on a different graph than the one it offered.
+    (() => {
+      const q = new URLSearchParams(location.search);
+      const wanted = q.get("view");
+      // A link may name the request to open; the picker is filled on first poll.
+      const wantedTurn = q.get("turn");
+      if (wantedTurn) {
+        const sel = document.getElementById("turn");
+        sel.innerHTML = `<option value="${wantedTurn}">…</option>`;
+        sel.value = wantedTurn;
+        document.getElementById("turnWrap").style.display = "";
+      }
+      const sel = document.getElementById("view");
+      if (wanted && [...sel.options].some(o => o.value === wanted)) sel.value = wanted;
+      const back = document.getElementById("totrace");
+      if (back && q.get("user_id")) back.href = "/trace?" + new URLSearchParams({
+        user_id: q.get("user_id"), session_id: q.get("session_id") || "" });
+    })();
+    makeNetwork(); updateChrome(); poll(); loop();
   </script>
 </body>
 </html>
