@@ -23,8 +23,7 @@ _QUERIES = {
     "queries": [
         {
             "id": "LIT-01",
-            "task": "Классы анионных ПАВ для ASP",
-            "query_en": "anionic surfactants ASP flooding ultralow IFT",
+            "task": "Классы анионных ПАВ для ASP-заводнения со сверхнизким IFT",
             "extract": ["класс ПАВ", "IFT"],
         }
     ]
@@ -35,7 +34,7 @@ def test_render_queries_markdown_lists_each_query():
     md = render_queries_markdown(_QUERIES)
     assert "Целевые запросы к литературному агенту" in md
     assert "LIT-01" in md
-    assert "anionic surfactants ASP flooding ultralow IFT" in md
+    assert "Классы анионных ПАВ для ASP-заводнения со сверхнизким IFT" in md
     assert "класс ПАВ, IFT" in md
 
 

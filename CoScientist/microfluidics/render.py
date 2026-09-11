@@ -199,7 +199,6 @@ def _query_dicts(queries: Any) -> list[dict]:
             {
                 "id": str(q.get("id") or q.get("query_id") or ""),
                 "task": str(q.get("task") or ""),
-                "query_en": str(q.get("query_en") or q.get("query") or ""),
                 "extract": [str(x) for x in (q.get("extract") or [])],
             }
         )
@@ -214,17 +213,16 @@ def render_queries_markdown(queries: Any) -> str:
         out.append("_Запросы к литературному агенту не сформированы._")
         return "\n".join(out) + "\n"
     out.append(
-        "Задачи, выведенные из ТЗ: для каждой — англоязычный поисковый запрос и "
-        "перечень данных, которые литературный агент должен извлечь."
+        "Задачи, выведенные из ТЗ: для каждой — перечень данных, которые "
+        "литературный агент должен извлечь."
     )
     out.append("")
-    out.append("| ID | Задача | Поисковый запрос (EN) | Что извлечь |")
-    out.append("| --- | --- | --- | --- |")
+    out.append("| ID | Задача | Что извлечь |")
+    out.append("| --- | --- | --- |")
     for q in rows:
         extract = ", ".join(q["extract"]) if q["extract"] else "—"
         out.append(
-            f"| {_cell(q['id'])} | {_cell(q['task'])} "
-            f"| {_cell(q['query_en'])} | {_cell(extract)} |"
+            f"| {_cell(q['id'])} | {_cell(q['task'])} | {_cell(extract)} |"
         )
     return "\n".join(out).rstrip() + "\n"
 
@@ -333,13 +331,12 @@ def render_tz_and_queries_html(
     else:
         parts.append(
             "<table><thead><tr><th>ID</th><th>Задача</th>"
-            "<th>Поисковый запрос (EN)</th><th>Что извлечь</th></tr></thead><tbody>"
+            "<th>Что извлечь</th></tr></thead><tbody>"
         )
         for q in rows:
             extract = ", ".join(q["extract"]) if q["extract"] else "—"
             parts.append(
                 f"<tr><td>{_h(q['id'])}</td><td>{_h(q['task'])}</td>"
-                f"<td><code>{_h(q['query_en'])}</code></td>"
                 f"<td>{_h(extract)}</td></tr>"
             )
         parts.append("</tbody></table>")

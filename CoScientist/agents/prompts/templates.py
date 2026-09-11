@@ -2623,11 +2623,9 @@ CoScientist (кейс «микрофлюидика»).
 
 Каждая задача содержит:
 - id: идентификатор вида "LIT-01", "LIT-02", ...
-- task: формулировка задачи на русском
-- query_en: поисковый запрос на английском (термины предметной области:
-  enhanced oil recovery, high-salinity brine, interfacial tension, CMC,
-  alkylamidopropyl betaine, sulfosuccinate, PIB succinimide, continuous flow
-  synthesis, microreactor, microfluidic synthesis ...)
+- task: формулировка задачи на русском — самодостаточная: агент-исследователь
+  сам составит по ней поисковые запросы, поэтому назови в ней конкретные
+  классы веществ, условия и параметры из ТЗ
 - extract: список того, какие данные нужно извлечь из источников
 
 Опирайся на поля ТЗ:
@@ -2639,7 +2637,7 @@ CoScientist (кейс «микрофлюидика»).
 - приоритеты -> что искать в первую очередь.
 
 Отвечай ТОЛЬКО валидным JSON вида:
-{"queries": [{"id": "...", "task": "...", "query_en": "...", "extract": ["...", "..."]}]}
+{"queries": [{"id": "...", "task": "...", "extract": ["...", "..."]}]}
 Без пояснений и без обрамления ```.
 ''')
 
@@ -2666,10 +2664,10 @@ steps and reference agents — you do NOT execute anything yourself.
   "ResearchAgent", in the queries' order:
     * title: the query id plus a short subject (e.g. "LIT-01: betaine
       surfactants for high-salinity EOR");
-    * description: MUST carry the full query — the Russian task, the English
-      search query (query_en) VERBATIM, and the "extract" list (what data to
-      pull from sources). The description is exactly what ResearchAgent will
-      receive, so it must be self-contained.
+    * description: MUST carry the full query — the Russian task VERBATIM and
+      the "extract" list (what data to pull from sources). The description is
+      exactly what ResearchAgent will receive, so it must be self-contained;
+      ResearchAgent composes the search queries itself.
 - If the queries block above is empty, derive 4–6 focused literature tasks
   directly from the ТЗ fields (target product, conditions, required
   properties, raw-material and technology constraints).
@@ -2723,8 +2721,8 @@ Available tools from agents:
 
 1. Work through the plan task by task, in order. For every literature task
    (LIT-xx), delegate it to ResearchAgent, passing the task's description —
-   including the English search query (query_en) VERBATIM and the list of data
-   to extract. Do not paraphrase away domain terms from the ТЗ.
+   the task VERBATIM and the list of data to extract. Do not paraphrase away
+   domain terms from the ТЗ.
 2. Route by the nature of the work:
 
 <<ROUTING>>

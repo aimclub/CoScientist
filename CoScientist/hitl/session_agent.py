@@ -15,9 +15,42 @@ from CoScientist.hitl.models import HITLAction, HITLRequest, HITLResponse
 from CoScientist.graph.session_scope import session_key
 
 import json
+import yaml
 from CoScientist.tools.task_tracker import task_tracker_instance
 
 logger = logging.getLogger("CoScientist.hitl.session_agent")
+
+
+class _ReviewYamlDumper(yaml.SafeDumper):
+    """YAML for a human reader: list items indented under their key,
+    multi-line strings as ``|`` blocks."""
+
+    def increase_indent(self, flow=False, indentless=False):
+        return super().increase_indent(flow, False)
+
+
+def _represent_str(dumper: yaml.SafeDumper, value: str):
+    style = "|" if "\n" in value else None
+    return dumper.represent_scalar("tag:yaml.org,2002:str", value, style=style)
+
+
+_ReviewYamlDumper.add_representer(str, _represent_str)
+
+
+def render_review_yaml(data) -> str:
+    """Render a structured output (dict/list) as readable YAML.
+
+    Key order is kept (the schema's order reads best), Cyrillic stays as is,
+    and long lines are not hard-wrapped — the UI wraps them itself.
+    """
+    return yaml.dump(
+        data,
+        Dumper=_ReviewYamlDumper,
+        allow_unicode=True,
+        sort_keys=False,
+        default_flow_style=False,
+        width=float("inf"),
+    ).rstrip()
 
 
 def render_task_plan(tasks) -> str:
@@ -73,13 +106,20 @@ class SessionAgent(LlmAgent):
     def _review_output(self, output_text) -> str:
         """How the proposed output is presented to the human reviewer.
 
-        Structured outputs (dict/list from an output_schema) are shown as
-        readable JSON. Subclasses may override to show a rendered document
-        instead (e.g. the microfluidics ТЗ agent renders Markdown)."""
-        if isinstance(output_text, (dict, list)):
+        Structured outputs (dict/list from an output_schema, or the same as a
+        JSON string) are shown as YAML — far easier to read than JSON.
+        Subclasses may override to show a rendered document instead (e.g. the
+        microfluidics ТЗ agent renders Markdown)."""
+        data = output_text
+        if isinstance(data, str):
             try:
-                return json.dumps(output_text, ensure_ascii=False, indent=2)
-            except (TypeError, ValueError):
+                data = json.loads(data)
+            except ValueError:
+                return output_text
+        if isinstance(data, (dict, list)):
+            try:
+                return render_review_yaml(data)
+            except yaml.YAMLError:
                 pass
         return str(output_text)
 

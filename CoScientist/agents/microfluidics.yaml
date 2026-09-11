@@ -132,8 +132,8 @@ agents:
     class: custom:session
     description: >-
       генератор поисковых задач — из структурированного ТЗ формирует 4–6
-      конкретных литературных запросов (LIT-01…) с англоязычным поисковым
-      запросом и списком данных для извлечения.
+      конкретных литературных задач (LIT-01…) со списком данных для
+      извлечения.
     prompt: microfluidics_query_gen
     output_key: tz_literature_queries
     output_schema: tz_literature_queries
@@ -179,8 +179,8 @@ agents:
       (web, RAG, paper search). Open-ended search only.
     routing: >-
       for every literature task (LIT-xx) from the plan and any open-ended
-      knowledge question. Pass the task description with the English search
-      query (query_en) VERBATIM and the list of data to extract. If it returns
+      knowledge question. Pass the task description VERBATIM with the list of
+      data to extract — it composes the search queries itself. If it returns
       no/empty/insufficient results, escalate once by reformulating into
       "find and download papers about <expanded topic>".
     planning: |-

@@ -94,7 +94,6 @@ class LiteratureQuery(BaseModel):
 
     id: str = Field(description="Идентификатор задачи, например LIT-01")
     task: str = Field(description="Формулировка задачи на русском")
-    query_en: str = Field(description="Поисковый запрос на английском")
     extract: List[str] = Field(
         default_factory=list, description="Какие данные нужно извлечь из источников"
     )

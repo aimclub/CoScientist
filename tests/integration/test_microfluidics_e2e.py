@@ -8,7 +8,7 @@ the profile exists for:
   2. literature queries (LIT-xx) are derived FROM that ТЗ;
   3. the planner registers them as tasks assigned to ResearchAgent;
   4. the request that actually REACHES ResearchAgent carries the ТЗ-derived
-     query (query_en terms), i.e. the ТЗ table drives the literature search.
+     task (its terms), i.e. the ТЗ table drives the literature search.
 
 Scoped to module A on purpose: since stages 3–11 landed, the ROOT
 (RootOrchestrator) would also run design, experiment and report, which is a
@@ -57,17 +57,19 @@ QUERY = (
     "перспективные классы ПАВ, их свойства и маршруты синтеза."
 )
 
-# Generic English words that prove nothing about the ТЗ -> research handoff.
+# Generic words that prove nothing about the ТЗ -> research handoff.
 _STOPWORDS = {
     "with", "from", "into", "using", "under", "based", "high", "води",
     "search", "find", "paper", "papers", "download", "literature", "review",
     "data", "study", "studies", "research", "analysis", "properties",
+    "найти", "данные", "данных", "источников", "литературе", "литературы",
+    "свойства", "задача", "также", "которые", "условиях", "применения",
 }
 
 
 def _significant_tokens(text: str) -> set:
     return {
-        t for t in re.findall(r"[a-zA-Z][a-zA-Z-]{3,}", text.lower())
+        t for t in re.findall(r"[a-zа-яё][a-zа-яё-]{3,}", text.lower())
         if t not in _STOPWORDS
     }
 
@@ -136,7 +138,7 @@ def test_tz_table_drives_the_literature_requests():
     queries = lq.get("queries") or []
     assert queries, f"no literature queries derived from the ТЗ: {lq}"
     for q in queries:
-        assert q.get("id") and q.get("query_en"), f"malformed query: {q}"
+        assert q.get("id") and q.get("task"), f"malformed query: {q}"
     print(f"[e2e] ТЗ produced {len(queries)} literature queries: "
           f"{[q['id'] for q in queries]}")
 
@@ -156,14 +158,14 @@ def test_tz_table_drives_the_literature_requests():
     matched = []
     for q in queries:
         tokens = _significant_tokens(
-            " ".join([q.get("query_en", ""), " ".join(q.get("extract") or [])])
+            " ".join([q.get("task", ""), " ".join(q.get("extract") or [])])
         )
         common = sorted(t for t in tokens if t in joined)
         if q["id"].lower() in joined or len(common) >= 2:
             matched.append((q["id"], common[:8]))
     assert matched, (
         "No ResearchAgent request matches any ТЗ-derived literature query.\n"
-        f"Queries: {[q['query_en'] for q in queries]}\n"
+        f"Queries: {[q['task'] for q in queries]}\n"
         f"Requests: {[str(r)[:200] for r in research_requests]}"
     )
     print(f"[e2e] ТЗ -> ResearchAgent handoff confirmed for: {matched}")
