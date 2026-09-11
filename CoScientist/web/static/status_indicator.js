@@ -22,11 +22,15 @@
  *   StatusIndicator.markStopped()      — the user pressed Stop
  *   StatusIndicator.reset()            — session switch / clear
  *   StatusIndicator.demo(file, speed)  — replay a saved bundle's events
+ *   StatusIndicator.stages()           — linear pipeline stages with their state
+ *   StatusIndicator.stageOf(agent)     — index of the stage an agent works in
  *
  * A LINEAR pipeline (config `pipeline.linear`, e.g. the microfluidics profile)
  * sends its stages with the session snapshot. The line then leads with the
  * stage — "Этап 3 из 10 · План исследования" — and the current activity moves
  * to the sub-line: in such a run most tools look alike, the stage does not.
+ * The same stages, each with its state, are the plan tracker's list
+ * (plan_tracker.js), which is re-rendered whenever one of them changes.
  *
  * While the microfluidics ТЗ agents fill or edit the ТЗ cards, the line is the
  * card count instead — "Заполнено карточек ТЗ: 7 из 16" — read from the ТЗ
@@ -281,6 +285,10 @@
       // whether its own agent has already finished.
       stage: -1,
       stageEnded: false,
+      // How the run ended ('done' | 'error' | 'stopped'), null while it runs.
+      // Unlike `phase` it outlives the terminal linger, so the plan tracker
+      // still shows the failed stage after the card has hidden.
+      outcome: null,
       lastAuthor: null,    // the agent behind the latest tool/agent event
       note: null,          // transient sub-line (a failed tool, …)
       hideAt: 0,           // when a terminal phase should disappear
@@ -586,6 +594,8 @@
         window.RoadmapModal.updateTasks(st.tasks, false);
       }
     }
+    // Same rule once the terminal phase has lingered out into idle.
+    if (!(phase === 'done' && st.outcome)) st.outcome = phase;
     st.hideAt = Date.now() + linger;
     setPhase(phase, {}, true);
     setTimeout(() => {
@@ -855,6 +865,33 @@
 
   function stageCounter(info) {
     return pick(TEXT.stage).replace('%d', info.position).replace('%d', info.total);
+  }
+
+  /** Every stage with its state — the plan tracker's list for a linear run:
+   *  `[{agent, title, status}]`, status as the roadmap spells it (done /
+   *  in_progress / error / todo). A stopped run leaves its stage pending. */
+  function stageStates() {
+    return pipeline.stages.map((stage, i) => {
+      let status = 'todo';
+      if (i < st.stage) {
+        status = 'done';
+      } else if (i === st.stage) {
+        if (st.stageEnded || st.outcome === 'done') status = 'done';
+        else if (st.outcome === 'error') status = 'error';
+        else if (st.outcome !== 'stopped') status = 'in_progress';
+      }
+      return { agent: stage.agent, title: stage.title || stage.agent, status: status };
+    });
+  }
+
+  // The plan tracker renders from stageStates(); tell it only when they change
+  // — this runs after every websocket frame.
+  let stagesSignature = '';
+  function notifyStages() {
+    const signature = JSON.stringify(stageStates());
+    if (signature === stagesSignature) return;
+    stagesSignature = signature;
+    if (window.PlanTracker) window.PlanTracker.render();
   }
 
   // ── ТЗ cards ──────────────────────────────────────────────────────────────
@@ -1540,13 +1577,16 @@
 
   window.StatusIndicator = {
     mount: guarded('mount', mount),
-    feed: guarded('feed', feed),
-    reset: guarded('reset', reset),
+    feed: guarded('feed', function (msg, quiet) { feed(msg, quiet); notifyStages(); }),
+    reset: guarded('reset', function () { reset(); notifyStages(); }),
+    stages: guarded('stages', stageStates),
+    stageOf: guarded('stageOf', stageOf),
     demo: demo,   // async: the caller already handles its rejection
     setLang: guarded('setLang', function (value) { if (value) { lang = value; paint(); } }),
     setConnected: guarded('setConnected', function (value) { connected = !!value; render(); }),
     markStopped: guarded('markStopped', function () {
       endRun('stopped', STOPPED_LINGER_MS);
+      notifyStages();
     }),
   };
 })();

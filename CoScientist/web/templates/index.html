@@ -324,10 +324,13 @@
       </div>
     </section>
 
-    <!-- Right Sidebar: Telemetry -->
-    <aside class="w-80 shrink-0 flex flex-col gap-6 overflow-y-auto no-scrollbar pb-8">
-      <!-- Telemetry -->
-      <div class="bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/10 overflow-hidden relative">
+    <!-- Right Sidebar: status panels, then the plan tracker sized to its content -->
+    <aside class="w-80 shrink-0 flex flex-col gap-4 min-h-0 overflow-y-auto no-scrollbar pb-8">
+      <!-- Top panels are capped and scroll on their own, so a long usage list
+           doesn't push the plan tracker below the fold. -->
+      <div class="shrink-0 max-h-[50vh] flex flex-col gap-4 overflow-y-auto no-scrollbar">
+      <!-- Telemetry — a few recent lines only; kept compact, hidden by default -->
+      <div class="hidden bg-surface-container-lowest px-4 py-3 rounded-xl border border-outline-variant/10 overflow-hidden relative">
         <div class="absolute top-3 right-3">
           <span id="telemetry-live"
             class="text-[8px] font-bold text-outline-variant font-mono tracking-tighter uppercase flex items-center gap-1">
@@ -335,9 +338,9 @@
           </span>
         </div>
         <h4 data-i18n="telemetry.header"
-          class="text-[10px] font-bold text-outline-variant uppercase mb-3 tracking-widest">Telemetry Output</h4>
+          class="text-[10px] font-bold text-outline-variant uppercase mb-1.5 tracking-widest">Telemetry Output</h4>
         <div id="telemetry-log"
-          class="space-y-1.5 font-mono text-[9px] text-primary/60 max-h-96 overflow-y-auto no-scrollbar">
+          class="space-y-0.5 font-mono text-[9px] leading-tight text-primary/60 max-h-14 overflow-y-auto no-scrollbar">
           <div class="text-outline-variant">Waiting for connection…</div>
         </div>
       </div>
@@ -357,6 +360,30 @@
       <!-- HITL Pending -->
       <div id="hitl-panel" class="hidden">
         <!-- Filled dynamically -->
+      </div>
+      </div>
+
+      <!-- Plan Tracker — task titles and their state, filled by plan_tracker.js.
+           Starts hidden: it only appears once a plan exists (see render() in
+           plan_tracker.js), and sizes to its own content rather than
+           stretching to fill the column. -->
+      <div id="plan-tracker"
+        class="hidden shrink-0 flex flex-col bg-surface-container-lowest px-4 py-3 rounded-xl border border-outline-variant/10">
+        <div class="flex items-center justify-between gap-2 mb-2">
+          <h4 data-i18n="plan.header" class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Plan
+          </h4>
+          <div class="flex items-center gap-2">
+            <span id="plan-tracker-count" class="text-[10px] font-mono font-bold text-primary">0/0</span>
+            <button type="button" onclick="openRoadmapEditor()" data-i18n-title="plan.open" title="Open roadmap"
+              class="text-outline-variant hover:text-primary transition-colors flex items-center">
+              <span class="material-symbols-outlined text-sm">open_in_full</span>
+            </button>
+          </div>
+        </div>
+        <div class="h-1 w-full rounded-full bg-surface-container-high overflow-hidden mb-2 shrink-0">
+          <div id="plan-tracker-bar" class="h-full bg-secondary transition-all duration-500" style="width:0%"></div>
+        </div>
+        <ol id="plan-tracker-list" class="relative max-h-72 overflow-y-auto space-y-0.5 -mr-2 pr-1"></ol>
       </div>
     </aside>
   </main>
@@ -1373,6 +1400,7 @@
   <script src="/static/js/modals/settings.js"></script>
   <script src="/static/js/modals/dataset.js"></script>
   <script src="/static/js/modals/roadmap.js"></script>
+  <script src="/static/js/plan_tracker.js"></script>
   <script src="/static/js/modals/tz.js"></script>
   <script src="/static/js/modals/experiments.js"></script>
   <script src="/static/js/ws.js"></script>

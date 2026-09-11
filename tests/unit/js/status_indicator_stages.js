@@ -18,7 +18,10 @@ const root = {
   innerHTML: '',
   querySelector: () => null,
 };
+// The plan tracker lists the stages; the indicator re-renders it on a change.
+let trackerRenders = 0;
 const context = {
+  PlanTracker: { render() { trackerRenders += 1; } },
   document, console, URLSearchParams, setTimeout, clearTimeout,
   setInterval: () => 0,
   localStorage: { getItem: () => 'on', setItem() {} },  // expanded view on
@@ -42,6 +45,7 @@ function painted() {
 }
 const activity = (phase, author, extra) =>
   SI.feed(Object.assign({ type: 'tool_activity', phase, author }, extra || {}));
+const statuses = () => SI.stages().map(stage => stage.status).join(' ');
 
 SI.feed({ type: 'session_snapshot', pipeline_stages: STAGES, active_tasks: [] });
 SI.feed({ type: 'user_message', message: 'go' });
@@ -51,6 +55,14 @@ activity('call', 'TZSpecAgent_task', { tool: 'fill_tz_section', call_id: 'c1' })
 let line = painted();
 assert.match(line, /Этап 1 из 5 · Техническое задание/, line);
 assert.match(line, /0\/5 \(0%\)/, line);
+assert.strictEqual(statuses(), 'in_progress todo todo todo todo');
+assert.strictEqual(SI.stages()[0].title, 'Техническое задание');
+assert.strictEqual(SI.stageOf('TZSpecAgent_task'), 0);
+assert.strictEqual(SI.stageOf('ResearchAgent'), 3);
+// Frames inside the same stage do not re-render the tracker.
+const rendersBefore = trackerRenders;
+activity('call', 'TZSpecAgent_task', { tool: 'fill_tz_section', call_id: 'c1b' });
+assert.strictEqual(trackerRenders, rendersBefore);
 
 SI.feed({ type: 'hitl_request', agent_name: 'TZSpecAgent', form: { kind: 'tz' } });
 line = painted();
@@ -62,6 +74,8 @@ activity('agent_end', 'TZSpecAgent_task');                // a worker, not the s
 assert.match(painted(), /0\/5/);
 activity('agent_end', 'TZSpecAgent');
 assert.match(painted(), /1\/5 \(20%\)/);
+assert.strictEqual(statuses(), 'done todo todo todo todo');
+assert.strictEqual(trackerRenders, rendersBefore + 1);
 
 activity('agent_start', 'TZQueryGenAgent');
 line = painted();
@@ -74,6 +88,20 @@ assert.match(painted(), /Этап 4 из 5 · Анализ литературы/
 // …but a late call from an earlier stage does not move back.
 activity('call', 'TZQueryGenAgent', { tool: 'x', call_id: 'c3' });
 assert.match(painted(), /Этап 4 из 5/);
+assert.strictEqual(statuses(), 'done done done in_progress todo');
+
+// A failed run marks its stage failed, and keeps it so after the card hides;
+// a stopped one leaves it pending.
+SI.feed({ type: 'error', message: 'boom' });
+assert.strictEqual(statuses(), 'done done done error todo');
+SI.feed({ type: 'status', status: 'idle' });
+assert.strictEqual(statuses(), 'done done done error todo');
+SI.feed({ type: 'user_message', message: 'retry' });
+activity('agent_start', 'LiteratureOrchestrator');
+const rendersBeforeStop = trackerRenders;
+SI.markStopped();
+assert.strictEqual(statuses(), 'done done done todo todo');
+assert.strictEqual(trackerRenders, rendersBeforeStop + 1);
 
 // A session switch keeps the stages (they are config), not the position.
 SI.reset();
@@ -82,6 +110,7 @@ activity('agent_start', 'ReportAgent');
 activity('agent_end', 'ReportAgent');
 SI.feed({ type: 'final_response', content: 'ok' });
 assert.match(painted(), /Готово.*5\/5 \(100%\)/);
+assert.strictEqual(statuses(), 'done done done done done');
 
 // Not a linear pipeline: the old line, no stage counter.
 SI.feed({ type: 'session_snapshot', pipeline_stages: [] });
@@ -89,6 +118,7 @@ SI.feed({ type: 'user_message', message: 'go' });
 activity('call', 'ResearchAgent', { tool: 'tavily_search', call_id: 'c9', args: { query: 'q' } });
 line = painted();
 assert.doesNotMatch(line, /Этап/, line);
+assert.strictEqual(SI.stages().length, 0);
 
 // ── The ТЗ cards: counted, no tools and no agents named ────────────────────
 // No ТЗ tool or ТЗ agent is ever named; in a linear pipeline no module, root

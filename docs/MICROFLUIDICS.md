@@ -198,6 +198,14 @@ COSCIENTIST_CONFIG=microfluidics python -m CoScientist.assembly
 относятся к этапу `TZSpecAgent` по префиксу имени). Этап считается пройденным,
 когда закончил работу его собственный агент или начался следующий.
 
+Те же этапы — это **план** в правой панели (`plan_tracker.js`): строка на этап
+с его состоянием (ожидает / в работе / выполнен / ошибка), счётчик и полоса —
+пройденные этапы. Задачи роадмапа (`LIT-01…` от `PlannerAgent`) вложены под
+этап своего исполнителя — `ResearchAgent` входит в «Анализ литературы».
+Список отдаёт индикатор (`StatusIndicator.stages()`) и перерисовывает панель,
+когда меняется состояние какого-нибудь этапа. Без `pipeline.linear` панель
+показывает только задачи роадмапа.
+
 ## Human-in-the-loop (ревью оператора)
 
 Аналог интерактивного опросника VibePAV: обе стадии ТЗ и планер — session-агенты
@@ -315,7 +323,8 @@ pytest tests/unit/test_microfluidics_tz_parallel.py -q
 
 # этапы линейного пайплайна: вывод из конфига, snapshot, и сам индикатор
 # («Этап k из N»; сценарий в tests/unit/js, нужен node — иначе пропускается)
-pytest tests/unit/test_pipeline_stages.py tests/unit/test_status_indicator_stages.py -q
+pytest tests/unit/test_pipeline_stages.py tests/unit/test_status_indicator_stages.py \
+       tests/unit/test_plan_tracker_stages.py -q
 
 # живой тест HITL ТЗ-стадии: скриптованный «оператор» вписывает одно значение,
 # остальные пустые поля оставляет агенту, во 2-м раунде принимает ТЗ;

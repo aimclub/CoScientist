@@ -37,6 +37,15 @@
       'telemetry.header': { en: 'Telemetry Output', ru: 'Лог телеметрии' },
       'usage.header': { en: 'Usage & Cost', ru: 'Использование и стоимость' },
 
+      // ── Plan tracker (right sidebar) ──
+      'plan.header': { en: 'Plan', ru: 'План' },
+      'plan.open': { en: 'Open roadmap', ru: 'Открыть план' },
+      'plan.untitled': { en: 'Untitled task', ru: 'Задача без названия' },
+      'plan.status.todo': { en: 'Pending', ru: 'Ожидает' },
+      'plan.status.in_progress': { en: 'In progress', ru: 'В работе' },
+      'plan.status.done': { en: 'Completed', ru: 'Выполнена' },
+      'plan.status.error': { en: 'Failed', ru: 'Ошибка' },
+
       // ── Activity Rail HUD ──
       'rail.agents': { en: 'Agents', ru: 'Агенты' },
       'rail.tools': { en: 'Tools', ru: 'Инструменты' },
@@ -269,6 +278,12 @@
         const entry = i18n[key];
         if (entry && entry[currentLang]) el.placeholder = entry[currentLang];
       });
+      document.querySelectorAll('[data-i18n-title]').forEach(el => {
+        const key = el.getAttribute('data-i18n-title');
+        const entry = i18n[key];
+        if (entry && entry[currentLang]) el.title = entry[currentLang];
+      });
+      if (window.PlanTracker) PlanTracker.render();
 
       // Динамические элементы статуса и пользователя
       const nicknameEl = document.getElementById('active-nickname');
