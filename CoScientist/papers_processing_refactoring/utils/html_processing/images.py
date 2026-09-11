@@ -37,7 +37,7 @@ def check_image_relevance(image_b64: str, llm) -> bool:
 def try_extract_table(image_b64: str, llm) -> str | None:
     try:
         table_query = [prompt_func({"text": table_extraction_prompt, "image": [image_b64]})]
-        res = llm.invoke(table_query)
+        res = llm.invoke(table_query).content.strip()
 
         if res != "No table":
             pattern = r'<table\b[^>]*>.*?</table>'
