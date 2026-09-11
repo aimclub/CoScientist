@@ -22,18 +22,17 @@ import json
 from datetime import date
 from typing import Any, Union
 
-from CoScientist.microfluidics.models import (
-    CANONICAL_BLOCKS,
-    OPEN_STATUSES,
-    StructuredTZ,
-)
+from CoScientist.hitl.field_status import NOT_REQUIRED_STATUS
+from CoScientist.microfluidics.models import CANONICAL_BLOCKS, StructuredTZ
 
 _LEGEND = """\
 | Статус поля            | Как интерпретировать                                                                                                        |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | Задано заказчиком      | Конкретное значение получено от заказчика и может использоваться агентами как входное ограничение или критерий               |
-| Уточнено оператором    | Значение добавлено оператором/агентом постановки ТЗ из контекста и может использоваться как рабочее ограничение              |
+| Автоподбор             | Заказчик значение не называл — агент постановки ТЗ подобрал его из запроса и контекста; рабочее ограничение до проверки       |
+| Уточнено оператором    | Значение внесено или исправлено человеком при проверке ТЗ; используется как подтверждённое ограничение                        |
 | Не задано              | Значение отсутствует; агент не должен его придумывать, но может запросить уточнение или выполнить поиск вариантов            |
+| Не требуется           | Параметр намеренно оставлен без ограничения: подходит любое значение, как критерий отбора не используется                    |
 | Свободный комментарий  | Неформализованная информация; не используется как жёсткий критерий ранжирования, пока не переведена в конкретный параметр    |
 | Рассчитывается агентом | Значение должно быть определено на следующем этапе работы системы                                                            |
 | Заполнено агентом      | Оператор оставил поле пустым, и агент подставил рабочее значение; используется как рабочее ограничение до уточнения          |"""
@@ -41,6 +40,7 @@ _LEGEND = """\
 _OPEN_GUIDANCE = {
     "не задано": "Не подменять предположениями; запросить уточнение или выполнить поиск вариантов",
     "рассчитывается агентом": "Определяется на следующем этапе работы системы",
+    NOT_REQUIRED_STATUS: "Намеренно без ограничения: подходит любое значение, не критерий отбора",
 }
 
 
@@ -132,7 +132,7 @@ def render_tz_document(tz: Union[StructuredTZ, dict, str], version: str = "v1") 
         (block.title, f)
         for block in tz.blocks
         for f in block.fields
-        if f.status in OPEN_STATUSES
+        if f.status in _OPEN_GUIDANCE
     ]
     out.append("## Поля, которые остаются свободными или незаполненными\n")
     if open_rows:
@@ -259,6 +259,8 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86em;
 .s-comment{background:#e6f0fb;color:#1c5fa8;border-color:#c3ddf5}
 .s-open{background:#f0f0f0;color:#777;border-color:#ddd}
 .s-agent{background:#fff8d6;color:#8a6d00;border-color:#f0dc8a}
+.s-auto{background:#e6f7f7;color:#0d7070;border-color:#bde6e6}
+.s-free{background:#f4f4f4;color:#888;border-color:#ddd;font-style:italic}
 @media (prefers-color-scheme:dark){
  body{background:#171717;color:#e8e8e8}
  h2{border-color:#333} h3{color:#f0f0f0}
@@ -271,13 +273,17 @@ code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86em;
  .s-comment{background:#132840;color:#8bb9e8;border-color:#274a70}
  .s-open{background:#242424;color:#999;border-color:#3a3a3a}
  .s-agent{background:#3a3210;color:#eac400;border-color:#5e5220}
+ .s-auto{background:#123333;color:#7fd3d3;border-color:#265c5c}
+ .s-free{background:#222;color:#888;border-color:#3a3a3a}
 }
 @media print{body{max-width:none;padding:0}}
 """
 
 _STATUS_HTML_CLASS = {
     "задано заказчиком": "s-given",
+    "автоподбор": "s-auto",
     "уточнено оператором": "s-op",
+    "не требуется": "s-free",
     "рассчитывается агентом": "s-calc",
     "свободный комментарий": "s-comment",
     "заполнено агентом": "s-agent",

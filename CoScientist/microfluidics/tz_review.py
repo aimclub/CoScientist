@@ -8,11 +8,15 @@ in the ТЗ panel of the web UI:
     ascending section order (the panel moves a section down as soon as its
     empty fields are filled);
   * every field can be edited; a value typed by the operator becomes
-    «уточнено оператором»;
+    «уточнено оператором» (the agent's own inferences are «автоподбор»);
   * a field the operator leaves EMPTY goes to the agent — it fills it through
     ``fill_agent_fields`` as «заполнено агентом», and the ТЗ comes back to the
     operator with those fields highlighted. Round after round, until the
-    operator submits a form with nothing left empty.
+    operator submits a form with nothing left empty;
+  * a field the operator leaves empty with the ⊘ button (the form sends
+    ``NOT_REQUIRED_VALUE``, or the operator types «не требуется») becomes «не
+    требуется»: deliberately unconstrained, never handed to the agent — also
+    the way to clear a value the agent filled that is not needed after all.
 
 ``tz_view`` is the one serialisation of the ТЗ the panel reads — both the
 HITL form and the live ``tz_snapshot`` stream use it.
@@ -22,7 +26,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, List, Optional, Tuple
 
-from CoScientist.hitl.field_status import AGENT_FILLED_STATUS, OPERATOR_STATUS
+from CoScientist.hitl.field_status import (
+    AGENT_FILLED_STATUS,
+    NOT_REQUIRED_STATUS,
+    NOT_REQUIRED_VALUE,
+    OPERATOR_STATUS,
+)
 from CoScientist.microfluidics.models import CANONICAL_BLOCKS, StructuredTZ
 from CoScientist.microfluidics.questionnaire import QUESTION_BANK
 from CoScientist.microfluidics.tz_builder import is_empty_value
@@ -30,6 +39,15 @@ from CoScientist.microfluidics.tz_builder import is_empty_value
 FORM_KIND = "tz"
 AWAITING_STATUS = "не задано"
 DEFERRED_STATUS = "рассчитывается агентом"
+# What the operator may send (or type) to mark a field «не требуется».
+_NOT_REQUIRED_ANSWERS = {
+    " ".join(v.split()).lower() for v in (NOT_REQUIRED_VALUE, NOT_REQUIRED_STATUS)
+}
+
+
+def is_not_required_answer(value) -> bool:
+    """Did the operator mark the field «не задавать»?"""
+    return " ".join(str(value or "").split()).lower() in _NOT_REQUIRED_ANSWERS
 
 
 def section_number(title: str, position: int) -> int:
@@ -58,6 +76,7 @@ def tz_view(tz: StructuredTZ, agent_fill: Optional[dict] = None) -> dict:
                 "awaiting": f.status == AWAITING_STATUS,
                 "deferred": f.status == DEFERRED_STATUS,
                 "agent_filled": f.status == AGENT_FILLED_STATUS,
+                "not_required": f.status == NOT_REQUIRED_STATUS,
                 "agent_pending": f.name in waiting,
             }
             for f in block.fields
@@ -80,7 +99,9 @@ def tz_view(tz: StructuredTZ, agent_fill: Optional[dict] = None) -> dict:
             "awaiting_sections": sum(1 for s in sections if s["awaiting"]),
             "awaiting_fields": sum(1 for f in all_fields if f["awaiting"]),
             "agent_filled": sum(1 for f in all_fields if f["agent_filled"]),
+            "not_required": sum(1 for f in all_fields if f["not_required"]),
         },
+        "not_required_value": NOT_REQUIRED_VALUE,
     }
 
 
@@ -92,14 +113,15 @@ def tz_form(tz: StructuredTZ, round_no: int) -> dict:
         intro = (
             f"Не заполнено полей: {counts['awaiting_fields']} в "
             f"{counts['awaiting_sections']} разделах — они вверху. Впишите "
-            "известные значения; поля, оставленные пустыми, заполнит агент."
+            "известные значения; поля, оставленные пустыми, заполнит агент. Поле, "
+            "которое задавать не нужно, оставьте пустым кнопкой ⊘ справа от него."
         )
     else:
         intro = "Все поля заполнены. Проверьте значения и подтвердите ТЗ."
     if counts["agent_filled"]:
         intro += (
             f" Агент заполнил полей: {counts['agent_filled']} — они выделены; "
-            "исправьте их при необходимости."
+            "исправьте их при необходимости, лишние уберите кнопкой ⊘."
         )
     return {"kind": FORM_KIND, "title": "Техническое задание", "intro": intro,
             "round": round_no, **view}
@@ -111,6 +133,8 @@ class OperatorAnswers:
 
     tz: StructuredTZ
     set_by_operator: int = 0
+    # Fields the operator marked «не задавать» in this round.
+    not_required: int = 0
     # [(section, [field names])] in document order — to be filled by the agent.
     left_to_agent: List[Tuple[str, List[str]]] = field(default_factory=list)
 
@@ -122,12 +146,14 @@ class OperatorAnswers:
 def apply_operator_values(tz: StructuredTZ, form_values: Any) -> OperatorAnswers:
     """Fold a submitted form ({section: {field: value}}) onto the ТЗ.
 
-    Per field present in the form: a new non-empty value -> «уточнено
-    оператором»; the same value as before -> unchanged (an agent value the
-    operator kept stays «заполнено агентом»); an empty value -> left to the
-    agent (the field becomes «не задано» until the agent fills it). Fields
-    «рассчитывается агентом» are deferred to later stages, so leaving them
-    empty keeps them as they are. Fields missing from the form are untouched.
+    Per field present in the form: «не задавать» (``NOT_REQUIRED_VALUE`` or
+    «не требуется») -> «не требуется», never handed to the agent; a new
+    non-empty value -> «уточнено оператором»; the same value as before ->
+    unchanged (an agent value the operator kept stays «заполнено агентом»);
+    an empty value -> left to the agent (the field becomes «не задано» until
+    the agent fills it). Fields «рассчитывается агентом» are deferred to later
+    stages, so leaving them empty keeps them as they are. Fields missing from
+    the form are untouched.
     """
     tz = tz.model_copy(deep=True)
     answers = OperatorAnswers(tz=tz)
@@ -143,7 +169,11 @@ def apply_operator_values(tz: StructuredTZ, form_values: Any) -> OperatorAnswers
                 continue
             raw = submitted[f.name]
             new = "" if raw is None else str(raw).strip()
-            if is_empty_value(new):
+            if is_not_required_answer(new):
+                if f.status != NOT_REQUIRED_STATUS:
+                    f.value, f.status = NOT_REQUIRED_VALUE, NOT_REQUIRED_STATUS
+                    answers.not_required += 1
+            elif is_empty_value(new):
                 if f.status == DEFERRED_STATUS:
                     continue
                 f.value, f.status = "Не задано", AWAITING_STATUS
@@ -159,9 +189,14 @@ def apply_operator_values(tz: StructuredTZ, form_values: Any) -> OperatorAnswers
 def agent_fill_message(answers: OperatorAnswers, instruction: str) -> str:
     """The turn that sends the agent to fill what the operator left empty."""
     sections = len(answers.left_to_agent)
+    not_required = (
+        f" Полей, отмеченных «не требуется» (их не заполняй): {answers.not_required}."
+        if answers.not_required else ""
+    )
     return (
         "Оператор проверил ТЗ в веб-форме. Введённые им значения уже внесены в "
-        f"ТЗ (полей: {answers.set_by_operator}). {answers.left_count} пол(я/ей) в "
+        f"ТЗ (полей: {answers.set_by_operator}).{not_required} "
+        f"{answers.left_count} пол(я/ей) в "
         f"{sections} раздел(е/ах) оператор оставил пустыми — их должен заполнить "
         "ты: конкретными рабочими значениями из запроса и отраслевого контекста, "
         "по одному разделу за вызов fill_agent_fields, строго в указанном порядке. "
@@ -176,6 +211,7 @@ __all__ = [
     "OperatorAnswers",
     "agent_fill_message",
     "apply_operator_values",
+    "is_not_required_answer",
     "section_number",
     "tz_form",
     "tz_view",

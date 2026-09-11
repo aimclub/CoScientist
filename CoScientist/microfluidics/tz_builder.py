@@ -60,7 +60,11 @@ from typing import Any, Callable, List, Optional, Tuple, get_args
 from google.adk.tools import ToolContext
 from pydantic import BaseModel, Field
 
-from CoScientist.hitl.field_status import AGENT_FILLED_STATUS
+from CoScientist.hitl.field_status import (
+    AGENT_FILLED_STATUS,
+    NOT_REQUIRED_STATUS,
+    NOT_REQUIRED_VALUE,
+)
 from CoScientist.microfluidics.models import (
     CANONICAL_BLOCKS,
     FieldStatus,
@@ -85,6 +89,8 @@ TOTAL_SECTIONS = len(CANONICAL_BLOCKS)
 ALLOWED_STATUSES: tuple[str, ...] = tuple(
     s for s in get_args(FieldStatus) if s != AGENT_FILLED_STATUS
 )
+# Statuses under which a field needs no value of its own.
+_VALUELESS_STATUSES = (*OPEN_STATUSES, NOT_REQUIRED_STATUS)
 _FIELD_KEYS = ("name", "value", "status")
 # Values that mean "nothing here" — not acceptable under a status that claims one.
 _EMPTY_VALUES = {"", "-", "—", "не задано", "не задан", "не задана", "нет данных"}
@@ -363,7 +369,7 @@ def validate_section_fields(
                 f"{label}: недопустимый статус «{status}»; допустимо одно из: "
                 + ", ".join(f"«{s}»" for s in ALLOWED_STATUSES) + "."
             )
-        elif normalized not in OPEN_STATUSES and _norm(value) in _EMPTY_VALUES:
+        elif normalized not in _VALUELESS_STATUSES and _norm(value) in _EMPTY_VALUES:
             field_errors.append(
                 f"{label}: статус «{normalized}» означает, что значение известно, "
                 f"но value {'пустое' if not value else f'«{value}»'} — укажите "
@@ -373,6 +379,8 @@ def validate_section_fields(
         if field_errors:
             errors.extend(field_errors)
             continue
+        if normalized == NOT_REQUIRED_STATUS and _norm(value) in _EMPTY_VALUES:
+            value = NOT_REQUIRED_VALUE
         rows.append(TZFieldRow(name=name, value=value or "Не задано", status=normalized))
     return rows, errors
 
@@ -561,8 +569,9 @@ def fill_tz_section(
         usage: one phrase — how this section is used further down the pipeline.
         fields: the rows of the section table, each
             {"name": ..., "value": ..., "status": ...}; status is one of
-            «задано заказчиком», «уточнено оператором», «не задано»,
-            «свободный комментарий», «рассчитывается агентом».
+            «задано заказчиком», «автоподбор», «уточнено оператором»,
+            «не задано», «не требуется», «свободный комментарий»,
+            «рассчитывается агентом».
 
     Returns:
         status "ok" with the progress (k/N) and the section to fill next;
@@ -702,8 +711,9 @@ def make_group_fill_tool(group: SectionGroup) -> Callable[..., dict]:
         usage: one phrase — how this section is used further down the pipeline.
         fields: the rows of the section table, each
             {{"name": ..., "value": ..., "status": ...}}; status is one of
-            «задано заказчиком», «уточнено оператором», «не задано»,
-            «свободный комментарий», «рассчитывается агентом».
+            «задано заказчиком», «автоподбор», «уточнено оператором»,
+            «не задано», «не требуется», «свободный комментарий»,
+            «рассчитывается агентом».
 
     Returns:
         status "ok" with the progress of your part (k/N) and the section to

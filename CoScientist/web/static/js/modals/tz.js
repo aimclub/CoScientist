@@ -7,7 +7,10 @@
 // человеком"); a section moves down to the filled ones — kept in ascending
 // order — as soon as its empty fields are filled and the focus leaves it.
 // Fields the operator leaves empty go to the agent; the fields it filled come
-// back highlighted in the next round.
+// back highlighted in the next round. The ⊘ button right of a field keeps it
+// empty on purpose: it becomes «не требуется» — deliberately unconstrained,
+// never handed to the agent (also the way to clear an agent value that is
+// not needed); ↺ in its place takes that back.
 // =========================================================================
 (function () {
   'use strict';
@@ -15,12 +18,18 @@
   let snapshot = null;   // latest tz_snapshot
   let request = null;    // pending HITL request carrying the ТЗ form
   let draft = {};        // {section: {field: value}} — what the operator typed
+  let stash = {};        // what a field held before it was marked «не задавать»
   let sessionId = null;
+
+  // The value that marks a field «не требуется» — the server's, when it sent one.
+  const NOT_REQUIRED_DEFAULT = 'Не требуется — без ограничения';
 
   const STATUS_CHIP = {
     'задано заказчиком': 'text-secondary border-secondary/30 bg-secondary/10',
+    'автоподбор': 'text-on-surface-variant border-primary/20 bg-primary/5',
     'уточнено оператором': 'text-primary border-primary/30 bg-primary/10',
     'не задано': 'text-error border-error/30 bg-error/10',
+    'не требуется': 'text-outline-variant border-outline-variant/30 bg-transparent italic',
     'свободный комментарий': 'text-on-surface-variant border-outline-variant/30 bg-surface-container-high',
     'рассчитывается агентом': 'text-outline-variant border-outline-variant/30 bg-surface-container-high',
     'заполнено агентом': 'text-tertiary border-tertiary/40 bg-tertiary/10',
@@ -51,6 +60,18 @@
 
   function editable(field) { return !field.deferred; }
 
+  function notRequiredValue() {
+    const v = view();
+    return (v && v.not_required_value) || NOT_REQUIRED_DEFAULT;
+  }
+
+  function norm(value) { return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase(); }
+
+  function isNotRequired(value) {
+    const text = norm(value);
+    return text === norm(notRequiredValue()) || text === 'не требуется';
+  }
+
   function draftValue(section, field) {
     const s = draft[section.title];
     return s && Object.prototype.hasOwnProperty.call(s, field.name) ? s[field.name] : '';
@@ -67,6 +88,7 @@
 
   function resetDraft() {
     draft = {};
+    stash = {};
     const v = view();
     ((v && v.sections) || []).forEach(s => {
       draft[s.title] = {};
@@ -85,41 +107,72 @@
     return n;
   }
 
+  function notRequiredCount() {
+    const v = view();
+    let n = 0;
+    ((v && v.sections) || []).forEach(s => (s.fields || []).forEach(f => {
+      if (formMode() ? (editable(f) && isNotRequired(draftValue(s, f))) : f.not_required) n++;
+    }));
+    return n;
+  }
+
   // ── rendering ──────────────────────────────────────────────────────────
   function fieldHtml(section, field, fi) {
-    const chip = STATUS_CHIP[field.status] || STATUS_CHIP['свободный комментарий'];
     const agent = field.agent_filled;
     const pending = field.agent_pending && !formMode();
-    const rowClass = agent
-      ? 'border-l-2 border-tertiary bg-tertiary/5'
-      : (field.awaiting ? 'border-l-2 border-error/60' : 'border-l-2 border-transparent');
+    const form = formMode() && editable(field);
+    const value = form ? draftValue(section, field) : '';
+    const unset = form && isNotRequired(value);
+    // In the form the chip follows the operator's choice right away.
+    const status = unset ? 'не требуется' : field.status;
+    const chip = STATUS_CHIP[status] || STATUS_CHIP['свободный комментарий'];
+    const rowClass = unset
+      ? 'border-l-2 border-outline-variant/30'
+      : agent
+        ? 'border-l-2 border-tertiary bg-tertiary/5'
+        : (field.awaiting ? 'border-l-2 border-error/60' : 'border-l-2 border-transparent');
     let valueHtml;
-    if (formMode() && editable(field)) {
-      const value = draftValue(section, field);
+    if (form) {
       const placeholder = field.awaiting
-        ? 'Не задано — впишите значение или оставьте пустым: заполнит агент'
+        ? 'Не задано — впишите значение; пустое заполнит агент, ⊘ справа — оставить пустым'
         : 'Пусто — заполнит агент';
       // Values already there read as text until hovered/focused; the ones
       // waiting for the operator and the agent's ones stand out.
-      const look = agent
-        ? 'bg-tertiary/5 border-tertiary/40'
-        : field.awaiting
-          ? 'bg-error/5 border-error/25'
-          : 'bg-transparent border-transparent hover:border-outline-variant/30';
+      const look = unset
+        ? 'bg-transparent border-dashed border-outline-variant/30 text-outline-variant italic'
+        : agent
+          ? 'bg-tertiary/5 border-tertiary/40'
+          : field.awaiting
+            ? 'bg-error/5 border-error/25'
+            : 'bg-transparent border-transparent hover:border-outline-variant/30';
+      const hint = unset
+        ? 'Вернуть поле: вписать значение или отдать агенту'
+        : 'Оставить поле пустым — без ограничения, агент не будет его заполнять';
+      // The «leave empty» button sits right of the value, one click per field.
       valueHtml = `
-        <textarea rows="1" data-section="${esc(section.title)}" data-field="${esc(field.name)}"
-          id="tz-f-${section.num}-${fi}" placeholder="${esc(placeholder)}"
-          class="tz-input w-full resize-none border ${look} rounded-md px-2 py-1 text-[11px] text-on-surface placeholder:text-outline-variant/50 focus:bg-surface-container-lowest focus:border-primary/50 focus:ring-1 focus:ring-primary/30 outline-none">${esc(value)}</textarea>`;
+        <div class="flex items-start gap-1.5">
+          <textarea rows="1" data-section="${esc(section.title)}" data-field="${esc(field.name)}"
+            id="tz-f-${section.num}-${fi}" placeholder="${esc(placeholder)}" ${unset ? 'readonly' : ''}
+            class="tz-input flex-1 min-w-0 resize-none border ${look} rounded-md px-2 py-1 text-[11px] text-on-surface placeholder:text-outline-variant/50 focus:bg-surface-container-lowest focus:border-primary/50 focus:ring-1 focus:ring-primary/30 outline-none">${esc(value)}</textarea>
+          <button type="button" data-section="${esc(section.title)}" data-field="${esc(field.name)}"
+            title="${esc(hint)}" aria-label="${esc(hint)}" aria-pressed="${unset ? 'true' : 'false'}"
+            class="tz-toggle-nr shrink-0 w-7 h-7 flex items-center justify-center rounded-md border transition-colors ${unset
+              ? 'text-primary border-primary/40 bg-primary/10 hover:bg-primary/20'
+              : 'text-outline-variant border-outline-variant/25 hover:text-error hover:border-error/40 hover:bg-error/5'}">
+            <span class="material-symbols-outlined text-[16px] pointer-events-none">${unset ? 'undo' : 'block'}</span>
+          </button>
+        </div>`;
     } else {
       const shown = field.awaiting ? '—' : field.value;
-      valueHtml = `<div class="text-[11px] text-on-surface whitespace-pre-line break-words ${field.awaiting ? 'text-outline-variant italic' : ''}">${esc(shown)}</div>`;
+      const muted = field.awaiting || field.not_required;
+      valueHtml = `<div class="text-[11px] text-on-surface whitespace-pre-line break-words ${muted ? 'text-outline-variant italic' : ''}">${esc(shown)}</div>`;
     }
     return `
       <div class="tz-field flex flex-col gap-1 pl-2 py-1 rounded-sm ${rowClass}">
         <div class="flex flex-wrap items-center gap-1.5">
           <span class="text-[11px] font-medium text-on-surface-variant">${esc(field.name)}</span>
-          <span class="text-[9px] px-1.5 py-px rounded-full border ${chip}">${esc(field.status)}</span>
-          ${agent ? '<span class="text-[9px] font-semibold text-tertiary">● проверьте значение агента</span>' : ''}
+          <span class="text-[9px] px-1.5 py-px rounded-full border ${chip}">${esc(status)}</span>
+          ${agent && !unset ? '<span class="text-[9px] font-semibold text-tertiary">● проверьте значение агента</span>' : ''}
           ${pending ? '<span class="text-[9px] font-semibold text-tertiary animate-pulse">агент заполняет…</span>' : ''}
         </div>
         ${valueHtml}
@@ -216,13 +269,21 @@
     const awaiting = sections.filter(isAwaiting).length;
     const agent = sections.reduce((n, s) => n + (s.fields || []).filter(f => f.agent_filled).length, 0);
     const empty = emptyCount();
+    const unset = notRequiredCount();
     document.getElementById('tz-awaiting-count').textContent = awaiting;
     document.getElementById('tz-filled-count').textContent = sections.length - awaiting;
     document.getElementById('tz-stats').textContent =
-      `Разделов: ${sections.length} · ожидают: ${awaiting}` + (agent ? ` · заполнено агентом: ${agent}` : '');
+      `Разделов: ${sections.length} · ожидают: ${awaiting}`
+      + (agent ? ` · заполнено агентом: ${agent}` : '')
+      + (unset ? ` · не требуется: ${unset}` : '');
 
     const submit = document.getElementById('tz-submit-btn');
     submit.classList.toggle('hidden', !formMode());
+    const leaveEmpty = document.getElementById('tz-leave-empty-btn');
+    if (leaveEmpty) {
+      leaveEmpty.classList.toggle('hidden', !formMode() || !empty);
+      document.getElementById('tz-leave-empty-label').textContent = `Не заполнять пустые (${empty})`;
+    }
     document.getElementById('tz-submit-label').textContent = empty
       ? `Отправить · пустые поля (${empty}) заполнит агент`
       : 'Подтвердить ТЗ';
@@ -268,6 +329,39 @@
     updateCounters();
   }
 
+  function setNotRequired(section, field, on) {
+    const values = (draft[section] = draft[section] || {});
+    const key = section + '\u0000' + field;
+    if (on) {
+      if (!isNotRequired(values[field])) stash[key] = values[field] || '';
+      values[field] = notRequiredValue();
+    } else {
+      values[field] = stash[key] || '';
+      delete stash[key];
+    }
+  }
+
+  // ⊘ (leave empty) / ↺ (take it back) on one field.
+  function onClick(e) {
+    const button = e.target.closest && e.target.closest('.tz-toggle-nr');
+    if (!button || !formMode()) return;
+    const section = button.getAttribute('data-section');
+    const field = button.getAttribute('data-field');
+    setNotRequired(section, field, !isNotRequired((draft[section] || {})[field]));
+    render();
+  }
+
+  // Every field still empty → «не задавать». Marks only: the operator sees
+  // the result and submits it with the usual button.
+  function leaveEmptyUnset() {
+    if (!formMode()) return;
+    const v = view();
+    ((v && v.sections) || []).forEach(s => (s.fields || []).forEach(f => {
+      if (editable(f) && !String(draftValue(s, f)).trim()) setNotRequired(s.title, f.name, true);
+    }));
+    render();
+  }
+
   function onFocusOut(e) {
     const card = e.target.closest && e.target.closest('.tz-section');
     if (!card || (e.relatedTarget && card.contains(e.relatedTarget))) return;
@@ -302,6 +396,7 @@
     if (!request) return;
     const requestId = request.request_id;
     const empty = emptyCount();
+    const unset = notRequiredCount();
     const formValues = {};
     Object.keys(draft).forEach(section => {
       formValues[section] = {};
@@ -321,11 +416,13 @@
     markCard(requestId, empty
       ? `Отправлено — пустые поля (${empty}) заполняет агент, затем ТЗ вернётся на проверку.`
       : 'ТЗ подтверждено.');
-    addSystemMsg(empty
+    addSystemMsg((empty
       ? `✓ ТЗ отправлено: пустых полей передано агенту — ${empty}`
-      : '✓ ТЗ подтверждено оператором');
+      : '✓ ТЗ подтверждено оператором')
+      + (unset ? ` · без ограничения («не требуется»): ${unset}` : ''));
     request = null;
     draft = {};
+    stash = {};
     render();
   }
 
@@ -409,10 +506,12 @@
     if (!body) return;
     body.addEventListener('input', onInput);
     body.addEventListener('focusout', onFocusOut);
+    body.addEventListener('click', onClick);
   });
 
   window.TZPanel = { feed, onHitlRequest, clearRequest, restore, isFormOpen: formMode };
   window.openTzPanel = openTzPanel;
   window.closeTzPanel = closeTzPanel;
   window.submitTzForm = submitTzForm;
+  window.tzLeaveEmptyUnset = leaveEmptyUnset;
 })();

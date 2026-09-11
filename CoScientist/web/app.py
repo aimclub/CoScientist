@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 from collections import defaultdict, OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -62,6 +63,50 @@ def _json_safe(value):
         return json.loads(json.dumps(value, default=str, ensure_ascii=False))
     except (TypeError, ValueError):
         return str(value)
+
+
+class _RevalidatedStaticFiles(StaticFiles):
+    """Static files the browser revalidates on every load (an ETag match is a
+    cheap 304). Without Cache-Control it keeps a script it has seen as
+    heuristically fresh, and a changed indicator or panel never reaches the
+    page on a plain reload."""
+
+    def file_response(self, *args, **kwargs):
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
+_STATIC_REF = re.compile(r'((?:src|href)="/static/)([^"?#]+)(")')
+
+
+def _versioned_static_refs(html: str, static_dir: Path) -> str:
+    """Append ``?v=<mtime>`` to every /static/ asset the page references.
+
+    The page itself is no-store, so a changed asset gets a new URL and is
+    fetched on the next load — even from a browser that cached the old one
+    before the assets were served with Cache-Control."""
+
+    def version(match: re.Match) -> str:
+        try:
+            stamp = (static_dir / match.group(2)).stat().st_mtime_ns
+        except OSError:
+            return match.group(0)
+        return f"{match.group(1)}{match.group(2)}?v={stamp}{match.group(3)}"
+
+    return _STATIC_REF.sub(version, html)
+
+
+def _pipeline_stages() -> list:
+    """The stages of a linear pipeline (see ``SystemConfig.linear_stages``) —
+    the status indicator counts them; [] when the run is not a linear one."""
+    try:
+        from CoScientist.assembly.schema import get_config
+
+        return get_config().linear_stages()
+    except Exception as exc:  # noqa: BLE001 — a status line must not break the socket
+        logging.getLogger(__name__).warning("pipeline stages unavailable: %s", exc)
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +571,7 @@ class WebRuntime:
                     "tz": self.tz_snapshots.get(key),
                     "dataset_url": self.dataset_urls.get(key, ""),
                     "report_language": self.report_languages.get(key, ""),
+                    "pipeline_stages": _pipeline_stages(),
                 })
             except Exception:
                 self.detach_socket(key, ws)
@@ -956,15 +1002,17 @@ def create_app() -> FastAPI:
     # offline / behind a VPN without any CDN.
     _static_dir = WEB_DIR / "static"
     if _static_dir.exists():
-        app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+        app.mount("/static", _RevalidatedStaticFiles(directory=str(_static_dir)), name="static")
 
     # --- HTML endpoint ---
     @app.get("/", response_class=HTMLResponse)
     async def index():
         # no-store: a cached index.html silently serves an OLD frontend — HITL
         # review cards then render without controls/content.
+        # The asset URLs carry their file's version, so a changed script is
+        # fetched right away rather than served from the browser's cache.
         return HTMLResponse(
-            TEMPLATE_PATH.read_text(encoding="utf-8"),
+            _versioned_static_refs(TEMPLATE_PATH.read_text(encoding="utf-8"), _static_dir),
             headers={"Cache-Control": "no-store"},
         )
 
@@ -1675,6 +1723,7 @@ def create_app() -> FastAPI:
             "agents": agents_list,
             "hierarchy": hierarchy,
             "delegatable_names": list(cfg.delegatable_names()),
+            "pipeline_stages": cfg.linear_stages(),
         })
 
     # --- Events log ---

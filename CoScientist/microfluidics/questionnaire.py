@@ -12,7 +12,7 @@ in HITL, with three ways to answer each question:
 
   * a concrete value              -> the field is filled («уточнено оператором»)
   * «не знаю» / skip              -> the field stays «не задано», the pipeline continues
-  * «на усмотрение агента»        -> the agent fills a reasonable working value
+  * «на усмотрение агента»        -> the agent fills a working value («заполнено агентом»)
 
 Pressing Accept without answers continues with the open questions as-is.
 
@@ -126,7 +126,7 @@ _ANSWER_RULES = """\
 - `Qn: не знаю` (или просто пропустите вопрос) — поле останется «не задано»,
   система продолжит работу без него;
 - `Qn: на усмотрение агента` — агент подставит рабочее значение из отраслевого
-  контекста (статус «уточнено оператором»);
+  контекста (статус «заполнено агентом»);
 - если уточнений нет — нажмите **Accept**: система продолжит с незакрытыми вопросами."""
 
 

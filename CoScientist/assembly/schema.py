@@ -169,6 +169,9 @@ class AgentConfig(BaseModel):
     # that always reasons (deepseek-r1, o-series) ignores the request.
     reasoning: Optional[Union[bool, str]] = None
     description: str = ""
+    # Short human name, e.g. «Техническое задание» — the stage label in the web
+    # status indicator of a linear pipeline (falls back to the agent's name).
+    title: str = ""
     # How a PARENT's prompt routes work to this agent (one routing bullet).
     routing: str = ""
     # How the planner's roster describes this agent (defaults to description).
@@ -282,6 +285,11 @@ class PipelineConfig(BaseModel):
 
     pre: List[str] = Field(default_factory=list)
     post: List[str] = Field(default_factory=list)
+    # The root runs its subordinates one after another, in the declared order
+    # (e.g. the microfluidics modules), so "stage k of N" is a meaningful thing
+    # to show the user — see SystemConfig.linear_stages(). Off for an
+    # orchestrator that picks subordinates freely.
+    linear: bool = False
 
     def stage_names(self) -> List[str]:
         return list(self.pre) + list(self.post)
@@ -415,6 +423,55 @@ class SystemConfig(BaseModel):
             "pipeline_pre": list(self.pipeline.pre),
             "pipeline_post": list(self.pipeline.post),
         }
+
+    def linear_stages(self) -> List[Dict[str, Any]]:
+        """The run as a list of stages, when ``pipeline.linear`` says it is one.
+
+        Stages, in order: the ``pre`` stages, then the root's enabled
+        subordinates with every sequential composite unrolled into its children
+        (a module is not a stage, its steps are), then the ``post`` stages.
+        Anything else — an LLM agent, a loop — is one stage, and every agent in
+        its subtree (children and subordinates) counts as that stage's work.
+        Each stage is ``{"agent", "title", "members"}``; [] when not linear.
+        """
+        if not self.pipeline.linear:
+            return []
+
+        def unroll(name: str) -> List[str]:
+            agent = self.agent(name)
+            if not agent.is_enabled():
+                return []
+            if agent.cls == "sequential":
+                return [s for child in agent.children for s in unroll(child)]
+            return [name]
+
+        def subtree(name: str, seen: set) -> List[str]:
+            if name in seen:
+                return []
+            seen.add(name)
+            out = [name]
+            for dep in self.deps(name):
+                out.extend(subtree(dep, seen))
+            return out
+
+        names = list(self.pipeline.pre)
+        for sub in self.root.subordinates:
+            names.extend(unroll(sub))
+        names.extend(self.pipeline.post)
+
+        claimed: set = set()
+        stages = []
+        for name in names:
+            agent = self.agent(name)
+            # An agent shared by several stages counts toward the first one.
+            members = [m for m in subtree(name, set()) if m not in claimed]
+            claimed.update(members)
+            stages.append({
+                "agent": name,
+                "title": agent.title or name,
+                "members": members,
+            })
+        return stages
 
     def delegatable_names(self) -> set:
         """Names of every agent that some agent delegates to via AgentTool."""

@@ -512,3 +512,56 @@ def test_a_failed_fill_worker_is_rerun_alone(monkeypatch):
         assert _agent_value(tz, section) == ("рабочее значение", AGENT_FILLED_STATUS)
     assert model.calls["quality_fill"] == 2  # not run again
     assert model.calls["task_fill"] == 1 + 2  # the failed call, then the rerun
+
+
+class _LeaveOneMarkOneThenApprove(AbstractHITLHandler):
+    """Round 1: one field left to the agent, one marked «не задавать».
+    Round 2: the form is sent back as shown."""
+
+    def __init__(self, to_agent, not_required):
+        self.to_agent, self.not_required = to_agent, not_required
+        self.requests = []
+
+    async def handle_request(self, request):
+        from CoScientist.hitl.field_status import NOT_REQUIRED_VALUE
+
+        self.requests.append(request)
+        if len(self.requests) == 1:
+            return HITLResponse(action=HITLAction.APPROVE, approved=True, form_values={
+                self.to_agent: {_field(self.to_agent): ""},
+                self.not_required: {_field(self.not_required): NOT_REQUIRED_VALUE},
+            })
+        fields = {
+            s["title"]: {f["name"]: f["value"] for f in s["fields"]}
+            for s in request.form["sections"]
+        }
+        return HITLResponse(action=HITLAction.APPROVE, approved=True, form_values=fields)
+
+
+def test_a_field_marked_not_required_is_never_filled_by_the_agent(monkeypatch):
+    from CoScientist.config import get_settings
+    from CoScientist.hitl.field_status import (
+        AGENT_FILLED_STATUS,
+        NOT_REQUIRED_STATUS,
+        NOT_REQUIRED_VALUE,
+    )
+
+    monkeypatch.setattr(get_settings().web, "hitl_enabled", True)
+    to_agent, not_required = "Целевой продукт", "Аналитические методы"
+    model = _model()
+    handler = _LeaveOneMarkOneThenApprove(to_agent, not_required)
+    session = _run(_agent(model, hitl_handler=handler))
+
+    assert len(handler.requests) == 2
+    tz = load_tz(session.state[TZ_STATE_KEY])
+    assert _agent_value(tz, to_agent) == ("рабочее значение", AGENT_FILLED_STATUS)
+    assert _agent_value(tz, not_required) == (NOT_REQUIRED_VALUE, NOT_REQUIRED_STATUS)
+    # Only the part with the field left to the agent had anything to fill.
+    assert "quality_fill" not in model.calls
+    assert model.calls["task_fill"] == 2
+    # The second round shows it as not required, not as awaiting.
+    field = next(
+        f for s in handler.requests[1].form["sections"] for f in s["fields"]
+        if f["name"] == _field(not_required)
+    )
+    assert field["not_required"] and not field["awaiting"]

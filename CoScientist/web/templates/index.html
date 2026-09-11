@@ -639,7 +639,8 @@
         <div class="flex flex-wrap items-center gap-3 text-[9px] text-outline-variant">
           <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-error/60"></span> ожидает заполнения человеком</span>
           <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm bg-tertiary"></span> заполнено агентом — проверьте</span>
-          <span>Пустое поле при отправке заполнит агент</span>
+          <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-sm border border-dashed border-outline-variant"></span> не требуется — без ограничения</span>
+          <span class="flex items-center gap-1">Пустое поле при отправке заполнит агент; <span class="material-symbols-outlined text-[12px]">block</span> справа от поля — оставить его пустым</span>
         </div>
       </div>
 
@@ -665,6 +666,11 @@
           <button onclick="closeTzPanel()"
             class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
             Закрыть
+          </button>
+          <button id="tz-leave-empty-btn" onclick="tzLeaveEmptyUnset()"
+            title="Оставить все пустые поля пустыми (без ограничения): агент не будет их заполнять"
+            class="hidden px-4 py-2 bg-surface-container-high border border-outline-variant/30 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider whitespace-nowrap transition-all flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">block</span> <span id="tz-leave-empty-label">Не заполнять пустые</span>
           </button>
           <button id="tz-submit-btn" onclick="submitTzForm()"
             class="hidden px-4 py-2 bg-primary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-primary/20 transition-all flex items-center gap-2">

@@ -541,8 +541,10 @@ class TZSessionAgent(SessionAgent):
         state[TZ_STATE_KEY] = answers.tz.model_dump()
         fill = agent_fill_request(ctx.invocation_id, answers.left_to_agent)
         logger.info(
-            "%s: round %d — %d value(s) from the operator, %d left to the agent",
-            self.name, round_no, answers.set_by_operator, answers.left_count,
+            "%s: round %d — %d value(s) from the operator, %d marked not "
+            "required, %d left to the agent",
+            self.name, round_no, answers.set_by_operator, answers.not_required,
+            answers.left_count,
         )
         if fill is None:
             await self._publish(ctx, "review", answers.tz)
