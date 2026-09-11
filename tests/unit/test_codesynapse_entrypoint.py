@@ -3,7 +3,7 @@
 from CoScientist.integrations.codesynapse import __main__ as entrypoint
 
 
-def test_facade_entrypoint_reserves_a_control_worker(monkeypatch):
+def test_facade_entrypoint_uses_one_worker_for_process_local_run_state(monkeypatch):
     captured = {}
 
     def fake_run(app, **kwargs):
@@ -22,4 +22,4 @@ def test_facade_entrypoint_reserves_a_control_worker(monkeypatch):
 
     assert captured["app"] == "CoScientist.integrations.codesynapse.__main__:create_app_for_uvicorn"
     assert captured["factory"] is True
-    assert captured["workers"] == 2
+    assert captured["workers"] == 1

@@ -60,8 +60,10 @@ def make_control_router(facade, store, validator) -> APIRouter:
         authorization: str | None = Header(default=None),
     ):
         await require_capability(run_id, authorization)
-        # Codesynapse persists an answer before delivery and can safely replay it.
-        await facade.resolve_hitl(run_id, request_id, response)
+        # Codesynapse persists an answer before delivery and can safely replay it,
+        # but a completed/cancelled request must not be acknowledged as accepted.
+        if not await facade.resolve_hitl(run_id, request_id, response):
+            raise HTTPException(status_code=409, detail="HITL request is no longer pending")
         return Response(status_code=204)
 
     @router.post("/{run_id}/cancel", status_code=204)

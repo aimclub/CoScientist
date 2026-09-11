@@ -1,6 +1,5 @@
 """Structural checks for the aggregate local MCP Docker Compose stack."""
 
-import json
 from pathlib import Path
 
 import yaml
@@ -35,8 +34,10 @@ def _services() -> dict:
     return compose["services"]
 
 
-def test_compose_declares_every_local_mcp_service() -> None:
-    assert set(_services()) == set(EXPECTED)
+def test_compose_declares_every_required_coscientist_mcp_service() -> None:
+    """Optional S3/support services may coexist with the four façade tools."""
+
+    assert set(EXPECTED).issubset(_services())
 
 
 def test_each_mcp_service_has_stable_port_env_and_health_contract() -> None:
@@ -65,7 +66,7 @@ def test_chemical_image_uses_its_own_build_context() -> None:
     }
 
 
-def test_paper_analysis_non_secret_settings_are_startup_safe() -> None:
+def test_paper_analysis_template_keeps_runtime_credentials_empty() -> None:
     path = (
         ROOT
         / "mcp-servers"
@@ -79,14 +80,9 @@ def test_paper_analysis_non_secret_settings_are_startup_safe() -> None:
         for key, value in [line.split("=", 1)]
     }
 
-    assert json.loads(values["LLM__ALLOWED_PROVIDERS"]) == []
-    for key in (
-        "HOSTS_PORTS__CHROMA_PORT",
-        "HOSTS_PORTS__EMBEDDING_PORT",
-        "HOSTS_PORTS__RERANKER_PORT",
-        "HOSTS_PORTS__OPENCHEMIE_PORT",
-    ):
-        assert int(values[key]) > 0
+    assert values["LLM__ALLOWED_PROVIDERS"] == ""
+    for key in ("LLM__SERVICE_KEY", "OPENAI_API_KEY", "S3__ACCESS_KEY", "S3__SECRET_KEY"):
+        assert values[key] == ""
 
 
 def test_local_mcps_share_the_codesynapse_network_with_the_facade() -> None:
@@ -95,6 +91,6 @@ def test_local_mcps_share_the_codesynapse_network_with_the_facade() -> None:
 
     assert compose["networks"]["codesynapse-internal"]["external"] is True
     assert facade["services"]["coscientist-facade"]["ports"] == ["${CODESYNAPSE_A2A_PORT:-8010}:8010"]
-    assert facade["services"]["coscientist-facade"]["environment"]["HITL__ENABLED"] == "false"
+    assert facade["services"]["coscientist-facade"]["environment"]["HITL__ENABLED"] == "true"
     for service in compose["services"].values():
         assert service["networks"] == ["codesynapse-internal"]

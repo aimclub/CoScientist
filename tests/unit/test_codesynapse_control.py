@@ -55,3 +55,27 @@ def test_control_router_requires_capability_and_exposes_replay():
 
     assert resolved.status_code == 204
     assert replay.json()["events"][0]["event_id"] == "event-1"
+
+
+def test_control_router_rejects_a_stale_hitl_response():
+    class Facade:
+        async def resolve_hitl(self, run_id, request_id, response):
+            return False
+
+        async def cancel_by_run(self, run_id):
+            return False
+
+    class Store:
+        async def replay_events(self, run_id, *, after_sequence=0):
+            return []
+
+    validator = RunCapabilityValidator({"run-1": hashlib.sha256(b"token-1").hexdigest()})
+    app = FastAPI()
+    app.include_router(make_control_router(Facade(), Store(), validator))
+    response = TestClient(app).post(
+        "/internal/runs/run-1/hitl/already-finished/resolve",
+        headers={"Authorization": "Bearer token-1"},
+        json={"action": "approve", "approved": True},
+    )
+
+    assert response.status_code == 409

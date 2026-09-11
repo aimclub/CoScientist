@@ -16,10 +16,15 @@ def create_app_for_uvicorn():
 
 
 def _worker_count() -> int:
-    """Keep one process available for A2A control calls during research work."""
+    """Use one owner for process-local jobs, HITL futures and subscriptions."""
 
-    configured = int(os.getenv("CODESYNAPSE_A2A_WORKERS", "2"))
-    return max(2, configured)
+    configured = int(os.getenv("CODESYNAPSE_A2A_WORKERS", "1"))
+    if configured != 1:
+        raise ValueError(
+            "CODESYNAPSE_A2A_WORKERS must be 1: façade run and HITL state "
+            "is owned by a single process"
+        )
+    return configured
 
 
 def main() -> None:

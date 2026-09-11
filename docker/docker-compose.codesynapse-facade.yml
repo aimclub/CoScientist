@@ -17,7 +17,8 @@ services:
       MCP__PAPER_ANALYSIS_URL: http://paper-analysis-mcp-server:7331/mcp
       MCP__CHEMICAL_URL: http://chemical-mcp-server:7331/mcp
       MCP__DATASET_COLLECTION_URL: http://dataset-collection-mcp-server:7331/mcp
-      HITL__ENABLED: "false"
+      # The manager receives a Codesynapse-backed handler, never ConsoleHITLHandler.
+      HITL__ENABLED: "true"
       A2A_DISABLE_OPIK: ${A2A_DISABLE_OPIK:-1}
     networks:
       - codesynapse-internal

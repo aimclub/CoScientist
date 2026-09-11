@@ -193,6 +193,111 @@ def test_facade_delivers_trace_events_with_capability_without_jwt():
     asyncio.run(scenario())
 
 
+def test_facade_delivers_the_terminal_cancel_trace_event():
+    async def scenario():
+        started = asyncio.Event()
+        delivered = []
+
+        class BlockingExecutor:
+            async def execute(self, request, hitl_handler):
+                started.set()
+                await asyncio.Event().wait()
+
+        class Dispatcher:
+            async def flush_run(self, run_id):
+                delivered.append(run_id)
+
+        facade = CodesynapseFacade(
+            store=InMemoryIntegrationStore(),
+            executor=BlockingExecutor(),
+            delivery_factory=lambda _request: Dispatcher(),
+        )
+        task = await facade.start(
+            StartRequest(
+                external_run_id="external-1", coscientist_run_id="run-1",
+                tenant_id="root", project_id="project-1", research_request="Find a hypothesis",
+            )
+        )
+        await started.wait()
+
+        assert await facade.cancel(task.a2a_task_id)
+        await asyncio.sleep(0)
+
+        assert delivered.count("run-1") >= 2
+
+    asyncio.run(scenario())
+
+
+def test_facade_runs_only_one_pipeline_at_a_time():
+    async def scenario():
+        first_started = asyncio.Event()
+        release_first = asyncio.Event()
+        second_started = asyncio.Event()
+
+        class Executor:
+            async def execute(self, request, hitl_handler):
+                if request.external_run_id == "external-1":
+                    first_started.set()
+                    await release_first.wait()
+                else:
+                    second_started.set()
+                return "report"
+
+        facade = CodesynapseFacade(store=InMemoryIntegrationStore(), executor=Executor())
+        await facade.start(StartRequest(
+            external_run_id="external-1", tenant_id="root", project_id="project-1", research_request="first",
+        ))
+        await first_started.wait()
+        await facade.start(StartRequest(
+            external_run_id="external-2", tenant_id="root", project_id="project-1", research_request="second",
+        ))
+        await asyncio.sleep(0)
+
+        assert not second_started.is_set()
+        release_first.set()
+        await asyncio.wait_for(second_started.wait(), timeout=1)
+        await facade.interrupt_non_terminal_tasks()
+
+    asyncio.run(scenario())
+
+
+def test_facade_schedules_outbox_retry_after_a_failed_callback():
+    async def scenario():
+        retries = []
+
+        class Executor:
+            async def execute(self, request, hitl_handler):
+                return "# Report"
+
+        class Dispatcher:
+            async def flush_run(self, run_id):
+                return 0
+
+            async def retry_pending(self, run_id, *, sleep):
+                retries.append(run_id)
+
+        facade = CodesynapseFacade(
+            store=InMemoryIntegrationStore(),
+            executor=Executor(),
+            delivery_factory=lambda _request: Dispatcher(),
+        )
+        await facade.start(
+            StartRequest(
+                external_run_id="external-1",
+                coscientist_run_id="run-1",
+                tenant_id="root",
+                project_id="project-1",
+                research_request="Find a hypothesis",
+            ),
+            run_in_background=False,
+        )
+        await asyncio.sleep(0)
+
+        assert retries == ["run-1"]
+
+    asyncio.run(scenario())
+
+
 def test_large_final_report_becomes_capability_backed_artifact(monkeypatch):
     captured = {}
 

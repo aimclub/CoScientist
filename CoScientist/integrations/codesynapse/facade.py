@@ -70,9 +70,12 @@ class CodesynapseFacade:
         self._handlers: dict[str, CodesynapseHITLHandler] = {}
         self._task_ids_by_run: dict[str, str] = {}
         self._progress_subscribers: dict[str, set[ProgressSubscriber]] = {}
+        self._delivery_dispatchers: dict[str, object] = {}
+        self._delivery_retries: dict[str, asyncio.Task[None]] = {}
         self._cancelling_tasks: set[str] = set()
         self._task_locks: dict[str, asyncio.Lock] = {}
         self._start_lock = asyncio.Lock()
+        self._execution_capacity = asyncio.Semaphore(1)
         self._lease_owner_id = str(uuid4())
         self._lease_ttl_seconds = lease_ttl_seconds
 
@@ -146,8 +149,12 @@ class CodesynapseFacade:
             self._subscribe_progress(a2a_task_id, request.progress_subscriber)
 
         if run_in_background:
+            if self._delivery_factory is not None:
+                self._delivery_dispatchers[coscientist_run_id] = self._delivery_factory(request)
             self._jobs[a2a_task_id] = asyncio.create_task(self._execute(request, a2a_task_id, coscientist_run_id))
             return task
+        if self._delivery_factory is not None:
+            self._delivery_dispatchers[coscientist_run_id] = self._delivery_factory(request)
         await self._execute(request, a2a_task_id, coscientist_run_id)
         completed = await self._store.get_task(a2a_task_id)
         if completed is None:
@@ -197,6 +204,32 @@ class CodesynapseFacade:
                 )
                 self.unsubscribe_progress(a2a_task_id, subscriber)
 
+    async def _schedule_outbox_retry(self, run_id: str, dispatcher: object) -> None:
+        """Keep retrying a persisted outbox after a callback failure."""
+
+        if not await self._store.pending_events(run_id):
+            return
+        retry = getattr(dispatcher, "retry_pending", None)
+        if not callable(retry):
+            return
+        existing = self._delivery_retries.get(run_id)
+        if existing is not None and not existing.done():
+            return
+        job = asyncio.create_task(retry(run_id, sleep=asyncio.sleep))
+        self._delivery_retries[run_id] = job
+        job.add_done_callback(lambda _completed: self._delivery_retries.pop(run_id, None))
+
+    async def _flush_trace_delivery(self, run_id: str, dispatcher: object | None) -> None:
+        """Deliver durable events without making callback availability fatal to the run."""
+
+        if dispatcher is None:
+            return
+        try:
+            await dispatcher.flush_run(run_id)
+            await self._schedule_outbox_retry(run_id, dispatcher)
+        except Exception:
+            logger.warning("[TRACE_DELIVERY] run_id=%s — callback attempt failed", run_id, exc_info=True)
+
     async def cancel(self, a2a_task_id: str) -> bool:
         """Idempotently cancel a live task and publish a terminal cancelled view."""
 
@@ -241,6 +274,10 @@ class CodesynapseFacade:
                     project_id=run.project_id,
                 ).emit("run.cancelled", data={"error_code": "cancelled"})
                 await self._publish_progress(task.a2a_task_id, event)
+                await self._flush_trace_delivery(
+                    task.coscientist_run_id,
+                    self._delivery_dispatchers.get(task.coscientist_run_id),
+                )
 
             # A2A cancellation is an acknowledgement, not a join on the
             # scientific pipeline.  _execute performs eventual cleanup.
@@ -261,6 +298,14 @@ class CodesynapseFacade:
         return await self.cancel(task_id) if task_id else False
 
     async def _execute(self, request: StartRequest, a2a_task_id: str, coscientist_run_id: str) -> None:
+        """Serialize manager execution while leaving A2A control endpoints responsive."""
+
+        async with self._execution_capacity:
+            await self._execute_with_capacity(request, a2a_task_id, coscientist_run_id)
+
+    async def _execute_with_capacity(
+        self, request: StartRequest, a2a_task_id: str, coscientist_run_id: str
+    ) -> None:
         if not await self._store.acquire_run_lease(
             request.external_run_id, self._lease_owner_id, self._lease_ttl_seconds
         ):
@@ -277,12 +322,11 @@ class CodesynapseFacade:
                 if not await self._store.save_run_if_non_terminal(run):
                     return
 
-            dispatcher = self._delivery_factory(request) if self._delivery_factory is not None else None
+            dispatcher = self._delivery_dispatchers.get(coscientist_run_id)
 
             async def flush_trace_event(event: TraceEvent) -> None:
                 await self._publish_progress(a2a_task_id, event)
-                if dispatcher is not None:
-                    await dispatcher.flush_run(coscientist_run_id)
+                await self._flush_trace_delivery(coscientist_run_id, dispatcher)
 
             recorder = TraceRecorder(
                 self._store,
@@ -356,6 +400,7 @@ class CodesynapseFacade:
             await self._store.release_run_lease(request.external_run_id, self._lease_owner_id)
             self._jobs.pop(a2a_task_id, None)
             self._handlers.pop(coscientist_run_id, None)
+            self._delivery_dispatchers.pop(coscientist_run_id, None)
             self._cancelling_tasks.discard(a2a_task_id)
             self._task_locks.pop(a2a_task_id, None)
 

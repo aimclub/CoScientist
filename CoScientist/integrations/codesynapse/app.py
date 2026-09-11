@@ -9,7 +9,7 @@ from fastapi import HTTPException
 from CoScientist.integrations.codesynapse.a2a_adapter import FacadeAgentExecutor, FacadeTaskStore, make_agent_card
 from CoScientist.integrations.codesynapse.control_api import StoreCapabilityValidator, make_control_router
 from CoScientist.integrations.codesynapse.delivery import TraceDeliveryClient, TraceOutboxDispatcher
-from CoScientist.integrations.codesynapse.executor import ManagerPipelineExecutor
+from CoScientist.integrations.codesynapse.process_executor import ProcessManagerPipelineExecutor
 from CoScientist.integrations.codesynapse.facade import CodesynapseFacade
 from CoScientist.integrations.codesynapse.migrate import apply_indexes
 from CoScientist.integrations.codesynapse.mongo_store import MongoIntegrationStore
@@ -35,7 +35,7 @@ def create_app(
         client = AsyncIOMotorClient(settings.mongo_uri)
         database = client[settings.mongo_database]
         store = MongoIntegrationStore(database)
-        facade = CodesynapseFacade(store=store, executor=ManagerPipelineExecutor())
+        facade = CodesynapseFacade(store=store, executor=ProcessManagerPipelineExecutor())
     if store is None:
         raise ValueError("store is required when injecting a façade")
 
