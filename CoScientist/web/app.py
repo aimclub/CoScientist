@@ -2030,6 +2030,12 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
     run_status_version = int(
         data.get("_run_status_version", runtime.run_versions[key])
     )
+    # A chat message may pin the report language (the settings-modal select on
+    # the pre-#347 UI did this). Absent or invalid means "keep the per-session
+    # choice" — defaulting here would clobber the set_report_language mirror.
+    report_language = data.get("report_language")
+    if report_language not in ("en", "ru"):
+        report_language = None
     if not query:
         await runtime.send(key, {"type": "error", "message": "Empty query"})
         return
@@ -2064,6 +2070,7 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
                 manager,
                 query,
                 run_status_version=run_status_version,
+                report_language=report_language,
             )
 
     except asyncio.CancelledError:
@@ -2114,6 +2121,7 @@ async def _run_chat_invocation(
     query: str,
     *,
     run_status_version: int,
+    report_language: str | None = None,
 ) -> None:
     """Execute one serialized ADK invocation for a session."""
     user_id, session_id = key
@@ -2129,6 +2137,11 @@ async def _run_chat_invocation(
     # (report_language) and reaches the prompt through inject_report_language.
     report_config = ReportConfig()
     await manager._set_state("report_config", report_config.to_state())
+    # Prompt templates read {report_language?} from session state. An explicit
+    # per-message choice overrides the per-session mirror for this run; a
+    # message without one leaves the mirror (and the callback default) alone.
+    if report_language:
+        await manager._set_state("report_language", report_language)
 
     final_response = "No response"
     # The report is the LAST final-response text of the run — the terminal aggregator
