@@ -41,8 +41,18 @@ def scoped_prefix(user_id: str | None, session_id: str | None, feature: str) -> 
 
 def contract(s3_key: str) -> dict:
     """The return contract for one stored object."""
+    bucket = s3_service.bucket_name
+    if not bucket:
+        # Every consumer needs the pair. CoScientist.utils.s3_refs drops a record
+        # that carries a key and no bucket, because a key alone does not say where
+        # the object is. main() refuses to start without a bucket name, so this is
+        # the second line of defense, for an s3_service built some other way.
+        raise RuntimeError(
+            "S3 bucket name is not configured, so the object at "
+            f"{s3_key} has no durable reference. Set S3__BUCKET_NAME."
+        )
     return {
-        "bucket": s3_service.bucket_name,
+        "bucket": bucket,
         "s3_key": s3_key,
         "presigned_url": s3_service.generate_presigned_url(
             s3_key, expiration=_URL_TTL_SECONDS
