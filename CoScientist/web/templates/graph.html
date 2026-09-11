@@ -103,7 +103,6 @@
     <label id="turnWrap" style="display:none"><span id="turnLabel">request</span>
       <select id="turn" style="max-width:340px"></select>
     </label>
-    <label id="provWrap"><input type="checkbox" id="prov" checked /> tool calls</label>
     <label><input type="checkbox" id="auto" checked /> live</label>
     <button id="refresh">↻</button>
     <span class="spacer"></span>
@@ -150,12 +149,11 @@
       verificationmethod:'⚙️', confirmationcriteria:'🎯', tool:'🔧', resource:'🔋',
       empiricalbase:'🗄️', constraint:'⚖️', codeartifact:'💻', generateddata:'📦',
       report:'📑', publication:'📰', spec:'📋', efficiencyjustification:'📈',
-      costmodel:'💰', efficiencymetric:'📊', toolcall:'🛠️' };
+      costmodel:'💰', efficiencymetric:'📊' };
     const R_LEVEL = { researchquestion:0, constraint:0, hypothesis:1, empiricalbase:1,
       verificationmethod:2, confirmationcriteria:2, tool:2,
       evidence:3, resource:3, generateddata:3, codeartifact:3, conclusion:4,
-      report:5, publication:5, spec:5, efficiencyjustification:5, costmodel:5, efficiencymetric:5,
-      toolcall:6 };
+      report:5, publication:5, spec:5, efficiencyjustification:5, costmodel:5, efficiencymetric:5 };
     const R_EDGE = { supports:GOOD, refutes:CRIT, refines:WARN };
     // Human-readable type names (shown as "Hypothesis 1" instead of the terse id
     // "H1") and edge phrases, so a first-time viewer instantly reads the graph.
@@ -164,7 +162,7 @@
       tool:"Tool", resource:"Resource", empiricalbase:"Data source", constraint:"Constraint",
       codeartifact:"Code", generateddata:"Dataset", report:"Report", publication:"Publication",
       spec:"Spec", efficiencyjustification:"Efficiency", costmodel:"Cost model",
-      efficiencymetric:"Metric", toolcall:"Tool call" };
+      efficiencymetric:"Metric" };
     const R_EDGE_NAME = { motivates:"motivates", tested_by:"tested by", requires:"requires",
       uses:"uses", consumes:"consumes", produces:"produces", supports:"supports", refutes:"refutes",
       refines:"refines", based_on:"based on", determines_sufficiency:"sufficiency for",
@@ -236,7 +234,6 @@
       const svg = box.querySelector("svg");
       if (svg) { svg.removeAttribute("height"); svg.style.width = "100%"; svg.style.height = "auto"; }
     }
-    const showProv = () => document.getElementById("prov").checked;
     function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
     function rText(n){ return String(n.output||n.label||"").replace(/\s+/g," ").trim(); }
     // A card is a headline, not the document. Seven hundred characters of
@@ -310,16 +307,13 @@
       const node = {
         id: n.id, title: titleOf(n), shape: "box", label: researchLabel(n),
         level: R_LEVEL[n.kind] != null ? R_LEVEL[n.kind] : 3,
-        color: { background: n.overlay ? "#20242b" : rgba(c, 0.14),
-                 border: n.overlay ? "#3a4150" : c,
+        color: { background: rgba(c, 0.14), border: c,
                  highlight: { background: rgba(c, 0.22), border: c } },
-        font: { color: INK, size: n.overlay ? 12 : 16, multi: "html",
+        font: { color: INK, size: 16, multi: "html",
                 face: "-apple-system, Segoe UI, sans-serif", align: "left" },
-        borderWidth: n.overlay ? 1 : 2, shapeProperties: { borderRadius: 9 },
+        borderWidth: 2, shapeProperties: { borderRadius: 9 },
         widthConstraint: { minimum: 230, maximum: 320 }, margin: 12,
       };
-      if (n.overlay) { node.borderWidthSelected = 2; node.shadow = false;
-        node.label = `<b>🛠️ ${esc(n.label)}</b>`; node.font.color = "#9aa3af"; }
       return node;
     }
 
@@ -352,7 +346,7 @@
           + (chosenTurn ? `&turn=${encodeURIComponent(chosenTurn)}` : "");
         const r = await fetch(url, { cache: "no-store" });
         const g = await r.json(); lastGraph = g;
-        const research = isResearch(), prov = showProv();
+        const research = isResearch();
         // The log is drawn one request at a time; the payload lists the rest.
         const turnWrap = document.getElementById("turnWrap"),
               turnSel = document.getElementById("turn"),
@@ -392,7 +386,6 @@
         const ordered = g.nodes || [];
         ordered.forEach(n => {
           if (hidden.has(n.id)) return;
-          if (n.overlay && !(research && prov)) return;   // hide provenance overlay unless toggled
           nodeData[n.id] = n;
           if (research) { nodes.update(researchNode(n)); }
           else {
@@ -439,7 +432,6 @@
           }
         }
         (g.edges || []).forEach(e => {
-          if (e.overlay && !(research && prov)) return;
           if (!research && (hidden.has(e.src) || hidden.has(e.dst))) return;
           const id = e.src + "->" + e.dst + ":" + (e.type||"");
           if (seenEdges.has(id) || !e.src || !e.dst) return;
@@ -448,7 +440,6 @@
           const rlabel = research ? (R_EDGE_NAME[e.type] || e.type || "") : (e.type || "");
           const edge = { id, from:e.src, to:e.dst, label: e.provenance ? "" : rlabel };
           if (e.synthetic) { edge.color={color:"#2c313a",highlight:"#3a4150"}; edge.dashes=true; edge.width=1; edge.arrows=""; edge.label=""; }
-          else if (e.overlay) { edge.color={color:"#3b82f6",highlight:"#60a5fa"}; edge.dashes=[3,3]; edge.width=1; edge.arrows="to"; edge.label="via"; edge.font={color:"#60a5fa",size:11,strokeWidth:3,strokeColor:"#14161a"}; }
           else if (research) { const c=R_EDGE[e.type];
             edge.color={color:c||"#4a5160",highlight:c||"#64748b"}; edge.width=c?3:1.5;
             edge.font={color:c||"#aeb6c2",size:12,strokeWidth:4,strokeColor:"#14161a"}; }
@@ -468,8 +459,8 @@
              : new Date(g.updated_at * 1000).toLocaleString());
         }
         document.getElementById("status").textContent =
-          (g.nodes||[]).filter(n=>!n.overlay && !hidden.has(n.id)).length + " nodes · " +
-          (g.edges||[]).filter(e=>!e.overlay && !(!research && (hidden.has(e.src)||hidden.has(e.dst)))).length
+          (g.nodes||[]).filter(n=>!hidden.has(n.id)).length + " nodes · " +
+          (g.edges||[]).filter(e=>!(!research && (hidden.has(e.src)||hidden.has(e.dst)))).length
           + " edges" + age;
       } catch (err) { document.getElementById("status").textContent = "error: " + err; }
     }
@@ -506,8 +497,7 @@
       + item(GOOD,"✓ confirmed / validated") + item(WARN,"⧗ under verification")
       + item(CRIT,"✗ refuted / failed") + item(INFO,"○ formulated / open")
       + item(ORANGE,"⚙ needs tool") + item(SLATE,"⏸ postponed") + '</div>'
-      + '<div class="grp"><b>edge</b>' + item(GOOD,"supports") + item(CRIT,"refutes")
-      + '<span class="item" style="color:#60a5fa">– – via (provenance)</span></div>'
+      + '<div class="grp"><b>edge</b>' + item(GOOD,"supports") + item(CRIT,"refutes") + '</div>'
       + '<div class="grp"><b>type</b><span class="item">❓ question · 💡 hypothesis · 🔬 evidence · '
       + '⚙️ method · 🎯 criteria · 🔧 tool · ✅ conclusion</span></div>';
     const EX_LEGEND = '<div class="grp"><b>status</b>' + item("#f1c40f","running")
@@ -518,7 +508,6 @@
       const r = isResearch();
       document.getElementById("legend").innerHTML = r ? R_LEGEND : EX_LEGEND;
       document.getElementById("head").classList.toggle("hidden", !r);
-      document.getElementById("provWrap").style.display = r ? "" : "none";
       document.getElementById("net").style.top = "46px";
     }
 

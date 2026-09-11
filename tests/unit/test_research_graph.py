@@ -1004,3 +1004,36 @@ def test_orchestrator_can_commit_evidence(store):
     assert ev_node["status"] == "obtained"
     assert any(e["type"] == "supports" and e["to"] == "H1" for e in store.full()["edges"])
 
+
+
+def test_the_view_links_tool_calls_without_drawing_them(store):
+    """Provenance rides on the node; it is not a node of its own.
+
+    One Evidence can be the product of a dozen calls. Drawn as nodes they
+    outnumber the findings and bury what the reader came for, so the graph
+    shows the research record and the card carries the links into the log.
+    """
+    _init(store)
+    r = store.commit(
+        source="OrchestratorAgent",
+        nodes=[{"type": "Evidence", "ref": "e", "attrs": {
+            "subtype": "computational", "content": "95% validity",
+            "measured_on": "ZINC-250k held-out split",
+            "_provenance": [
+                {"tool": "execute_bash", "exec_id": "tool:1", "result": "ok"},
+                {"tool": "tavily_search", "exec_id": "tool:2", "result": "12 papers"},
+            ],
+        }}],
+    )
+    assert r.ok, r.errors
+
+    view = store.to_view()
+    assert not [n for n in view["nodes"] if n["kind"] == "toolcall"]
+    assert not [e for e in view["edges"] if e["type"] == "via"]
+
+    evidence = next(n for n in view["nodes"] if n["kind"] == "evidence")
+    assert [p["tool"] for p in evidence["provenance"]] == ["execute_bash", "tavily_search"]
+    # The panel needs the call id to link into the execution log.
+    assert [p["exec_id"] for p in evidence["provenance"]] == ["tool:1", "tool:2"]
+    # And the raw bookkeeping key never reaches the reader's field list.
+    assert "_provenance" not in (evidence["input"] or {})

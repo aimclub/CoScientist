@@ -478,13 +478,17 @@ class ResearchGraphStore:
 
     def to_view(self) -> Dict[str, Any]:
         """Project onto the shape web/templates/graph.html already renders
-        (the execution-graph node/edge dicts). Also glues each Evidence's
-        execution provenance (the tool calls that produced it) on as flagged
-        overlay nodes/edges the viewer can toggle."""
+        (the execution-graph node/edge dicts).
+
+        The tool calls behind a node travel on the node itself, in
+        ``provenance``, and the panel lists them with a link into the execution
+        log. They are deliberately NOT nodes of their own: this graph is the
+        research record a scientist reads, and one Evidence can be the product
+        of a dozen calls — drawn as nodes they outnumber the findings and bury
+        the thing the reader came for.
+        """
         with self._lock:
             nodes = []
-            prov_nodes: Dict[str, Dict[str, Any]] = {}
-            prov_edges = []
             for n, d in self._g.nodes(data=True):
                 attrs = d.get("attrs") or {}
                 provenance = attrs.get("_provenance") or []
@@ -509,20 +513,8 @@ class ResearchGraphStore:
                     "t_start": d.get("created_at"),
                     "t_end": d.get("updated_at"),
                 })
-                for p in provenance:
-                    eid = p.get("exec_id") or f"call:{n}:{p.get('tool')}"
-                    prov_nodes[eid] = {
-                        "id": eid, "run_id": self._research_id, "kind": "toolcall",
-                        "label": p.get("tool") or "call", "status": "",
-                        "executor_agent": d.get("source", ""),
-                        "output": p.get("result", ""), "overlay": True,
-                    }
-                    prov_edges.append({"src": n, "dst": eid, "type": "via",
-                                       "overlay": True})
             edges = [{"src": u, "dst": v, "type": k}
                      for u, v, k in self._g.edges(keys=True)]
-            nodes += list(prov_nodes.values())
-            edges += prov_edges
             # Cosmetic: tie orphan components (context nodes declared but not yet
             # referenced — a Tool no hypothesis requires, an unconsumed Resource,
             # an unlinked EmpiricalBase) to the root question with a faint
