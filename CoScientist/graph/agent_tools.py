@@ -17,7 +17,6 @@ from google.adk.agents.readonly_context import ReadonlyContext
 from google.adk.tools.tool_context import ToolContext
 
 from CoScientist.graph.memory import get_knowledge_graph
-from CoScientist.graph.memory_store import get_knowledge_memory as resolve_knowledge_memory
 
 
 def read_research_graph(tool_context: ToolContext) -> Dict[str, Any]:
@@ -59,43 +58,6 @@ def get_agents_info(tool_context: ToolContext) -> Dict[str, Any]:
     return {"agents": get_knowledge_graph(tool_context).agents_info()}
 
 
-def search_knowledge_memory(
-    query: str,
-    tool_context: ToolContext,
-    limit: int = 10,
-) -> Dict[str, Any]:
-    """Search the global KNOWLEDGE MEMORY for facts from earlier research.
-
-    Returns the domain entities (targets, molecules, metrics, papers, hypotheses,
-    methods) most relevant to the query, with their attributes — so you can build
-    on prior findings instead of recomputing them. Empty if nothing was learned yet.
-
-    Args:
-        query: what you're looking for (e.g. "GSK-3beta inhibitors docking").
-        limit: max entities to return.
-    """
-    return {"entities": resolve_knowledge_memory(tool_context).relevant(query, k=limit)}
-
-
-def get_entity_neighbors(entity: str, tool_context: ToolContext) -> Dict[str, Any]:
-    """Walk the knowledge graph from one entity (search → then traverse).
-
-    Given an entity name or key, returns it plus its 1-hop facts — e.g. which
-    targets a molecule inhibits, which properties were measured (with values),
-    related molecules. Use after search_knowledge_memory to explore connections.
-
-    Args:
-        entity: an entity name or key, e.g. "paracetamol" or "molecule:paracetamol".
-    """
-    return resolve_knowledge_memory(tool_context).neighbors(entity)
-
-
-def get_knowledge_memory(tool_context: ToolContext) -> Dict[str, Any]:
-    """Get the global knowledge memory shared across users and sessions.
-
-    Prefer search_knowledge_memory + get_entity_neighbors for focused retrieval.
-    """
-    return resolve_knowledge_memory(tool_context).full()
 
 
 class GraphReaderToolset(BaseToolset):
@@ -116,9 +78,6 @@ def get_graph_tools() -> List[BaseTool]:
         FunctionTool(read_research_graph),
         FunctionTool(get_graph_history),
         FunctionTool(get_agents_info),
-        FunctionTool(search_knowledge_memory),
-        FunctionTool(get_entity_neighbors),
-        FunctionTool(get_knowledge_memory),
     ]
 
 

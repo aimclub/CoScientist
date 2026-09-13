@@ -78,6 +78,8 @@ class GraphStore:
                 n["status"] = upd.status
             if upd.output is not None:
                 n["output"] = upd.output
+            if upd.output_files is not None:
+                n["output_files"] = upd.output_files
             if upd.verdict is not None:
                 n["verdict"] = upd.verdict
             if upd.t_end is not None:

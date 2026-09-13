@@ -166,8 +166,14 @@ class TaskTrackerToolset(BaseToolset):
             "result": "success",
             "message": f"Plan created with {len(new_tasks)} tasks, ordered for execution.",
             "plan": [
-                {"id": t["id"], "title": t["title"], "assignee": t["assignee"],
-                 "parent_id": t["parent_id"]}
+                {
+                    "id": t["id"],
+                    "title": t["title"],
+                    "description": t.get("description", ""),
+                    "notes": t.get("notes", ""),
+                    "assignee": t["assignee"],
+                    "parent_id": t["parent_id"],
+                }
                 for t in new_tasks
             ],
         }
@@ -280,8 +286,11 @@ class TaskTrackerToolset(BaseToolset):
         Returns:
             A dictionary with the task ID and current state.
         """
-        tasks = list(tool_context.state.get("active_tasks", []))
-        task_id = f"TASK-{len(tasks) + 1}"
+        master_tasks = list(
+            tool_context.state.get("_master_active_tasks")
+            or tool_context.state.get("active_tasks", [])
+        )
+        task_id = f"TASK-{len(master_tasks) + 1}"
         task = {
             "id": task_id,
             "title": title,
@@ -293,8 +302,10 @@ class TaskTrackerToolset(BaseToolset):
             "notes": "",
             "parent_id": None
         }
-        tasks.append(task)
-        tool_context.state["active_tasks"] = tasks
+        master_tasks.append(task)
+        tool_context.state["_master_active_tasks"] = master_tasks
+        current_agent = getattr(tool_context, "agent_name", None)
+        tool_context.state["active_tasks"] = clean_tasks_for_agent(master_tasks, current_agent)
         return {"result": "success", "task": task}
 
     def update_task_status(

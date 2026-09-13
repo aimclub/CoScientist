@@ -54,6 +54,11 @@ def _papers_search():
     return papers_search_toolset_instance
 
 
+def _vault():
+    from CoScientist.tools import vault_toolset_instance
+    return vault_toolset_instance
+
+
 def _retrieval():
     from CoScientist.tools import retrieval_toolset_instance
     return retrieval_toolset_instance
@@ -97,6 +102,11 @@ def _alembic():
     from CoScientist.tools.alembic_tools import ALEMBIC_TOOLS
     return ALEMBIC_TOOLS
 
+def _verify():
+    from CoScientist.verify.tools import verify_toolset
+    return verify_toolset.get_tools(None)
+
+
 def _sandbox():
     """OpenHands sandbox tools — absent when no sandbox URL is configured."""
     from CoScientist.tools.coder_tools.sandbox_tools import get_sandbox_tools
@@ -109,6 +119,11 @@ def _task_tracker():
 def _create_plan_tool():
     from CoScientist.tools.task_tracker import create_plan_tool
     return [create_plan_tool()]
+
+def _sleep_tool():
+    from google.adk.tools import FunctionTool
+    from CoScientist.tools.sleep_tool import sleep_tool
+    return [FunctionTool(sleep_tool)]
 
 def _web_flag(field: str) -> bool:
     """Read a per-tool switch off ``settings.web`` (set from the web UI)."""
@@ -219,6 +234,33 @@ REGISTRY.register_tool(ToolEntry(
 ))
 
 REGISTRY.register_tool(ToolEntry(
+    key="vault",
+    factory=_vault,
+    optional=True,  # built only when MCP__VAULT_URL is configured
+    runtime_resolved=True,
+    docs=(
+        ToolDoc(
+            name="get_upload_link",
+            signature="get_upload_link(filename, feature=None)",
+            purpose=(
+                "Returns a one-hour upload_url for a new file, plus the bucket "
+                "and s3_key that identify it for good. Upload with a plain HTTP "
+                "PUT and no extra headers. Report the bucket and the s3_key, "
+                "never the URL: the URL expires and the object does not."
+            ),
+        ),
+        ToolDoc(
+            name="get_download_link",
+            signature="get_download_link(s3_key)",
+            purpose=(
+                "Turns an s3_key from an earlier step back into a one-hour "
+                "download URL. Use it when a link you were given no longer works."
+            ),
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
     key="papers_search",
     factory=_papers_search,
     optional=True,  # built only when MCP__PAPERS_SEARCH_URL is configured
@@ -306,21 +348,6 @@ _GRAPH_DOCS = (
         signature="get_agents_info()",
         purpose="Structured info about all agents in the system.",
     ),
-    ToolDoc(
-        name="search_knowledge_memory",
-        signature="search_knowledge_memory(query)",
-        purpose="Search globally accumulated facts relevant to a query.",
-    ),
-    ToolDoc(
-        name="get_entity_neighbors",
-        signature="get_entity_neighbors(entity)",
-        purpose="Walk the graph: an entity's 1-hop facts (search then traverse).",
-    ),
-    ToolDoc(
-        name="get_knowledge_memory",
-        signature="get_knowledge_memory()",
-        purpose="Global knowledge memory shared across users and sessions.",
-    ),
 )
 
 REGISTRY.register_tool(ToolEntry(
@@ -382,6 +409,14 @@ _RESEARCH_ORCH_DOCS = _RESEARCH_WORKER_DOCS + (
         signature="research_init(question, attrs, constraints, tools, resources, empirical_bases)",
         purpose=("Start a NEW research: create the root ResearchQuestion + its "
                  "context star. Call once at the start; archives any active graph."),
+    ),
+    ToolDoc(
+        name="research_prior",
+        signature="research_prior(query, limit)",
+        purpose=("Search PAST researches (previous runs) related to a question: "
+                 "their hypotheses with verdicts, the methods/tools used and the "
+                 "conclusions. Consult BEFORE planning so settled work is reused "
+                 "instead of re-derived; each hit reports why it matched."),
     ),
     ToolDoc(
         name="research_triggers",
@@ -453,6 +488,30 @@ REGISTRY.register_tool(ToolEntry(
 ))
 
 REGISTRY.register_tool(ToolEntry(
+    key="verify",
+    factory=_verify,
+    docs=(
+        ToolDoc(
+            name="validate_dataset",
+            signature="validate_dataset(path)",
+            purpose=(
+                "Deterministically check that a dataset file holds REAL, diverse "
+                "molecules (RDKit-valid SMILES + a fitness/SA column). Call it on "
+                "your training dataset BEFORE training — training is BLOCKED until a "
+                "real dataset validates; toy/placeholder data (integers, one "
+                "repeated molecule, a synthetic fallback) is rejected."),
+        ),
+        ToolDoc(
+            name="validate_training",
+            signature="validate_training(checkpoint_path, loss_log)",
+            purpose=(
+                "Deterministically check a training result: a real saved checkpoint "
+                "and a loss that actually decreased over >=1 epoch."),
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
     key="create_plan_tool",
     factory=_create_plan_tool,
     docs=(
@@ -463,6 +522,24 @@ REGISTRY.register_tool(ToolEntry(
                 "Replace all tasks with a new plan. Each task needs title, "
                 "description and assignee, plus `id` and `parent_id` to state "
                 "which task must run first. Tasks are stored in execution order."
+            ),
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="sleep",
+    factory=_sleep_tool,
+    docs=(
+        ToolDoc(
+            name="sleep_tool",
+            signature="sleep_tool(minutes)",
+            purpose=(
+                "Pause before your next tool call instead of checking again "
+                "immediately — use this to space out status/log checks on a "
+                "long-running job (e.g. one that takes hours) instead of "
+                "polling it every turn. Capped at 10 minutes per call; call it "
+                "again afterwards if you need to wait longer."
             ),
         ),
     ),
@@ -821,6 +898,11 @@ def _skip_retriever_context():
     return before_tool_reranker_model
 
 
+def _shortlist_reranker_tools():
+    from CoScientist.agents.callbacks import shortlist_reranker_tools
+    return shortlist_reranker_tools
+
+
 def _collect_reranked_tools():
     from CoScientist.agents.callbacks import after_tool_reranker_agent
     return after_tool_reranker_agent
@@ -834,6 +916,11 @@ def _collect_reranked_mcps():
 def _redirect_when_no_tools():
     from CoScientist.agents.callbacks import redirect_when_no_tools
     return redirect_when_no_tools
+
+
+def _inject_fedot_candidates():
+    from CoScientist.agents.callbacks import inject_fedot_candidates
+    return inject_fedot_candidates
 
 
 def _before_get_task():
@@ -852,6 +939,36 @@ def _inject_graph_root():
 def _inject_dataset_context():
     from CoScientist.agents.callbacks import inject_dataset_context
     return inject_dataset_context
+
+
+def _inject_report_language():
+    from CoScientist.agents.callbacks import inject_report_language
+    return inject_report_language
+
+
+def _user_links():
+    from CoScientist.agents.callbacks import user_links
+    return user_links
+
+
+def _resolve_link_refs():
+    from CoScientist.agents.callbacks import resolve_link_refs
+    return resolve_link_refs
+
+
+def _register_tool_result_links():
+    from CoScientist.agents.callbacks import register_tool_result_links
+    return register_tool_result_links
+
+
+def _expand_link_refs():
+    from CoScientist.agents.callbacks import expand_link_refs
+    return expand_link_refs
+
+
+def _redact_link_urls():
+    from CoScientist.agents.callbacks import redact_link_urls
+    return redact_link_urls
 
 
 def _inject_research_context(ctx):
@@ -955,10 +1072,14 @@ _cb("inject_uploaded_papers", "before_model", factory=lambda ctx: _inject_upload
 _cb("log_research_tool_calls", "after_tool", factory=lambda ctx: _log_research_tool_calls())
 _cb("capture_mcp_artifacts", "after_tool", factory=lambda ctx: _capture_mcp_artifacts())
 _cb("skip_retriever_context", "before_model", factory=lambda ctx: _skip_retriever_context())
+# Cross-encoder pre-pass: hand the LLM reranker a short list, not everything.
+_cb("shortlist_reranker_tools", "before_agent", factory=lambda ctx: _shortlist_reranker_tools())
 _cb("collect_reranked_tools", "after_agent", factory=lambda ctx: _collect_reranked_tools())
 _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranked_mcps())
 # Coder↔Executor redirect: abstain to CoderAgent when no tool matched the task.
 _cb("redirect_when_no_tools", "before_agent", factory=lambda ctx: _redirect_when_no_tools())
+# Reranker fallback: show FedotAgent the candidate pool fedot_tool will receive.
+_cb("inject_fedot_candidates", "before_agent", factory=lambda ctx: _inject_fedot_candidates())
 # Load active tasks into agent state before the agent runs.
 _cb("before_get_task", "before_agent", factory=lambda ctx: _before_get_task())
 _cb("inject_original_query", "before_model", factory=lambda ctx: _inject_original_query())
@@ -969,6 +1090,14 @@ _cb("inject_research_context", "before_agent", factory=_inject_research_context)
 # Tell the agent about the dataset archive the user attached in the web UI; it
 # decides itself which calls need the link.
 _cb("inject_dataset_context", "before_agent", factory=lambda ctx: _inject_dataset_context())
+# Report language the user picked for this session: inject the whole block
+# (headings, substitution rule, glossary), not a bare language name.
+_cb("inject_report_language", "before_agent", factory=lambda ctx: _inject_report_language())
+_cb("user_links", "before_agent", factory=lambda ctx: _user_links())
+_cb("redact_link_urls", "before_model", factory=lambda ctx: _redact_link_urls())
+_cb("resolve_link_refs", "before_tool", factory=lambda ctx: _resolve_link_refs())
+_cb("register_tool_result_links", "after_tool", factory=lambda ctx: _register_tool_result_links())
+_cb("expand_link_refs", "after_model", factory=lambda ctx: _expand_link_refs())
 # Human-In-The-Loop approval callback before model/agent execution.
 _cb("hitl_before_model", "before_model", factory=lambda ctx: _hitl_before_model())
 _cb("hitl_before_agent", "before_agent", factory=lambda ctx: _hitl_before_model())
@@ -995,7 +1124,10 @@ _cb("post_action_critique", "after_tool", factory=_post_action_critique)
 # ── Agent classes / output schemas / planners ────────────────────────────────
 
 def _register_classes() -> None:
-    from CoScientist.agents.custom_agents import WebToolsDeployerAgent
+    from CoScientist.agents.custom_agents import (
+        ExecutorSwitchAgent,
+        WebToolsDeployerAgent,
+    )
     from CoScientist.hitl.session_agent import SessionAgent
     from CoScientist.hypothesis_subsystem import HypothesisSubsystemAgent
     from CoScientist.microfluidics.tz_agent import TZSessionAgent
@@ -1004,6 +1136,8 @@ def _register_classes() -> None:
     REGISTRY.register_agent_class("session", SessionAgent)
     REGISTRY.register_agent_class("web_tools_deployer", WebToolsDeployerAgent)
     REGISTRY.register_agent_class("hypothesis_subsystem", HypothesisSubsystemAgent)
+    # Runs ONE of its children: the normal executor, or the reranker fallback.
+    REGISTRY.register_agent_class("executor_switch", ExecutorSwitchAgent)
     # Microfluidics ТЗ stage: the review loop shows the RENDERED ТЗ document.
     REGISTRY.register_agent_class("tz_session", TZSessionAgent)
     # Context-init pre-stage: the review shows a STRUCTURED FORM (research frame)

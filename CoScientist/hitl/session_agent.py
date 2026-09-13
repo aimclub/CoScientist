@@ -64,8 +64,8 @@ class SessionAgent(LlmAgent):
     # critic gets a single say, then the rewrite stands — a self-critique loop
     # that can run forever will. There is always a budget; only its size moves.
     critic_max_rounds: int = 1
-    correction_prompt: str = "The human reviewed your output and provided this feedback/correction:\n\n{feedback}\n\nYou MUST rewrite your output incorporating this feedback."
-    critic_correction_prompt: str = "A plan critic reviewed your output and asked for one revision:\n\n{feedback}\n\nProduce the output again ONCE, in full, fixing exactly what the critic named — the previous version was discarded. Registering it normalises it (ids are renumbered, adjacent steps with the same executor assignee are merged); that is expected, so do not register again to undo it. This is the last round: there is no second review."
+    correction_prompt: str = "The human reviewed your output and provided this feedback/correction:\n\n{feedback}\n\nYou MUST rewrite your output incorporating this feedback. Write your answer in the report language of this session. The session state key `report_language` gives it: en = English, ru = Russian. If it is empty, use English."
+    critic_correction_prompt: str = "A plan critic reviewed your output and asked for one revision:\n\n{feedback}\n\nProduce the output again ONCE, in full, fixing exactly what the critic named — the previous version was discarded. Registering it normalises it (ids are renumbered, adjacent steps with the same executor assignee are merged); that is expected, so do not register again to undo it. This is the last round: there is no second review. Write your answer in the report language of this session. The session state key `report_language` gives it: en = English, ru = Russian. If it is empty, use English."
 
     def _review_output(self, output_text) -> str:
         """How the proposed output is presented to the human reviewer.
@@ -131,6 +131,27 @@ class SessionAgent(LlmAgent):
         pipeline moves on. Default: nothing."""
         return iter(())
 
+    async def _emit_final(
+        self, ctx: InvocationContext, final_event: Event, output_text
+    ) -> AsyncGenerator[Event, None]:
+        """Yield the final event, then any subclass follow-up events.
+
+        When ``_post_final_events`` actually publishes something (a rendered
+        summary/document standing in for the raw model output — e.g.
+        ContextInitSessionAgent's frame summary, the ТЗ agent's document),
+        showing ``final_event``'s raw text too would double the chat message.
+        ``final_event`` is still yielded unchanged otherwise — its
+        state_delta (e.g. ``output_key``) and its place in session history
+        must survive — only its visible text is blanked, which the chat feed
+        treats as nothing to display.
+        """
+        extras = list(self._post_final_events(ctx, output_text))
+        if extras and final_event.content and final_event.content.parts:
+            final_event.content.parts[0].text = ""
+        yield final_event
+        for extra in extras:
+            yield extra
+
     async def _review_decision(self, ctx: InvocationContext, output_text) -> HITLResponse:
         """One review round with the human; returns the final decision.
 
@@ -145,8 +166,7 @@ class SessionAgent(LlmAgent):
             agent_name=self.name,
             action_type=HITLAction.APPROVE,
             message=(
-                f"[INTERNAL_LOOP: SessionAgent] Agent '{self.name}' proposes "
-                "its result. Please review."
+                f"Agent '{self.name}' proposes its result. Please review."
             ),
             context={
                 "output": self._review_output(review_output),
@@ -250,9 +270,8 @@ class SessionAgent(LlmAgent):
                         "output passed through without human review", self.name,
                     )
                 if final_event is not None:
-                    yield final_event
-                    for extra in self._post_final_events(ctx, output_text):
-                        yield extra
+                    async for event in self._emit_final(ctx, final_event, output_text):
+                        yield event
                 break
 
             if self.output_key:
@@ -298,9 +317,8 @@ class SessionAgent(LlmAgent):
                 if not response.free_input and response.action != HITLAction.EDIT:
                     # HITL approved — now emit the (possibly updated) final event and exit
                     if final_event is not None:
-                        yield final_event
-                        for extra in self._post_final_events(ctx, output_text):
-                            yield extra
+                        async for event in self._emit_final(ctx, final_event, output_text):
+                            yield event
                     break
 
             # Rejected or "Edit" requested — feed feedback back into the agent

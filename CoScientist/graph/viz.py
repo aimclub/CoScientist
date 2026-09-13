@@ -15,19 +15,14 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 # Run-step nodes are coloured by STATUS; the static structure (system root and
-# the agent roster) keeps its own identity colour so it doesn't read as "done".
+# it acted) keeps its own identity colour so it doesn't read as "done".
 _STATUS_COLOR = {
     "running": "#f1c40f",  # amber
     "success": "#2ecc71",  # green
     "failed": "#e74c3c",   # red
     "pruned": "#7f8c8d",   # grey
 }
-_IDENTITY_COLOR = {
-    "system": "#f4c542", "agent": "#7eb6ff",
-    # knowledge-graph view nodes (status is not meaningful for these):
-    "question": "#ff9f43", "fact": "#f6c453", "hypothesis": "#b388ff",
-    "finding": "#2ecc71", "method": "#1abc9c",
-}
+_IDENTITY_COLOR = {"system": "#f4c542", "agent": "#7eb6ff"}
 
 # Shape encodes the node KIND so type is readable without relying on colour.
 _SHAPE = {
@@ -37,52 +32,25 @@ _SHAPE = {
     "agent_call": "ellipse",
     "tool_call": "box",
     "result": "star",
-    # knowledge-graph view:
-    "question": "diamond", "fact": "box", "hypothesis": "ellipse", "finding": "star", "method": "box",
 }
 
-
-# Knowledge-MEMORY entities are coloured/shaped by their DOMAIN type (semantic.type).
-_ENTITY_COLOR = {
-    "target": "#e84393", "molecule": "#00cec9", "metric": "#fdcb6e", "property": "#fab1a0",
-    "paper": "#74b9ff", "hypothesis": "#b388ff", "method": "#1abc9c", "dataset": "#a29bfe",
-    "finding": "#2ecc71", "gene": "#ffeaa7", "organism": "#55efc4",
-}
-_ENTITY_SHAPE = {"target": "star", "molecule": "dot", "metric": "triangle", "paper": "box",
-                 "hypothesis": "ellipse", "method": "box", "dataset": "database"}
-
-
-def _entity_type(node: Dict[str, Any]) -> str:
-    return (node.get("semantic") or {}).get("type") or "entity"
-
-
-def _hash_color(s: str) -> str:
-    """Stable, readable colour for any (possibly new/dynamic) type string."""
-    import hashlib
-    h = int(hashlib.md5((s or "x").encode()).hexdigest()[:6], 16)
-    return f"#{120 + (h & 0x5F):02x}{120 + ((h >> 6) & 0x5F):02x}{120 + ((h >> 12) & 0x5F):02x}"
 
 
 def _color(node: Dict[str, Any]) -> str:
     kind = node.get("kind", "")
-    if kind == "entity":
-        t = _entity_type(node)
-        return _ENTITY_COLOR.get(t) or _hash_color(t)
     if kind in _IDENTITY_COLOR:
         return _IDENTITY_COLOR[kind]
     return _STATUS_COLOR.get(node.get("status", ""), "#dcdde1")
 
 
 def _shape(node: Dict[str, Any]) -> str:
-    if node.get("kind") == "entity":
-        return _ENTITY_SHAPE.get(_entity_type(node), "dot")
     return _SHAPE.get(node.get("kind", ""), "box")
 
 
 def _label(node: Dict[str, Any]) -> str:
     # tool_call: show WHAT tool; agent nodes: show WHICH agent. Who called a tool
     # is obvious from its parent agent node, so we don't repeat the caller.
-    if node.get("kind") in ("tool_call", "result", "goal", "entity", "fact", "question"):
+    if node.get("kind") in ("tool_call", "result", "goal"):
         base = node.get("label") or node.get("id", "")
     else:
         base = node.get("executor_agent") or node.get("label") or node.get("id", "")

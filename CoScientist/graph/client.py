@@ -52,6 +52,7 @@ async def emit_node(
     status: str = "running",
     parent_ids: Optional[List[str]] = None,
     input: Any = None,
+    input_files: Optional[List[str]] = None,
     t_start: Optional[float] = None,
 ) -> None:
     await _post("/node", {
@@ -63,6 +64,7 @@ async def emit_node(
         "status": status,
         "parent_ids": parent_ids or [],
         "input": input,
+        "input_files": input_files or [],
         "t_start": t_start,
     })
 
@@ -77,6 +79,7 @@ async def set_status(
     node_id: str,
     status: Optional[str] = None,
     output: Optional[str] = None,
+    output_files: Optional[List[str]] = None,
     verdict: Optional[str] = None,
     t_end: Optional[float] = None,
 ) -> None:
@@ -84,6 +87,7 @@ async def set_status(
         "run_id": run_id,
         "status": status,
         "output": output,
+        "output_files": output_files,
         "verdict": verdict,
         "t_end": t_end,
     })

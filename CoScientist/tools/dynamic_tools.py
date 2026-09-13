@@ -14,6 +14,7 @@ stay equivalent. Best-effort: an unreachable server is skipped, never fatal.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Dict, List, Optional
 
 from google.adk.tools import BaseTool
@@ -23,6 +24,27 @@ from google.adk.tools.mcp_tool import McpToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
 
 logger = logging.getLogger(__name__)
+
+
+def _disable_adk_mcp_mtls_probe() -> None:
+    """Skip ADK's Google-mTLS client-certificate probe on every MCP connect.
+
+    ADK's ``MCPSessionManager`` runs ``google.auth.default()`` +
+    ``configure_mtls_channel()`` before each connection unless
+    ``GOOGLE_API_USE_CLIENT_CERTIFICATE`` is ``false`` (it defaults to ``true``).
+    Plain MCP servers never use Google client certificates, so the probe can
+    only fail — after ~12s, on every single connect, which makes ``get_tools``
+    roughly 75x slower. Worse, it runs while the manager holds its per-loop
+    session lock, so a multi-agent run spends that window serialised behind it.
+
+    ``setdefault`` so a deployment that genuinely uses GCP mTLS can opt back in.
+    The value is read at call time, so setting it here takes effect for every
+    entry point that ends up building an MCP toolset.
+    """
+    os.environ.setdefault("GOOGLE_API_USE_CLIENT_CERTIFICATE", "false")
+
+
+_disable_adk_mcp_mtls_probe()
 
 _SSE_READ_TIMEOUT = 60 * 5.0
 

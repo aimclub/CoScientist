@@ -86,3 +86,53 @@ def test_manager_close_awaits_runner_before_resetting_lifecycle_state():
         assert manager._initialized is False
 
     asyncio.run(scenario())
+
+
+def test_initial_state_is_seeded_without_dropping_the_defaults():
+    """Callers that drive the system programmatically need state in place
+    before the first turn; the manager's own session scoping stays authoritative."""
+
+    async def scenario():
+        service = InMemorySessionService()
+        with patch("CoScientist.main.Runner", _Runner):
+            manager = CoScientistManager(
+                user_id="user_a",
+                session_id="session_a",
+                session_service=service,
+                initial_state={"deployed_mcps": [{"url": "http://h:8000/mcp"}]},
+            )
+            await manager.initialize()
+            return await service.get_session(
+                app_name=manager.app_name,
+                user_id="user_a",
+                session_id="session_a",
+            )
+
+    state = asyncio.run(scenario()).state
+    assert state["deployed_mcps"] == [{"url": "http://h:8000/mcp"}]
+    assert state["active_tasks"] == []
+
+
+def test_a_caller_cannot_redirect_the_session_scope():
+    """Scope keys decide whose graph a run writes to — not the caller's to set."""
+
+    async def scenario():
+        service = InMemorySessionService()
+        from CoScientist.graph.session_scope import GRAPH_SCOPE_USER_KEY
+
+        with patch("CoScientist.main.Runner", _Runner):
+            manager = CoScientistManager(
+                user_id="user_a",
+                session_id="session_a",
+                session_service=service,
+                initial_state={GRAPH_SCOPE_USER_KEY: "someone_else"},
+            )
+            await manager.initialize()
+            session = await service.get_session(
+                app_name=manager.app_name,
+                user_id="user_a",
+                session_id="session_a",
+            )
+            return session.state[GRAPH_SCOPE_USER_KEY]
+
+    assert asyncio.run(scenario()) == "user_a"

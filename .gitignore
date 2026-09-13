@@ -1,59 +1,25 @@
-# Byte-compiled / optimized / DLL files
+# Credentials — live API keys, must never leave the machine
+.env
+.env.*
+!.env.example
+
+# Local agent/session config — machine-specific, never shared
+.claude/
+.adk/
+
+# Python bytecode and build noise
 __pycache__/
 *.py[cod]
-*$py.class
-*.env
-# C extensions
-*.so
-.vscode
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
 *.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-/model_bench
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
-
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
 .pytest_cache/
-cover/
 
-# Translations
-*.mo
-*.pot
+# E2E run traces and stdout: large, per-run, regenerated on every launch
+e2e_*.jsonl
+e2e_*.log
+*.stdout.log
+train_full.log
+pilot_v*.log
+v4_full.log
 
 # Django stuff:
 *.log
@@ -192,26 +158,43 @@ session_snapshots/
 workspace/
 # Execution-graph run snapshots
 graph_runs/
-openhands.log
-task_tracker_data.json
 
-# Experiment run logs & history (generated artifacts; keep harness + COMPARISON*.md)
-model_bench/out/
-model_bench/out_*/
-*.events.jsonl
-*.summary.json
-analysis.json
-# experiment result dumps / trace manifests (e.g. scripts/experiments, scripts/opik_eval)
-**/experiments/results/
-**/opik_eval/results/
-trace_manifest.jsonl
+# Rasterised exports — regenerate from the committed .svg / .json
+research_graph_*.png
 
 # Auxiliary test scaffolding for ported features (not architecture)
 CoScientist/tests/unit/test_llm_repair.py
 tests/integration/hypothehis_generation_integration/output/
+# Run bundles dropped in for analysis (artefacts, checkpoints, traces)
+CoScientist/track3/
 
+# Paper and demo workspace — the article, its figures, LaTeX build products and
+# the recorded bundles the replay plays. Kept out of the repository: they are
+# artefacts of one submission, not part of the system.
+paper/
+demo/
+RUNBOOK_*.md
+
+# Per-run traces and exports dropped at the repository root
+act3*.jsonl
+act3*.log
+act3*.json
+act3*.html
+act3*.svg
+act3*.png
+track3*
+run_evolution.log
+last_run.log
+session.log
+dataset_gen.log
+agent_events.log
+runs/
+logs/
+workspace/
 tz_documents/
-TZ_*.md
+conversations*/
+task_tracker_data.json
+*_report.md
 
 # Alembic output & testing
 .alembic
@@ -219,3 +202,21 @@ TZ_*.md
 benchmarks/alembic/runs/
 benchmarks/alembic/tmbench_salvage/
 benchmarks/alembic/pre_comparison
+# Reference PDFs and vendored templates pulled in for the write-up
+CoScientist/docs/*.pdf
+CoScientist/golem_h1/
+IEEE-conference-template-*/
+research_graph*.svg
+research_graph*.html
+research_graph*.json
+run_evolution*.jsonl
+run_evolution*.html
+agent_events.jsonl
+e2e_case.jsonl
+benchmarks/**/repository_inventory.jsonl
+CoScientist/developer/aaai_coscientist/
+CoScientist/developer/slides/
+
+# Exported run folders and stray configs — session data, never source
+*_cossession/
+CoScientist/some.yaml

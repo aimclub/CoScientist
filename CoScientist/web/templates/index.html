@@ -11,6 +11,12 @@
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
     rel="stylesheet" />
   <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+  <!-- Live status indicator: the reducer that turns the raw event stream
+       into one human sentence. Vendored locally, no CDN. -->
+  <script src="/static/status_indicator.js"></script>
   <script id="tailwind-config">
     tailwind.config = {
       darkMode: "class",
@@ -18,10 +24,10 @@
         extend: {
           colors: {
             "primary": "#00daf3", "surface-dim": "#101319",
-            "surface-container-high": "#272a31", "outline": "#8c90a1",
+            "surface-container-high": "#272a31", "outline": "#cbd5e1",
             "surface-variant": "#32353c", "secondary": "#40e56c",
             "secondary-container": "#02c953", "tertiary": "#eac400",
-            "outline-variant": "#424656", "surface-container-low": "#191c22",
+            "outline-variant": "#94a3b8", "surface-container-low": "#191c22",
             "on-surface": "#e1e2eb", "primary-container": "#007e8c",
             "surface-container": "#1d2026", "surface-container-lowest": "#0b0e14",
             "on-surface-variant": "#c2c6d8", "surface-container-highest": "#32353c",
@@ -39,112 +45,14 @@
       },
     }
   </script>
-  <style>
-    body {
-      font-family: 'Inter', sans-serif;
-    }
-
-    .material-symbols-outlined {
-      font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
-    }
-
-    .no-scrollbar::-webkit-scrollbar {
-      display: none;
-    }
-
-    .line-through-dim {
-      text-decoration: line-through;
-      text-decoration-color: #424656;
-      color: #424656;
-    }
-
-    .topology-grid {
-      background-image: radial-gradient(rgba(0, 218, 243, 0.05) 1px, transparent 1px);
-      background-size: 24px 24px;
-    }
-
-    /* Collapsible left rail: the sidebar slides out of view and everything that
-       was offset by its width (header, main) reclaims the space. */
-    #side-nav {
-      transition: transform .25s ease;
-    }
-
-    #top-nav,
-    #main-content {
-      transition: margin-left .25s ease, width .25s ease;
-    }
-
-    body.nav-collapsed #side-nav {
-      transform: translateX(-100%);
-    }
-
-    body.nav-collapsed #top-nav {
-      margin-left: 0;
-      width: 100%;
-    }
-
-    body.nav-collapsed #main-content {
-      margin-left: 0;
-    }
-
-    /* Chat composer: wraps text and grows with the content up to a ceiling. */
-    #chat-input {
-      resize: none;
-      overflow-y: auto;
-      white-space: pre-wrap;
-      overflow-wrap: break-word;
-      min-height: 4.5rem;
-      max-height: 15rem;
-      line-height: 1.5rem;
-    }
-
-    @keyframes fadeIn {
-      from {
-        opacity: 0;
-        transform: translateY(8px)
-      }
-
-      to {
-        opacity: 1;
-        transform: translateY(0)
-      }
-    }
-
-    .msg-enter {
-      animation: fadeIn .3s ease-out;
-    }
-
-    .typing-dot {
-      animation: pulse 1.2s infinite;
-    }
-
-    .typing-dot:nth-child(2) {
-      animation-delay: .2s;
-    }
-
-    .typing-dot:nth-child(3) {
-      animation-delay: .4s;
-    }
-
-    @keyframes pulse {
-
-      0%,
-      100% {
-        opacity: .3
-      }
-
-      50% {
-        opacity: 1
-      }
-    }
-  </style>
+  <link rel="stylesheet" href="/static/css/main.css">
 </head>
 
 <body class="bg-background text-on-surface overflow-hidden">
 
   <!-- SideNavBar -->
   <aside id="side-nav"
-    class="w-64 h-full fixed left-0 top-0 border-r border-[#424656]/10 bg-[#191c22] flex flex-col h-screen py-6 font-['Space_Grotesk'] tracking-tight z-50">
+    class="w-64 h-full fixed left-0 top-0 border-r border-outline-variant/10 bg-[#191c22] flex flex-col h-screen py-6 font-['Space_Grotesk'] tracking-tight z-50">
     <div class="px-6 mb-8">
       <h1 class="text-xl font-bold tracking-widest text-[#00daf3] uppercase">CoScientist</h1>
       <p class="text-[10px] text-outline-variant tracking-widest mt-1" id="version-label">MAS v1.0.0</p>
@@ -199,10 +107,9 @@
           <span class="material-symbols-outlined text-primary text-sm">science</span>
         </div>
         <div>
-          <p id="active-nickname" data-i18n="nav.noUser" class="text-[10px] font-bold text-on-surface">No user selected
+          <p id="active-nickname" class="text-[10px] font-bold text-on-surface">No user selected
           </p>
-          <p id="conn-status" data-i18n="nav.disconnected"
-            class="text-[8px] text-error uppercase font-bold tracking-widest">Disconnected</p>
+          <p id="conn-status" class="text-[8px] text-error uppercase font-bold tracking-widest">Disconnected</p>
         </div>
       </div>
     </div>
@@ -210,24 +117,24 @@
 
   <!-- TopNavBar -->
   <header id="top-nav"
-    class="flex items-center justify-between px-8 py-4 ml-64 w-[calc(100%-16rem)] top-0 sticky z-50 bg-[#101319]/70 backdrop-blur-xl border-b border-[#424656]/15 shadow-[0_24px_48px_-12px_rgba(0,218,243,0.08)]">
+    class="flex items-center justify-between px-8 py-4 ml-64 w-[calc(100%-16rem)] top-0 sticky z-50 bg-[#101319]/70 backdrop-blur-xl border-b border-outline-variant/15 shadow-[0_24px_48px_-12px_rgba(0,218,243,0.08)]">
     <div class="flex items-center gap-8">
       <button type="button" id="side-nav-toggle" onclick="toggleSideNav()" title="Show/hide sidebar"
-        class="text-[#424656] hover:text-[#00daf3] transition-colors flex items-center">
+        class="text-outline-variant hover:text-primary transition-colors flex items-center">
         <span id="side-nav-toggle-icon" class="material-symbols-outlined">left_panel_open</span>
       </button>
       <div data-i18n="nav.orchestrator" class="font-black text-[#00daf3] font-headline tracking-tighter">ORCHESTRATOR
       </div>
       <div
         class="hidden md:flex items-center gap-6 font-['Space_Grotesk'] text-[10px] uppercase tracking-widest font-bold">
-        <span id="status-badge" class="text-[#424656]">Status: Idle</span>
-        <span id="event-count" class="text-[#424656]">Events: 0</span>
+        <span id="status-badge" class="text-outline-variant">Status: Idle</span>
+        <span id="event-count" class="text-outline-variant">Events: 0</span>
       </div>
     </div>
-    <div class="flex items-center gap-4 text-[#424656]">
+    <div class="flex items-center gap-4 text-outline-variant">
       <button onclick="clearChat()" title="Clear current view (history is preserved)">
         <span
-          class="material-symbols-outlined cursor-pointer hover:text-[#00daf3] transition-colors">delete_sweep</span>
+          class="material-symbols-outlined cursor-pointer hover:text-primary transition-colors">delete_sweep</span>
       </button>
     </div>
   </header>
@@ -237,37 +144,69 @@
 
     <!-- Central Chat Area -->
     <section
-      class="flex-1 flex flex-col bg-surface-container-low rounded-xl relative border border-[#424656]/10 shadow-inner">
+      class="flex-1 min-w-0 flex flex-col bg-surface-container-low rounded-xl relative border border-outline-variant/10 shadow-inner">
       <div class="p-4 border-b border-outline-variant/10 flex justify-between items-center bg-surface-container-low/50">
         <div class="flex items-center gap-3">
-          <span id="live-dot" class="w-2 h-2 bg-[#424656] rounded-full"></span>
+          <span id="live-dot" class="w-2 h-2 bg-outline-variant/60 rounded-full"></span>
           <h2 data-i18n="chat.missionControl"
             class="font-headline text-xs font-bold tracking-wider text-on-surface-variant uppercase">Mission Control
           </h2>
         </div>
         <div class="flex items-center gap-3">
           <button id="activity-toggle" onclick="toggleActivityRail()" title="Show/hide agent activity"
-            class="text-[#424656] hover:text-primary transition-colors">
+            class="text-outline-variant hover:text-primary transition-colors">
             <span class="material-symbols-outlined text-base">timeline</span>
           </button>
-          <div id="active-badge" data-i18n="chat.offline"
-            class="text-[10px] bg-surface-container-highest px-3 py-1 rounded text-[#424656] border border-[#424656]/20 uppercase font-bold tracking-widest">
+          <div id="active-badge"
+            class="text-[10px] bg-surface-container-highest px-3 py-1 rounded text-outline-variant border border-outline-variant/20 uppercase font-bold tracking-widest">
             Offline</div>
         </div>
       </div>
 
-      <!-- Activity Rail: who is working right now and with which tools.
-           Lives outside the chat feed on purpose — it must stay glanceable
-           without adding a single message to the conversation. -->
+      <!-- Activity Rail: Executive Fleet & Tool Execution HUD -->
       <div id="activity-rail"
-        class="hidden px-4 py-2.5 border-b border-outline-variant/10 bg-surface-container-lowest/40 space-y-2">
-        <div class="flex items-center gap-2">
-          <span class="text-[8px] font-bold text-outline-variant uppercase tracking-widest shrink-0">Agents</span>
-          <div id="activity-agents" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-1"></div>
+        class="hidden w-full max-w-full min-w-0 border-b border-outline-variant/15 bg-gradient-to-b from-[#11141b]/95 via-[#0d1016]/95 to-[#0b0d13]/95 backdrop-blur-xl px-4 py-2.5 space-y-2 shadow-[inset_0_1px_0_0_rgba(0,218,243,0.12),0_8px_24px_-4px_rgba(0,0,0,0.5)]">
+        
+        <!-- Row 1: Agent Fleet -->
+        <div class="flex items-center gap-2.5 w-full min-w-0">
+          <div class="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md bg-[#161a23] border border-outline-variant/15 shadow-sm">
+            <span class="material-symbols-outlined text-primary text-[14px]">hub</span>
+            <span data-i18n="rail.agents" class="text-[9px] font-bold font-mono tracking-widest uppercase text-on-surface-variant">Agents</span>
+            <span id="activity-agents-count" class="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-primary/15 text-primary border border-primary/25">0</span>
+          </div>
+          
+          <div class="relative flex-1 min-w-0 flex items-center group/rail">
+            <button type="button" id="rail-agents-left" onclick="scrollActivityRail('activity-agents', -240)"
+              class="hidden absolute left-0 z-10 w-6 h-6 rounded-full bg-surface-container-high/95 border border-outline-variant/25 text-on-surface shadow-lg hover:text-primary hover:border-primary/50 transition-all items-center justify-center -ml-1 cursor-pointer">
+              <span class="material-symbols-outlined text-[14px]">chevron_left</span>
+            </button>
+            <div id="activity-agents" class="flex items-center gap-2 overflow-x-auto no-scrollbar flex-1 min-w-0 py-0.5 scroll-smooth"></div>
+            <button type="button" id="rail-agents-right" onclick="scrollActivityRail('activity-agents', 240)"
+              class="hidden absolute right-0 z-10 w-6 h-6 rounded-full bg-surface-container-high/95 border border-outline-variant/25 text-on-surface shadow-lg hover:text-primary hover:border-primary/50 transition-all items-center justify-center -mr-1 cursor-pointer">
+              <span class="material-symbols-outlined text-[14px]">chevron_right</span>
+            </button>
+          </div>
         </div>
-        <div class="flex items-center gap-2">
-          <span class="text-[8px] font-bold text-outline-variant uppercase tracking-widest shrink-0">Tools</span>
-          <div id="activity-tools" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-1"></div>
+
+        <!-- Row 2: Tool Calls -->
+        <div class="flex items-center gap-2.5 w-full min-w-0 pt-1.5 border-t border-outline-variant/10">
+          <div class="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md bg-[#161a23] border border-outline-variant/15 shadow-sm">
+            <span class="material-symbols-outlined text-outline-variant text-[14px]">handyman</span>
+            <span data-i18n="rail.tools" class="text-[9px] font-bold font-mono tracking-widest uppercase text-on-surface-variant">Tools</span>
+            <span id="activity-selected-agent-label" class="text-[8px] font-mono text-primary/80 font-medium truncate max-w-[100px]"></span>
+          </div>
+
+          <div class="relative flex-1 min-w-0 flex items-center group/rail">
+            <button type="button" id="rail-tools-left" onclick="scrollActivityRail('activity-tools', -240)"
+              class="hidden absolute left-0 z-10 w-6 h-6 rounded-full bg-surface-container-high/95 border border-outline-variant/25 text-on-surface shadow-lg hover:text-primary hover:border-primary/50 transition-all items-center justify-center -ml-1 cursor-pointer">
+              <span class="material-symbols-outlined text-[14px]">chevron_left</span>
+            </button>
+            <div id="activity-tools" class="flex items-center gap-2 overflow-x-auto no-scrollbar flex-1 min-w-0 py-0.5 scroll-smooth"></div>
+            <button type="button" id="rail-tools-right" onclick="scrollActivityRail('activity-tools', 240)"
+              class="hidden absolute right-0 z-10 w-6 h-6 rounded-full bg-surface-container-high/95 border border-outline-variant/25 text-on-surface shadow-lg hover:text-primary hover:border-primary/50 transition-all items-center justify-center -mr-1 cursor-pointer">
+              <span class="material-symbols-outlined text-[14px]">chevron_right</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -281,8 +220,13 @@
         </div>
       </div>
 
+      <!-- Live status: what the system is doing right now, in one sentence.
+           Sits between the feed and the composer so it is the last thing read
+           before typing, and never scrolls away with the conversation. -->
+      <div id="status-indicator" class="hidden px-6 pt-1 pb-0" role="status" aria-live="polite"></div>
+
       <!-- Chat Input -->
-      <div class="p-6 bg-surface-container-lowest/50 backdrop-blur-md border-t border-outline-variant/5">
+      <div class="p-6 pt-4 bg-surface-container-lowest/50 backdrop-blur-md border-t border-outline-variant/5">
         <!-- Context attached to this session (dataset archive, …) -->
         <div id="attachment-chips" class="hidden flex flex-wrap items-center gap-2 mb-2"></div>
 
@@ -356,6 +300,13 @@
               </button>
             </div>
           </div>
+          <!-- Report language for THIS session. Separate from the interface
+               language toggle (lang-btn-en / lang-btn-ru) in the sidebar. -->
+          <select id="report-lang-select" onchange="onReportLanguageChange()" title="Report language / Язык отчёта"
+            class="shrink-0 bg-surface-container-highest border border-outline-variant/20 text-on-surface-variant text-[10px] font-mono rounded-md px-2 py-1 focus:border-primary/40 focus:ring-0 cursor-pointer">
+            <option value="ru" data-i18n="composer.reportLang.ru">Отчёт: RU</option>
+            <option value="en" data-i18n="composer.reportLang.en">Отчёт: EN</option>
+          </select>
           <textarea id="chat-input" rows="3" wrap="soft" spellcheck="false" autocomplete="off"
             class="bg-transparent border-none focus:ring-0 text-sm flex-1 py-1.5 text-on-surface placeholder:text-outline-variant/50 font-medium no-scrollbar"
             placeholder="Send system command…  (Enter — send, Shift+Enter — new line)"
@@ -374,13 +325,13 @@
     </section>
 
     <!-- Right Sidebar: Telemetry -->
-    <aside class="w-80 flex flex-col gap-6 overflow-y-auto no-scrollbar pb-8">
+    <aside class="w-80 shrink-0 flex flex-col gap-6 overflow-y-auto no-scrollbar pb-8">
       <!-- Telemetry -->
-      <div class="bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/10 overflow-hidden relative">
+      <div class="hidden bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/10 overflow-hidden relative">
         <div class="absolute top-3 right-3">
           <span id="telemetry-live"
-            class="text-[8px] font-bold text-[#424656] font-mono tracking-tighter uppercase flex items-center gap-1">
-            <span class="w-1 h-1 bg-[#424656] rounded-full"></span> Offline
+            class="text-[8px] font-bold text-outline-variant font-mono tracking-tighter uppercase flex items-center gap-1">
+            <span class="w-1.5 h-1.5 bg-outline-variant/60 rounded-full"></span> Offline
           </span>
         </div>
         <h4 data-i18n="telemetry.header"
@@ -410,8 +361,6 @@
     </aside>
   </main>
 
-  <script>
-    // =========================================================================
     // WebSocket & State
     // =========================================================================
     let ws = null;
@@ -428,293 +377,16 @@
     const SESSION_STORAGE_KEY = 'coscientist.session_id';
     const NICK_STORAGE_KEY = 'coscientist.nickname';
     const SIDE_NAV_KEY = 'coscientist.side_nav';
-    const LANG_STORAGE_KEY = 'coscientist.lang';
-
-    // =========================================================================
-    // i18n – lightweight translation system
-    // =========================================================================
-    // Текущий язык: 'ru' по умолчанию (или из localStorage)
-    let currentLang = localStorage.getItem(LANG_STORAGE_KEY) || 'ru';
-
-    const i18n = {
-      // ── Navigation & Sidebar ──
-      'nav.agents': { en: 'Agents', ru: 'Агенты' },
-      'nav.user': { en: 'User', ru: 'Пользователь' },
-      'nav.session': { en: 'Session', ru: 'Сессия' },
-      'nav.noUser': { en: 'No user selected', ru: 'Пользователь не выбран' },
-      'nav.disconnected': { en: 'Disconnected', ru: 'Отключено' },
-      'nav.orchestrator': { en: 'ORCHESTRATOR', ru: 'ОРКЕСТРАТОР' },
-
-      // Agent descriptions in side nav
-      'agent.OrchestratorAgent.desc': { en: 'Master Orchestrator', ru: 'Главный оркестратор' },
-      'agent.PlannerAgent.desc': { en: 'Roadmap Planner', ru: 'Планировщик задач' },
-      'agent.ToolsViewer.desc': { en: 'Tools Viewer', ru: 'Просмотр инструментов' },
-      'agent.KnowledgeGraph.desc': { en: 'Knowledge Graph', ru: 'Граф знаний' },
-      'agent.MCPBuilds.desc': { en: 'MCP Builds', ru: 'Сборки MCP' },
-      'agent.CoderSandbox.desc': { en: 'CoderSandbox', ru: 'Песочница кода' },
-      'agent.__settings__.desc': { en: 'Settings', ru: 'Настройки' },
-
-      // Chat controls & Header
-      'chat.missionControl': { en: 'Mission Control', ru: 'Центр управления' },
-      'chat.offline': { en: 'Offline', ru: 'Офлайн' },
-      'chat.sendQuery': { en: 'Send a query to begin orchestration', ru: 'Отправьте запрос для начала работы' },
-      'chat.placeholder': { en: 'Send system command…  (Enter — send, Shift+Enter — new line)', ru: 'Введите запрос… (Enter — отправить, Shift+Enter — новая строка)' },
-      'telemetry.header': { en: 'Telemetry Output', ru: 'Лог телеметрии' },
-      'usage.header': { en: 'Usage & Cost', ru: 'Использование и стоимость' },
-
-      // ── Settings modal header ──
-      'settings.title': { en: 'Settings', ru: 'Настройки' },
-      'settings.subtitle': { en: 'System Configuration', ru: 'Конфигурация системы' },
-
-      // ── General section ──
-      'settings.general': { en: 'General', ru: 'Общие' },
-      'settings.general.hint': {
-        en: '(Default values are set in .env or settings.py)',
-        ru: '(Значения по умолчанию задаются в .env или settings.py)'
-      },
-
-      'settings.startMode.label': { en: 'Session Start Mode', ru: 'Режим запуска сессии' },
-      'settings.startMode.desc': {
-        en: 'Choose which agent starts the session. <strong>PlannerAgent</strong> runs PlannerAgent first, then OrchestratorAgent. <strong>OrchestratorAgent</strong> starts directly with the orchestrator. <strong>Orchestrator as a planner</strong> gives Orchestrator the plan tool and disables PlannerAgent.',
-        ru: 'Выберите, какой агент запускает сессию. <strong>PlannerAgent</strong> сначала запускает PlannerAgent, затем OrchestratorAgent. <strong>OrchestratorAgent</strong> запускает оркестратор напрямую. <strong>Orchestrator as a planner</strong> даёт оркестратору инструмент планирования и отключает PlannerAgent.'
-      },
-      'settings.startMode.planner': { en: 'PlannerAgent', ru: 'PlannerAgent' },
-      'settings.startMode.init': { en: 'PlannerAgent', ru: 'PlannerAgent' },
-      'settings.startMode.orchestrator': { en: 'OrchestratorAgent', ru: 'OrchestratorAgent' },
-      'settings.startMode.orchestratorPlanner': { en: 'Orchestrator as a planner', ru: 'Orchestrator в роли планировщика' },
-
-      'settings.maxRetries.label': { en: 'Max LLM Retries', ru: 'Макс. повторов LLM' },
-      'settings.maxRetries.desc': {
-        en: 'Number of LLM call retry attempts on transient network or upstream API errors.',
-        ru: 'Количество повторных попыток вызова LLM при временных сбоях сети или API.'
-      },
-
-      'settings.hitl.label': { en: 'HITL Enabled', ru: 'Включить HITL (подтверждения)' },
-      'settings.hitl.desc': {
-        en: 'Toggle Human-in-the-Loop approval for dangerous or outward-facing actions.',
-        ru: 'Включить подтверждение человеком (Human-in-the-Loop) для опасных или внешних действий.'
-      },
-      'settings.hitlTimeout.label': { en: 'HITL Auto-Approve Timeout (s)', ru: 'Автоподтверждение HITL (сек)' },
-      'settings.hitlTimeout.desc': {
-        en: 'Seconds before auto-approving HITL requests (-1 for no timeout / wait for human).',
-        ru: 'Секунды до автоподтверждения HITL (-1 — без тайм-аута, ждать человека).'
-      },
-
-      'settings.usePlanner.label': { en: 'Use Planner', ru: 'Использовать планировщик' },
-      'settings.usePlanner.note': {
-        en: '(disabled when using PlannerAgent mode)',
-        ru: '(отключено в режиме PlannerAgent)'
-      },
-      'settings.usePlanner.desc': {
-        en: 'Whether the orchestrator delegates to PlannerAgent for task decomposition.',
-        ru: 'Делегирует ли оркестратор декомпозицию задач компоненту PlannerAgent.'
-      },
-
-      'settings.contextInit.label': { en: 'Research Frame', ru: 'Рамка исследования' },
-      'settings.contextInit.desc': {
-        en: 'Draft research frame and seed it into the research graph before the orchestrator runs.',
-        ru: 'Формировать фрейм исследования и добавлять его в граф исследований до запуска оркестратора.'
-      },
-
-      'settings.useProxy.label': { en: 'Use Corporate Proxy', ru: 'Корпоративный прокси' },
-      'settings.useProxy.note': { en: '(set only in env)', ru: '(задаётся в .env)' },
-      'settings.useProxy.desc': {
-        en: 'Route LLM model calls through corporate proxy (SERVICES__PROXY_URL).',
-        ru: 'Маршрутизировать вызовы моделей LLM через корпоративный прокси (SERVICES__PROXY_URL).'
-      },
-
-      'settings.opik.label': { en: 'Enable Opik Tracing', ru: 'Включить трассировку Opik' },
-      'settings.opik.desc': {
-        en: 'Send execution logs and agent traces to your Opik dashboard.',
-        ru: 'Отправлять логи выполнения и трассировки агентов в дашборд Opik.'
-      },
-
-      'settings.autoNaming.label': { en: 'Auto-name Sessions', ru: 'Авто-наименование сессий' },
-      'settings.autoNaming.desc': {
-        en: 'Automatically generate session titles based on the first prompt.',
-        ru: 'Автоматически генерировать названия сессий на основе первого запроса.'
-      },
-
-      'settings.defaultUsername.label': { en: 'Default Username', ru: 'Имя пользователя по умолчанию' },
-      'settings.defaultUsername.desc': {
-        en: 'Auto-selects user on startup (can also be set via COSCIENTIST_USERNAME in .env).',
-        ru: 'Автоматически выбирает пользователя при старте (задаётся также через COSCIENTIST_USERNAME в .env).'
-      },
-      'settings.defaultUsername.placeholder': {
-        en: 'e.g. COSCIENTIST_USERNAME in .env',
-        ru: 'например COSCIENTIST_USERNAME в .env'
-      },
-
-      // ── Graphs section ──
-      'settings.graphs': { en: 'Graphs', ru: 'Графы' },
-      'settings.knowledgeGraph.label': { en: 'Knowledge Graph', ru: 'Граф знаний' },
-      'settings.knowledgeGraph.desc': {
-        en: 'Records the execution graph of every run and lets agents read it (<span class="font-mono">get_graph_history</span>, <span class="font-mono">get_agents_info</span>, <span class="font-mono">search_knowledge_memory</span>). When off, nothing is recorded, the Graph view stays empty, and the tools disappear from every agent and from their prompts.',
-        ru: 'Записывает граф выполнения каждого запуска и позволяет агентам читать его (<span class="font-mono">get_graph_history</span>, <span class="font-mono">get_agents_info</span>, <span class="font-mono">search_knowledge_memory</span>). Когда выключен, ничего не записывается, вкладка графа пуста, а инструменты убираются у всех агентов.'
-      },
-
-      'settings.researchGraph.label': { en: 'Research Graph', ru: 'Граф исследований' },
-      'settings.researchGraph.desc': {
-        en: 'The typed research blackboard agents commit findings to (<span class="font-mono">research_commit</span>, <span class="font-mono">research_context_slice</span>, orchestrator triggers). When off, the whole feature — tools and prompt sections — drops out and agents pass context through their answers only.',
-        ru: 'Доска исследований, куда агенты записывают результаты (<span class="font-mono">research_commit</span>, <span class="font-mono">research_context_slice</span>, триггеры оркестратора). Когда выключен, инструменты и секции промптов отключаются, контекст передается только в ответах.'
-      },
-
-      'settings.graphs.sessionNote': {
-        en: 'Applies to new sessions — the agent system is built once per session.',
-        ru: 'Применяется к новым сессиям — система агентов инициализируется при создании сессии.'
-      },
-
-      'settings.deleteGraph.label': { en: 'Delete Graph Data', ru: 'Удалить данные графов' },
-      'settings.deleteGraph.desc': {
-        en: 'Wipe what the graphs have recorded. The execution and research graphs belong to the <strong>current session</strong>; the knowledge memory is installation-wide and disappears for every session at once. The research graph and the knowledge memory are archived next to their files first; the execution graph keeps only the agent roster.',
-        ru: 'Очистить записанные данными графов. Графы выполнения и исследований относятся к <strong>текущей сессии</strong>; память знаний распространяется на всю систему. Граф исследований и память знаний архивируются; граф выполнения сохраняет только список агентов.'
-      },
-      'settings.deleteGraph.optExecution': { en: 'Execution (session)', ru: 'Выполнение (сессия)' },
-      'settings.deleteGraph.optResearch': { en: 'Research (session)', ru: 'Исследования (сессия)' },
-      'settings.deleteGraph.optMemory': { en: 'Knowledge memory (global)', ru: 'Память знаний (глобальная)' },
-      'settings.deleteGraph.optAll': { en: 'All of the above', ru: 'Всё вышеперечисленное' },
-      'settings.deleteGraph.btn': { en: 'Delete', ru: 'Удалить' },
-
-      'settings.autoClearGraph.label': { en: 'Auto-clear Graph Before Session', ru: 'Автоочистка графов перед сессией' },
-      'settings.autoClearGraph.note': { en: '(set only in env)', ru: '(задаётся в .env)' },
-      'settings.autoClearGraph.desc': {
-        en: 'Automatically clear graph data before each session starts.',
-        ru: 'Автоматически очищать данные графов перед началом каждой сессии.'
-      },
-
-      // ── PlannerAgent section ──
-      'settings.planner.retrieval.label': { en: 'Retrieval Tools', ru: 'Инструменты поиска' },
-      'settings.planner.retrieval.desc': {
-        en: 'Let the planner search the MCP registry (<span class="font-mono">retrieve_tools</span>, <span class="font-mono">get_server_info</span>) before writing the roadmap. When off, it plans by outcome and never names concrete tools or server ids.',
-        ru: 'Разрешить планировщику искать в реестре MCP (<span class="font-mono">retrieve_tools</span>, <span class="font-mono">get_server_info</span>) перед созданием плана. Когда выключено, планирование происходит без указания конкретных инструментов.'
-      },
-
-      'settings.planner.graph.label': { en: 'Graph Tools', ru: 'Инструменты графа' },
-      'settings.planner.graph.note': { en: '(disabled — Knowledge Graph is off)', ru: '(отключено — Граф знаний выключен)' },
-      'settings.planner.graph.desc': {
-        en: 'Let the planner read the shared knowledge graph (history, agent roster, knowledge memory) so it does not re-plan finished work.',
-        ru: 'Разрешить планировщику читать общий граф знаний (историю, список агентов, память знаний), чтобы не планировать заново выполненную работу.'
-      },
-
-      'settings.planner.critic.label': { en: 'Plan Critic', ru: 'Критик плана' },
-      'settings.planner.critic.desc': {
-        en: 'Have an LLM critic review the registered roadmap (assignees, coverage, dependencies) before it is executed, and send it back to the planner if it objects. Runs whether or not HITL is on, before a human sees the plan. Costs one extra LLM call per planning run.',
-        ru: 'Проверять созданный план с помощью LLM-критика (исполнители, покрытие, зависимости) перед выполнением и возвращать планировщику при наличии замечаний. Добавляет 1 вызов LLM на запуск планирования.'
-      },
-
-      'settings.planner.rounds.label': { en: 'Revision Rounds', ru: 'Раунды доработки' },
-      'settings.planner.rounds.desc': {
-        en: 'How many times the critic may send the roadmap back. <span class="font-mono">1</span> — it gets a single say and the rewrite then stands. Each extra round is a full replan, and a critic that never approves would otherwise keep the planner going.',
-        ru: 'Сколько раз критик может возвращать план на доработку. <span class="font-mono">1</span> — одна проверка, после чего версия утверждается. Каждый доп. раунд — полный переутверждённый план.'
-      },
-
-      'settings.planner.mergeTasks.label': { en: 'Merge Tasks', ru: 'Объединение задач' },
-      'settings.planner.mergeTasks.desc': {
-        en: 'Automatically merge consecutive tasks assigned to the same executor (CoderAgent / TaskExecutorAgent) into a single task. Turn off to keep every task the planner wrote as a separate unit of work.',
-        ru: 'Автоматически объединять последовательные задачи, назначенные одному исполнителю (CoderAgent / TaskExecutorAgent), в одну задачу.'
-      },
-
-      // ── ResearchAgent section ──
-      'settings.research.maxSearches.label': { en: 'Per-turn — max searches', ru: 'Макс. поисков за ход' },
-      'settings.research.maxSearches.desc': {
-        en: 'Maximum number of web search tool calls per agent turn. After this limit, the agent must synthesize from existing results.',
-        ru: 'Максимальное количество вызовов поиска в сети за один ход агента. После превышения лимита агент должен отвечать из имеющихся данных.'
-      },
-
-      // ── HypothesesAgent section ──
-      'settings.hypotheses.maxActive.label': { en: 'Max Active Hypotheses', ru: 'Макс. активных гипотез' },
-      'settings.hypotheses.maxActive.desc': {
-        en: 'How many hypotheses are kept as active (<span class="font-mono">formulated</span>) simultaneously for parallel verification. <span class="font-mono">1</span> — the classic "one at a time" mode: the agent picks the single best hypothesis and postpones the rest. Higher values let the orchestrator verify several branches in parallel.',
-        ru: 'Сколько гипотез одновременно сохраняются активными (<span class="font-mono">formulated</span>) для параллельной проверки. <span class="font-mono">1</span> — режим "по одной": выбирается 1 лучшая гипотеза. Более высокие значения позволяют проверять несколько веток параллельно.'
-      },
-
-      // ── CoderAgent section ──
-      'settings.coder.mode.label': { en: 'Coder Execution Mode', ru: 'Режим выполнения Coder' },
-      'settings.coder.mode.note': { en: '(no Sandbox URL set — OpenHands mode requires a Sandbox URL)', ru: '(не задан URL песочницы — для режима OpenHands требуется URL песочницы)' },
-      'settings.coder.mode.desc': {
-        en: 'Choose execution mode: <strong>local</strong> uses in-process tools (<span class="font-mono">execute_bash</span>, file edits, git); <strong>openhands</strong> relays tasks to the remote OpenHands sandbox agent.',
-        ru: 'Выберите режим выполнения: <strong>local</strong> использует локальные инструменты (<span class="font-mono">execute_bash</span>, правка файлов, git); <strong>openhands</strong> передаёт задачи удалённому агенту в песочнице OpenHands.'
-      },
-
-      'settings.coder.sandboxUrl.label': { en: 'Sandbox Remote URL', ru: 'Удалённый URL песочницы' },
-      'settings.coder.sandboxUrl.desc': {
-        en: 'The endpoint URL of the isolated code-execution sandbox server.',
-        ru: 'URL-адрес изолированного сервера-песочницы для выполнения кода.'
-      },
-
-      'settings.coder.workspaceId.label': { en: 'Coder Workspace ID', ru: 'ID рабочей области Coder' },
-      'settings.coder.workspaceId.desc': {
-        en: 'Pin a custom persistent workspace folder name to save code state across delegations. Leave empty to auto-generate.',
-        ru: 'Указать имя папки рабочей области для сохранения состояния кода между вызовами. Оставьте пустым для автогенерации.'
-      },
-      'settings.coder.workspaceId.placeholder': { en: 'e.g. workspace_1', ru: 'например workspace_1' },
-
-      // ── TaskExecutorAgent section ──
-      'settings.taskExec.keepScore.label': { en: 'Tool Keep Threshold', ru: 'Порог релевантности инструментов' },
-      'settings.taskExec.keepScore.desc': {
-        en: 'Minimum relevance score (0.0 to 1.0) for a retrieved MCP tool to be loaded into context.',
-        ru: 'Минимальный балл релевантности (от 0.0 до 1.0) для загрузки найденного инструмента MCP в контекст.'
-      },
-
-      'settings.taskExec.abstainScore.label': { en: 'Tool Abstain Threshold', ru: 'Порог отказа от инструментов' },
-      'settings.taskExec.abstainScore.desc': {
-        en: 'Threshold below which the tool pipeline completely abstains, so the executor re-routes the task to the CoderAgent.',
-        ru: 'Порог, ниже которого пайплайн инструментов отказывается от выполнения, и исполнитель перенаправляет задачу в CoderAgent.'
-      },
-
-      // ── Empty / Common sections ──
-      'settings.noConfig': { en: 'No configurable parameters yet.', ru: 'Пока нет настраиваемых параметров.' },
-      'settings.cancel': { en: 'Cancel', ru: 'Отмена' },
-      'settings.save': { en: 'Save Settings', ru: 'Сохранить настройки' },
-    };
-
-    /** Применяет текущий язык ко всем элементам с data-i18n / data-i18n-placeholder */
-    function applyLanguage(lang) {
-      if (lang) currentLang = lang;
-      localStorage.setItem(LANG_STORAGE_KEY, currentLang);
-      document.documentElement.lang = currentLang;
-
-      document.querySelectorAll('[data-i18n]').forEach(el => {
-        const key = el.getAttribute('data-i18n');
-        const entry = i18n[key];
-        if (entry && entry[currentLang]) el.innerHTML = entry[currentLang];
-      });
-      document.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
-        const key = el.getAttribute('data-i18n-placeholder');
-        const entry = i18n[key];
-        if (entry && entry[currentLang]) el.placeholder = entry[currentLang];
-      });
-
-      // Обновляем кнопки переключателя языка
-      const btnEn = document.getElementById('lang-btn-en');
-      const btnRu = document.getElementById('lang-btn-ru');
-      if (btnEn) {
-        btnEn.classList.toggle('bg-primary', currentLang === 'en');
-        btnEn.classList.toggle('text-on-primary', currentLang === 'en');
-      }
-      if (btnRu) {
-        btnRu.classList.toggle('bg-primary', currentLang === 'ru');
-        btnRu.classList.toggle('text-on-primary', currentLang === 'ru');
-      }
-    }
-
-    // Применяем язык при загрузке страницы (после того как DOM построится)
-    document.addEventListener('DOMContentLoaded', () => applyLanguage());
-
 
     const appSettings = {
       general: {
-        startMode: 'planner',   // 'planner' | 'orchestrator' | 'orchestrator_planner'
+        startMode: 'init',   // 'init' | 'orchestrator' | 'orchestrator_planner'
         maxRetries: 3,
         hitlEnabled: false,
-        hitlAutoApproveTimeout: 300,
         usePlanner: true,
-        useProxy: true,
         opikEnabled: false,
         autoNamingEnabled: true,
-        contextInitEnabled: true,
         knowledgeGraphEnabled: true,
-        autoClearGraphEnabled: false,
         researchGraphEnabled: true,
       },
       researchAgent: {
@@ -727,7 +399,7 @@
       coderAgent: {
         sandboxUrl: 'http://localhost:8884',
         workspaceId: '',
-        mode: 'local',
+        localToolsEnabled: true,
       },
       orchestratorAgent: {},
       plannerAgent: {
@@ -751,7 +423,8 @@
       { name: "OrchestratorAgent", icon: "hub", desc: "Master Orchestrator" },
       { name: "PlannerAgent", icon: "map", desc: "Roadmap Planner" },
       { name: "ToolsViewer", icon: "science", desc: "Tools Viewer" },
-      { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Knowledge Graph", id: "graph-link", href: "/graph" },
+      { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Research Graph", id: "graph-link", href: "/graph" },
+      { name: "SessionTrace", icon: "schedule", desc: "Session Trace", id: "trace-link", href: "/trace" },
       { name: "MCPBuilds", icon: "build", desc: "MCP Builds", href: "/builds" },
       { name: "CoderSandbox", icon: "terminal", desc: "CoderSandbox", id: "coder-sandbox-link", href: "http://localhost:8884/" },
       { name: "__settings__", icon: "settings", desc: "Settings" },
@@ -778,14 +451,13 @@
           <div ${elemIdAttr} ${hrefAttr} onclick="onAgentClick('${a.name}')" class="flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100">
             <span class="material-symbols-outlined ${iconColorClass} text-lg">${a.icon}</span>
             <div class="flex flex-col">
-              <span class="text-sm ${textColorClass}" data-i18n="agent.${a.name}.desc">${a.desc}</span>
+              <span class="text-sm ${textColorClass}">${a.desc}</span>
               <span class="text-[8px] text-outline-variant/50 font-mono uppercase">${a.name}</span>
             </div>
             ${extraDot}
           </div>
         `;
       }).join('');
-      applyLanguage();
     }
 
     function onAgentClick(name) {
@@ -804,6 +476,11 @@
         } else {
           window.open('/graph', '_blank');
         }
+      } else if (name === "SessionTrace") {
+        // Sessions newest-first, and the chronology of the one you open.
+        window.open(activeUser && activeSession
+          ? `/trace?user_id=${encodeURIComponent(activeUser.id)}&session_id=${encodeURIComponent(activeSession.id)}`
+          : '/trace', '_blank');
       } else if (name === "MCPBuilds") {
         window.open('/builds', '_blank');
       } else if (name === "CoderSandbox") {
@@ -893,7 +570,6 @@
     <div class="flex flex-col gap-2 max-w-2xl msg-enter">
       <div class="flex items-center gap-2">
         <span class="text-[10px] font-mono text-primary/70 bg-primary/5 px-2 py-0.5 rounded uppercase">System</span>
-        <span class="text-[10px] text-outline-variant font-mono">${ts(timestamp)}</span>
       </div>
       <div class="bg-surface-container-lowest p-3 rounded-lg border border-outline-variant/10">
         <p class="font-mono text-[11px] leading-relaxed text-on-surface-variant whitespace-pre-wrap">${escHtml(text)}</p>
@@ -924,6 +600,110 @@
           // Live MCP build page: /builds/<job_id> (agent surfaces it as progress_page).
           .replace(/(^|\s)(\/builds\/[A-Za-z0-9._-]+)/g, '$1<a href="$2"' + A + '>$2</a>');
       }).join('');
+    }
+
+    // Agents write markdown — headings, tables, lists, code. Rendering it as
+    // flat pre-wrapped text turned a report into a wall of asterisks and pipes.
+    // Small on purpose: the subset the agents actually emit, nothing more.
+    function renderMarkdown(raw) {
+      const text = String(raw == null ? '' : raw).replace(/\r\n?/g, '\n');
+
+      // Fenced code is lifted out first so nothing below reformats its insides.
+      const fences = [];
+      const withoutCode = text.replace(/```[ \t]*([\w+-]*)\n([\s\S]*?)```/g, (_, lang, body) => {
+        fences.push('<pre class="md-code"><code>' + escHtml(body.replace(/\n$/, '')) + '</code></pre>');
+        return 'CSFENCE' + (fences.length - 1) + 'ENDCS';
+      });
+
+      const inline = (line) => {
+        // Escape first: everything below emits trusted markup onto safe text.
+        let out = escHtml(line);
+        const spans = [];
+        out = out.replace(/`([^`]+)`/g, (_, code) => {
+          spans.push('<code class="md-inline-code">' + code + '</code>');
+          return 'CSSPAN' + (spans.length - 1) + 'ENDCS';
+        });
+        out = out
+          .replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
+          .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+          .replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s.,;:!?)]|$)/g, '$1<em>$2</em>')
+          .replace(/(^|[\s(])_([^_\n]+)_(?=[\s.,;:!?)]|$)/g, '$1<em>$2</em>')
+          .replace(/~~([^~]+)~~/g, '<del>$1</del>');
+        out = linkify(out);
+        return out.replace(/CSSPAN(\d+)ENDCS/g, (_, i) => spans[Number(i)]);
+      };
+
+      const cells = (row) => row.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map(c => c.trim());
+
+      const lines = withoutCode.split('\n');
+      const html = [];
+      let list = null;
+      let paragraph = [];
+
+      const closeList = () => { if (list) { html.push('</' + list + '>'); list = null; } };
+      const closeParagraph = () => {
+        if (!paragraph.length) return;
+        html.push('<p>' + paragraph.map(inline).join('<br>') + '</p>');
+        paragraph = [];
+      };
+      const close = () => { closeParagraph(); closeList(); };
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+
+        if (!line.trim()) { close(); continue; }
+
+        const fence = line.match(/^CSFENCE(\d+)ENDCS$/);
+        if (fence) { close(); html.push(fences[Number(fence[1])]); continue; }
+
+        const heading = line.match(/^(#{1,6})\s+(.*)$/);
+        if (heading) {
+          close();
+          const level = heading[1].length;
+          html.push('<h' + level + ' class="md-h md-h' + level + '">' + inline(heading[2]) + '</h' + level + '>');
+          continue;
+        }
+
+        if (/^\s*(?:[-*_]\s*){3,}$/.test(line)) { close(); html.push('<hr class="md-rule">'); continue; }
+
+        // A table needs its separator row to be a table at all.
+        if (/^\s*\|/.test(line) && i + 1 < lines.length && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(lines[i + 1])) {
+          close();
+          const head = cells(line);
+          const align = cells(lines[i + 1]).map(spec =>
+            /^:-+:$/.test(spec) ? 'center' : /-+:$/.test(spec) ? 'right' : 'left');
+          const rows = [];
+          i += 2;
+          while (i < lines.length && /^\s*\|/.test(lines[i])) { rows.push(cells(lines[i])); i++; }
+          i--;
+          const cell = (tag, value, j) =>
+            '<' + tag + ' style="text-align:' + (align[j] || 'left') + '">' + inline(value || '') + '</' + tag + '>';
+          html.push(
+            '<div class="md-table-wrap"><table class="md-table"><thead><tr>' +
+            head.map((h, j) => cell('th', h, j)).join('') + '</tr></thead><tbody>' +
+            rows.map(r => '<tr>' + head.map((_, j) => cell('td', r[j], j)).join('') + '</tr>').join('') +
+            '</tbody></table></div>');
+          continue;
+        }
+
+        const quote = line.match(/^\s*>\s?(.*)$/);
+        if (quote) { close(); html.push('<blockquote class="md-quote">' + inline(quote[1]) + '</blockquote>'); continue; }
+
+        const bullet = line.match(/^\s*[-*+]\s+(.*)$/);
+        const numbered = line.match(/^\s*\d+[.)]\s+(.*)$/);
+        if (bullet || numbered) {
+          closeParagraph();
+          const want = bullet ? 'ul' : 'ol';
+          if (list !== want) { closeList(); list = want; html.push('<' + want + ' class="md-list">'); }
+          html.push('<li>' + inline((bullet || numbered)[1]) + '</li>');
+          continue;
+        }
+
+        closeList();
+        paragraph.push(line);
+      }
+      close();
+      return html.join('');
     }
 
     let activeSandboxWatchUrl = null;
@@ -998,23 +778,52 @@
       return typeof value === 'string' && value.trim().length > 0;
     }
 
-    function addAgentMsg(author, text, timestamp = null) {
+    // An agent's own working-out, not its answer: worth showing, but it must
+    // not read like the reply. Muted, labelled, and folded when it runs long.
+    const THINKING_FOLD = 420;
+
+    function addAgentMsg(author, text, timestamp = null, isFinal = true) {
       // Blank-but-present text produces an empty bubble; such events carry a
       // function call, not an utterance. (Also guards history recorded before
       // the backend started filtering them.)
       if (!hasText(text)) return;
+
+      const body = renderMarkdown(text.trim());
+
+      if (!isFinal) {
+        const folded = text.trim().length > THINKING_FOLD;
+        appendMsgToFeed(`
+    <div class="flex items-start gap-4 max-w-3xl msg-enter">
+      <div class="w-8 h-8 rounded-lg bg-surface-container-highest border border-outline-variant/20 flex items-center justify-center shrink-0">
+        <span class="material-symbols-outlined text-sm text-outline-variant">psychology</span>
+      </div>
+      <div class="flex flex-col gap-1 min-w-0">
+        <div class="flex items-center gap-2 flex-wrap">
+          <span class="text-xs font-bold text-outline-variant font-headline uppercase tracking-tight">${escHtml(author)}</span>
+          <span class="text-[9px] font-mono uppercase tracking-widest text-outline-variant bg-outline-variant/10 border border-outline-variant/20 px-1.5 py-0.5 rounded">Thinking</span>
+        </div>
+        <div class="flex flex-col gap-2 bg-surface-container/40 px-4 py-3 rounded-xl rounded-tl-none border border-dashed border-outline-variant/25">
+          <div class="md text-[13px] text-outline-variant leading-relaxed break-words ${folded ? 'max-h-28 overflow-hidden' : ''}">${body}</div>
+          ${folded ? `<button onclick="toggleAgentOutput(this)"
+             class="self-start text-[10px] font-mono uppercase tracking-widest text-outline-variant hover:text-on-surface transition-colors">
+             Show full reasoning</button>` : ''}
+        </div>
+      </div>
+    </div>`);
+        return;
+      }
+
       appendMsgToFeed(`
     <div class="flex items-start gap-4 max-w-3xl msg-enter">
       <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
         <span class="material-symbols-outlined text-sm text-primary">smart_toy</span>
       </div>
-      <div class="flex flex-col gap-1">
-        <div class="flex items-center gap-2">
+      <div class="flex flex-col gap-1 min-w-0">
+        <div class="flex items-center gap-2 flex-wrap">
           <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">${escHtml(author)}</span>
-          <span class="text-[10px] text-outline-variant">${ts(timestamp)}</span>
         </div>
         <div class="bg-surface-container-high p-4 rounded-xl rounded-tl-none border border-outline-variant/5">
-          <p class="text-sm text-on-surface leading-relaxed whitespace-pre-wrap">${linkify(escHtml(text))}</p>
+          <div class="md text-sm text-on-surface leading-relaxed break-words">${body}</div>
         </div>
       </div>
     </div>`);
@@ -1047,12 +856,9 @@
           <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">${escHtml(agent || 'agent')}</span>
           <span class="text-[9px] font-mono uppercase tracking-widest text-secondary bg-secondary/10 border border-secondary/20 px-1.5 py-0.5 rounded">Result</span>
           ${caller ? `<span class="text-[9px] font-mono text-outline-variant">→ ${escHtml(caller)}</span>` : ''}
-          <span class="text-[10px] text-outline-variant">${ts(timestamp)}</span>
         </div>
         <div class="flex flex-col gap-2 bg-surface-container-high p-4 rounded-xl rounded-tl-none border border-secondary/20">
-          <div class="${folded ? 'max-h-64 overflow-hidden' : ''}">
-            <p class="text-sm text-on-surface leading-relaxed whitespace-pre-wrap break-words">${linkify(escHtml(body))}</p>
-          </div>
+          <div class="md text-sm text-on-surface leading-relaxed break-words ${folded ? 'max-h-64 overflow-hidden' : ''}">${renderMarkdown(body)}</div>
           ${toggle}
         </div>
       </div>
@@ -1062,9 +868,16 @@
     function toggleAgentOutput(button) {
       const box = button.previousElementSibling;
       if (!box) return;
-      const collapsed = box.classList.toggle('max-h-64');
+      // Reasoning folds shorter than a deliverable, so the height class the
+      // bubble was built with is the one to toggle.
+      const clamp = button.dataset.clamp
+        || (button.dataset.clamp = [...box.classList].find(c => c.startsWith('max-h-')) || 'max-h-64');
+      // Capture the button's own wording before the first toggle overwrites it.
+      const opened = button.dataset.openLabel
+        || (button.dataset.openLabel = button.textContent.trim() || 'Show full output');
+      const collapsed = box.classList.toggle(clamp);
       box.classList.toggle('overflow-hidden', collapsed);
-      button.textContent = collapsed ? 'Show full output' : 'Collapse';
+      button.textContent = collapsed ? opened : 'Collapse';
       if (collapsed) box.scrollIntoView({ block: 'nearest' }); else scrollChat();
     }
 
@@ -1076,7 +889,6 @@
       </div>
       <div class="flex flex-col gap-1 items-end">
         <div class="flex items-center gap-2">
-          <span class="text-[10px] text-outline-variant">${ts(timestamp)}</span>
           <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">You</span>
         </div>
         <div class="bg-primary/5 p-4 rounded-xl rounded-tr-none border border-primary/20">
@@ -1437,18 +1249,6 @@
     }
 
     // =========================================================================
-    // Telemetry
-    // =========================================================================
-    function addTelemetry(text) {
-      const log = document.getElementById('telemetry-log');
-      const t = new Date().toLocaleTimeString('en-GB', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-      log.innerHTML += `<div class="flex gap-2"><span class="text-outline-variant">[${t}]</span> ${escHtml(text)}</div>`;
-      log.scrollTop = log.scrollHeight;
-      eventCount++;
-      document.getElementById('event-count').textContent = 'Events: ' + eventCount;
-    }
-
-    // =========================================================================
     // Settings Modal
     // =========================================================================
     async function loadSettings() {
@@ -1457,18 +1257,14 @@
         if (resp.ok) {
           const data = await resp.json();
           if (data.general) {
-            appSettings.general.startMode = data.general.startMode || 'planner';
+            appSettings.general.startMode = data.general.startMode || 'init';
             appSettings.general.maxRetries = data.general.maxRetries ?? 3;
             appSettings.general.hitlEnabled = data.general.hitlEnabled ?? false;
-            appSettings.general.hitlAutoApproveTimeout = data.general.hitlAutoApproveTimeout ?? 300;
             appSettings.general.usePlanner = data.general.usePlanner ?? true;
-            appSettings.general.useProxy = data.general.useProxy ?? appSettings.general.useProxy;
             appSettings.general.opikEnabled = data.general.opikEnabled ?? false;
             appSettings.general.autoNamingEnabled = data.general.autoNamingEnabled ?? true;
             appSettings.general.coscientistUsername = data.general.coscientistUsername || '';
-            appSettings.general.contextInitEnabled = data.general.contextInitEnabled ?? true;
             appSettings.general.knowledgeGraphEnabled = data.general.knowledgeGraphEnabled ?? true;
-            appSettings.general.autoClearGraphEnabled = data.general.autoClearGraphEnabled ?? false;
             appSettings.general.researchGraphEnabled = data.general.researchGraphEnabled ?? true;
           }
           if (data.plannerAgent) {
@@ -1491,7 +1287,7 @@
           if (data.coderAgent) {
             appSettings.coderAgent.sandboxUrl = data.coderAgent.sandboxUrl || 'http://localhost:8884';
             appSettings.coderAgent.workspaceId = data.coderAgent.workspaceId || '';
-            appSettings.coderAgent.mode = data.coderAgent.mode || 'local';
+            appSettings.coderAgent.localToolsEnabled = data.coderAgent.localToolsEnabled ?? true;
           }
           if (!activeSandboxWatchUrl) {
             updateCoderSandboxButton(null);
@@ -1505,23 +1301,17 @@
     async function openSettings() {
       const modal = document.getElementById('settings-modal');
       modal.classList.remove('hidden');
-      // Apply current language to the modal (highlight toggle + translate)
-      applyLanguage();
       // Load latest from server
       await loadSettings();
       // Sync UI with current state
       document.getElementById('start-mode-select').value = appSettings.general.startMode;
       document.getElementById('max-retries-input').value = appSettings.general.maxRetries;
       document.getElementById('hitl-enabled-checkbox').checked = appSettings.general.hitlEnabled;
-      document.getElementById('hitl-timeout-input').value = appSettings.general.hitlAutoApproveTimeout ?? 300;
       document.getElementById('use-planner-checkbox').checked = appSettings.general.usePlanner;
-      document.getElementById('use-proxy-checkbox').checked = appSettings.general.useProxy;
       document.getElementById('opik-enabled-checkbox').checked = appSettings.general.opikEnabled;
       document.getElementById('auto-naming-enabled-checkbox').checked = appSettings.general.autoNamingEnabled;
       document.getElementById('default-username-input').value = appSettings.general.coscientistUsername || '';
-      document.getElementById('context-init-enabled-checkbox').checked = appSettings.general.contextInitEnabled ?? true;
       document.getElementById('knowledge-graph-checkbox').checked = appSettings.general.knowledgeGraphEnabled;
-      document.getElementById('auto-clear-graph-checkbox').checked = appSettings.general.autoClearGraphEnabled;
       document.getElementById('research-graph-checkbox').checked = appSettings.general.researchGraphEnabled;
       document.getElementById('planner-retrieval-checkbox').checked = appSettings.plannerAgent.retrievalEnabled;
       document.getElementById('planner-graph-checkbox').checked = appSettings.plannerAgent.graphEnabled;
@@ -1534,7 +1324,7 @@
       document.getElementById('task-exec-abstain-score').value = appSettings.taskExecutorAgent.abstainScore;
       document.getElementById('coder-sandbox-url').value = appSettings.coderAgent.sandboxUrl;
       document.getElementById('coder-workspace-id').value = appSettings.coderAgent.workspaceId;
-      document.getElementById('coder-mode-select').value = appSettings.coderAgent.mode || 'local';
+      document.getElementById('coder-local-tools-checkbox').checked = appSettings.coderAgent.localToolsEnabled;
       // A deletion result from an earlier visit says nothing about now.
       const graphDeleteStatus = document.getElementById('graph-delete-status');
       graphDeleteStatus.textContent = '';
@@ -1550,7 +1340,7 @@
       const plannerCheckbox = document.getElementById('use-planner-checkbox');
       const plannerNote = document.getElementById('use-planner-note');
 
-      if (startMode === 'planner' || startMode === 'orchestrator_planner') {
+      if (startMode === 'init' || startMode === 'orchestrator_planner') {
         plannerCheckbox.disabled = true;
         plannerCheckbox.checked = false;
         if (plannerNote) plannerNote.classList.remove('hidden');
@@ -1587,23 +1377,16 @@
     }
 
     // Deleting a graph rewrites files on the server, so the confirmation names
-    // exactly what goes — in particular that the knowledge memory is shared by
-    // every session, not just the one currently open.
+    // exactly what goes.
     const GRAPH_DELETE_LABELS = {
       execution: "this session's execution graph",
       research: "this session's research graph",
-      memory: 'the GLOBAL knowledge memory (shared by every session)',
-      all: "this session's execution and research graphs AND the GLOBAL knowledge memory",
+      all: "this session's execution and research graphs",
     };
 
     function describeGraphDeletion(deleted) {
-      return Object.entries(deleted || {}).map(([name, info]) => {
-        if (info && info.error) return `${name} failed (${info.error})`;
-        if (name === 'memory') {
-          return `${name} (${info.entities || 0} entities, ${info.relations || 0} relations)`;
-        }
-        return name;
-      }).join(', ');
+      return Object.entries(deleted || {}).map(([name, info]) =>
+        info && info.error ? `${name} failed (${info.error})` : name).join(', ');
     }
 
     async function deleteGraphData() {
@@ -1635,11 +1418,10 @@
       }
     }
 
-    // Warn when the coder ends up with no way to run anything: openhands mode
+    // Warn when the coder ends up with no way to run anything: local tools off
     // and no sandbox URL leaves CoderAgent unable to execute at all.
     function updateCoderToolsUI() {
-      const mode = document.getElementById('coder-mode-select').value;
-      const localOn = mode === 'local';
+      const localOn = document.getElementById('coder-local-tools-checkbox').checked;
       const sandboxUrl = document.getElementById('coder-sandbox-url').value.trim();
       const note = document.getElementById('coder-local-tools-note');
       if (note) note.classList.toggle('hidden', localOn || !!sandboxUrl);
@@ -1654,16 +1436,12 @@
       appSettings.general.startMode = document.getElementById('start-mode-select').value;
       appSettings.general.maxRetries = parseInt(document.getElementById('max-retries-input').value, 10) || 3;
       appSettings.general.hitlEnabled = document.getElementById('hitl-enabled-checkbox').checked;
-      const hitlTimeoutVal = parseInt(document.getElementById('hitl-timeout-input').value, 10);
-      appSettings.general.hitlAutoApproveTimeout = !isNaN(hitlTimeoutVal) ? hitlTimeoutVal : 300;
       if (appSettings.general.startMode === 'orchestrator') {
         appSettings.general.usePlanner = document.getElementById('use-planner-checkbox').checked;
       }
-      appSettings.general.useProxy = document.getElementById('use-proxy-checkbox').checked;
       appSettings.general.opikEnabled = document.getElementById('opik-enabled-checkbox').checked;
       appSettings.general.autoNamingEnabled = document.getElementById('auto-naming-enabled-checkbox').checked;
       appSettings.general.coscientistUsername = document.getElementById('default-username-input').value.trim();
-      appSettings.general.contextInitEnabled = document.getElementById('context-init-enabled-checkbox').checked;
       appSettings.general.knowledgeGraphEnabled = document.getElementById('knowledge-graph-checkbox').checked;
       appSettings.general.researchGraphEnabled = document.getElementById('research-graph-checkbox').checked;
 
@@ -1696,7 +1474,7 @@
 
       appSettings.coderAgent.sandboxUrl = document.getElementById('coder-sandbox-url').value.trim() || 'http://localhost:8884';
       appSettings.coderAgent.workspaceId = document.getElementById('coder-workspace-id').value.trim();
-      appSettings.coderAgent.mode = document.getElementById('coder-mode-select').value;
+      appSettings.coderAgent.localToolsEnabled = document.getElementById('coder-local-tools-checkbox').checked;
       if (!activeSandboxWatchUrl) {
         updateCoderSandboxButton(null);
       }
@@ -2342,9 +2120,14 @@
         const data = await apiJson('/api/users');
         knownUsers = data.users || [];
         populateUserSelectors();
-        const savedUserId = localStorage.getItem(USER_STORAGE_KEY);
+        // A replay link carries the session to open: /?user_id=...&session_id=...
+        // Without this the link is inert and lands on whatever was last used.
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlUserId = urlParams.get('user_id') || urlParams.get('user');
+        const urlSessionId = urlParams.get('session_id') || urlParams.get('session');
+        const savedUserId = urlUserId || localStorage.getItem(USER_STORAGE_KEY);
         let savedUser = knownUsers.find(item => item.id === savedUserId);
-        if (data.defaultUsername) {
+        if (data.defaultUsername && !urlUserId) {
           const envNick = data.defaultUsername.trim().toLowerCase();
           const envUser = knownUsers.find(item => item.nickname.toLowerCase() === envNick);
           if (envUser) {
@@ -2362,7 +2145,8 @@
           openIdentityModal();
           return;
         }
-        await ensureUserSession(savedUser, localStorage.getItem(SESSION_STORAGE_KEY));
+        await ensureUserSession(
+          savedUser, urlSessionId || localStorage.getItem(SESSION_STORAGE_KEY));
       } catch (error) {
         addSystemMsg('Failed to initialize local sessions: ' + error.message);
         openIdentityModal();
@@ -2427,7 +2211,7 @@
         } else if (message.type === 'agent_event') {
           activityTouchAgent(message.author, message.timestamp);
           if (hasText(message.content)) {
-            addAgentMsg(message.author || 'system', message.content, message.timestamp);
+            addAgentMsg(message.author || 'system', message.content, message.timestamp, !!message.is_final);
             const foundUrl = extractSandboxUrlFromText(message.content);
             if (foundUrl) updateCoderSandboxButton(foundUrl);
           }
@@ -2524,7 +2308,7 @@
             if (hasText(data.content)) {
               hideTyping();
               highlightAgent(data.author);
-              addAgentMsg(data.author, data.content, data.timestamp);
+              addAgentMsg(data.author, data.content, data.timestamp, !!data.is_final);
               const foundUrl = extractSandboxUrlFromText(data.content);
               if (foundUrl) updateCoderSandboxButton(foundUrl);
               addTelemetry('EVENT :: ' + data.author + (data.is_final ? ' [FINAL]' : ''));
@@ -2799,7 +2583,7 @@
       document.getElementById('chat-feed').innerHTML = `
     <div class="flex flex-col items-center justify-center h-full opacity-50">
       <span class="material-symbols-outlined text-4xl text-primary/30 mb-3">hub</span>
-      <p data-i18n="chat.sendQuery" class="text-sm text-outline-variant font-medium">Send a query to begin orchestration</p>
+      <p class="text-sm text-outline-variant font-medium">Send a query to begin orchestration</p>
     </div>`;
     }
 
@@ -2903,7 +2687,7 @@
           try {
             const d = JSON.parse(e.data);
             if (d) updateDatasetUploadUI(d);
-          } catch (_) { }
+          } catch (_) {}
         });
         datasetLogEventSource.addEventListener('status', (e) => {
           if (String(e.data).trim() === 'idle') {
@@ -3267,6 +3051,7 @@
       feed.scrollTop = feed.scrollHeight;
     }
   </script>
+=======
 
   <!-- Local user picker (in-memory development mode) -->
   <div id="identity-modal"
@@ -3346,66 +3131,167 @@
     </div>
   </div>
 
-  <!-- Roadmap Editor Modal -->
+  <!-- Roadmap & Execution Plan Modal -->
   <div id="roadmap-modal"
     class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
     <div
-      class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] mx-4">
+      class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[88vh] mx-4 transition-all">
       <!-- Modal Header -->
       <div
-        class="px-6 py-4 border-b border-outline-variant/10 flex justify-between items-center bg-surface-container-low/50">
-        <div class="flex items-center gap-3">
-          <span class="material-symbols-outlined text-primary">map</span>
-          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider">Roadmap Editor</h3>
+        class="px-6 py-4 border-b border-outline-variant/10 flex flex-col gap-3 bg-surface-container-low/60">
+        <div class="flex justify-between items-center">
+          <div class="flex items-center gap-3">
+            <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+              <span class="material-symbols-outlined text-primary text-sm">account_tree</span>
+            </div>
+            <div>
+              <div class="flex items-center gap-2">
+                <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider" id="roadmap-modal-title">Roadmap & Execution Plan</h3>
+                <span id="roadmap-counter-badge" class="text-[9px] font-mono font-semibold px-2 py-0.5 rounded-full bg-surface-container-highest text-primary border border-primary/20">0 tasks</span>
+              </div>
+              <p class="text-[9px] text-outline-variant/70 font-mono tracking-wide" id="roadmap-modal-subtitle">Execution steps for the current session</p>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-2">
+            <!-- Add Task Button -->
+            <button type="button" id="roadmap-add-task-btn" onclick="addNewRoadmapTask()"
+              class="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-surface-container-highest/90 hover:bg-surface-container-high border border-primary/25 hover:border-primary/50 text-[10px] font-semibold text-primary transition-all shadow-sm active:scale-95">
+              <span class="material-symbols-outlined text-xs">add_task</span>
+              <span>Add Task</span>
+            </button>
+
+            <!-- Close Modal -->
+            <button onclick="closeRoadmapEditor()"
+              class="text-outline-variant hover:text-on-surface p-1 rounded-md hover:bg-surface-container-high transition-colors flex items-center">
+              <span class="material-symbols-outlined text-lg">close</span>
+            </button>
+          </div>
         </div>
-        <button onclick="closeRoadmapEditor()"
-          class="text-outline-variant hover:text-on-surface transition-colors flex items-center">
-          <span class="material-symbols-outlined text-lg">close</span>
-        </button>
+
+        <!-- Filter & Search Toolbar (shown in Visual mode) -->
+        <div id="roadmap-visual-toolbar" class="flex flex-wrap items-center justify-between gap-3 pt-1 border-t border-outline-variant/10">
+          <!-- Status Filter Tabs -->
+          <div class="flex items-center gap-1 text-[10px] font-medium" id="roadmap-filter-tabs">
+            <button onclick="filterRoadmapTasks('all')" data-filter="all"
+              class="roadmap-tab-btn active px-2.5 py-1 rounded-md bg-surface-container-highest text-primary font-semibold border border-primary/20 transition-all">
+              All (<span id="rf-all-count">0</span>)
+            </button>
+            <button onclick="filterRoadmapTasks('active')" data-filter="active"
+              class="roadmap-tab-btn px-2.5 py-1 rounded-md text-outline-variant hover:text-on-surface transition-all">
+              In Progress (<span id="rf-active-count">0</span>)
+            </button>
+            <button onclick="filterRoadmapTasks('done')" data-filter="done"
+            class="roadmap-tab-btn px-2.5 py-1 rounded-md text-outline-variant hover:text-on-surface transition-all">
+              Completed (<span id="rf-done-count">0</span>)
+            </button>
+            <button onclick="filterRoadmapTasks('todo')" data-filter="todo"
+              class="roadmap-tab-btn px-2.5 py-1 rounded-md text-outline-variant hover:text-on-surface transition-all">
+              Pending (<span id="rf-todo-count">0</span>)
+            </button>
+          </div>
+
+          <!-- Search & Expand All Toolbar Actions -->
+          <div class="flex items-center gap-2 flex-1 max-w-sm justify-end">
+            <!-- Search Input -->
+            <div class="relative min-w-[170px] flex-1">
+              <span class="material-symbols-outlined absolute left-2.5 top-1/2 -translate-y-1/2 text-outline-variant/60 text-xs">search</span>
+              <input type="text" id="roadmap-search-input" oninput="searchRoadmapTasks(this.value)"
+                placeholder="Search tasks…"
+                class="w-full pl-7 pr-3 py-1 text-[11px] bg-surface-container-lowest/80 border border-outline-variant/15 rounded-md text-on-surface placeholder:text-outline-variant/40 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 transition-all" />
+            </div>
+
+            <!-- Expand / Collapse All -->
+            <div class="flex items-center gap-0.5 shrink-0 bg-surface-container-highest/60 rounded-md border border-outline-variant/15 p-0.5">
+              <button type="button" onclick="toggleAllDescExpand(true)"
+                title="Expand all descriptions"
+                class="p-1 rounded text-outline-variant hover:text-primary hover:bg-surface-container-high transition-colors flex items-center">
+                <span class="material-symbols-outlined text-sm">unfold_more</span>
+              </button>
+              <button type="button" onclick="toggleAllDescExpand(false)"
+                title="Collapse all descriptions"
+                class="p-1 rounded text-outline-variant hover:text-primary hover:bg-surface-container-high transition-colors flex items-center">
+                <span class="material-symbols-outlined text-sm">unfold_less</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Progress Track -->
+        <div class="flex items-center gap-3 pt-1">
+          <div class="flex-1 h-1.5 bg-surface-container-highest rounded-full overflow-hidden">
+            <div id="roadmap-progress-bar"
+              class="h-full bg-gradient-to-r from-primary via-primary to-secondary transition-all duration-500 rounded-full"
+              style="width: 0%;"></div>
+          </div>
+          <span id="roadmap-progress-text" class="text-[10px] font-mono text-outline-variant shrink-0 tabular-nums">0% completed</span>
+        </div>
       </div>
 
       <!-- Modal Body -->
-      <div class="p-6 flex-1 overflow-y-auto flex flex-col gap-4">
-        <p class="text-xs text-on-surface-variant leading-relaxed">
-          Edit the execution plan stored in the current user's active session.
-          This plan guides agent execution and is isolated from other sessions.
-        </p>
+      <div class="p-6 flex-1 overflow-y-auto flex flex-col gap-4 bg-gradient-to-b from-transparent to-surface-container-lowest/20">
 
-        <div class="relative flex-1 flex flex-col min-h-[300px]">
-          <textarea id="roadmap-textarea"
-            class="w-full flex-1 min-h-[300px] bg-surface-container-lowest border border-outline-variant/10 rounded-lg p-4 font-mono text-xs text-on-surface placeholder:text-outline-variant/30 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 resize-none leading-relaxed"
-            placeholder="1. Action...&#10;2. Action..."></textarea>
+        <!-- 1. Visual Cards View -->
+        <div id="roadmap-visual-view" class="flex flex-col gap-3">
+          <!-- Empty State -->
+          <div id="roadmap-empty-state" class="hidden flex flex-col items-center justify-center py-16 opacity-75">
+            <span class="material-symbols-outlined text-4xl text-primary/40 mb-3">account_tree</span>
+            <p class="text-sm font-medium text-on-surface">No tasks found in roadmap</p>
+            <p class="text-xs text-outline-variant mt-1">PlannerAgent generates the plan, or click "Add Task" to create one manually.</p>
+            <button type="button" onclick="addNewRoadmapTask()"
+              class="mt-4 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-on-primary text-xs font-semibold shadow hover:brightness-110 active:scale-95 transition-all">
+              <span class="material-symbols-outlined text-sm">add_task</span>
+              <span>Add Task</span>
+            </button>
+          </div>
+
+          <!-- Cards Timeline List -->
+          <div id="roadmap-tasks-list" class="space-y-3 relative"></div>
         </div>
 
-        <div id="roadmap-feedback-container" class="hidden mt-2 flex flex-col gap-2">
-          <label class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Feedback / Revision
-            Instructions</label>
-          <input id="roadmap-feedback-input"
-            class="bg-surface-container-highest border border-outline-variant/10 rounded-md px-3 py-2 text-xs text-on-surface placeholder:text-outline-variant/50 focus:ring-1 focus:ring-primary/40 focus:border-primary/40"
-            placeholder="E.g. Add an extra step for data validation..." />
+        <!-- HITL Feedback Container -->
+        <div id="roadmap-feedback-container" class="hidden mt-2 p-4 rounded-xl border border-primary/25 bg-primary/5 flex flex-col gap-2.5">
+          <div class="flex items-center gap-2">
+            <span class="material-symbols-outlined text-primary text-sm">edit_note</span>
+            <label class="text-[10px] font-bold text-primary uppercase tracking-widest">Feedback / Revision Instructions for Planner</label>
+          </div>
+          <textarea id="roadmap-feedback-input" rows="2"
+            class="w-full bg-surface-container-highest border border-outline-variant/15 rounded-md px-3 py-2 text-xs text-on-surface placeholder:text-outline-variant/50 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 resize-none"
+            placeholder="Specify what should be changed or added (e.g. Add validation against off-targets, split task 2)..."></textarea>
         </div>
 
+        <!-- Operation Status Alert -->
         <div id="roadmap-status" class="text-[10px] font-mono text-outline-variant hidden"></div>
       </div>
 
       <!-- Modal Footer -->
-      <div class="px-6 py-4 border-t border-outline-variant/10 flex justify-end gap-3 bg-surface-container-low/50">
-        <button onclick="closeRoadmapEditor()"
-          class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
-          Cancel
-        </button>
-        <button id="save-roadmap-btn" onclick="saveRoadmap()"
-          class="px-4 py-2 bg-primary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-primary/20 transition-all flex items-center gap-2">
-          <span class="material-symbols-outlined text-sm">save</span> Save Changes
-        </button>
-        <button id="revise-roadmap-btn" onclick="reviseRoadmap()"
-          class="hidden px-4 py-2 bg-surface-container-highest border border-error/20 text-error hover:bg-error/10 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all flex items-center gap-2">
-          <span class="material-symbols-outlined text-sm">edit</span> Revise Plan
-        </button>
-        <button id="confirm-roadmap-btn" onclick="saveAndConfirmRoadmap()"
-          class="hidden px-4 py-2 bg-secondary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-secondary/20 transition-all flex items-center gap-2">
-          <span class="material-symbols-outlined text-sm">check_circle</span> Save & Confirm
-        </button>
+      <div class="px-6 py-3.5 border-t border-outline-variant/10 flex justify-between items-center bg-surface-container-low/60">
+        <div class="flex items-center gap-3 text-[10px] font-mono text-outline-variant/70">
+          <span id="roadmap-stat-total">Total: 0</span>
+          <span>·</span>
+          <span id="roadmap-stat-active" class="text-primary">In progress: 0</span>
+          <span>·</span>
+          <span id="roadmap-stat-done" class="text-secondary">Done: 0</span>
+        </div>
+
+        <div class="flex items-center gap-3">
+          <button onclick="closeRoadmapEditor()"
+            class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
+            Cancel
+          </button>
+          <button id="save-roadmap-btn" onclick="saveRoadmap()"
+            class="px-4 py-2 bg-primary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-primary/20 transition-all flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">save</span> Save Changes
+          </button>
+          <button id="revise-roadmap-btn" onclick="reviseRoadmap()"
+            class="hidden px-4 py-2 bg-surface-container-highest border border-error/20 text-error hover:bg-error/10 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">edit</span> Revise Plan
+          </button>
+          <button id="confirm-roadmap-btn" onclick="saveAndConfirmRoadmap()"
+            class="hidden px-4 py-2 bg-secondary text-on-primary hover:brightness-110 active:scale-95 rounded-md font-bold text-[10px] uppercase tracking-wider shadow-lg shadow-secondary/20 transition-all flex items-center gap-2">
+            <span class="material-symbols-outlined text-sm">check_circle</span> Save & Confirm
+          </button>
+        </div>
       </div>
     </div>
   </div>
@@ -3430,6 +3316,9 @@
           </div>
         </div>
         <div class="flex items-center gap-2">
+          <button id="experiment-expand-all" onclick="toggleExperimentExpandAll()"
+            class="text-[9px] font-bold uppercase tracking-wider text-outline-variant hover:text-primary px-2 py-1 rounded hover:bg-primary/10 transition-colors">Expand
+            all</button>
           <button onclick="clearExperimentViewer()"
             class="text-outline-variant hover:text-error transition-colors flex items-center gap-1 px-2 py-1 rounded hover:bg-error/10"
             title="Clear feed">
@@ -3458,7 +3347,7 @@
         class="px-6 py-3 border-t border-outline-variant/10 flex justify-between items-center bg-surface-container-low/50">
         <div class="flex items-center gap-2">
           <span id="experiment-event-count"
-            class="text-[9px] font-mono text-outline-variant/60 uppercase tracking-wider">0 events</span>
+            class="text-[9px] font-mono text-outline-variant/60 uppercase tracking-wider">0 calls</span>
         </div>
         <button onclick="closeExperimentViewer()"
           class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
@@ -4054,210 +3943,54 @@
     </div>
   </div>
 
-  <script>
-    // === Session Export / Import / Save / Restore ===
+  <!-- MCP Rebuild Confirmation Modal — shown during import when the bundle contains MCP builds -->
+  <div id="mcp-rebuild-modal"
+    class="hidden fixed inset-0 z-[130] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+    <div class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-lg shadow-2xl p-6 mx-4">
+      <div class="flex items-start justify-between mb-5">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+            <span class="material-symbols-outlined text-primary text-sm">build</span>
+          </div>
+          <div>
+            <h3 class="font-headline font-bold text-on-surface uppercase tracking-wider">MCP Servers Found</h3>
+            <p class="text-[10px] text-outline-variant mt-1">This session contains MCP tool server builds</p>
+          </div>
+        </div>
+      </div>
+      <div id="mcp-rebuild-list" class="space-y-2 max-h-[200px] overflow-y-auto mb-5">
+      </div>
+      <p class="text-[10px] text-outline-variant mb-5">
+        <strong>Rebuild</strong> will launch Docker builds for each server (takes ~10–30 min per server).
+        <strong>Skip</strong> will import the session without starting the servers — build logs and metadata will still
+        be available.
+      </p>
+      <div class="flex justify-end gap-3">
+        <button id="mcp-rebuild-skip-btn"
+          class="px-4 py-2 bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40 rounded-md font-bold text-[10px] uppercase tracking-wider transition-all">
+          Skip</button>
+        <button id="mcp-rebuild-confirm-btn"
+          class="px-4 py-2 bg-primary text-on-primary rounded-md font-bold text-[10px] uppercase tracking-wider hover:brightness-110 transition-all">
+          Rebuild</button>
+      </div>
+    </div>
+  </div>
 
-    async function fetchErrorMessage(resp) {
-      try {
-        const data = await resp.json();
-        if (data && data.detail) return data.detail;
-      } catch (_) {
-        try {
-          const text = await resp.text();
-          if (text) return text.slice(0, 200);
-        } catch (_) { }
-      }
-      return resp.statusText || `HTTP ${resp.status}`;
-    }
 
-    async function exportCurrentSession() {
-      if (!activeUser || !activeSession) return addSystemMsg('No active session to export.');
-      try {
-        addSystemMsg('📥 Exporting session…');
-        const resp = await fetch(`/api/users/${encodeURIComponent(activeUser.id)}/sessions/${encodeURIComponent(activeSession.id)}/export`, { method: 'POST' });
-        if (!resp.ok) {
-          const errMsg = await fetchErrorMessage(resp);
-          throw new Error(errMsg);
-        }
-        const blob = await resp.blob();
-        const disposition = resp.headers.get('content-disposition') || '';
-        let filename = `session_${activeSession.id}.cossession.zip`;
-        const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-        if (utf8Match) {
-          try { filename = decodeURIComponent(utf8Match[1]); } catch (_) { }
-        } else {
-          const match = disposition.match(/filename="([^"]+)"/);
-          if (match) filename = match[1];
-        }
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = filename;
-        a.click();
-        URL.revokeObjectURL(a.href);
-        addSystemMsg('✅ Session exported: ' + filename);
-      } catch (err) { addSystemMsg('❌ Export failed: ' + err.message); }
-    }
-
-    async function saveCurrentSession() {
-      if (!activeUser || !activeSession) return addSystemMsg('No active session to save.');
-      try {
-        addSystemMsg('💾 Saving session to disk…');
-        const data = await apiJson(`/api/users/${encodeURIComponent(activeUser.id)}/sessions/${encodeURIComponent(activeSession.id)}/save`, { method: 'POST' });
-        addSystemMsg('✅ Session saved: ' + data.filename);
-      } catch (err) { addSystemMsg('❌ Save failed: ' + err.message); }
-    }
-
-    function triggerImportSession() {
-      if (!activeUser) return openIdentityModal();
-      document.getElementById('import-session-input').click();
-    }
-
-    async function handleImportFile(input) {
-      const file = input.files[0];
-      input.value = '';
-      if (!file) return;
-      if (!activeUser) return openIdentityModal();
-      try {
-        addSystemMsg('📤 Importing session from ' + file.name + '…');
-        const formData = new FormData();
-        formData.append('file', file);
-        const resp = await fetch(`/api/users/${encodeURIComponent(activeUser.id)}/import-session`, {
-          method: 'POST',
-          body: formData
-        });
-        if (!resp.ok) {
-          const errMsg = await fetchErrorMessage(resp);
-          throw new Error(errMsg);
-        }
-        const result = await resp.json();
-        const importedUser = result.user;
-        const importedSession = result.session;
-        // If the imported user is different from current, switch to it
-        if (importedUser.id !== activeUser.id) {
-          if (!knownUsers.find(u => u.id === importedUser.id)) {
-            knownUsers.push(importedUser);
-          }
-          activeUser = importedUser;
-          populateUserSelectors();
-        }
-        // Add session and switch to it
-        knownSessions.unshift(importedSession);
-        await activateSession(activeUser, importedSession);
-        addSystemMsg('✅ Session imported: ' + importedSession.title);
-      } catch (err) { addSystemMsg('❌ Import failed: ' + err.message); }
-    }
-
-    function openSavedSessionsModal() {
-      document.getElementById('saved-sessions-modal').classList.remove('hidden');
-      loadSavedSessionsList();
-    }
-
-    function closeSavedSessionsModal() {
-      document.getElementById('saved-sessions-modal').classList.add('hidden');
-    }
-
-    async function loadSavedSessionsList() {
-      const container = document.getElementById('saved-sessions-list');
-      container.innerHTML = '<p class="text-[10px] text-outline-variant italic">Loading…</p>';
-      try {
-        const data = await apiJson('/api/saved-sessions');
-        const sessions = data.sessions || [];
-        if (!sessions.length) {
-          container.innerHTML = '<p class="text-[10px] text-outline-variant italic">No saved sessions found.</p>';
-          return;
-        }
-        container.innerHTML = sessions.map(s => {
-          const sizeKb = (s.size_bytes / 1024).toFixed(1);
-          const date = s.exported_at ? new Date(s.exported_at).toLocaleString() : '—';
-          return `<div class="flex items-center justify-between bg-surface-container-high rounded-lg px-4 py-3 border border-outline-variant/10">
-            <div class="flex-1 min-w-0">
-              <p class="text-xs font-bold text-on-surface truncate">${escHtml(s.title)}</p>
-              <p class="text-[10px] text-outline-variant">${date} · ${sizeKb} KB${s.original_nickname ? ' · by ' + escHtml(s.original_nickname) : ''}</p>
-            </div>
-            <div class="flex gap-2 ml-3 shrink-0">
-              <button onclick="restoreSavedSession('${escHtml(s.filename)}')" title="Restore"
-                class="px-3 py-1.5 bg-primary text-on-primary rounded text-[10px] font-bold uppercase hover:brightness-110">
-                Restore</button>
-              <button onclick="downloadSavedSession('${escHtml(s.filename)}')" title="Download"
-                class="px-3 py-1.5 bg-surface-container border border-outline-variant/20 text-on-surface rounded text-[10px] font-bold uppercase hover:bg-surface-variant/40">
-                <span class="material-symbols-outlined text-sm">download</span></button>
-              <button onclick="deleteSavedSession('${escHtml(s.filename)}')" title="Delete"
-                class="px-3 py-1.5 bg-surface-container border border-error/30 text-error rounded text-[10px] font-bold uppercase hover:bg-error/10">
-                <span class="material-symbols-outlined text-sm">delete</span></button>
-            </div>
-          </div>`;
-        }).join('');
-      } catch (err) {
-        container.innerHTML = `<p class="text-[10px] text-error">Failed to load saved sessions: ${escHtml(err.message)}</p>`;
-      }
-    }
-
-    async function restoreSavedSession(filename) {
-      try {
-        addSystemMsg('📂 Restoring session from ' + filename + '…');
-        const resp = await fetch('/api/restore-session', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ filename })
-        });
-        if (!resp.ok) {
-          const errMsg = await fetchErrorMessage(resp);
-          throw new Error(errMsg);
-        }
-        const result = await resp.json();
-        const restoredUser = result.user;
-        const restoredSession = result.session;
-        if (!knownUsers.find(u => u.id === restoredUser.id)) {
-          knownUsers.push(restoredUser);
-        }
-        activeUser = restoredUser;
-        populateUserSelectors();
-        knownSessions.unshift(restoredSession);
-        await activateSession(activeUser, restoredSession);
-        closeSavedSessionsModal();
-        addSystemMsg('✅ Session restored: ' + restoredSession.title);
-      } catch (err) { addSystemMsg('❌ Restore failed: ' + err.message); }
-    }
-
-    async function downloadSavedSession(filename) {
-      try {
-        const resp = await fetch(`/api/saved-sessions/${encodeURIComponent(filename)}/download`);
-        if (!resp.ok) {
-          const errMsg = await fetchErrorMessage(resp);
-          throw new Error(errMsg);
-        }
-        const blob = await resp.blob();
-        const disposition = resp.headers.get('content-disposition') || '';
-        let dlFilename = filename;
-        const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
-        if (utf8Match) {
-          try { dlFilename = decodeURIComponent(utf8Match[1]); } catch (_) { }
-        } else {
-          const match = disposition.match(/filename="([^"]+)"/);
-          if (match) dlFilename = match[1];
-        }
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = dlFilename;
-        a.click();
-        URL.revokeObjectURL(a.href);
-      } catch (err) { addSystemMsg('❌ Download failed: ' + err.message); }
-    }
-
-    async function deleteSavedSession(filename) {
-      if (!confirm('Delete saved session "' + filename + '"?')) return;
-      try {
-        const resp = await fetch(`/api/saved-sessions/${encodeURIComponent(filename)}`, { method: 'DELETE' });
-        if (!resp.ok) {
-          const errMsg = await fetchErrorMessage(resp);
-          throw new Error(errMsg);
-        }
-        loadSavedSessionsList();
-        addSystemMsg('🗑 Saved session deleted: ' + filename);
-      } catch (err) { addSystemMsg('❌ Delete failed: ' + err.message); }
-    }
-  </script>
-
+  <!-- Core Modular Application Scripts -->
+  <script src="/static/js/state.js"></script>
+  <script src="/static/js/i18n.js"></script>
+  <script src="/static/js/activity_rail.js"></script>
+  <script src="/static/js/chat.js"></script>
+  <script src="/static/js/hitl.js"></script>
+  <script src="/static/js/telemetry.js"></script>
+  <script src="/static/js/sessions.js"></script>
+  <script src="/static/js/modals/settings.js"></script>
+  <script src="/static/js/modals/dataset.js"></script>
+  <script src="/static/js/modals/roadmap.js"></script>
+  <script src="/static/js/modals/experiments.js"></script>
+  <script src="/static/js/ws.js"></script>
+  <script src="/static/js/app.js"></script>
 </body>
 
 </html>

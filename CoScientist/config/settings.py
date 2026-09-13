@@ -3,13 +3,13 @@ Application configuration using Pydantic Settings.
 """
 import os as _os
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Union
 
-from dotenv import load_dotenv as _load_dotenv
+from dotenv import find_dotenv as _find_dotenv, load_dotenv as _load_dotenv
 from pydantic import BaseModel, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-_load_dotenv()
+_load_dotenv(_find_dotenv())
 
 from rag_tools.config import Settings as ToolRAGSettings
 
@@ -36,6 +36,13 @@ class LLMSettings(BaseModel):
     # provider prefix in the model string (e.g. "openrouter/...") selects the
     # endpoint, so no separate URL is needed.
     coder_model: Optional[str] = None
+
+    # Seconds to wait for a single completion before giving up. Without this a
+    # provider that accepts the connection and then goes quiet never raises, so
+    # the agent waits forever and the run looks frozen with nothing in the log.
+    # A timeout turns that silence into a retryable error. Override with
+    # LLM__REQUEST_TIMEOUT.
+    request_timeout: int = 180
 
     service_url: Optional[str] = None
     service_cc_url: Optional[str] = None
@@ -130,6 +137,10 @@ class S3Settings(BaseModel):
     access_key: Optional[str] = None
     secret_key: Optional[str] = None
     bucket_name: Optional[str] = None
+    # Lifetime of presigned artifact URLs, in seconds. 604800 (7 days) is the
+    # SigV4 maximum. The default of the S3 client (360 s) expires before the
+    # operator opens the report. Override via S3__PRESIGN_TTL.
+    presign_ttl: int = 604800
 
 
 # =========================
@@ -153,6 +164,11 @@ class MCPSettings(BaseModel):
     papers_search_url: Optional[str] = None
     moosechem_url: Optional[str] = None
     result_formatter_url: Optional[str] = None
+    # The file vault (mcp-servers/vault-mcp-server). Two consumers read it:
+    # worker agents get the upload/download pair as an ADK toolset, and
+    # framework code calls it per request through tools/vault_client.py.
+    # Unset means both drop out, and the run still completes.
+    vault_url: Optional[str] = None
 
 
 # =========================
@@ -263,7 +279,7 @@ class WebSettings(BaseModel):
     singleton is the single source of truth — all components read from it
     directly.
     """
-    start_mode: str = _os.getenv("START_MODE", "orchestrator")        # "planner" | "orchestrator" | "orchestrator_planner"
+    start_mode: str = _os.getenv("START_MODE", "orchestrator")        # "init" | "planner" | "orchestrator" | "orchestrator_planner"
     max_searches: int = int(_os.getenv("RESEARCH_AGENT_SEARCHES", "2"))           # WebSearchLimiter per-turn cap
     max_retries: int = int(_os.getenv("LLM_MAX_RETRIES", "3"))
     hitl_enabled: bool = _os.getenv("HITL__ENABLED", "false").lower() in ("true", "1", "yes")
@@ -277,6 +293,8 @@ class WebSettings(BaseModel):
     auto_clear_graph_enabled: bool = _os.getenv("GRAPH__AUTO_CLEAR", "false").lower() in ("true", "1", "yes")
     executor_tool_keep_score: float = float(_os.getenv("EXECUTOR_TOOL_KEEP_SCORE", "0.3"))
     executor_tool_abstain_score: float = float(_os.getenv("EXECUTOR_TOOL_ABSTAIN_SCORE", "0.2"))
+    fedot_fallback_enabled: bool = _os.getenv("EXECUTOR__FEDOT_FALLBACK", "true").lower() in ("true", "1", "yes")
+    fedot_fallback_timeout_s: float = float(_os.getenv("EXECUTOR__FEDOT_FALLBACK_TIMEOUT", "900"))
     sandbox_url: str = _os.getenv("SANDBOX_URL", "")
     coder_workspace_id: _Optional[str] = _os.getenv("CODER_WORKSPACE_ID")
     coder_mode: str = _os.getenv("CODER__MODE", "local")        # "local" | "openhands"
@@ -315,6 +333,28 @@ class ResearchGraphSettings(BaseModel):
 
 
 # =========================
+# CRITIC
+# =========================
+class CriticSettings(BaseModel):
+    """Critic LLM callback parameters (pre-action, post-action, plan critic)."""
+    timeout: float = 90.0
+    http_timeout_ratio: float = 0.75
+    max_attempts: int = 2
+    max_tokens: int = 7000
+    model: Optional[str] = None  # Dedicated model for the Critic callbacks; falls back to llm.main_model if unset
+    # Model "thinking" for the critic, in system.yaml's vocabulary: False/"off",
+    # or "minimal"|"low"|"medium"|"high". A verdict is a short judgement against
+    # an explicit checklist, and reasoning tokens are spent from `max_tokens` —
+    # thinking too hard truncates the JSON it was supposed to return. None
+    # leaves the provider's default alone.
+    reasoning: Optional[Union[bool, str]] = "low"
+
+    @property
+    def http_timeout(self) -> float:
+        return self.timeout * self.http_timeout_ratio
+
+
+# =========================
 # MAIN SETTINGS
 # =========================
 class Settings(BaseSettings):
@@ -336,6 +376,7 @@ class Settings(BaseSettings):
     mcp: MCPSettings = MCPSettings()
     web: WebSettings = WebSettings()
     research_graph: ResearchGraphSettings = ResearchGraphSettings()
+    critic: CriticSettings = CriticSettings()
 
     model_config = SettingsConfigDict(
         env_file=".env",          

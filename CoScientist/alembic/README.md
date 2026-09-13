@@ -82,6 +82,31 @@ python CoScientist/alembic/start_chain.py <repo_url> --rebuild-base
 python CoScientist/alembic/start_chain.py <repo_url> --gpus all
 ```
 
+### Guiding what gets built
+
+By default the Explorer decides autonomously which tools to expose. You can steer
+it with one of two mechanisms, at opposite ends of a strictness spectrum:
+
+- **Required tasks (hard, enforced).** Pin exact tool(s) — name, argument names,
+  return shape — that *must* appear, verified against real repo code by the plan
+  gate (the run fails if one can't be grounded). Used for TM-Bench-style
+  evaluation. Set `ALEMBIC_TASKS` (env) or pass `--tasks` to a JSON/YAML task
+  object, a path, or comma-separated paths (each `{name, description, arguments,
+  returns, example}`); several tasks run against one repo. `ALEMBIC_TARGET_TASK`
+  is the old single-task spelling.
+
+- **Soft hint (steer, not enforced).** Free-text describing the *idea* of a tool
+  you'd like to see mined **among the others**, with no forced name/signature and
+  no gate — applied to the Explorer stage only, dropped silently if the repo has
+  no real code for it. Set `ALEMBIC_HINTS` (env) or pass `--hints`:
+
+  ```bash
+  python CoScientist/alembic/start_chain.py <repo_url> \
+    --hints "a train + a predict entry point for the survival model"
+  ```
+
+  The two compose: required tools stay pinned while the hint steers the rest.
+
 ---
 
 ## Live Dashboard (Web UI)
