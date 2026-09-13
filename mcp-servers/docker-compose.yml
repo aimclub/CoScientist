@@ -44,6 +44,16 @@ services:
       - ./paper-analysis-mcp-server/.env
     restart: unless-stopped
 
+  moosechem-mcp-server:
+    build:
+      context: ..
+      dockerfile: mcp-servers/moosechem-mcp-server/Dockerfile
+    ports:
+      - "7335:7331"
+    env_file:
+      - ./moosechem-mcp-server/.env
+    restart: unless-stopped
+
   result-aggregator-mcp-server:
     build:
       context: ..
@@ -54,7 +64,6 @@ services:
       - ../logs:/app/logs
       - ../workspace:/app/workspace
     restart: unless-stopped
-
   # The file vault. Every other server hands files over through it.
   vault-mcp-server:
     build:
