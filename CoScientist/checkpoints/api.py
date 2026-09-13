@@ -4,11 +4,12 @@ Mounted on the SAME FastAPI apps that already serve the system: the A2A
 server (``A2AFastAPIApplication.build()`` returns plain FastAPI) and the web
 UI. Control commands must not pass through LLM interpretation — per the
 Synapse contract, A2A stays the dialogue channel and snapshots are managed by
-a service API ("первичен API", SynapseNmas §6.8).
+a service API ("первичен API", SynapseNmas §6.8). Every route requires the
+trusted instance-administrator credential (see docs/checkpoint_control.md).
 
 The busy gate is PROCESS-wide (``CheckpointPlugin.any_busy()``): restore
 mutates process-wide store singletons (task tracker, research graph), and in
-``run_all`` mode six A2A servers share one process — a per-router check would
+``run_all`` mode the A2A servers share one process — a per-router check would
 guard only its own runner.
 """
 from __future__ import annotations
@@ -16,10 +17,11 @@ from __future__ import annotations
 import logging
 from typing import Awaitable, Callable, Optional, Tuple
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+from CoScientist.checkpoints.auth import require_checkpoint_admin
 from CoScientist.checkpoints.plugin import CheckpointPlugin
 from CoScientist.checkpoints.restore import CompatibilityError, restore_checkpoint
 from CoScientist.checkpoints.store import LocalZipStore, get_default_store
@@ -65,7 +67,10 @@ def make_checkpoint_router(
             return _svc, _app
 
     store = store or get_default_store()
-    router = APIRouter(prefix="/api/checkpoints", tags=["checkpoints"])
+    router = APIRouter(
+        prefix="/api/checkpoints", tags=["checkpoints"],
+        dependencies=[Depends(require_checkpoint_admin)],
+    )
 
     @router.get("")
     async def list_checkpoints(run_id: Optional[str] = None):

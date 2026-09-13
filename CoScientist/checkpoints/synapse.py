@@ -13,7 +13,7 @@ import logging
 import threading
 from typing import Dict, Optional
 
-import httpx
+from CoScientist.checkpoints.notifications import enqueue_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -80,10 +80,7 @@ def notify_snapshot_saved(manifest) -> None:
         "label": manifest.label,
         "snapshot_ref": manifest.snapshot_ref,
     }
-    try:
-        httpx.post(f"{cfg.callback_url.rstrip('/')}/points", json=body, timeout=5.0)
-    except Exception as exc:  # noqa: BLE001 — never break the run
-        logger.warning("synapse: snapshot-ready callback failed: %s", exc)
+    enqueue_snapshot(f"{cfg.callback_url.rstrip('/')}/points", body)
 
 
 # ── minimal OTel: hang our steps under the platform's traceparent ────────────

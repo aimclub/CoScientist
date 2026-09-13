@@ -41,6 +41,7 @@ if str(REPO_ROOT) not in sys.path:  # script-by-path puts tests/ on sys.path, no
 PORT = int(os.getenv("E2E_CHECKPOINT_PORT", "8123"))
 BASE = f"http://127.0.0.1:{PORT}"
 APP_NAME = "orchestrator"
+TOKEN = "test-only-platform-admin-credential"
 
 
 # ─────────────────────────── server role ────────────────────────────────────
@@ -116,7 +117,9 @@ def _http(method: str, url: str, body: dict | None = None, timeout: float = 60.0
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(
         url, data=data, method=method,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json",
+                                          **({"Authorization": f"Bearer {TOKEN}"}
+                                             if url.startswith(f"{BASE}/api/checkpoints") else {})},
     )
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode())
@@ -180,7 +183,7 @@ def wait_ready(proc: subprocess.Popen, timeout: float = 90.0) -> None:
 def spawn_server(ckpt_dir: str) -> subprocess.Popen:
     env = {
         **os.environ,
-        "CHECKPOINTS__ENABLED": "1",
+        "CHECKPOINTS__ENABLED": "1", "CHECKPOINTS__API_TOKEN": TOKEN,
         "CHECKPOINTS__DIR": ckpt_dir,
         "A2A_DISABLE_OPIK": "1",
         "LOG_AGENT_EVENTS": "0",
