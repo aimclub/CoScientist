@@ -1,23 +1,20 @@
-"""Live web dashboard for the alembic pipeline (remaster architecture).
+"""Web dashboard for alembic builds.
 
-A local, browser-based split-screen view that streams a run in real time:
+Pages:
 
-  * top   — the five-stage rail (explorer → environment → coder → validator →
-             wrapper), lit as each stage runs / passes / fails;
-  * left  — an accumulating column: the exploration report, then the generated
-             output files, how to run them (recorded ``setup.sh``), and per-tool
-             invocation examples;
-  * right — the generated tools as cards with live pass/fail validation badges
-             and a **Call** form that invokes each tool-function on demand
-             (the same ``invoke_tool_function`` path the validator uses — the
-             MCP wrap is only the final stage);
-  * bottom — a live activity feed of every agent tool call.
+  * ``/``: paste a repo URL and start a build. The build runs detached through
+    ``CoScientist.tools.alembic_tools.build_mcp_server``, and the page moves to
+    the build's own page.
+  * ``/builds``: every build known on this host, with its MCP address and
+    whether the serving container is up.
+  * ``/builds/<job_id>``: one build. Top: the five-stage rail. Left: the
+    exploration report, output files, ``setup.sh`` and invocation examples.
+    Right: the generated tools with validation results and a Call form that
+    runs a tool inside the build's container, through the same
+    ``invoke_tool_function`` the validator uses. Bottom: the activity feed.
 
-The pipeline is unchanged for the CLI/benchmark: it emits events through the
-optional :mod:`alembic.events` bus, which is a no-op unless this dashboard
-installs a sink. All UI-shaped enrichment (reading reports/plan.json/output
-files off disk) lives here in the web layer, not in the pipeline.
+The main CoScientist web UI mounts this app under ``/alembic``.
 
-Run:
-    python -m alembic.web.server
+Standalone run (port 8100):
+    python CoScientist/alembic/web/server.py
 """

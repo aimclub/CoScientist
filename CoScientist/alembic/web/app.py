@@ -11,14 +11,7 @@ a build.
 """
 from __future__ import annotations
 
-import sys
 from pathlib import Path
-
-# The pipeline modules live as a top-level ``alembic`` package under
-# CoScientist/alembic; add its parent to sys.path so ``from alembic import ...``
-# works whether this module is imported from start_chain (which does the same)
-# or embedded into the CoScientist web app.
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
@@ -31,8 +24,8 @@ BUILDS_LIST_PATH = WEB_DIR / "templates" / "builds_list.html"
 def create_app() -> FastAPI:
     app = FastAPI(title="Alembic Pipeline Dashboard", version="3.0.0")
 
-    # Shared per-job REST + WS router — mounted here and also included by the
-    # main CoScientist web app under the /alembic prefix.
+    # Per-job REST + WS router. The main CoScientist web app mounts this whole
+    # app under /alembic, so the router is reachable there too.
     from CoScientist.alembic.web.build_api import router as build_router
     app.include_router(build_router)
 

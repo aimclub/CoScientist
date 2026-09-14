@@ -8,6 +8,7 @@ run (workdir = ``.alembic``) and for any past job (workdir =
 """
 from __future__ import annotations
 
+import ast
 import io
 import json
 import re
@@ -119,8 +120,38 @@ def _load_plan(workdir: Path, repo_url: str) -> Optional[dict]:
     return _read_json(reports_dir(workdir, repo_url) / "plan.json")
 
 
+def _tool_def(workdir: Path, repo_url: str, name: str):
+    """The generated function ``name`` from ``tools/<name>.py``, if it parses."""
+    try:
+        tree = ast.parse((output_dir(workdir, repo_url) / "tools" / f"{name}.py")
+                         .read_text(encoding="utf-8"))
+    except (OSError, SyntaxError, ValueError):
+        return None
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return node
+    return None
+
+
+def call_args_for(workdir: Path, repo_url: str, name: str, args: dict) -> dict:
+    """``args`` without the keys the generated function does not accept.
+
+    The plan's sample args describe the repo function, and the coder may wrap
+    it with other parameters. Kept as they are when the function takes
+    ``**kwargs`` or cannot be read.
+    """
+    fn = _tool_def(workdir, repo_url, name)
+    if fn is None or fn.args.kwarg is not None:
+        return args
+    a = fn.args
+    names = {p.arg for p in (*a.posonlyargs, *a.args, *a.kwonlyargs)}
+    return {k: v for k, v in args.items() if k in names}
+
+
 def build_tools(workdir: Path, repo_url: str) -> dict:
-    """Right-panel tool cards, merged from plan.json + validation.json."""
+    """Right-panel tool cards: names and purpose from plan.json, the signature
+    from the generated code (the coder may deviate from the plan), verdicts
+    from validation.json."""
     plan = _load_plan(workdir, repo_url)
     if not plan:
         return {"tools": [], "title": ""}
@@ -132,9 +163,10 @@ def build_tools(workdir: Path, repo_url: str) -> dict:
         status = v.get("status")            # perfect | passed | failed | untested
         badge = {"perfect": "pass", "passed": "pass",
                  "failed": "fail"}.get(status)   # None -> pending in the UI
+        fn = _tool_def(workdir, repo_url, t.get("name") or "")
         tools.append({
             "name": t.get("name"),
-            "sig": ", ".join(t.get("params") or []),
+            "sig": ast.unparse(fn.args) if fn else ", ".join(t.get("params") or []),
             "ret": "dict",
             "desc": t.get("purpose", ""),
             "target": t.get("target"),
