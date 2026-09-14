@@ -255,6 +255,8 @@ class ReplaySession:
                     "message": payload.get("message") or "",
                     "description": payload.get("message") or "",
                     "options": payload.get("options") or [],
+                    "invoked_via": "tool",
+                    "trigger": event["tool"],
                     "timestamp": stamp}
         if kind == "tool_result" and event.get("tool") in _HITL_TOOLS:
             answer = event.get("result")

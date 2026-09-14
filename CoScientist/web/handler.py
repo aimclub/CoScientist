@@ -174,6 +174,7 @@ class WebHITLHandler(AbstractHITLHandler):
             "context": public_context,
             "form": request.form,
             "invoked_via": request.invoked_via,
+            "trigger": request.trigger,
             "timeout_seconds": timeout_sec,
         }
 

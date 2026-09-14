@@ -344,12 +344,19 @@
 
       <!-- Usage & Cost — what this session has spent, by agent -->
       <div class="bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/10 overflow-hidden">
-        <div class="flex items-baseline justify-between mb-3">
+        <div class="flex items-baseline justify-between mb-2">
           <h4 data-i18n="usage.header" class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">
             Usage &amp; Cost</h4>
           <span id="metrics-total" class="text-sm font-mono font-bold text-primary">$0.0000</span>
         </div>
-        <div id="metrics-summary" class="text-[9px] font-mono text-outline-variant mb-2">no model calls yet</div>
+        <div class="flex items-center justify-between flex-wrap gap-x-2 gap-y-1 text-[9px] font-mono text-outline-variant mb-2">
+          <div id="metrics-summary">no model calls yet</div>
+          <div id="metrics-duration-wrap" class="flex items-center gap-1 font-mono text-outline-variant shrink-0" title="Execution time">
+            <span id="metrics-duration-dot" class="hidden w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
+            <span class="material-symbols-outlined text-[11px] text-outline-variant">schedule</span>
+            <span id="metrics-duration" class="font-bold">00:00</span>
+          </div>
+        </div>
         <div id="metrics-agents" class="space-y-1 font-mono text-[9px] max-h-64 overflow-y-auto no-scrollbar"></div>
         <div id="metrics-note" class="hidden text-[8px] font-mono text-error/70 mt-2 leading-relaxed"></div>
       </div>

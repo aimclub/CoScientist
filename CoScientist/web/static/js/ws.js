@@ -70,6 +70,10 @@
             break;
           case 'status':
             applyRunStatus(data.status, data.run_status_version);
+            if (typeof RunTimer !== 'undefined') {
+              if (data.status === 'processing') RunTimer.start(data.started_at);
+              else RunTimer.finish(data.finished_at);
+            }
             addTelemetry('STATUS :: ' + data.message);
             break;
           case 'user_message':
@@ -125,6 +129,7 @@
             activityMarkIdle();
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();
+            if (typeof RunTimer !== 'undefined') RunTimer.finish();
             addTelemetry('COMPLETE :: Final response received');
             break;
           case 'hitl_request':
@@ -188,6 +193,7 @@
             addTelemetry('ERROR :: ' + data.message);
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();
+            if (typeof RunTimer !== 'undefined') RunTimer.finish();
             break;
           case 'pong':
             break;

@@ -1,12 +1,57 @@
 import json
 import re
 from typing import Any, Dict, Iterable, Optional
+
+import yaml
 from google.genai import types as genai_types
 
 from CoScientist.config import get_settings
 from CoScientist.hitl.models import HITLRequest, HITLAction
 from CoScientist.hitl.handler import AbstractHITLHandler
 from CoScientist.graph.session_scope import session_key
+
+
+class _BlockStyleDumper(yaml.SafeDumper):
+    """SafeDumper that renders multi-line strings as literal block scalars."""
+
+
+def _represent_str(dumper: yaml.SafeDumper, data: str):
+    if "\n" in data:
+        return dumper.represent_scalar("tag:yaml.org,2002:str", data, style="|")
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data)
+
+
+_BlockStyleDumper.add_representer(str, _represent_str)
+
+
+def format_tool_args(args: Any) -> str:
+    """Render tool arguments as human-readable YAML.
+
+    Long prompts passed to tools such as ``run_sandbox_task`` are multi-line
+    strings; JSON collapses them into a single line of ``\\n`` escapes, which is
+    unreadable in the HITL card. YAML literal block scalars (``|``) keep the
+    original line breaks intact.
+
+    Falls back to JSON (and then ``str``) if the arguments contain values PyYAML
+    cannot represent.
+    """
+    if not isinstance(args, (dict, list)):
+        return str(args)
+    try:
+        dumped = yaml.dump(
+            args,
+            Dumper=_BlockStyleDumper,
+            default_flow_style=False,
+            allow_unicode=True,
+            sort_keys=False,
+            width=100,
+        )
+        return dumped.rstrip("\n")
+    except yaml.YAMLError:
+        try:
+            return json.dumps(args, indent=2, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            return str(args)
 
 
 def _parse_options(text: str) -> list[str]:
@@ -74,7 +119,8 @@ def make_hitl_after_callback(handler: AbstractHITLHandler, action_type: HITLActi
                 },
             },
             options=_parse_options(str(agent_output)) if action_type == HITLAction.SELECT else [],
-            invoked_via="callback"
+            invoked_via="callback",
+            trigger="after_agent",
         )
 
         response = await handler.handle_request(request)
@@ -149,12 +195,14 @@ def make_hitl_before_callback(handler: AbstractHITLHandler):
             action_type=HITLAction.APPROVE,
             message=f"[CALLBACK: BEFORE_AGENT] {msg}",
             context={
+                "user_query": user_query,
                 "_session": {
                     "user_id": user_id,
                     "session_id": session_id,
                 }
             },
-            invoked_via="callback"
+            invoked_via="callback",
+            trigger="before_agent",
         )
 
         response = await handler.handle_request(request)
@@ -249,17 +297,11 @@ def make_hitl_before_tool_callback(
 
         user_id, session_id = session_key(actual_context)
 
-        args_formatted = (
-            json.dumps(actual_args, indent=2, ensure_ascii=False, default=str)
-            if isinstance(actual_args, (dict, list))
-            else str(actual_args)
-        )
+        args_formatted = format_tool_args(actual_args)
 
-        message = (
-            f"Agent '{agent_name}' is about to execute tool '{tool_name}'.\n\n"
-            f"Arguments:\n{args_formatted}\n\n"
-            "Approve execution?"
-        )
+        # The arguments go only into context.output — repeating them in the
+        # message showed the same prompt twice in the HITL card.
+        message = f"Agent '{agent_name}' is about to execute tool '{tool_name}'. Approve execution?"
 
         proposed_output = f"Tool: {tool_name}\nArguments:\n{args_formatted}"
 
@@ -277,6 +319,7 @@ def make_hitl_before_tool_callback(
                 },
             },
             invoked_via="callback",
+            trigger="before_tool",
         )
 
         response = await handler.handle_request(request)

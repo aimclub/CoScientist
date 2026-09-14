@@ -318,6 +318,7 @@
       maybeAutoNameSession(msg);
       ws.send(JSON.stringify({ type: 'chat_message', message: msg }));
       addTelemetry('SEND :: user query');
+      if (typeof RunTimer !== 'undefined') RunTimer.start();
     });
 
     function stopChat() {
@@ -325,6 +326,7 @@
       ws.send(JSON.stringify({ type: 'stop_chat' }));
       addTelemetry('STOP :: user requested stop');
       StatusIndicator.markStopped();
+      if (typeof RunTimer !== 'undefined') RunTimer.finish();
     }
 
 

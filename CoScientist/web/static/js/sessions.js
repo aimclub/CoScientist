@@ -246,6 +246,7 @@
       document.getElementById('stop-btn').classList.toggle('hidden', !processing);
       if (processing) {
         showTyping();
+        if (typeof RunTimer !== 'undefined') RunTimer.start();
       } else {
         hideTyping();
         resetAgents();
@@ -253,6 +254,7 @@
         document.getElementById('hitl-panel').classList.add('hidden');
         currentPlannerHitlRequest = null;
         updateRoadmapModalButtons();
+        if (typeof RunTimer !== 'undefined') RunTimer.finish();
       }
     }
 
@@ -332,6 +334,9 @@
       document.getElementById('event-count').textContent = 'Events: ' + eventCount;
 
       applyRunStatus(snapshot.status, snapshot.run_status_version);
+      if (typeof RunTimer !== 'undefined') {
+        RunTimer.restoreFromSnapshot(snapshot);
+      }
       StatusIndicator.feed({ type: 'status', status: snapshot.status });
       populateUserSelectors();
       populateSessionSelector();

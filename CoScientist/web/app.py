@@ -299,6 +299,8 @@ class WebRuntime:
         self.hitl_handler.set_sender(self.send_socket)
         self.sockets: dict[SessionKey, list[WebSocket]] = defaultdict(list)
         self.active_runs: dict[SessionKey, asyncio.Task] = {}
+        # Run execution times (start to finish) per session
+        self.run_times: dict[SessionKey, dict[str, Any]] = {}
 
     def record_event(self, key: SessionKey, event: dict[str, Any]) -> None:
         """Append a UI event to memory and to the session's on-disk transcript,
@@ -330,6 +332,7 @@ class WebRuntime:
         *,
         version: int | None = None,
     ) -> dict[str, Any]:
+        timing = self.run_times.get(key)
         return {
             "type": "status",
             "status": status,
@@ -337,6 +340,8 @@ class WebRuntime:
             "run_status_version": (
                 self.run_versions[key] if version is None else version
             ),
+            "started_at": timing.get("started_at") if timing else None,
+            "finished_at": timing.get("finished_at") if timing else None,
         }
 
     async def start_run(self, key: SessionKey, data: dict[str, Any]) -> bool:
@@ -349,6 +354,10 @@ class WebRuntime:
                 return False
 
             version = self._next_run_version(key)
+            self.run_times[key] = {
+                "started_at": datetime.now().isoformat(),
+                "finished_at": None,
+            }
             run_data = dict(data)
             run_data["_run_status_version"] = version
             task = asyncio.create_task(_handle_chat(self, key, run_data))
@@ -376,6 +385,9 @@ class WebRuntime:
                 return False
             self.active_runs.pop(key, None)
             version = self._next_run_version(key)
+            timing = self.run_times.get(key)
+            if timing and timing.get("finished_at") is None:
+                timing["finished_at"] = datetime.now().isoformat()
         await self.send(key, self.status_payload(
             key,
             "idle",
@@ -410,6 +422,9 @@ class WebRuntime:
                 self.active_runs.pop(key, None)
             self.stopping_runs.discard(key)
             version = self._next_run_version(key)
+            timing = self.run_times.get(key)
+            if timing and timing.get("finished_at") is None:
+                timing["finished_at"] = datetime.now().isoformat()
 
         # Network I/O happens outside the ownership lock so a slow browser
         # cannot block future control operations for the session.
@@ -530,6 +545,7 @@ class WebRuntime:
                     "status": status,
                     "run_status_version": version,
                     "metrics": self.metrics.get(key),
+                    "run_times": self.run_times.get(key),
                     "dataset_url": self.dataset_urls.get(key, ""),
                     "report_language": self.report_languages.get(key, ""),
                 })
@@ -2186,6 +2202,7 @@ async def _run_chat_invocation(
                         "message": hitl_message,
                         "response_schema": hitl_schema,
                         "agent_name": event.author or "system",
+                        "invoked_via": "request_input",
                         "timestamp": datetime.now().isoformat(),
                     }
                     event_data["hitl_request"] = hitl_payload
