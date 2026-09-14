@@ -12,7 +12,7 @@ load_dotenv()
 
 import asyncio
 import os
-from typing import Optional
+from typing import Optional, Sequence
 import logging
 from uuid import uuid4
 
@@ -137,6 +137,7 @@ class CoScientistManager:
         hitl_handler: Optional[AbstractHITLHandler] = None,
         session_service: Optional[BaseSessionService] = None,
         initial_state: Optional[dict] = None,
+        plugins: Optional[Sequence[object]] = None,
     ):
         self.app_name = app_name
         self.user_id = user_id or f"user_{uuid4().hex}"
@@ -146,6 +147,9 @@ class CoScientistManager:
         # drive the system programmatically (scripts, reproductions, harnesses)
         # and need something in state before the first turn.
         self._initial_state = dict(initial_state or {})
+        # Integrations may add observer-only ADK plugins (for example the
+        # Codesynapse trace exporter) without replacing the core runtime stack.
+        self._additional_plugins = list(plugins or ())
 
         # Web mode injects one shared service so managers can reopen existing
         # sessions. CLI mode falls back to a private in-memory service.
@@ -237,6 +241,9 @@ class CoScientistManager:
                     # them, so an MCP server scopes its S3 keys correctly and the
                     # model never has to copy an id by hand.
                     SessionScopePlugin(),
+                    # External integration observers must see full tool results,
+                    # before the truncation plugin alters them for model context.
+                    *self._additional_plugins,
                     # Capture artifact (figure/table) URLs from tool results BEFORE
                     # truncation can drop them, so the report collector downloads them.
                     McpArtifactCapturePlugin(),

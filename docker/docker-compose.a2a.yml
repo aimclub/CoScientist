@@ -1,0 +1,225 @@
+x-a2a-environment: &a2a-environment
+  PYTHONPATH: /app
+  HITL__ENABLED: "false"
+  # Avoid Opik's interactive first-run prompt in detached containers.
+  # Set A2A_DISABLE_OPIK to an empty value to enable an already configured tracer.
+  A2A_DISABLE_OPIK: "${A2A_DISABLE_OPIK-1}"
+  INIT_HOST: a2a-init
+  ORCHESTRATOR_HOST: a2a-orchestrator
+  PLANNER_HOST: a2a-planner
+  HYPOTHESES_HOST: a2a-hypotheses
+  RESEARCH_HOST: a2a-research
+  TASK_EXECUTION_HOST: a2a-task-execution
+  MEDICAL_HOST: a2a-medical
+  CODER_HOST: a2a-coder
+  MCP_BUILDER_HOST: a2a-mcp-builder
+
+x-a2a-service: &a2a-service
+  image: coscientist-a2a:latest
+  env_file:
+    - ../.env
+  restart: unless-stopped
+  networks:
+    - a2a
+
+services:
+  a2a-orchestrator:
+    <<: *a2a-service
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.a2a
+    environment:
+      <<: *a2a-environment
+      ORCHESTRATOR_PORT: "${ORCHESTRATOR_PORT:-8000}"
+      A2A_PUBLIC_HOST: "${A2A_PUBLIC_HOST:-a2a-orchestrator}"
+    command: ["python", "-m", "CoScientist.a2a.serve", "orchestrator"]
+    ports:
+      - "${ORCHESTRATOR_PORT:-8000}:${ORCHESTRATOR_PORT:-8000}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --show-error
+          "http://localhost:$${ORCHESTRATOR_PORT}/.well-known/agent-card.json"
+          > /dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  a2a-planner:
+    <<: *a2a-service
+    environment:
+      <<: *a2a-environment
+      PLANNER_PORT: "${PLANNER_PORT:-8001}"
+      A2A_PUBLIC_HOST: "${A2A_PUBLIC_HOST:-a2a-planner}"
+    command: ["python", "-m", "CoScientist.a2a.serve", "planner"]
+    ports:
+      - "${PLANNER_PORT:-8001}:${PLANNER_PORT:-8001}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --show-error
+          "http://localhost:$${PLANNER_PORT}/.well-known/agent-card.json"
+          > /dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  a2a-hypotheses:
+    <<: *a2a-service
+    environment:
+      <<: *a2a-environment
+      HYPOTHESES_PORT: "${HYPOTHESES_PORT:-8002}"
+      A2A_PUBLIC_HOST: "${A2A_PUBLIC_HOST:-a2a-hypotheses}"
+    command: ["python", "-m", "CoScientist.a2a.serve", "hypotheses"]
+    ports:
+      - "${HYPOTHESES_PORT:-8002}:${HYPOTHESES_PORT:-8002}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --show-error
+          "http://localhost:$${HYPOTHESES_PORT}/.well-known/agent-card.json"
+          > /dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  a2a-research:
+    <<: *a2a-service
+    environment:
+      <<: *a2a-environment
+      RESEARCH_PORT: "${RESEARCH_PORT:-8003}"
+      A2A_PUBLIC_HOST: "${A2A_PUBLIC_HOST:-a2a-research}"
+    command: ["python", "-m", "CoScientist.a2a.serve", "research"]
+    ports:
+      - "${RESEARCH_PORT:-8003}:${RESEARCH_PORT:-8003}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --show-error
+          "http://localhost:$${RESEARCH_PORT}/.well-known/agent-card.json"
+          > /dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  a2a-task-execution:
+    <<: *a2a-service
+    environment:
+      <<: *a2a-environment
+      TASK_EXECUTION_PORT: "${TASK_EXECUTION_PORT:-8004}"
+      A2A_PUBLIC_HOST: "${A2A_PUBLIC_HOST:-a2a-task-execution}"
+    command: ["python", "-m", "CoScientist.a2a.serve", "task_execution"]
+    ports:
+      - "${TASK_EXECUTION_PORT:-8004}:${TASK_EXECUTION_PORT:-8004}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --show-error
+          "http://localhost:$${TASK_EXECUTION_PORT}/.well-known/agent-card.json"
+          > /dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  a2a-medical:
+    <<: *a2a-service
+    environment:
+      <<: *a2a-environment
+      MEDICAL_PORT: "${MEDICAL_PORT:-8005}"
+      A2A_PUBLIC_HOST: "${A2A_PUBLIC_HOST:-a2a-medical}"
+    command: ["python", "-m", "CoScientist.a2a.serve", "medical"]
+    ports:
+      - "${MEDICAL_PORT:-8005}:${MEDICAL_PORT:-8005}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --show-error
+          "http://localhost:$${MEDICAL_PORT}/.well-known/agent-card.json"
+          > /dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  a2a-coder:
+    <<: *a2a-service
+    environment:
+      <<: *a2a-environment
+      CODER_PORT: "${CODER_PORT:-8006}"
+      A2A_PUBLIC_HOST: "${A2A_PUBLIC_HOST:-a2a-coder}"
+    command: ["python", "-m", "CoScientist.a2a.serve", "coder"]
+    ports:
+      - "${CODER_PORT:-8006}:${CODER_PORT:-8006}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --show-error
+          "http://localhost:$${CODER_PORT}/.well-known/agent-card.json"
+          > /dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+    volumes:
+      - a2a-coder-workspace:/app/workspace
+
+  a2a-mcp-builder:
+    <<: *a2a-service
+    environment:
+      <<: *a2a-environment
+      MCP_BUILDER_PORT: "${MCP_BUILDER_PORT:-8007}"
+      A2A_PUBLIC_HOST: "${A2A_PUBLIC_HOST:-a2a-mcp-builder}"
+    command: ["python", "-m", "CoScientist.a2a.serve", "mcp_builder"]
+    ports:
+      - "${MCP_BUILDER_PORT:-8007}:${MCP_BUILDER_PORT:-8007}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --show-error
+          "http://localhost:$${MCP_BUILDER_PORT}/.well-known/agent-card.json"
+          > /dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  a2a-init:
+    <<: *a2a-service
+    environment:
+      <<: *a2a-environment
+      INIT_PORT: "${INIT_PORT:-8008}"
+      A2A_PUBLIC_HOST: "${A2A_PUBLIC_HOST:-a2a-init}"
+    command: ["python", "-m", "CoScientist.a2a.serve", "init"]
+    ports:
+      - "${INIT_PORT:-8008}:${INIT_PORT:-8008}"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          curl --fail --silent --show-error
+          "http://localhost:$${INIT_PORT}/.well-known/agent-card.json"
+          > /dev/null
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+networks:
+  a2a:
+    name: coscientist-a2a
+
+volumes:
+  a2a-coder-workspace:

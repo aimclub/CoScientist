@@ -38,8 +38,6 @@ from typing import Any, Dict, List, Optional, Union
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from CoScientist.config import get_settings
-
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "agents"
 DEFAULT_CONFIG_PATH = CONFIG_DIR / "system.yaml"
 
@@ -73,6 +71,11 @@ def _is_setting_ref(value: Any) -> bool:
 
 def _setting_value(ref: str) -> Any:
     """The live value behind a "${dotted.settings.path}" reference."""
+    # Schema-only callers (A2A discovery and tooling) must not initialize the
+    # full application settings stack. Resolve settings only for a value that
+    # actually references one.
+    from CoScientist.config import get_settings
+
     obj: Any = get_settings()
     for part in ref.strip()[2:-1].split("."):
         obj = getattr(obj, part)

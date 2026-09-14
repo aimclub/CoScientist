@@ -39,7 +39,7 @@ set -a
 source .env
 set +a
 uv sync --frozen --no-install-project
-uv run --no-project python papers_search_server.py
+uv run --no-project python paper_analysis_server.py
 ```
 
 ## Run With Docker

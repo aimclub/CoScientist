@@ -67,6 +67,64 @@ class SessionAgent(LlmAgent):
     correction_prompt: str = "The human reviewed your output and provided this feedback/correction:\n\n{feedback}\n\nYou MUST rewrite your output incorporating this feedback. Write your answer in the report language of this session. The session state key `report_language` gives it: en = English, ru = Russian. If it is empty, use English."
     critic_correction_prompt: str = "A plan critic reviewed your output and asked for one revision:\n\n{feedback}\n\nProduce the output again ONCE, in full, fixing exactly what the critic named — the previous version was discarded. Registering it normalises it (ids are renumbered, adjacent steps with the same executor assignee are merged); that is expected, so do not register again to undo it. This is the last round: there is no second review. Write your answer in the report language of this session. The session state key `report_language` gives it: en = English, ru = Russian. If it is empty, use English."
 
+    @staticmethod
+    def _fallback_plan(ctx: InvocationContext) -> list[dict[str, str]]:
+        """Build the smallest executable plan if PlannerAgent skipped its tool.
+
+        ``create_plan`` is an LLM tool call and therefore not guaranteed even
+        when the prompt asks for it.  The orchestration contract still requires
+        a durable task list, so an otherwise valid planner response must not
+        leave the run impossible to route.
+        """
+        query = _user_task(ctx).strip() or "the user's request"
+        return [{
+            "title": "Investigate the user request",
+            "description": f"Investigate and answer: {query}",
+            "assignee": "ResearchAgent",
+            "notes": (
+                "Automatically created because PlannerAgent completed without "
+                "calling create_plan."
+            ),
+        }]
+
+    async def _ensure_planner_plan(self, ctx: InvocationContext) -> None:
+        """Persist a fallback task plan exactly once for PlannerAgent.
+
+        State in modern ADK session services is durable only through an event
+        delta.  Appending that delta keeps the plan visible to the orchestrator
+        and prevents an A2A run from failing after a planner-only response.
+        """
+        if self.name != "PlannerAgent" or ctx.session.state.get("active_tasks"):
+            return
+
+        class _StateContext:
+            def __init__(self) -> None:
+                self.state: dict[str, Any] = {}
+
+        state_context = _StateContext()
+        outcome = task_tracker_instance.create_plan(
+            self._fallback_plan(ctx), state_context
+        )
+        if outcome.get("result") != "success":
+            raise RuntimeError(
+                "PlannerAgent could not create its fallback plan: "
+                f"{outcome.get('message', 'unknown error')}"
+            )
+
+        state_delta = {
+            "active_tasks": state_context.state.get("active_tasks", []),
+            "_master_active_tasks": state_context.state.get("_master_active_tasks", []),
+        }
+        await ctx.session_service.append_event(
+            ctx.session,
+            Event(
+                invocation_id=ctx.invocation_id,
+                author=self.name,
+                branch=ctx.branch,
+                actions=EventActions(state_delta=state_delta),
+            ),
+        )
+
     def _review_output(self, output_text) -> str:
         """How the proposed output is presented to the human reviewer.
 
@@ -215,6 +273,9 @@ class SessionAgent(LlmAgent):
                         )
                     else:
                         yield event
+
+            if final_event is not None:
+                await self._ensure_planner_plan(ctx)
 
             # ── Critic review ────────────────────────────────────────────
             # Runs before the human sees anything and regardless of whether

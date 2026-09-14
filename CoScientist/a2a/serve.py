@@ -12,6 +12,11 @@ import argparse
 import os
 
 
+def _should_use_remote_subagents(agent_cfg) -> bool:
+    """Serve roots and delegating agents with A2A remotes for their sub-agents."""
+    return bool(agent_cfg.root or agent_cfg.subordinates)
+
+
 def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("key", help="a2a key of the agent to serve (see system.yaml)")
@@ -39,11 +44,8 @@ def main(argv=None) -> None:
     from CoScientist.a2a.server import make_a2a_app, make_agent_card
     from CoScientist.assembly import build_system
 
-    if agent_cfg.root:
-        # The orchestrator delegates to its sub-agents over A2A.
-        agent = build_system(remote_subagents=True).root
-    else:
-        agent = build_system().agent(agent_cfg.name)
+    system = build_system(remote_subagents=_should_use_remote_subagents(agent_cfg))
+    agent = system.agent(agent_cfg.name)
 
     app = make_a2a_app(agent, make_agent_card(agent_cfg), agent_cfg.a2a.key)
     uvicorn.run(app, host=args.host, port=AGENT_PORTS[agent_cfg.a2a.key], log_level="info")

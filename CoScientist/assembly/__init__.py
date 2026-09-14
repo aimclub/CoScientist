@@ -16,12 +16,9 @@ Typical use:
     system = build_system()                       # in-process sub-agents
     system = build_system(remote_subagents=True)  # sub-agents over A2A
 """
-from CoScientist.assembly.assembler import (
-    AgentSystem,
-    build_system,
-    delegatable_agent_names,
-    load_config,
-)
+from __future__ import annotations
+
+from typing import Any
 
 __all__ = [
     "AgentSystem",
@@ -29,3 +26,12 @@ __all__ = [
     "delegatable_agent_names",
     "load_config",
 ]
+
+
+def __getattr__(name: str) -> Any:
+    """Avoid constructing the registry when only ``assembly.schema`` is read."""
+    if name in __all__:
+        from CoScientist.assembly import assembler
+
+        return getattr(assembler, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

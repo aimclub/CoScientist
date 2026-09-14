@@ -1,0 +1,31 @@
+name: Codesynapse contract and E2E
+
+on:
+  push:
+    paths:
+      - 'CoScientist/integrations/codesynapse/**'
+      - 'docs/contracts/coscientist-v1.json'
+      - '.github/workflows/codesynapse-contract.yml'
+  pull_request:
+    paths:
+      - 'CoScientist/integrations/codesynapse/**'
+      - 'docs/contracts/coscientist-v1.json'
+      - '.github/workflows/codesynapse-contract.yml'
+
+jobs:
+  contract-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Industrial-AI-Research-Lab/codesynapse
+          ref: integration/coscientist-a2a-v1.0
+          path: codesynapse
+      - uses: actions/checkout@v4
+        with:
+          path: CoScientist
+      - name: Assert shared contract fixture
+        run: cmp codesynapse/docs/contracts/coscientist-v1.json CoScientist/docs/contracts/coscientist-v1.json
+      - name: Run self-contained facade E2E
+        working-directory: codesynapse
+        run: docker compose -f docker/docker-compose.coscientist-e2e.yml up --build --abort-on-container-exit --exit-code-from e2e

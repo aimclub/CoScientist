@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codesynapse.internal/contracts/coscientist-v1.json",
+  "title": "CoScientist long-running A2A profile v1",
+  "type": "object",
+  "required": ["agent_card", "terminal_artifacts", "trace_event", "hitl", "artifact_reference", "artifact_upload", "error_codes"],
+  "properties": {
+    "agent_card": {
+      "type": "object",
+      "required": ["name", "protocolVersion", "skill_id", "output_modes"],
+      "properties": {
+        "name": {"const": "coscientist"},
+        "protocolVersion": {"pattern": "^0\\.3"},
+        "skill_id": {"const": "research"},
+        "output_modes": {
+          "type": "array",
+          "allOf": [
+            {"contains": {"const": "text/markdown"}},
+            {"contains": {"const": "application/json"}}
+          ]
+        }
+      }
+    },
+    "terminal_artifacts": {
+      "type": "object",
+      "properties": {
+        "completed": {"required": ["final_report"]},
+        "failed": {"required": ["error"]},
+        "cancelled": {"required": ["error"]},
+        "interrupted": {"required": ["error"]}
+      }
+    },
+    "trace_event": {
+      "type": "object",
+      "required": ["schema_version", "event_id", "run_id", "tenant_id", "project_id", "sequence", "type"],
+      "properties": {
+        "schema_version": {"const": "coscientist-v1"},
+        "event_id": {"type": "string", "minLength": 1},
+        "run_id": {"type": "string", "minLength": 1},
+        "tenant_id": {"type": "string", "minLength": 1},
+        "project_id": {"type": "string", "minLength": 1},
+        "sequence": {"type": "integer", "minimum": 1},
+        "type": {"type": "string", "minLength": 1}
+      }
+    },
+    "hitl": {
+      "type": "object",
+      "required": ["request", "response"],
+      "properties": {
+        "request": {"required": ["request_id", "action_type", "message"]},
+        "response": {
+          "required": ["action", "approved"],
+          "properties": {
+            "action": {"enum": ["approve", "reject", "select", "edit", "provide_input"]},
+            "approved": {"type": "boolean"}
+          }
+        }
+      }
+    },
+    "artifact_reference": {
+      "type": "object",
+      "required": ["artifact_id", "checksum_sha256", "mime_type"],
+      "properties": {
+        "artifact_id": {"type": "string", "minLength": 1},
+        "checksum_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "mime_type": {"type": "string", "minLength": 1}
+      }
+    },
+    "artifact_upload": {
+      "type": "object",
+      "required": ["output_name", "size_bytes", "mime_type", "checksum_sha256"],
+      "properties": {
+        "output_name": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+        "size_bytes": {"type": "integer", "minimum": 0},
+        "mime_type": {"enum": ["text/markdown", "application/json", "application/pdf", "text/plain"]},
+        "checksum_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "error_codes": {
+      "type": "array",
+      "items": {"enum": ["cancelled", "interrupted", "hitl_timeout", "execution_failed", "queue_timeout"]}
+    }
+  }
+}

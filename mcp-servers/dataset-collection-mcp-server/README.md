@@ -42,7 +42,7 @@ set -a
 source .env
 set +a
 uv sync --frozen --no-install-project
-uv run --no-project python server/dataset_collection_server.py
+uv run --no-project python dataset_collection_server.py
 ```
 
 ## Run With Docker

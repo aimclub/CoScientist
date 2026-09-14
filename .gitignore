@@ -145,6 +145,8 @@ PaperAnalysis/
 
 .DS_Store
 
+# Project-local agent skills and configuration
+.agents/
 tools/models
 
 *.tif
@@ -157,6 +159,7 @@ ChemCoScientist/tests/integration/parse_results
 ChemCoScientist/tests/integration/data/.last_activity
 *db.json
 
+roadmap.txt
 session_snapshots/
 workspace/
 # Execution-graph run snapshots
@@ -195,6 +198,13 @@ tz_documents/
 conversations*/
 task_tracker_data.json
 *_report.md
+
+# Alembic output & testing
+.alembic
+.test
+benchmarks/alembic/runs/
+benchmarks/alembic/tmbench_salvage/
+benchmarks/alembic/pre_comparison
 
 # Reference PDFs and vendored templates pulled in for the write-up
 CoScientist/docs/*.pdf

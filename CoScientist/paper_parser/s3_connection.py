@@ -67,12 +67,18 @@ class S3BucketService:
         Returns:
             Boto3 a client for working with S3 compatible storage.
         """
+        timeout_seconds = float(os.getenv("S3_REQUEST_TIMEOUT_SECONDS", "3"))
         client = boto3.client(
             "s3",
             endpoint_url=self.endpoint,
             aws_access_key_id=self.access_key,
             aws_secret_access_key=self.secret_key,
-            config=_CLIENT_CONFIG,
+            config=Config(
+                signature_version="s3v4",
+                connect_timeout=timeout_seconds,
+                read_timeout=timeout_seconds,
+                retries={"max_attempts": 0, "mode": "standard"},
+            ),
         )
         return client
     

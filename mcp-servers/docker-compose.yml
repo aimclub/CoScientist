@@ -11,9 +11,21 @@ services:
     ports:
       - "7331:7331"
     restart: unless-stopped
+    networks:
+      - codesynapse-internal
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; s=socket.create_connection(('127.0.0.1',7331),2); s.close()"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
   
   chemical-mcp-server:
-    build: 
+    build:
       context: ..
       dockerfile: mcp-servers/chemical-mcp-server/Dockerfile
     ports:
@@ -21,11 +33,23 @@ services:
     volumes:
       - ./data:/tmp/chemical_mcp_annotated
     env_file:
-      - .env
+      - ./chemical-mcp-server/.env
     restart: unless-stopped
+    networks:
+      - codesynapse-internal
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; s=socket.create_connection(('127.0.0.1',7331),2); s.close()"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   dataset-collection-mcp-server:
-    build: 
+    build:
       context: ..
       dockerfile: mcp-servers/dataset-collection-mcp-server/Dockerfile
     ports:
@@ -33,9 +57,21 @@ services:
     env_file:
       - ./dataset-collection-mcp-server/.env
     restart: unless-stopped
+    networks:
+      - codesynapse-internal
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; s=socket.create_connection(('127.0.0.1',7331),2); s.close()"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   paper-analysis-mcp-server:
-    build: 
+    build:
       context: ..
       dockerfile: mcp-servers/paper-analysis-mcp-server/Dockerfile
     ports:
@@ -43,6 +79,18 @@ services:
     env_file:
       - ./paper-analysis-mcp-server/.env
     restart: unless-stopped
+    networks:
+      - codesynapse-internal
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; s=socket.create_connection(('127.0.0.1',7331),2); s.close()"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   result-aggregator-mcp-server:
     build:
@@ -54,6 +102,8 @@ services:
       - ../logs:/app/logs
       - ../workspace:/app/workspace
     restart: unless-stopped
+    networks:
+      - codesynapse-internal
 
   # The file vault. Every other server hands files over through it.
   vault-mcp-server:
@@ -65,12 +115,17 @@ services:
         - HTTPS_PROXY=${PIP_PROXY}
     container_name: vault-mcp-server
     env_file:
-      - ./vault-mcp-server/.env
+      # Optional: defaults target the local-s3 profile. A production deployment
+      # supplies this file with its dedicated S3 credentials and endpoints.
+      - path: ./vault-mcp-server/.env
+        required: false
     environment:
       PYTHONUNBUFFERED: "1"
     ports:
       - "7338:7331"
     restart: unless-stopped
+    networks:
+      - codesynapse-internal
 
   # Local S3, for development only. The four servers above point at an endpoint
   # this file does not define, so starting MinIO by default would move where
@@ -89,6 +144,8 @@ services:
     volumes:
       - minio_data:/data
     restart: unless-stopped
+    networks:
+      - codesynapse-internal
 
   # One-shot setup. It carries the retention model: without the lifecycle rule
   # nothing under ephemeral/ ever expires, and without the anonymous policy the
@@ -109,6 +166,13 @@ services:
       /usr/bin/mc anonymous set download myminio/agent-vault/permanent;
       exit 0;
       "
+    networks:
+      - codesynapse-internal
 
 volumes:
   minio_data:
+
+networks:
+  codesynapse-internal:
+    external: true
+    name: ${CODESYNAPSE_INTERNAL_NETWORK:-codesynapse-internal}
