@@ -37,6 +37,13 @@ class LLMSettings(BaseModel):
     # endpoint, so no separate URL is needed.
     coder_model: Optional[str] = None
 
+    # Seconds to wait for a single completion before giving up. Without this a
+    # provider that accepts the connection and then goes quiet never raises, so
+    # the agent waits forever and the run looks frozen with nothing in the log.
+    # A timeout turns that silence into a retryable error. Override with
+    # LLM__REQUEST_TIMEOUT.
+    request_timeout: int = 180
+
     service_url: Optional[str] = None
     service_cc_url: Optional[str] = None
 
@@ -130,6 +137,10 @@ class S3Settings(BaseModel):
     access_key: Optional[str] = None
     secret_key: Optional[str] = None
     bucket_name: Optional[str] = None
+    # Lifetime of presigned artifact URLs, in seconds. 604800 (7 days) is the
+    # SigV4 maximum. The default of the S3 client (360 s) expires before the
+    # operator opens the report. Override via S3__PRESIGN_TTL.
+    presign_ttl: int = 604800
 
 
 # =========================
@@ -267,7 +278,7 @@ class WebSettings(BaseModel):
     singleton is the single source of truth — all components read from it
     directly.
     """
-    start_mode: str = _os.getenv("START_MODE", "orchestrator")        # "planner" | "orchestrator" | "orchestrator_planner"
+    start_mode: str = _os.getenv("START_MODE", "orchestrator")        # "init" | "planner" | "orchestrator" | "orchestrator_planner"
     max_searches: int = int(_os.getenv("RESEARCH_AGENT_SEARCHES", "2"))           # WebSearchLimiter per-turn cap
     max_retries: int = int(_os.getenv("LLM_MAX_RETRIES", "3"))
     hitl_enabled: bool = _os.getenv("HITL__ENABLED", "false").lower() in ("true", "1", "yes")

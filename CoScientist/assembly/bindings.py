@@ -84,6 +84,11 @@ def _alembic():
     from CoScientist.tools.alembic_tools import ALEMBIC_TOOLS
     return ALEMBIC_TOOLS
 
+def _verify():
+    from CoScientist.verify.tools import verify_toolset
+    return verify_toolset.get_tools(None)
+
+
 def _sandbox():
     """OpenHands sandbox tools — absent when no sandbox URL is configured."""
     from CoScientist.tools.coder_tools.sandbox_tools import get_sandbox_tools
@@ -325,21 +330,6 @@ _GRAPH_DOCS = (
         signature="get_agents_info()",
         purpose="Structured info about all agents in the system.",
     ),
-    ToolDoc(
-        name="search_knowledge_memory",
-        signature="search_knowledge_memory(query)",
-        purpose="Search globally accumulated facts relevant to a query.",
-    ),
-    ToolDoc(
-        name="get_entity_neighbors",
-        signature="get_entity_neighbors(entity)",
-        purpose="Walk the graph: an entity's 1-hop facts (search then traverse).",
-    ),
-    ToolDoc(
-        name="get_knowledge_memory",
-        signature="get_knowledge_memory()",
-        purpose="Global knowledge memory shared across users and sessions.",
-    ),
 )
 
 REGISTRY.register_tool(ToolEntry(
@@ -403,6 +393,14 @@ _RESEARCH_ORCH_DOCS = _RESEARCH_WORKER_DOCS + (
                  "context star. Call once at the start; archives any active graph."),
     ),
     ToolDoc(
+        name="research_prior",
+        signature="research_prior(query, limit)",
+        purpose=("Search PAST researches (previous runs) related to a question: "
+                 "their hypotheses with verdicts, the methods/tools used and the "
+                 "conclusions. Consult BEFORE planning so settled work is reused "
+                 "instead of re-derived; each hit reports why it matched."),
+    ),
+    ToolDoc(
         name="research_triggers",
         signature="research_triggers()",
         purpose=("Evaluate the decision triggers (READY / BLOCKED / REFUTE / "
@@ -440,6 +438,30 @@ REGISTRY.register_tool(ToolEntry(
     optional=True,
     runtime_resolved=True,
     docs=(_RESEARCH_OVERVIEW_DOC, _RESEARCH_SLICE_DOC, _RESEARCH_PROVENANCE_DOC),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="verify",
+    factory=_verify,
+    docs=(
+        ToolDoc(
+            name="validate_dataset",
+            signature="validate_dataset(path)",
+            purpose=(
+                "Deterministically check that a dataset file holds REAL, diverse "
+                "molecules (RDKit-valid SMILES + a fitness/SA column). Call it on "
+                "your training dataset BEFORE training — training is BLOCKED until a "
+                "real dataset validates; toy/placeholder data (integers, one "
+                "repeated molecule, a synthetic fallback) is rejected."),
+        ),
+        ToolDoc(
+            name="validate_training",
+            signature="validate_training(checkpoint_path, loss_log)",
+            purpose=(
+                "Deterministically check a training result: a real saved checkpoint "
+                "and a loss that actually decreased over >=1 epoch."),
+        ),
+    ),
 ))
 
 REGISTRY.register_tool(ToolEntry(

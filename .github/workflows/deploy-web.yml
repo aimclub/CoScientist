@@ -31,6 +31,14 @@ jobs:
           } >> "$GITHUB_ENV"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Clean up stale git locks
+        run: |
+          set -euo pipefail
+          cd "$DEPLOY_DIR"
+          find .git -name "*.lock" -delete 2>/dev/null || true
+          git fsck --full 2>/dev/null || true
+          git gc --prune=now 2>/dev/null || true
+
       - name: Update code in the deploy dir
         run: |
           set -euo pipefail

@@ -44,7 +44,10 @@ _COMMIT_HINT = ("Fix the listed items and call research_commit again. "
                 "NOTHING from this call was saved.")
 
 # Attrs consulted (in order) when a short human-readable label is needed.
-_LABEL_ATTRS = ("formulation", "content", "synthesis", "name", "title",
+# ``display`` comes first so a node can carry a short form for the viewer while
+# keeping its full text in the attribute the schema names. Nothing sets it
+# automatically; it is for a record meant to be read on a screen.
+_LABEL_ATTRS = ("display", "formulation", "content", "synthesis", "name", "title",
                 "description", "rule", "threshold", "path")
 
 # Priority words accepted in attrs.priority, most important first.
@@ -102,6 +105,144 @@ def _short(value: Any, n: int = 200) -> str:
     s = value if isinstance(value, str) else str(value)
     s = " ".join(s.split())
     return s if len(s) <= n else s[: n] + "…"
+
+
+
+# ── the record, said in words ────────────────────────────────────────────────
+# The viewer is read by scientists who do not read the code. Everything below
+# turns the store's internal vocabulary into the words they already use: node
+# types become the thing they stand for, statuses become what happened, and
+# attribute keys become field names rather than identifiers.
+
+_KIND_WORDS = {
+    "ResearchQuestion": "Question", "Hypothesis": "Hypothesis",
+    "VerificationMethod": "Method", "ConfirmationCriteria": "Acceptance criteria",
+    "Evidence": "Evidence", "Conclusion": "Conclusion", "Constraint": "Constraint",
+    "Tool": "Tool", "Resource": "Budget", "EmpiricalBase": "Data",
+    "CodeArtifact": "Code", "GeneratedData": "Generated data", "Report": "Report",
+    "Publication": "Publication", "Spec": "Specification",
+    "CostModel": "Cost", "EfficiencyMetric": "Efficiency",
+    "EfficiencyJustification": "Efficiency rationale",
+}
+
+_STATUS_WORDS = {
+    "open": "open", "decomposed": "broken down", "closed": "closed",
+    "formulated": "proposed", "under_verification": "being tested",
+    "confirmed": "confirmed", "refuted": "refuted",
+    "inconclusive": "tested — not settled", "postponed": "set aside",
+    "obtained": "collected", "validated": "validated", "rejected": "rejected",
+    "planned": "planned", "running": "running", "done": "done", "failed": "failed",
+    "not_met": "not met yet", "met": "met",
+    "available": "available", "exhausted": "used up",
+    "needs_adaptation": "needs adaptation", "being_created": "being built",
+    "creation_failed": "could not be built",
+    "draft": "draft", "approved": "approved", "created": "recorded", "active": "active",
+}
+
+_FIELD_WORDS = {
+    "formulation": "Statement", "rationale": "Why", "priority": "Priority",
+    "content": "Finding", "subtype": "Kind", "reliability": "Confidence",
+    "source_ref": "Source", "synthesis": "Conclusion",
+    "validity_bounds": "Limits of validity", "new_question": "Opens next",
+    "procedure": "Procedure", "limits": "Limits", "threshold": "Threshold",
+    "metric": "Metric", "value": "Value", "name": "Name", "location": "Where",
+    "tool_type": "Type", "base_type": "Type", "volume": "Size",
+    "resource_type": "Resource", "remaining": "Remaining", "limit": "Total",
+    "domain": "Field", "gap": "Knowledge gap", "not_tested_reason": "Why untested",
+    "description": "Description", "method_type": "Type", "path": "File",
+}
+
+#: Never shown: bookkeeping the reader has no use for.
+_HIDDEN_FIELDS = {"_provenance", "selected", "display", "postponed_reason"}
+
+
+def _headline(kind: str, attrs: Dict[str, Any]) -> str:
+    """One line saying what this node is, in the reader's own words.
+
+    A budget used to be rendered as its raw record — `{"resource_type":
+    "GPU-hours", "remaining": 50, "limit": 50}` — which is the storage format
+    and not a sentence. Each type gets the phrasing that suits it, and only
+    something genuinely unnameable falls back to the record.
+    """
+    def text(*keys: str) -> str:
+        for key in keys:
+            value = attrs.get(key)
+            if value not in (None, "", [], {}):
+                return str(value).strip()
+        return ""
+
+    if kind == "Resource":
+        left, total = attrs.get("remaining"), attrs.get("limit")
+        unit = text("resource_type") or "budget"
+        if left is not None and total is not None:
+            return f"{unit}: {left} of {total} left"
+        return unit
+    if kind == "EmpiricalBase":
+        size = text("volume")
+        base = text("name", "description", "base_type") or "dataset"
+        where = text("source_ref")
+        # A node whose only content is `base_type` used to render as the bare
+        # word "dataset", which tells a reader nothing about which dataset.
+        detail = size or where
+        return f"{base} — {detail}" if detail else base
+    if kind == "ConfirmationCriteria":
+        stated = text("threshold", "content", "description")
+        extra = text("confirmations_needed", "reproducibility")
+        if stated and extra:
+            return f"{stated}; {extra}"
+        return stated or extra or "acceptance criteria"
+    if kind == "Evidence":
+        found = text("content", "description", "finding", "summary")
+        if found:
+            return found
+        metric, value = text("metric"), text("value")
+        return f"{metric}: {value}" if metric and value else "measurement"
+    if kind == "Tool":
+        return text("name", "description") or "tool"
+    if kind == "VerificationMethod":
+        return text("description", "procedure", "method_type") or "method"
+    if kind == "Conclusion":
+        return text("synthesis", "content", "description") or "conclusion"
+
+    said = text("formulation", "content", "synthesis", "name", "title",
+                "description", "rule", "threshold", "path")
+    if said:
+        return said
+    readable = [f"{_FIELD_WORDS.get(k, k)}: {v}" for k, v in attrs.items()
+                if k not in _HIDDEN_FIELDS and v not in (None, "", [], {})]
+    return "; ".join(readable)
+
+
+#: Keys a headline already speaks for, per type; repeating them underneath is
+#: the same sentence twice.
+_CONSUMED_BY_HEADLINE = {
+    "Resource": {"resource_type", "remaining", "limit"},
+    "EmpiricalBase": {"base_type", "volume", "name", "description"},
+    "ConfirmationCriteria": {"threshold", "content", "description"},
+    "Tool": {"name", "description"},
+    "Conclusion": {"synthesis", "content", "description"},
+    "Evidence": {"content", "description", "finding", "summary"},
+}
+
+
+def _fields(attrs: Dict[str, Any], headline: str,
+            kind: str = "") -> Dict[str, str]:
+    """The node's attributes under names a reader recognises.
+
+    The panel used to list the record verbatim, keys and all, so a scientist
+    read `base_type` and `source_ref`. Whatever the headline already says is
+    dropped rather than repeated underneath it.
+    """
+    out: Dict[str, str] = {}
+    spoken = _CONSUMED_BY_HEADLINE.get(kind, set())
+    for key, value in attrs.items():
+        if key in _HIDDEN_FIELDS or key in spoken or value in (None, "", [], {}):
+            continue
+        rendered = _short(value, 600) if not isinstance(value, str) else value
+        if rendered.strip() and rendered.strip() == headline.strip():
+            continue
+        out[_FIELD_WORDS.get(key, key.replace("_", " ").capitalize())] = rendered
+    return out
 
 
 class ResearchGraphStore:
@@ -337,19 +478,38 @@ class ResearchGraphStore:
 
     def to_view(self) -> Dict[str, Any]:
         """Project onto the shape web/templates/graph.html already renders
-        (the execution-graph node/edge dicts)."""
+        (the execution-graph node/edge dicts).
+
+        The tool calls behind a node travel on the node itself, in
+        ``provenance``, and the panel lists them with a link into the execution
+        log. They are deliberately NOT nodes of their own: this graph is the
+        research record a scientist reads, and one Evidence can be the product
+        of a dozen calls — drawn as nodes they outnumber the findings and bury
+        the thing the reader came for.
+        """
         with self._lock:
             nodes = []
             for n, d in self._g.nodes(data=True):
+                attrs = d.get("attrs") or {}
+                provenance = attrs.get("_provenance") or []
+                node_type = d.get("type", "?")
+                status = d.get("status", "")
+                headline = _headline(node_type, attrs)
                 nodes.append({
                     "id": n,
                     "run_id": self._research_id,
-                    "kind": d.get("type", "?").lower(),
-                    "label": f"{n} · {self._label(d, 60)}",
-                    "status": d.get("status", ""),
+                    "kind": node_type.lower(),
+                    # The id used to open every label. It means nothing to a
+                    # reader and cost a third of the line, so it moves to the
+                    # panel and the label says what the node is instead.
+                    "label": headline,
+                    "type_word": _KIND_WORDS.get(node_type, node_type),
+                    "status": status,
+                    "status_word": _STATUS_WORDS.get(status, status),
                     "executor_agent": d.get("source", ""),
-                    "input": {k: _short(v, 300) for k, v in (d.get("attrs") or {}).items()},
-                    "output": self._label(d, 300),
+                    "input": _fields(attrs, headline, node_type),
+                    "output": headline,
+                    "provenance": provenance,
                     "t_start": d.get("created_at"),
                     "t_end": d.get("updated_at"),
                 })
@@ -368,7 +528,86 @@ class ResearchGraphStore:
                     rep = sorted(comp, key=self._sort_key_id)[0]
                     edges.append({"src": root, "dst": rep, "type": "context",
                                   "synthetic": True})
-            return {"run_id": self._research_id, "nodes": nodes, "edges": edges}
+            # When this study was last written to. A research graph outlives a
+            # single prompt, so a session can show one that has not moved for a
+            # day — which reads as "the new run produced nothing" only if the
+            # reader can see the date. Without it the stale graph is
+            # indistinguishable from a fresh one.
+            stamps = [d.get("updated_at") or d.get("created_at")
+                      for _, d in self._g.nodes(data=True)]
+            stamps = [t for t in stamps if isinstance(t, (int, float))]
+            return {"run_id": self._research_id, "nodes": nodes, "edges": edges,
+                    "updated_at": max(stamps) if stamps else None,
+                    "node_count": self._g.number_of_nodes()}
+
+    def view_of(self, study_id: Optional[str] = None) -> Dict[str, Any]:
+        """One study's projection, plus the list of the session's other studies.
+
+        Mirrors the execution log, where a session lists its requests and draws
+        one. `study_id` is "active" or an archive filename; the live study is
+        used when nothing is asked for.
+        """
+        catalogue = self.studies()
+        chosen = study_id or "active"
+        if chosen == "active":
+            view = self.to_view()
+        else:
+            view = self.archived_view(chosen)
+        view["studies"] = catalogue
+        view["study_id"] = chosen
+        return view
+
+    # ── the studies this session holds ───────────────────────────────────────
+
+    def studies(self) -> List[Dict[str, Any]]:
+        """Every study in this session, newest first, the live one first of all.
+
+        `research_init` archives the study in progress and starts a new one, so
+        a session accumulates them. Only the live one was ever reachable, which
+        made a finished study look deleted and a stale one look like the current
+        run's output.
+        """
+        out = [{"study_id": "active", "label": self._study_label(self._serialize()),
+                "updated_at": self._latest_stamp(), "live": True,
+                "node_count": self._g.number_of_nodes()}]
+        for path in sorted(self._dir.glob("research_*.json"), reverse=True):
+            if path.name == self._path.name:
+                continue
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            nodes = data.get("nodes") or []
+            stamps = [n.get("updated_at") or n.get("created_at") for n in nodes]
+            stamps = [t for t in stamps if isinstance(t, (int, float))]
+            out.append({"study_id": path.name, "label": self._study_label(data),
+                        "updated_at": max(stamps) if stamps else None,
+                        "live": False, "node_count": len(nodes)})
+        return out
+
+    @staticmethod
+    def _study_label(data: Dict[str, Any]) -> str:
+        """A study is known by the question it asks."""
+        for node in data.get("nodes") or []:
+            if node.get("type") == "ResearchQuestion":
+                said = (node.get("attrs") or {}).get("formulation")
+                if said:
+                    return str(said)
+        return "untitled study"
+
+    def _latest_stamp(self) -> Optional[float]:
+        stamps = [d.get("updated_at") or d.get("created_at")
+                  for _, d in self._g.nodes(data=True)]
+        stamps = [t for t in stamps if isinstance(t, (int, float))]
+        return max(stamps) if stamps else None
+
+    def archived_view(self, study_id: str) -> Dict[str, Any]:
+        """The same projection, over a study that has already been archived."""
+        path = self._dir / study_id
+        if path.name != study_id or not path.is_file():
+            raise KeyError(f"no archived study '{study_id}' in this session")
+        frozen = ResearchGraphStore(directory=str(self._dir), active_file=study_id)
+        return frozen.to_view()
 
     def reset(self, archive: bool = True) -> Optional[str]:
         """Start over with an empty graph. The old graph is archived (never
@@ -464,6 +703,17 @@ class ResearchGraphStore:
                                      "attrs": d.get("attrs") or {}})
 
         # -- status updates: existing nodes only ------------------------------
+        # Criteria this commit marks met, whatever order they arrive in. The
+        # validator writes the verdict and the criteria it rests on together,
+        # and it lists the verdict first, so scanning only what is already
+        # staged would judge the verdict against a bar this very commit is
+        # raising.
+        met_here = {
+            str(d.get("id"))
+            for d in status_drafts
+            if isinstance(d, dict)
+            and schema.normalize_token(d.get("status") or "") == "met"
+        }
         staged_status: List[Dict[str, Any]] = []
         for k, d in enumerate(status_drafts):
             if not isinstance(d, dict):
@@ -494,6 +744,20 @@ class ResearchGraphStore:
             tr_errs = schema.validate_transition(source, ntype, cur, new,
                                                 enforce_permissions=enforce_permissions)
             errors.extend(f"status_updates[{k}]: {e}" for e in tr_errs)
+            unmet = ([c for c in self._unmet_criteria(nid) if c not in met_here]
+                     if (ntype, new) == ("Hypothesis", "confirmed") else [])
+            if unmet:
+                # A hypothesis is confirmed against the bar written for it. A run
+                # once reported "all criteria satisfied" while both of its
+                # criteria still stood at not_met, and nothing contradicted it:
+                # the claim and the bar were separate objects that never had to
+                # agree. Now they do, and the refusal names what is outstanding.
+                errors.append(
+                    f"status_updates[{k}]: {nid} cannot be confirmed while its "
+                    f"acceptance criteria are unmet ({', '.join(unmet)}). Either "
+                    f"mark each criterion met with the measurement that meets it, "
+                    f"or record the verdict as refuted or inconclusive.")
+                continue
             if not tr_errs:
                 staged_status.append({"id": nid, "type": ntype, "from": cur,
                                       "to": new, "reason": d.get("reason")})
@@ -582,11 +846,34 @@ class ResearchGraphStore:
     # hypothesis to under_verification and reaches the validator.
     _EVIDENCE_EDGES = ("supports", "refutes", "refines", "relates_to")
 
+    def _focus_hypothesis(self, focus: str) -> Optional[str]:
+        """Resolve a focus node to the Hypothesis it belongs to, so evidence
+        gathered while focused on a method/tool/criteria of a hypothesis still
+        auto-links to that hypothesis (the orchestrator often focuses on the VM
+        or Tool it is verifying, not the hypothesis itself)."""
+        t = self._g.nodes[focus].get("type")
+        if t == "Hypothesis":
+            return focus
+        if t == "VerificationMethod":          # H -tested_by-> VM
+            for u, _, k in self._g.in_edges(focus, keys=True):
+                if k == "tested_by" and self._g.nodes[u].get("type") == "Hypothesis":
+                    return u
+        elif t == "Tool":                      # H -requires-> Tool
+            for u, _, k in self._g.in_edges(focus, keys=True):
+                if k == "requires" and self._g.nodes[u].get("type") == "Hypothesis":
+                    return u
+        elif t == "ConfirmationCriteria":      # CC -formulated_for-> H
+            for _, v, k in self._g.out_edges(focus, keys=True):
+                if k == "formulated_for" and self._g.nodes[v].get("type") == "Hypothesis":
+                    return v
+        return None
+
     def _autolink_focus(self, committed: Dict[str, List[Dict[str, Any]]],
                         focus: Optional[str], source: str, now: float) -> None:
         if not focus or not self._g.has_node(focus):
             return
-        if self._g.nodes[focus].get("type") != "Hypothesis":
+        focus = self._focus_hypothesis(focus)
+        if not focus:
             return
         # evidence ids already linked to SOME hypothesis in this commit
         linked = {e["from"] for e in committed["edges"]
@@ -629,6 +916,19 @@ class ResearchGraphStore:
                 committed["status_updates"].append(
                     {"id": hid, "from": "formulated", "to": "under_verification",
                      "auto": True})
+
+
+    def _unmet_criteria(self, hypothesis_id: str) -> List[str]:
+        """Criteria written for this hypothesis that are still not met."""
+        outstanding = []
+        for src, dst, key in self._g.in_edges(hypothesis_id, keys=True):
+            if key != "formulated_for":
+                continue
+            node = self._g.nodes[src]
+            if node.get("type") == "ConfirmationCriteria" \
+                    and node.get("status") != "met":
+                outstanding.append(src)
+        return sorted(outstanding)
 
     def _normalize_hypothesis_selection(self, creates: List[Dict[str, Any]],
                                         warnings: List[str]) -> None:

@@ -81,6 +81,35 @@
         ru: 'Секунды до автоподтверждения HITL (-1 — без тайм-аута, ждать человека).'
       },
 
+      // ── HITL research-frame form (rendered at runtime, keyed by currentLang) ──
+      'hitl.form.sidebarTitle': { en: 'Research Frame', ru: 'Рамка исследования' },
+      'hitl.form.sidebarHint': {
+        en: 'Fill in the form in the chat. The agent fills the empty fields itself.',
+        ru: 'Заполните форму в чате. Пустые поля агент заполнит сам.'
+      },
+      'hitl.form.title': { en: 'Research Frame', ru: 'Рамка исследования' },
+      'hitl.form.notSet': { en: 'not set', ru: 'не задано' },
+      'hitl.form.placeholderFallback': {
+        en: 'Leave empty and the agent will fill in a working value',
+        ru: 'Оставьте пустым, чтобы агент подставил рабочее значение'
+      },
+      'hitl.form.save': { en: 'Save Frame', ru: 'Сохранить рамку' },
+      'hitl.form.skip': { en: 'Skip (agent decides)', ru: 'Пропустить (агент решит)' },
+      'hitl.form.saved': {
+        en: '✓ Frame saved ({n} fields set by the operator)',
+        ru: '✓ Рамка сохранена ({n} поле(й) заданы оператором)'
+      },
+      'hitl.form.skipped': {
+        en: '→ Frame skipped — the agent will fill in the values',
+        ru: '→ Рамка пропущена — агент подставит значения'
+      },
+
+      // Internal-loop review request (agent name replaces {agent}).
+      'hitl.internalLoop': {
+        en: "Agent '{agent}' proposes its result. Please review.",
+        ru: "Агент '{agent}' предлагает свой результат. Проверьте его."
+      },
+
       'settings.usePlanner.label': { en: 'Use Planner', ru: 'Использовать планировщик' },
       'settings.usePlanner.note': {
         en: '(disabled when using PlannerAgent mode)',
