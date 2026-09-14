@@ -249,9 +249,12 @@ degrades the same way (S3 off) rather than breaking the server's import.
   different input URIs that happen to share a basename never collide — each
   download gets an isolated subdirectory.
 - **Output.** A `*_path`/`*_file` result field that is an existing local file
-  outside the cloned repo, the mounted `/mount/data` and the per-call scratch
-  dir, and no larger than `S3_UPLOAD_MAX_BYTES`, is uploaded and presigned
-  after the tool returns; the original local field is kept, and one nested
+  outside the mounted `/mount/data` and the per-call scratch dir, and no
+  larger than `S3_UPLOAD_MAX_BYTES`, is uploaded and presigned after the tool
+  returns. Inside the cloned repo only a file written during the call counts:
+  generated tools often resolve a relative out path against the repo, while a
+  source or data file the tool merely returns stays out. The original local
+  field is kept, and one nested
   `<field>_s3` entry — `{"bucket", "s3_key", "presigned_url", "expires_in"}` —
   is added alongside it. Not flat `<field>_s3_key` / `<field>_presigned_url`
   siblings: the framework's artifact walker

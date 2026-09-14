@@ -723,7 +723,7 @@ def test_generated_tool_function_works_without_s3_env_ignoring_scope_params(tmp_
 def test_rendered_server_denies_the_mounted_benchmark_data():
     server = cg.render_server("demo", [_SIG])
     assert '_MOUNT_DATA = Path("/mount/data")' in server
-    assert "(_REPOS_DIR, _MOUNT_DATA, scratch)" in server
+    assert "(_MOUNT_DATA, scratch), _REPOS_DIR, started)" in server
 
 
 def test_call_does_not_publish_an_echoed_path_from_the_mounted_data(tmp_path, monkeypatch):

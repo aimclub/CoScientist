@@ -242,7 +242,10 @@ def _client_factory(endpoint_url: str | None = None):
         endpoint_url=endpoint_url or _env("ENDPOINT_URL"),
         aws_access_key_id=_env("ACCESS_KEY"),
         aws_secret_access_key=_env("SECRET_KEY"),
-        region_name=os.environ.get("S3_REGION", _DEFAULT_REGION),
+        # `or`, not a get() default: the build blanks S3_REGION in the committed
+        # image (ENV S3_REGION=), and an empty region signs links that strict
+        # S3 services reject.
+        region_name=os.environ.get("S3_REGION") or _DEFAULT_REGION,
         config=Config(
             signature_version="s3v4",
             connect_timeout=_CONNECT_TIMEOUT_SECONDS,
@@ -491,13 +494,18 @@ def maybe_upload(local_path: str, prefix: str, field_key: str) -> dict | None:
         return None
 
 
-def _is_publishable(key: str, value: object, deny_roots: tuple) -> bool:
+def _is_publishable(key: str, value: object, deny_roots: tuple,
+                    repo_root: Path | None = None, since: float | None = None) -> bool:
     """True iff ``value`` is an existing regular file, named like a file
-    param, and NOT inside any of ``deny_roots``: the cloned repo (publishing
-    repo source files would leak them into every result) and the per-call
-    scratch dir (a tool that echoes its ``input_path`` back would otherwise
-    re-upload the caller's own input and hand back a local path that the
-    post-call scratch cleanup is about to delete)."""
+    param, and NOT inside any of ``deny_roots``: the per-call scratch dir (a
+    tool that echoes its ``input_path`` back would otherwise re-upload the
+    caller's own input and hand back a local path that the post-call scratch
+    cleanup is about to delete) and the mounted benchmark data.
+
+    Inside ``repo_root`` (the cloned repo) only a file written at or after
+    ``since`` is publishable. Source and data files a tool echoes back stay
+    out of the bucket, while an output the call wrote there goes up:
+    generated tools often resolve a relative out path against the repo."""
     if not (is_file_param(key) and isinstance(value, str)):
         return False
     path = Path(value)
@@ -505,12 +513,18 @@ def _is_publishable(key: str, value: object, deny_roots: tuple) -> bool:
         return False
     try:
         resolved = path.resolve()
-        return not any(resolved.is_relative_to(root.resolve()) for root in deny_roots)
+        if any(resolved.is_relative_to(root.resolve()) for root in deny_roots):
+            return False
+        if repo_root is not None and resolved.is_relative_to(repo_root.resolve()):
+            # One second of slack for filesystems that store whole-second mtimes.
+            return since is not None and path.stat().st_mtime >= since - 1
+        return True
     except OSError:
         return False
 
 
-def publish_result(result: object, prefix: str, deny_roots) -> object:
+def publish_result(result: object, prefix: str, deny_roots,
+                   repo_root: Path | None = None, since: float | None = None) -> object:
     """Recursively walk a dict/list tool result. For every ``*_path``/
     ``*_file`` string entry that is an existing, publishable local file,
     upload it under ``prefix`` and add one nested ``<key>_s3`` entry:
@@ -528,24 +542,26 @@ def publish_result(result: object, prefix: str, deny_roots) -> object:
     mcp-servers/chemical-mcp-server/server/utils/vault.py:contract).
 
     ``deny_roots`` is a single ``Path`` or an iterable of them; files under
-    any deny root are never uploaded (see ``_is_publishable``)."""
+    any deny root are never uploaded, and files under ``repo_root`` only when
+    written at or after ``since`` (see ``_is_publishable``)."""
     roots = (deny_roots,) if isinstance(deny_roots, Path) else tuple(deny_roots)
     if isinstance(result, dict):
         out = {}
         for key, value in result.items():
-            out[key] = publish_result(value, prefix, roots)
+            out[key] = publish_result(value, prefix, roots, repo_root, since)
             # Guarded against `result` (the tool's own dict), not `out`: dict
             # iteration order means a tool-returned `<key>_s3` sibling could
             # sit either before or after `key` in `result` — checking `out`
             # would only catch the "before" ordering and still clobber the
             # tool's own field in the other one.
-            if _is_publishable(key, value, roots) and f"{key}_s3" not in result:
+            if (_is_publishable(key, value, roots, repo_root, since)
+                    and f"{key}_s3" not in result):
                 uploaded = maybe_upload(value, prefix, key)
                 if uploaded:
                     out[f"{key}_s3"] = uploaded
         return out
     if isinstance(result, list):
-        return [publish_result(item, prefix, roots) for item in result]
+        return [publish_result(item, prefix, roots, repo_root, since) for item in result]
     return result
 
 

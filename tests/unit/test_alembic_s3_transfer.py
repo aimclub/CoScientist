@@ -8,8 +8,10 @@ on sys.path to test it — same reasoning as tests/unit/_codegen_loader.py.
 
 import email.message
 import importlib.util
+import os
 import re
 import sys
+import time
 import types
 from pathlib import Path
 
@@ -979,6 +981,11 @@ def test_client_factory_passes_a_region_default_and_override(monkeypatch):
     s3t._client_factory()
     assert calls[-1]["region_name"] == "eu-west-1"
 
+    # The committed image carries a blanked ENV S3_REGION=.
+    monkeypatch.setenv("S3_REGION", "")
+    s3t._client_factory()
+    assert calls[-1]["region_name"] == "us-east-1"
+
 
 # ── M1/M2 regression: the built key/id must clear the vault's own validation ─
 
@@ -1183,3 +1190,40 @@ def test_download_http_decodes_a_percent_encoded_filename(tmp_path, monkeypatch)
         tmp_path / "scratch")
 
     assert Path(local).name == "данные.csv"
+
+
+def test_publish_result_uploads_what_the_call_wrote_into_the_repo(tmp_path, monkeypatch):
+    """Generated tools resolve a relative out path against the cloned repo, so
+    an output often lands there. A repo file the call did not write stays out."""
+    _clear_env(monkeypatch)
+    _set_env(monkeypatch)
+    client = _FakeUploadClient()
+    monkeypatch.setattr(s3t, "_client_factory", lambda *a, **k: client)
+    repo = tmp_path / "repos"
+    (repo / "Tests").mkdir(parents=True)
+    source = repo / "Tests" / "rosemary.pro"
+    source.write_text(">x\nMK\n", encoding="utf-8")
+    os.utime(source, (time.time() - 3600, time.time() - 3600))
+    started = time.time()
+    written = repo / "out.fasta"
+    written.write_text(">x\nMK\n", encoding="utf-8")
+
+    result = s3t.publish_result({"in_file": str(source), "out_file": str(written)},
+                                "prefix", (), repo, started)
+
+    assert "out_file_s3" in result
+    assert "in_file_s3" not in result
+    assert [u["key"] for u in client.uploads] == ["prefix/out_file/out.fasta"]
+
+
+def test_publish_result_without_a_call_start_keeps_the_whole_repo_out(tmp_path, monkeypatch):
+    _clear_env(monkeypatch)
+    _set_env(monkeypatch)
+    monkeypatch.setattr(s3t, "_client_factory", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("must not upload a repo file")))
+    repo = tmp_path / "repos"
+    repo.mkdir()
+    written = repo / "out.fasta"
+    written.write_text("x", encoding="utf-8")
+
+    assert "out_file_s3" not in s3t.publish_result({"out_file": str(written)}, "prefix", (), repo)
