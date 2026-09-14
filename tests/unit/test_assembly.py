@@ -606,3 +606,63 @@ def test_coder_local_tools_switch_on_attaches_the_local_toolset(monkeypatch, con
     coder = on.agent("CoderAgent")
     assert "execute_bash" in _tool_names(coder)
     assert "execute_bash" in coder.instruction
+
+
+# ── Work Order wiring ────────────────────────────────────────────────────────
+
+_WORK_ORDER_TOOLS = {"declare_work_order", "update_work_order", "update_work_step"}
+
+
+def _as_list(callbacks):
+    if callbacks is None:
+        return []
+    return list(callbacks) if isinstance(callbacks, list) else [callbacks]
+
+
+def test_work_order_agents_get_tools_guard_reset_and_prompt(monkeypatch, config):
+    on = _build_with(monkeypatch, config, hitl_enabled=True)
+    wired = [name for name, cfg in config.agents.items() if cfg.work_order]
+    assert set(wired) >= {"ResearchAgent", "DatasetCollectorAgent", "HypothesesAgent", "MedicalAgent"}
+
+    for name in wired:
+        agent = on.agent(name)
+        assert _WORK_ORDER_TOOLS <= _tool_names(agent), name
+        # Both run FIRST: a blocked call must not reach the other callbacks
+        # (the search limiter would count it), and the reset precedes any read.
+        assert _as_list(agent.before_tool_callback)[0].__name__ == "work_order_guard", name
+        assert _as_list(agent.before_agent_callback)[0].__name__ == "reset_work_order", name
+        assert "### Work Order" in agent.instruction, name
+        for tool in _WORK_ORDER_TOOLS:
+            assert tool in agent.instruction, f"{name}: {tool} not documented"
+
+    # Not opted in: no contract.
+    coder = on.agent("CoderAgent")
+    assert not (_WORK_ORDER_TOOLS & _tool_names(coder))
+    assert "### Work Order" not in coder.instruction
+
+
+def test_work_order_is_not_attached_without_hitl(monkeypatch, config):
+    off = _build_with(monkeypatch, config, hitl_enabled=False)
+    for name, cfg in config.agents.items():
+        if not cfg.work_order:
+            continue
+        agent = off.agent(name)
+        assert not (_WORK_ORDER_TOOLS & _tool_names(agent)), name
+        assert all(cb.__name__ != "work_order_guard" for cb in _as_list(agent.before_tool_callback))
+
+
+def test_work_order_prompt_hints_follow_the_agent_tools(monkeypatch, config):
+    on = _build_with(monkeypatch, config, hitl_enabled=True)
+    assert "query formulations" in on.agent("ResearchAgent").instruction
+    assert "population, study designs" in on.agent("MedicalAgent").instruction
+    assert "query formulations" not in on.agent("MedicalAgent").instruction
+
+
+def test_work_order_requires_an_llm_agent_with_hitl():
+    from CoScientist.assembly.schema import AgentConfig
+
+    with pytest.raises(ValueError, match="work_order"):
+        AgentConfig(name="X", work_order=True)
+    with pytest.raises(ValueError, match="work_order"):
+        AgentConfig(name="X", **{"class": "custom:session"}, hitl=True, work_order=True)
+    assert AgentConfig(name="X", hitl=True, work_order=True).work_order

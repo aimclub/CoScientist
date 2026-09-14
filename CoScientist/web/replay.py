@@ -32,7 +32,7 @@ REPLAY_FLAG = "replayed_from"
 
 #: Event types the browser renders in the chat column, as opposed to the tool
 #: panel. These are the ones a viewer reads, so they get their own spacing.
-_CHAT_TYPES = ("agent_event", "user_message", "hitl_request")
+_CHAT_TYPES = ("agent_event", "user_message", "hitl_request", "work_order_notice")
 
 #: Tools that are a question to the operator, not a computation.
 _HITL_TOOLS = ("request_selection", "request_approval")
@@ -257,6 +257,38 @@ class ReplaySession:
                     "options": payload.get("options") or [],
                     "invoked_via": "tool",
                     "trigger": event["tool"],
+                    "timestamp": stamp}
+        # A declared Work Order is the agent's plan: the browser draws it as a
+        # read-only card. Its fields are the recorded arguments, not the
+        # normalised order (ids and tier were assigned server-side).
+        if kind == "tool_call" and event.get("tool") == "declare_work_order":
+            args = event.get("args")
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except ValueError:
+                    args = {}
+            args = args if isinstance(args, dict) else {}
+            order = {
+                "agent": author,
+                "goal": cls._payload(args.get("goal") or ""),
+                "done_criteria": cls._payload(args.get("done_criteria") or ""),
+                "assumptions": [
+                    {"id": f"A{i}", "text": cls._payload(str(a))}
+                    for i, a in enumerate(args.get("assumptions") or [], 1)
+                ],
+                "steps": [
+                    {"id": f"S{i}", **(s if isinstance(s, dict) else {"title": str(s)})}
+                    for i, s in enumerate(args.get("steps") or [], 1)
+                ],
+                "planned_tools": args.get("planned_tools") or [],
+                "side_effects": args.get("side_effects") or [],
+                "budget": args.get("budget") or {},
+                "expected_outcome": cls._payload(args.get("expected_outcome") or ""),
+                "revision": 1,
+            }
+            return {"type": "work_order_notice", "kind": "declared",
+                    "agent_name": author, "work_order": order,
                     "timestamp": stamp}
         if kind == "tool_result" and event.get("tool") in _HITL_TOOLS:
             answer = event.get("result")

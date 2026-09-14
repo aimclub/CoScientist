@@ -252,6 +252,8 @@ agents:
     # HITL so it can co-build the graph with the human: validate proposed
     # hypotheses and ask for acceptance criteria when the human didn't add any.
     hitl: true
+    # Declares a Work Order (what it will generate and commit) before acting.
+    work_order: true
     callbacks:
       before_agent: [before_get_task, inject_research_context, user_links]
       before_model: [redact_link_urls]
@@ -303,6 +305,8 @@ agents:
       after_model: [expand_link_refs, guard_unknown_tools]
     # Every agent asks before acting on a decision; inert until HITL__ENABLED.
     hitl: true
+    # Declares a Work Order (queries, source criteria, budget) before searching.
+    work_order: true
     a2a:
       key: research
       port: 8003
@@ -437,6 +441,8 @@ agents:
   DatasetCollectorAgent:
     # Asks before acting on a decision; inert until HITL__ENABLED.
     hitl: true
+    # Declares a Work Order (sources, filters, volumes, downloads) before acting.
+    work_order: true
     class: llm
     model: coder
     description: >-
@@ -489,6 +495,8 @@ agents:
       after_model: [expand_link_refs, guard_unknown_tools]
     # Every agent asks before acting on a decision; inert until HITL__ENABLED.
     hitl: true
+    # Declares a Work Order (population, study designs, date range) before acting.
+    work_order: true
     a2a:
       key: medical
       port: 8005

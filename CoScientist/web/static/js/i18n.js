@@ -73,6 +73,25 @@ const i18n = {
     en: 'Number of LLM call retry attempts on transient network or upstream API errors.',
     ru: 'Количество повторных попыток вызова LLM при временных сбоях сети или API.'
   },
+  'settings.openrouterProvider.label': { en: 'OpenRouter Provider Routing', ru: 'Маршрутизация провайдеров OpenRouter' },
+  'settings.openrouterProvider.desc': {
+    en: 'Route OpenRouter requests by strategy: Lowest Price, Lowest Latency, or Highest Throughput.',
+    ru: 'Стратегия маршрутизации запросов OpenRouter: минимальная цена, задержка или максимальная скорость.'
+  },
+  'settings.openrouterProvider.default': { en: 'Default (Balanced)', ru: 'По умолчанию (сбалансированный)' },
+  'settings.openrouterProvider.price': { en: 'Lowest Price (Cheapest)', ru: 'Самый дешёвый (Lowest Price)' },
+  'settings.openrouterProvider.latency': { en: 'Lowest Latency', ru: 'Минимальная задержка (Lowest Latency)' },
+  'settings.openrouterProvider.throughput': { en: 'Highest Throughput', ru: 'Максимальная скорость (Highest Throughput)' },
+
+  'settings.openrouterOrder.label': { en: 'OpenRouter Preferred Provider(s)', ru: 'Приоритетный провайдер OpenRouter' },
+  'settings.openrouterOrder.desc': {
+    en: 'Pin or prioritize specific hosters (e.g. Together, DeepInfra, Fireworks, Groq) or leave empty for any.',
+    ru: 'Зафиксировать или предпочесть конкретных провайдеров (Together, DeepInfra, Fireworks, Groq) или пусто для любых.'
+  },
+  'settings.openrouterOrder.placeholder': {
+    en: 'e.g. Together, DeepInfra',
+    ru: 'например, Together, DeepInfra'
+  },
 
   'settings.hitl.label': { en: 'HITL Enabled', ru: 'Включить HITL (подтверждения)' },
   'settings.hitl.desc': {
@@ -84,6 +103,65 @@ const i18n = {
     en: 'Seconds before auto-approving HITL requests (-1 for no timeout / wait for human).',
     ru: 'Секунды до автоподтверждения HITL (-1 — без тайм-аута, ждать человека).'
   },
+  'settings.workOrder.label': { en: 'Work Orders', ru: 'Наряды на работу (Work Order)' },
+  'settings.workOrder.desc': {
+    en: 'Executor agents declare their plan and assumptions before acting (requires HITL).',
+    ru: 'Агенты-исполнители объявляют план и допущения до начала работы (нужен HITL).'
+  },
+  'settings.workOrderVeto.label': { en: 'Work Order Veto Window (s)', ru: 'Окно вето наряда (сек)' },
+  'settings.workOrderVeto.desc': {
+    en: 'Compute-tier work orders start automatically after this many seconds unless paused.',
+    ru: 'Наряды уровня «вычисления» стартуют автоматически через столько секунд, если их не поставить на паузу.'
+  },
+
+  // ── Work Order cards (hitl.js) ──
+  'hitl.msg.workOrder': {
+    en: "Agent '{agent}' declares its work order. Review the plan and the assumptions.",
+    ru: "Агент '{agent}' объявляет наряд на работу. Проверьте план и допущения."
+  },
+  'hitl.msg.workOrderAmendment': {
+    en: "Agent '{agent}' wants to amend its work order.",
+    ru: "Агент '{agent}' хочет изменить свой наряд на работу."
+  },
+  'hitl.via.workOrder': { en: 'work order (plan before acting)', ru: 'наряд на работу (план до действий)' },
+  'hitl.via.workOrderAmendment': { en: 'work order amendment', ru: 'поправка к наряду' },
+  'workOrder.title': { en: 'Work Order', ru: 'Наряд на работу' },
+  'workOrder.amendTitle': { en: 'Work Order Amendment', ru: 'Поправка к наряду' },
+  'workOrder.noticeTitle': { en: 'Work Order (for information)', ru: 'Наряд на работу (для сведения)' },
+  'workOrder.tier.read': { en: 'read', ru: 'чтение' },
+  'workOrder.tier.compute': { en: 'compute', ru: 'вычисления' },
+  'workOrder.tier.side_effect': { en: 'side effects', ru: 'побочные эффекты' },
+  'workOrder.goal': { en: 'Goal', ru: 'Цель' },
+  'workOrder.done': { en: 'Done when', ru: 'Критерий готовности' },
+  'workOrder.assumptions': { en: 'Assumptions', ru: 'Допущения' },
+  'workOrder.assumptionsHint': {
+    en: 'Uncheck the assumptions you reject — the agent must not rely on them.',
+    ru: 'Снимите галочку с допущений, которые вы отклоняете, — агент не должен на них опираться.'
+  },
+  'workOrder.steps': { en: 'Steps', ru: 'Шаги' },
+  'workOrder.tools': { en: 'Tools', ru: 'Инструменты' },
+  'workOrder.sideEffects': { en: 'Side effects', ru: 'Побочные эффекты' },
+  'workOrder.budget': { en: 'Budget', ru: 'Бюджет' },
+  'workOrder.expected': { en: 'Expected outcome', ru: 'Ожидаемый результат' },
+  'workOrder.fallback': { en: 'If it fails', ru: 'Если не получится' },
+  'workOrder.reason': { en: 'Reason', ru: 'Обоснование' },
+  'workOrder.added': { en: 'Requested changes', ru: 'Запрошенные изменения' },
+  'workOrder.countdown': { en: 'Starts automatically in {s} s', ru: 'Автоматический старт через {s} с' },
+  'workOrder.paused': { en: 'Paused — waiting for your decision', ru: 'Пауза — ждём вашего решения' },
+  'workOrder.blocking': { en: 'Waiting for your decision', ru: 'Ждём вашего решения' },
+  'workOrder.btn.pause': { en: 'Pause', ru: 'Пауза' },
+  'workOrder.ph.notes': {
+    en: 'Notes or corrections for the agent (optional for Accept, required for Revise)',
+    ru: 'Заметки или правки для агента (для «Принять» — необязательно, для «Доработать» — обязательно)'
+  },
+  'workOrder.approved': { en: '✓ Work order approved', ru: '✓ Наряд одобрен' },
+  'workOrder.rejectedAssumptions': { en: '{n} assumption(s) rejected', ru: 'отклонено допущений: {n}' },
+  'workOrder.deviation': { en: 'Blocked', ru: 'Заблокировано' },
+  'workOrder.reason.no_work_order': { en: 'no work order declared yet', ru: 'наряд ещё не объявлен' },
+  'workOrder.reason.rejected': { en: 'work order was rejected', ru: 'наряд отклонён' },
+  'workOrder.reason.undeclared_tool': { en: 'tool not in the work order', ru: 'инструмента нет в наряде' },
+  'workOrder.reason.budget_exceeded': { en: 'budget used up', ru: 'бюджет исчерпан' },
+  'workOrder.reason.undeclared_side_effect': { en: 'undeclared side effect', ru: 'незаявленный побочный эффект' },
 
   // ── HITL research-frame form (rendered at runtime, keyed by currentLang) ──
   'hitl.form.sidebarTitle': { en: 'Research Frame', ru: 'Рамка исследования' },

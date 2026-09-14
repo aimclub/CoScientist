@@ -752,6 +752,50 @@
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-20 text-center focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
             </div>
             <hr class="border-outline-variant/10" />
+            <!-- OpenRouter Provider Routing -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label data-i18n="settings.openrouterProvider.label" class="text-xs font-bold text-on-surface">OpenRouter Provider Routing</label>
+                <p data-i18n="settings.openrouterProvider.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Route OpenRouter requests by strategy (Lowest Price, Lowest Latency, Highest Throughput).
+                </p>
+              </div>
+              <select id="openrouter-provider-sort-select"
+                class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 min-w-[180px] cursor-pointer">
+                <option value="default" data-i18n="settings.openrouterProvider.default">Default (Balanced)</option>
+                <option value="price" data-i18n="settings.openrouterProvider.price">Lowest Price</option>
+                <option value="latency" data-i18n="settings.openrouterProvider.latency">Lowest Latency</option>
+                <option value="throughput" data-i18n="settings.openrouterProvider.throughput">Highest Throughput</option>
+              </select>
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- OpenRouter Preferred Provider -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label data-i18n="settings.openrouterOrder.label" class="text-xs font-bold text-on-surface">OpenRouter Preferred Provider(s)</label>
+                <p data-i18n="settings.openrouterOrder.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Pin or prioritize specific hosters (e.g. Together, DeepInfra, Fireworks, Groq) or leave empty for any.
+                </p>
+              </div>
+              <input id="openrouter-provider-order-input" type="text" list="openrouter-popular-providers"
+                placeholder="e.g. Together, DeepInfra"
+                data-i18n-placeholder="settings.openrouterOrder.placeholder"
+                class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-48 focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
+              <datalist id="openrouter-popular-providers">
+                <option value="DeepInfra" />
+                <option value="Together" />
+                <option value="Fireworks" />
+                <option value="Groq" />
+                <option value="Lepton" />
+                <option value="Novita" />
+                <option value="Chutes" />
+                <option value="Cerebras" />
+                <option value="SambaNova" />
+                <option value="Nebius" />
+                <option value="Mistral" />
+              </datalist>
+            </div>
+            <hr class="border-outline-variant/10" />
             <!-- HITL -->
             <div class="flex items-center justify-between gap-4">
               <div class="flex flex-col">
@@ -773,6 +817,27 @@
                   requests (-1 for no timeout / wait for human).</p>
               </div>
               <input id="hitl-timeout-input" type="number" min="-1" step="1" value="300"
+                class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-24 text-center focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- Work Order -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label data-i18n="settings.workOrder.label" class="text-xs font-bold text-on-surface">Work Orders</label>
+                <p data-i18n="settings.workOrder.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Executor agents declare their plan and assumptions before acting (requires HITL).</p>
+              </div>
+              <input id="work-order-enabled-checkbox" type="checkbox" checked class="w-5 h-5 accent-primary cursor-pointer" />
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- Work Order veto window -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label data-i18n="settings.workOrderVeto.label" class="text-xs font-bold text-on-surface">Work Order Veto Window (s)</label>
+                <p data-i18n="settings.workOrderVeto.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Compute-tier work orders start automatically after this many seconds unless paused.</p>
+              </div>
+              <input id="work-order-veto-input" type="number" min="1" step="1" value="30"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-24 text-center focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
             </div>
             <hr class="border-outline-variant/10" />

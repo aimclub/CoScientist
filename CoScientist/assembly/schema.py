@@ -16,6 +16,10 @@ The YAML declares every agent of the system in one place. Per agent:
   callbacks:    {before_model|after_model|before_tool|after_tool|before_agent|after_agent: [names]}
   hitl:         whether the agent uses human-in-the-loop (tools + prompt section
                 for llm agents, review-loop handler for session agents)
+  work_order:   before acting, the agent declares a Work Order (goal, assumptions,
+                steps, tools, side effects, budget) for the human to review, and
+                a guard keeps it inside the approved contract (llm agents with
+                hitl only; see CoScientist/hitl/work_order.py)
   critic:       an LLM critic reviews the agent's output once and it rewrites
                 on request (session agents only; bool or "${settings.path}")
   report_output: the agent's final answer is a deliverable — show it in the chat
@@ -174,6 +178,8 @@ class AgentConfig(BaseModel):
     children: List[str] = Field(default_factory=list)
     callbacks: CallbacksConfig = Field(default_factory=CallbacksConfig)
     hitl: bool = False
+    # Declare a Work Order before acting; a guard enforces it (needs hitl).
+    work_order: bool = False
     # An LLM critic reviews my proposed output once before it is accepted, and
     # I rewrite it if the critic asks (session-style custom agents only — the
     # review loop is theirs). Independent of the orchestrator's pre/post-action
@@ -226,6 +232,10 @@ class AgentConfig(BaseModel):
             # custom: classes may take children too (e.g. an executor switch that
             # runs exactly one of them); everything else is a leaf.
             raise ValueError(f"{self.cls} agent cannot have children")
+        if self.work_order and (self.cls != "llm" or not self.hitl):
+            # The contract is declared through tools and reviewed through the
+            # HITL channel: only a plain llm agent with hitl has both.
+            raise ValueError("work_order needs class: llm and hitl: true")
         return self
 
     def is_enabled(self) -> bool:

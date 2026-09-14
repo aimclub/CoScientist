@@ -76,6 +76,58 @@ human — not by inventing the answer. Commit the human's input with
 `research_commit`; if your role may not create that node type, state their
 decision in your text answer so the orchestrator records it."""
 
+# No curly braces in this text: the instruction goes through ADK's session-state
+# injection, which treats a braced identifier as a state key.
+_WORK_ORDER_SECTION = """\
+### Work Order — declare what you will do before you do it
+
+The human must be able to see your plan and the assumptions behind it BEFORE
+you act. Protocol:
+1. Orient yourself first if you need to: reading your own context (research
+   context, active tasks, directory listings) is allowed before declaring.
+2. Call `declare_work_order` before your first external action (search, download,
+   code run, graph write). State: the goal; how you will know you are done; EVERY
+   assumption the plan relies on (append "(confidence: low)" when unsure); ordered
+   steps with the tools each uses and what you expect it to produce; all tools you
+   plan to call; side effects (package_install, network_download, git_write,
+   long_job, file_delete, external_share); a budget of calls per tool; the
+   concrete outcome you expect; and your fallback.
+3. Read the result:
+   - `approved` — proceed. Assumptions the human rejected are listed: do not rely
+     on them. Operator notes are instructions: follow them.
+   - `revise` — declare again, taking the feedback into account.
+   - `rejected` — do not act; finish and report why the task was not done.
+4. As you work, mark steps with `update_work_step` (in_progress, then done or
+   skipped with a short note on what came out).
+5. A call outside the approved order (undeclared tool, budget used up, undeclared
+   side effect) is BLOCKED. Do not retry it: if you really need it, call
+   `update_work_order` with the reason — what you learned that the plan did not
+   foresee — and what you need added. Otherwise continue within the order.
+
+Keep the order honest and specific: a human who reads "search the literature"
+learns nothing; "search PubMed for RCTs on X since 2015, exclude case reports" is
+something they can correct. This work order replaces separate approval requests
+for the plan itself — use `request_approval` only for decisions that come up
+along the way."""
+
+_WORK_ORDER_HINTS = (
+    (("websearch",),
+     "For searches, the query formulations and the source selection criteria "
+     "(recency, study types, venues) are assumptions — list them."),
+    (("papers_search",),
+     "For paper downloads, state which papers or how many you will fetch, and why those."),
+    (("medical",),
+     "For clinical evidence, state the population, study designs and date range "
+     "you will accept as assumptions."),
+    (("coder", "sandbox"),
+     "For data work, the data sources, filters, units and expected volumes are "
+     "assumptions; downloads and installs are side effects."),
+    (("research_graph",),
+     "If you will write the research graph, name in the steps which nodes you will "
+     "create or change."),
+)
+
+
 # The orchestrator alone holds `research_triggers`, so only its copy of the
 # protocol may name it. Naming it for every writer told worker agents to call a
 # tool they are not given, which is exactly the kind of instruction that makes a
@@ -92,6 +144,7 @@ class PromptContext:
     # (includes the synthetic HITL entry when HITL tools are attached).
     tool_entries: List[ToolEntry] = field(default_factory=list)
     hitl_attached: bool = False
+    work_order_attached: bool = False
 
     # ── queries ──────────────────────────────────────────────────────────────
     def has_tool(self, key: str) -> bool:
@@ -178,6 +231,14 @@ class PromptContext:
             section += "\n\n" + _HITL_RESEARCH_COOP
             if self.has_tool("research_graph_orchestrator"):
                 section += "\n" + _HITL_RESEARCH_COOP_ORCHESTRATOR
+        if self.work_order_attached:
+            section += "\n\n" + _WORK_ORDER_SECTION
+            hints = [
+                hint for keys, hint in _WORK_ORDER_HINTS
+                if any(self.has_tool(key) for key in keys)
+            ]
+            if hints:
+                section += "\n\n" + "\n".join(f"- {hint}" for hint in hints)
         return section
 
     def render_sibling_roster(self) -> str:

@@ -10,10 +10,14 @@
         if (resp.ok) {
           const data = await resp.json();
           if (data.general) {
+            appSettings.general.openrouterProviderSort = data.general.openrouterProviderSort || 'default';
+            appSettings.general.openrouterProviderOrder = data.general.openrouterProviderOrder || '';
             appSettings.general.startMode = data.general.startMode || 'planner';
             appSettings.general.maxRetries = data.general.maxRetries ?? 3;
             appSettings.general.hitlEnabled = data.general.hitlEnabled ?? false;
             appSettings.general.hitlAutoApproveTimeout = data.general.hitlAutoApproveTimeout ?? 300;
+            appSettings.general.workOrderEnabled = data.general.workOrderEnabled ?? true;
+            appSettings.general.workOrderVetoSeconds = data.general.workOrderVetoSeconds ?? 30;
             appSettings.general.usePlanner = data.general.usePlanner ?? true;
             appSettings.general.useProxy = data.general.useProxy ?? appSettings.general.useProxy;
             appSettings.general.opikEnabled = data.general.opikEnabled ?? false;
@@ -63,10 +67,16 @@
       // Load latest from server
       await loadSettings();
       // Sync UI with current state
+      const providerSortEl = document.getElementById('openrouter-provider-sort-select');
+      if (providerSortEl) providerSortEl.value = appSettings.general.openrouterProviderSort || 'default';
+      const providerOrderEl = document.getElementById('openrouter-provider-order-input');
+      if (providerOrderEl) providerOrderEl.value = appSettings.general.openrouterProviderOrder || '';
       document.getElementById('start-mode-select').value = appSettings.general.startMode;
       document.getElementById('max-retries-input').value = appSettings.general.maxRetries;
       document.getElementById('hitl-enabled-checkbox').checked = appSettings.general.hitlEnabled;
       document.getElementById('hitl-timeout-input').value = appSettings.general.hitlAutoApproveTimeout ?? 300;
+      document.getElementById('work-order-enabled-checkbox').checked = appSettings.general.workOrderEnabled ?? true;
+      document.getElementById('work-order-veto-input').value = appSettings.general.workOrderVetoSeconds ?? 30;
       document.getElementById('use-planner-checkbox').checked = appSettings.general.usePlanner;
       document.getElementById('use-proxy-checkbox').checked = appSettings.general.useProxy;
       document.getElementById('opik-enabled-checkbox').checked = appSettings.general.opikEnabled;
@@ -204,11 +214,18 @@
 
     async function saveSettings() {
       // Read from UI
+      const sortSelect = document.getElementById('openrouter-provider-sort-select');
+      if (sortSelect) appSettings.general.openrouterProviderSort = sortSelect.value;
+      const orderInput = document.getElementById('openrouter-provider-order-input');
+      if (orderInput) appSettings.general.openrouterProviderOrder = orderInput.value.trim();
       appSettings.general.startMode = document.getElementById('start-mode-select').value;
       appSettings.general.maxRetries = parseInt(document.getElementById('max-retries-input').value, 10) || 3;
       appSettings.general.hitlEnabled = document.getElementById('hitl-enabled-checkbox').checked;
       const hitlTimeoutVal = parseInt(document.getElementById('hitl-timeout-input').value, 10);
       appSettings.general.hitlAutoApproveTimeout = !isNaN(hitlTimeoutVal) ? hitlTimeoutVal : 300;
+      appSettings.general.workOrderEnabled = document.getElementById('work-order-enabled-checkbox').checked;
+      const vetoVal = parseInt(document.getElementById('work-order-veto-input').value, 10);
+      appSettings.general.workOrderVetoSeconds = !isNaN(vetoVal) && vetoVal > 0 ? vetoVal : 30;
       if (appSettings.general.startMode === 'orchestrator') {
         appSettings.general.usePlanner = document.getElementById('use-planner-checkbox').checked;
       }

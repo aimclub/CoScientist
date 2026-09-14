@@ -22,10 +22,14 @@ const LANG_STORAGE_KEY = 'coscientist.lang';
 
 const appSettings = {
   general: {
+    openrouterProviderSort: 'default', // 'default' | 'price' | 'throughput' | 'latency'
+    openrouterProviderOrder: '',       // e.g. 'Together, DeepInfra'
     startMode: 'planner',   // 'planner' | 'orchestrator' | 'orchestrator_planner'
     maxRetries: 3,
     hitlEnabled: false,
     hitlAutoApproveTimeout: 300,
+    workOrderEnabled: true,
+    workOrderVetoSeconds: 30,
     usePlanner: true,
     useProxy: true,
     opikEnabled: false,

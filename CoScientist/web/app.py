@@ -135,6 +135,10 @@ def _apply_frontend_settings(frontend: dict) -> None:
     web = get_settings().web
 
     general = frontend.get("general", {})
+    if "openrouterProviderSort" in general:
+        web.openrouter_provider_sort = str(general["openrouterProviderSort"]).strip().lower()
+    if "openrouterProviderOrder" in general:
+        web.openrouter_provider_order = str(general["openrouterProviderOrder"]).strip()
     if "startMode" in general:
         web.start_mode = general["startMode"]
     if "maxRetries" in general:
@@ -145,6 +149,10 @@ def _apply_frontend_settings(frontend: dict) -> None:
         get_settings().hitl.enabled = val
     if "hitlAutoApproveTimeout" in general:
         web.hitl_auto_approve_timeout = int(general["hitlAutoApproveTimeout"])
+    if "workOrderEnabled" in general:
+        web.work_order_enabled = bool(general["workOrderEnabled"])
+    if "workOrderVetoSeconds" in general:
+        web.work_order_veto_seconds = max(1, int(general["workOrderVetoSeconds"]))
     if "usePlanner" in general:
         web.use_planner = bool(general["usePlanner"])
     if "useProxy" in general:
@@ -225,10 +233,14 @@ def _settings_payload() -> dict:
     web = settings.web
     return {
         "general": {
+            "openrouterProviderSort": web.openrouter_provider_sort,
+            "openrouterProviderOrder": web.openrouter_provider_order,
             "startMode": web.start_mode,
             "maxRetries": web.max_retries,
             "hitlEnabled": web.hitl_enabled,
             "hitlAutoApproveTimeout": web.hitl_auto_approve_timeout,
+            "workOrderEnabled": web.work_order_enabled,
+            "workOrderVetoSeconds": web.work_order_veto_seconds,
             "usePlanner": web.use_planner,
             "useProxy": web.use_proxy,
             "opikEnabled": web.opik_enabled,
@@ -1935,6 +1947,11 @@ def create_app() -> FastAPI:
                     })
                 elif msg_type == "hitl_response":
                     _handle_hitl_response(runtime, key, data)
+                elif msg_type == "hitl_hold":
+                    # "Pause" on a Work Order veto window: stop the countdown.
+                    request_id = data.get("request_id")
+                    if request_id:
+                        await runtime.hitl_handler.hold_request(request_id, key)
                 elif msg_type == "ping":
                     await runtime.send_socket(ws, {"type": "pong"}, key)
                 else:

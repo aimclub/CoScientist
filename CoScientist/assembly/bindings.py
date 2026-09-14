@@ -809,6 +809,38 @@ HITL_TOOL_DOCS = (
     ),
 )
 
+# Attached the same way, by the per-agent `work_order: true` flag.
+WORK_ORDER_TOOL_DOCS = (
+    ToolDoc(
+        name="declare_work_order",
+        signature=(
+            "declare_work_order(goal, done_criteria, assumptions, steps, planned_tools, "
+            "side_effects, budget, expected_outcome, fallback)"
+        ),
+        purpose=(
+            "(Work Order) Declare your contract BEFORE your first external action: "
+            "goal, assumptions, steps, tools, side effects, budget, expected outcome. "
+            "Returns status approved / revise / rejected."
+        ),
+    ),
+    ToolDoc(
+        name="update_work_order",
+        signature="update_work_order(reason, add_tools, add_side_effects, add_steps, budget)",
+        purpose=(
+            "(Work Order) Amend the approved contract when you need a tool, budget or "
+            "side effect it does not cover. The human reviews the diff."
+        ),
+    ),
+    ToolDoc(
+        name="update_work_step",
+        signature="update_work_step(step_id, status, note)",
+        purpose=(
+            "(Work Order) Mark a step in_progress / done / skipped as you go, so the "
+            "human can follow the plan live."
+        ),
+    ),
+)
+
 
 # ── Callbacks ────────────────────────────────────────────────────────────────
 

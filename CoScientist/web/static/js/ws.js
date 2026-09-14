@@ -149,6 +149,14 @@
             addSystemMsg('⏱ HITL: нет ответа ' + (data.timeout_seconds || 300) + ' с — предложение агента ' + (data.agent_name || '') + ' авто-подтверждено, пайплайн продолжен.');
             addTelemetry('HITL :: auto-approve on timeout (' + (data.agent_name || '?') + ')');
             break;
+          case 'hitl_hold':
+            applyWorkOrderHold(data.request_id);
+            addTelemetry('HITL :: countdown paused');
+            break;
+          case 'work_order_notice':
+            renderWorkOrderNotice(data);
+            addTelemetry('WORK ORDER :: ' + (data.agent_name || '?') + ' ' + (data.kind || ''));
+            break;
           case 'hitl_cancelled':
             disableHitlControls(data.request_id);
             document.getElementById('hitl-panel').classList.add('hidden');
