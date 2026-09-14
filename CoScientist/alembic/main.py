@@ -614,9 +614,12 @@ async def _validate(repo_url, name, session_service, metrics):
                 failures_by_class[classify_error(f)] = failures_by_class.get(classify_error(f), 0) + 1
             failures += fails
             write_validation(repo_url, name, v)   # incremental (R2)
+            # The args the tool was actually invoked with: plan keys the
+            # generated signature does not accept are dropped, as in _check_tool.
+            shown = _clean_sample_args(t) if t.sample_args is not None else {}
             await emit({"type": "validation", "tool": t.name,
                         "passed": rep.passed, "status": rep.status,
-                        "exec_ok": rep.exec_ok, "input": t.sample_args or {},
+                        "exec_ok": rep.exec_ok, "input": shown,
                         "error": (rep.error or None) if not rep.passed else None})
         if not failures:
             break

@@ -25,7 +25,7 @@ from google.adk.events.event_actions import EventActions
 from google.genai import types
 
 from CoScientist.context_init.commit import seed_frame
-from CoScientist.context_init.models import ResearchFrame
+from CoScientist.context_init.models import BLOCK_I18N, FIELD_I18N, ResearchFrame
 from CoScientist.graph.research.store import get_research_graph
 from CoScientist.graph.session_scope import session_key
 from CoScientist.hitl.field_status import OPERATOR_STATUS, is_open
@@ -38,6 +38,11 @@ FRAME_STATE_KEY = "research_frame"
 _FORM_INTRO = ("Заполните рамку исследования. Пустые поля агент заполнит "
                "рабочими значениями. Рамка задаёт стратегию: литературный "
                "поиск, дорогой или дешёвый эксперимент.")
+_FORM_INTRO_EN = ("Fill in the research frame. The agent fills empty fields "
+                  "with working values. The frame sets the strategy: literature "
+                  "search, expensive or cheap experiment.")
+_HITL_MESSAGE = "Подтвердите рамку исследования перед запуском."
+_HITL_MESSAGE_EN = "Confirm the research frame before the run starts."
 
 
 def coerce_frame(value: Any) -> ResearchFrame:
@@ -54,13 +59,31 @@ def frame_to_form(frame: ResearchFrame) -> Dict[str, Any]:
     frame = frame.normalized()
     blocks: List[Dict[str, Any]] = []
     for b in frame.blocks:
-        fields = [
-            {"name": f.name, "value": f.value, "status": f.status,
-             "open": is_open(f.status)}
-            for f in b.fields
-        ]
-        blocks.append({"title": b.title, "usage": b.usage, "fields": fields})
-    return {"title": "Рамка исследования", "intro": _FORM_INTRO, "blocks": blocks}
+        block_i18n = BLOCK_I18N.get(b.title, {})
+        fields = []
+        for f in b.fields:
+            field_i18n = FIELD_I18N.get(f.name, {})
+            fields.append({
+                "name": f.name, "value": f.value, "status": f.status,
+                "open": is_open(f.status),
+                "label": field_i18n.get("label", {"en": f.name, "ru": f.name}),
+                "placeholder": field_i18n.get("placeholder", {"en": "", "ru": ""}),
+            })
+        blocks.append({
+            "title": b.title, "usage": b.usage,
+            "title_i18n": block_i18n.get("title", {"en": b.title, "ru": b.title}),
+            "usage_i18n": block_i18n.get("usage", {"en": b.usage, "ru": b.usage}),
+            "fields": fields,
+        })
+    return {
+        "kind": "research_frame",
+        "title": "Рамка исследования",
+        "title_i18n": {"en": "Research frame", "ru": "Рамка исследования"},
+        "intro": _FORM_INTRO,
+        "intro_i18n": {"en": _FORM_INTRO_EN, "ru": _FORM_INTRO},
+        "message_i18n": {"en": _HITL_MESSAGE_EN, "ru": _HITL_MESSAGE},
+        "blocks": blocks,
+    }
 
 
 def apply_form_values(frame: ResearchFrame,
@@ -116,7 +139,7 @@ class ContextInitSessionAgent(SessionAgent):
         request = HITLRequest(
             agent_name=self.name,
             action_type=HITLAction.APPROVE,
-            message="Подтвердите рамку исследования перед запуском.",
+            message=_HITL_MESSAGE,
             form=frame_to_form(frame),
             context={"_session": {"user_id": user_id, "session_id": session_id}},
             invoked_via="internal_loop",

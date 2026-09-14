@@ -83,11 +83,23 @@
       const raw = typeof text === 'string' ? stripThinking(text) : String(text == null ? '' : text);
       const withLocalLinks = raw
         .replace(/(^|\s)(\/api\/tz-document[^\s)]*)/g, '$1[$2]($2)')
-        // Live MCP build page: /builds/<job_id> (agent surfaces it as progress_page).
-        .replace(/(^|\s)(\/builds\/[A-Za-z0-9._-]+)/g, '$1[$2]($2)');
+        // Live MCP build page: /alembic/builds/<job_id> (agent surfaces it as progress_page).
+        .replace(/(^|\s)(\/alembic\/builds\/[A-Za-z0-9._-]+)/g, '$1[$2]($2)');
       const html = marked.parse(withLocalLinks);
       const clean = DOMPurify.sanitize(html, { ADD_ATTR: ['target'] });
-      return clean.replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" class="text-primary underline" ');
+      // A link whose URL path (before any ?query) ends in an image extension
+      // gets an inline <img> preview under the link — markdown images render
+      // on their own, but agents also emit image URLs as plain links. The & in
+      // presigned S3 query strings shows up here as &amp; — the pattern allows
+      // it.
+      const withPreviews = clean.replace(
+        /<a href="(https?:\/\/[^"]+|\/(?!\/)[^"]*)">([^<]*)<\/a>/g,
+        (m, url, label) => {
+          if (!/\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(url.split(/[?#]/)[0])) return m;
+          return m + '<br><a href="' + url + '"><img src="' + url + '" alt="' + label + '"'
+            + ' class="mt-2 max-w-full rounded-lg border border-outline-variant/20 cursor-zoom-in" loading="lazy"></a>';
+        });
+      return withPreviews.replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" class="text-primary underline" ');
     }
 
     function getBaseSandboxUrl() {

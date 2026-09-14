@@ -54,6 +54,10 @@ def run_web(host: str = "127.0.0.1", port: int = 8000, reload: bool = False) -> 
         port=port,
         reload=reload,
         log_level="info",
+        # Above the 5 s polling of the builds page. At uvicorn's default of 5 s
+        # a POST could land on a connection the server was closing, and the
+        # browser reported a NetworkError for an action that never arrived.
+        timeout_keep_alive=30,
     )
 
 

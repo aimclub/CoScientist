@@ -1600,80 +1600,13 @@ def create_app() -> FastAPI:
             )
         return await api_session_graph(user_id, session_id, view)
 
-    # --- MCP build dashboard (Alembic pipeline live view) ---
-    @app.get("/builds", response_class=HTMLResponse)
-    async def builds_page():
-        return HTMLResponse(
-            (WEB_DIR / "templates" / "builds.html").read_text(encoding="utf-8"),
-            headers={"Cache-Control": "no-store"},
-        )
-
-    @app.get("/builds/{job_id}", response_class=HTMLResponse)
-    async def build_detail_page(job_id: str):
-        return HTMLResponse(
-            (WEB_DIR / "templates" / "build_detail.html").read_text(encoding="utf-8"),
-            headers={"Cache-Control": "no-store"},
-        )
-
-    @app.get("/api/builds")
-    async def api_builds():
-        """List every MCP build the UI can show (in-memory + on-disk logs)."""
-        from CoScientist.tools import alembic_tools
-        return JSONResponse({"builds": alembic_tools.web_list_builds()})
-
-    @app.websocket("/builds/ws/{job_id}")
-    async def build_ws(ws: WebSocket, job_id: str):
-        """Stream a build's progress: tail its log, forwarding each structured
-        ``ALEMBIC_EVENT`` line as a typed event and every other line as raw log.
-        The events originate INSIDE the isolated build container and reach here
-        via container stdout -> host build log."""
-        from CoScientist.tools import alembic_tools
-
-        await ws.accept()
-        log_file = alembic_tools.web_build_log_file(job_id)
-        if log_file is None:
-            await ws.send_json({"type": "error", "message": f"unknown build {job_id}"})
-            await ws.close()
-            return
-
-        pos = 0
-        try:
-            while True:
-                try:
-                    text = log_file.read_text(encoding="utf-8", errors="replace")
-                except OSError:
-                    text = ""
-                if len(text) > pos:
-                    chunk = text[pos:]
-                    pos = len(text)
-                    # Keep a trailing partial line for the next read.
-                    if not chunk.endswith("\n"):
-                        last_nl = chunk.rfind("\n")
-                        if last_nl != -1:
-                            pos -= len(chunk) - last_nl - 1
-                            chunk = chunk[:last_nl + 1]
-                        else:
-                            pos -= len(chunk)
-                            chunk = ""
-                    for line in chunk.splitlines():
-                        ev = alembic_tools.parse_event_line(line)
-                        if ev is not None:
-                            await ws.send_json({"type": "event", "event": ev})
-                        elif line.strip():
-                            await ws.send_json({"type": "log", "line": line})
-
-                snap = alembic_tools.web_build_snapshot(job_id)
-                if snap and snap.get("status") in ("done", "failed"):
-                    # Flush any final bytes, then send the terminal status once.
-                    await ws.send_json({"type": "status", **snap})
-                    break
-
-                # Cooperative sleep; also lets a client disconnect surface.
-                await asyncio.sleep(0.6)
-        except WebSocketDisconnect:
-            print(f"[BuildWS] client disconnected ({job_id})")
-        except Exception as exc:  # noqa: BLE001 — never crash the server on a UI tail
-            print(f"[BuildWS] error ({job_id}): {exc}")
+    # --- MCP build dashboard ---
+    # Standalone alembic app mounted as a sub-app: its `/`, `/ws`, `/builds`,
+    # `/builds/{jid}`, `/api/builds*`, `/artifacts` all live under `/alembic`
+    # and never collide with the chat `/ws`. Nothing at the CoScientist root:
+    # the sidebar's MCPBuilder entry goes straight to `/alembic/`.
+    from CoScientist.alembic.web.app import create_app as _create_alembic_app
+    app.mount("/alembic", _create_alembic_app())
 
     # --- Roadmap endpoints ---
     @app.get("/api/users/{user_id}/sessions/{session_id}/roadmap")
@@ -2030,6 +1963,12 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
     run_status_version = int(
         data.get("_run_status_version", runtime.run_versions[key])
     )
+    # A chat message may pin the report language (the settings-modal select on
+    # the pre-#347 UI did this). Absent or invalid means "keep the per-session
+    # choice" — defaulting here would clobber the set_report_language mirror.
+    report_language = data.get("report_language")
+    if report_language not in ("en", "ru"):
+        report_language = None
     if not query:
         await runtime.send(key, {"type": "error", "message": "Empty query"})
         return
@@ -2064,6 +2003,7 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
                 manager,
                 query,
                 run_status_version=run_status_version,
+                report_language=report_language,
             )
 
     except asyncio.CancelledError:
@@ -2114,6 +2054,7 @@ async def _run_chat_invocation(
     query: str,
     *,
     run_status_version: int,
+    report_language: str | None = None,
 ) -> None:
     """Execute one serialized ADK invocation for a session."""
     user_id, session_id = key
@@ -2129,6 +2070,11 @@ async def _run_chat_invocation(
     # (report_language) and reaches the prompt through inject_report_language.
     report_config = ReportConfig()
     await manager._set_state("report_config", report_config.to_state())
+    # Prompt templates read {report_language?} from session state. An explicit
+    # per-message choice overrides the per-session mirror for this run; a
+    # message without one leaves the mirror (and the callback default) alone.
+    if report_language:
+        await manager._set_state("report_language", report_language)
 
     final_response = "No response"
     # The report is the LAST final-response text of the run — the terminal aggregator
