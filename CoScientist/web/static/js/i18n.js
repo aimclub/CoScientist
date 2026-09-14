@@ -23,6 +23,7 @@
       'agent.PlannerAgent.desc': { en: 'Roadmap Planner', ru: 'Планировщик задач' },
       'agent.ToolsViewer.desc': { en: 'Tools Viewer', ru: 'Просмотр инструментов' },
       'agent.KnowledgeGraph.desc': { en: 'Knowledge Graph', ru: 'Граф знаний' },
+      'agent.SessionTrace.desc': { en: 'Session Trace', ru: 'Трассировка сессии' },
       'agent.MCPBuilder.desc': { en: 'MCP Builder', ru: 'Сборщик MCP' },
       'agent.CoderSandbox.desc': { en: 'CoderSandbox', ru: 'Песочница кода' },
       'agent.__settings__.desc': { en: 'Settings', ru: 'Настройки' },

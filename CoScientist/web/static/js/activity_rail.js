@@ -33,10 +33,7 @@
         return `
           <div ${elemIdAttr} ${hrefAttr} onclick="onAgentClick('${a.name}')" class="flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100">
             <span class="material-symbols-outlined ${iconColorClass} text-lg">${a.icon}</span>
-            <div class="flex flex-col">
-              <span class="text-sm ${textColorClass}" data-i18n="agent.${a.name}.desc">${a.desc}</span>
-              <span class="text-[8px] text-outline-variant font-mono uppercase">${a.name}</span>
-            </div>
+            <span class="text-sm ${textColorClass}" data-i18n="agent.${a.name}.desc">${a.desc}</span>
             ${extraDot}
           </div>
         `;
@@ -76,21 +73,20 @@
         if (!el) return;
         if (a.name === name) {
           el.className = "flex items-center gap-3 py-3 px-4 bg-[#272a31] rounded-lg transition-all duration-200 border-l-2 border-[#00daf3] cursor-pointer";
-          el.querySelector('.material-symbols-outlined').className = "material-symbols-outlined text-primary text-lg animate-pulse";
-          el.querySelectorAll('span:not(.material-symbols-outlined)').forEach(s => s.classList.remove('text-outline-variant', 'opacity-50'));
+          const icon = el.querySelector('.material-symbols-outlined');
+          if (icon) icon.className = "material-symbols-outlined text-primary text-lg animate-pulse";
+          const label = el.querySelector('[data-i18n]');
+          if (label) label.className = "text-sm text-on-surface font-semibold";
         } else {
           const highlighted = isAgentHighlightedByDefault(a.name);
           const opacityClass = highlighted ? "opacity-100" : "opacity-80";
           el.className = `flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100`;
 
           const icon = el.querySelector('.material-symbols-outlined');
-          icon.className = `material-symbols-outlined ${highlighted ? 'text-primary' : 'text-outline-variant'} text-lg`;
+          if (icon) icon.className = `material-symbols-outlined ${highlighted ? 'text-primary' : 'text-outline-variant'} text-lg`;
 
-          el.querySelectorAll('span:not(.material-symbols-outlined)').forEach(s => {
-            if (!s.classList.contains('font-mono')) {
-              s.className = `text-sm ${highlighted ? 'text-on-surface font-semibold' : 'text-on-surface-variant font-medium'}`;
-            }
-          });
+          const label = el.querySelector('[data-i18n]');
+          if (label) label.className = `text-sm ${highlighted ? 'text-on-surface font-semibold' : 'text-on-surface-variant font-medium'}`;
         }
       });
     }
@@ -105,13 +101,10 @@
           el.className = `flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100`;
 
           const icon = el.querySelector('.material-symbols-outlined');
-          icon.className = `material-symbols-outlined ${highlighted ? 'text-primary' : 'text-outline-variant'} text-lg`;
+          if (icon) icon.className = `material-symbols-outlined ${highlighted ? 'text-primary' : 'text-outline-variant'} text-lg`;
 
-          el.querySelectorAll('span:not(.material-symbols-outlined)').forEach(s => {
-            if (!s.classList.contains('font-mono')) {
-              s.className = `text-sm ${highlighted ? 'text-on-surface font-semibold' : 'text-on-surface-variant font-medium'}`;
-            }
-          });
+          const label = el.querySelector('[data-i18n]');
+          if (label) label.className = `text-sm ${highlighted ? 'text-on-surface font-semibold' : 'text-on-surface-variant font-medium'}`;
         }
       });
     }
