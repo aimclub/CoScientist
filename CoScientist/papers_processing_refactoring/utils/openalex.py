@@ -168,7 +168,7 @@ def find_doi_by_title(title: str, publication_year: int) -> str | None:
         except (requests.exceptions.RequestException, RuntimeError, ValueError) as exc:
             logger.warning("Crossref DOI lookup failed for %r: %s", title, exc)
     if doi is None:
-        logger.warning("DOI was not found for %r in OpenAlex or Crossref", title)
+        logger.error("DOI was not found for %r in OpenAlex or Crossref", title)
     return doi
 
 
@@ -218,23 +218,50 @@ def _classification_from_work(work: dict[str, Any] | None) -> tuple[str, str] | 
     return domain_name, field_name
 
 
-def get_openalex_domain_and_field(
+def _source_from_work(work: dict[str, Any]) -> str | None:
+    locations = [work.get("primary_location"), work.get("best_oa_location")]
+    raw_locations = work.get("locations")
+    if isinstance(raw_locations, list):
+        locations.extend(raw_locations)
+
+    for location in locations:
+        if not isinstance(location, dict):
+            continue
+        source = location.get("source")
+        source_name = source.get("display_name") if isinstance(source, dict) else None
+        if isinstance(source_name, str) and source_name.strip():
+            return source_name.strip()
+    return None
+
+
+def _metadata_from_work(
+    work: dict[str, Any] | None,
+) -> tuple[str | None, str | None, str | None] | None:
+    if work is None:
+        return None
+
+    classification = _classification_from_work(work)
+    domain, field = classification if classification is not None else (None, None)
+    return domain, field, _source_from_work(work)
+
+
+def get_openalex_metadata(
     *,
     doi: str | None,
     title: str,
     publication_year: int,
-) -> tuple[str, str] | None:
-    """Find domain and field by DOI first, then by exact title."""
+) -> tuple[str | None, str | None, str | None] | None:
+    """Find domain, field, and source by DOI first, then by exact title."""
     if doi:
         try:
-            classification = _classification_from_work(_find_openalex_work_by_doi(doi))
-            if classification is not None:
-                return classification
+            metadata = _metadata_from_work(_find_openalex_work_by_doi(doi))
+            if metadata is not None:
+                return metadata
         except (requests.exceptions.RequestException, RuntimeError, ValueError) as exc:
-            logger.warning("OpenAlex classification lookup by DOI failed for %s: %s", doi, exc)
+            logger.warning("OpenAlex metadata lookup by DOI failed for %s: %s", doi, exc)
 
     try:
-        return _classification_from_work(_find_openalex_work_by_title(title, publication_year))
+        return _metadata_from_work(_find_openalex_work_by_title(title, publication_year))
     except (requests.exceptions.RequestException, RuntimeError, ValueError) as exc:
-        logger.warning("OpenAlex classification lookup by title failed for %r: %s", title, exc)
+        logger.warning("OpenAlex metadata lookup by title failed for %r: %s", title, exc)
         return None

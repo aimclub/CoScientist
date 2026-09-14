@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 
 from CoScientist.papers_processing_refactoring.definitions import CONFIG_PATH
 
@@ -103,8 +103,13 @@ class DatabaseSettings(BaseSettings):
 
     type: str = Field(default="sqlite", alias="DATABASE_TYPE")
     sqlite_path: str = Field(default="./data/db.sqlite", alias="SQLITE_PATH")
-    
-    postgresql_dsn: str = Field(alias="POSTGRESQL_DSN")
+    postgresql_dsn: str | None = Field(default=None, alias="POSTGRESQL_DSN")
+
+    @model_validator(mode="after")
+    def validate_postgresql_dsn(self) -> "DatabaseSettings":
+        if self.type == "postgres" and not self.postgresql_dsn:
+            raise ValueError("POSTGRESQL_DSN is required when DATABASE_TYPE=postgres")
+        return self
 
     model_config = SettingsConfigDict(
         extra="ignore",

@@ -9,7 +9,7 @@ from langchain_core.messages import HumanMessage
 from PIL import Image
 from pydantic import BaseModel, Field, model_validator
 
-from openalex import UNKNOWN_PUBLICATION_YEAR
+from .openalex import UNKNOWN_PUBLICATION_YEAR
 
 logger = logging.getLogger(__name__)
 

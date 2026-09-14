@@ -1,7 +1,7 @@
 from CoScientist.paper_analysis.research_taxonomy import (
     format_domain_subdomain_mapping_for_prompt,
 )
-from openalex import UNKNOWN_PUBLICATION_YEAR
+from .openalex import UNKNOWN_PUBLICATION_YEAR
 
 
 OPENALEX_TAXONOMY_FOR_PROMPT = format_domain_subdomain_mapping_for_prompt()
