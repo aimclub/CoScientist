@@ -12,6 +12,9 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+build/
+lib/
+lib64/
 
 # E2E run traces and stdout: large, per-run, regenerated on every launch
 e2e_*.jsonl
@@ -207,6 +210,12 @@ e2e_case.jsonl
 benchmarks/**/repository_inventory.jsonl
 CoScientist/developer/aaai_coscientist/
 CoScientist/developer/slides/
+
+# Alembic build workdirs and benchmark run outputs: large, regenerated per run
+.alembic
+benchmarks/alembic/runs/
+benchmarks/alembic/tmbench_salvage/
+benchmarks/alembic/pre_comparison
 
 # Exported run folders and stray configs — session data, never source
 *_cossession/
