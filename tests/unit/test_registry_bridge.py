@@ -6,6 +6,7 @@ the rag_tools manager is injected.
 """
 
 import asyncio
+import json
 
 import pytest
 
@@ -128,6 +129,8 @@ def _fake_build(monkeypatch, tmp_path, *, log=_DONE_LOG, returncode=0):
     """A job record whose build subprocess is faked out."""
     from CoScientist.tools import alembic_tools
 
+    # _runner persists the job's meta file; keep it out of the real build list.
+    monkeypatch.setattr(alembic_tools, "LOG_DIR", tmp_path / "builds")
     monkeypatch.setattr(
         alembic_tools.subprocess,
         "Popen",
@@ -286,3 +289,20 @@ def test_a_server_whose_tools_could_not_be_indexed_is_not_called_registered(
     assert rec["status"] == "done"
     assert rec["registered"] is False
     assert "tools could not be indexed" in rec["registration_error"]
+
+
+def test_the_catalogue_outcome_survives_a_restart(monkeypatch, tmp_path):
+    """After a restart the build list is rebuilt from the meta file. A user who
+    never sees why the server is missing from the catalogue cannot fix it."""
+    alembic_tools, rec = _fake_build(monkeypatch, tmp_path, log=_LOOPBACK_DONE_LOG)
+    _stub_registry(monkeypatch, [])
+
+    alembic_tools._runner(rec)
+    monkeypatch.setattr(alembic_tools, "_JOBS", {})  # as after a restart
+
+    meta = json.loads((tmp_path / "builds" / "gget-938c68.json").read_text())
+    snap = alembic_tools.web_build_snapshot("gget-938c68")
+
+    assert meta["registered"] is False
+    assert snap["mcp_url"] == "http://localhost:20162/mcp"
+    assert "A2A_HOST" in snap["registration_error"]

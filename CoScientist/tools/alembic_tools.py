@@ -19,6 +19,8 @@ import logging
 import os
 import re
 import secrets
+import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -57,7 +59,8 @@ _LOCK = threading.Lock()
 # rebuild `_JOBS` without reparsing docker chatter out of the log.
 _META_FIELDS = ("job_id", "repo_url", "status", "started_at", "finished_at",
                 "log_file", "workdir", "pid", "mcp_url", "image", "container",
-                "error")
+                "error", "registered", "registration_error", "image_id",
+                "server_id", "served_at", "image_deleted")
 
 
 def _meta_path(job_id: str) -> Path:
@@ -87,9 +90,22 @@ def _read_job_meta(job_id: str) -> Optional[Dict[str, Any]]:
 
 # Patterns over start_chain.py / alembic.main output.
 _URL_RE = re.compile(r"url\s*:\s*(http://\S+/mcp)")
-_IMAGE_RE = re.compile(r"image\s*:\s*(\S+)")
-_CONTAINER_RE = re.compile(r"container\s*:\s*(\S+)")
+# Anchored to the "MCP server up" summary lines: the earlier "building base
+# image: docker build ..." line must not be read as the tool image.
+_IMAGE_RE = re.compile(r"^\s*image\s*:\s*(\S+)", re.M)
+_CONTAINER_RE = re.compile(r"^\s*container\s*:\s*(\S+)", re.M)
 _STAGE_RE = re.compile(r"STAGE (\d) — (\S+)")
+
+
+def _validator_counts(text: str) -> Optional[Dict[str, Any]]:
+    """Tool and test counts from the validator's closing event in a build log."""
+    for line in reversed(text.splitlines()):
+        if '"validator"' in line and '"counts"' in line:
+            event = parse_event_line(line)
+            if (event and event.get("type") == "stage" and event.get("stage") == "validator"
+                    and event.get("counts")):
+                return event["counts"]
+    return None
 
 
 def _repo_name(repo_url: str) -> str:
@@ -153,6 +169,9 @@ def _runner(rec: Dict[str, Any]) -> None:
     # generated tools/, server.py, setup.sh) land on the host for the web UI
     # to render — instead of dying with the container.
     env["ALEMBIC_HOST_WORKDIR"] = str(workdir)
+    # start_chain tags the committed image alembic-tool:<job_id> as well, so this
+    # build stays reachable after a newer build of the repo moves alembic-tool:<repo>.
+    env["ALEMBIC_JOB_ID"] = rec["job_id"]
     try:
         with open(log_path, "w", encoding="utf-8") as log:
             proc = subprocess.Popen(
@@ -170,6 +189,17 @@ def _runner(rec: Dict[str, Any]) -> None:
         return
     with _LOCK:
         _finalize(rec, returncode)
+    if rec.get("status") == "done" and rec.get("image"):
+        # The id survives the tag moving to a newer build of the same repo.
+        # Best effort: a lookup that fails must not lose the finished build.
+        try:
+            found = _docker("image", "inspect", "-f", "{{.Id}}", rec["image"], timeout=30)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("image id lookup failed for %s: %s", rec["image"], exc)
+        else:
+            if found.returncode == 0 and found.stdout.strip():
+                with _LOCK:
+                    rec["image_id"] = found.stdout.strip()
     _write_job_meta(rec)
     # The catalogue entry is made here, when the build finishes, and not when
     # someone asks about it. An agent that starts a build and reports the job_id
@@ -187,6 +217,7 @@ def _runner(rec: Dict[str, Any]) -> None:
         asyncio.run(_register_in_catalogue(rec))
     except Exception as exc:  # noqa: BLE001 — the build itself succeeded
         logger.warning("catalogue registration thread failed: %s", exc)
+    _write_job_meta(rec)  # the registration outcome has to outlive this process
 
 
 def _snapshot(rec: Dict[str, Any], with_log_tail: bool = True) -> Dict[str, Any]:
@@ -209,6 +240,9 @@ def _snapshot(rec: Dict[str, Any], with_log_tail: bool = True) -> Dict[str, Any]
     stages = _STAGE_RE.findall(text)
     if stages:
         out["stage"] = f"{stages[-1][0]}/5 {stages[-1][1]}"
+    counts = _validator_counts(text)
+    if counts:
+        out["tool_counts"] = counts
     if rec["status"] == "running":
         if with_log_tail:
             out["log_tail"] = "\n".join(text.splitlines()[-_LOG_TAIL_LINES:])
@@ -223,6 +257,11 @@ def _snapshot(rec: Dict[str, Any], with_log_tail: bool = True) -> Dict[str, Any]
         out["mcp_url"] = rec.get("mcp_url")
         out["image"] = rec.get("image")
         out["container"] = rec.get("container")
+        if "registered" in rec:
+            out["registered"] = rec["registered"]
+        for key in ("registration_error", "image_id", "image_deleted", "server_id"):
+            if rec.get(key):
+                out[key] = rec[key]
         if not rec.get("mcp_url"):
             out["note"] = ("Build finished but no MCP URL was printed — the image "
                            f"{rec.get('image') or 'alembic-tool:<repo>'} was likely "
@@ -341,9 +380,8 @@ async def _register_in_catalogue(rec: Dict[str, Any]) -> None:
         return
     rec["registered"] = True  # one attempt per build, however often it is polled
 
-    # Loopback URL in a shared catalogue is a broken entry — other machines
-    # resolve it to their own localhost. Skip registration and tell the user
-    # how to opt in.
+    # A loopback URL in a shared catalogue is a broken entry: other machines
+    # resolve it to their own localhost. Skip registration and say how to opt in.
     from urllib.parse import urlparse
 
     from CoScientist.alembic.remote import _LOCAL_HOSTS
@@ -351,23 +389,27 @@ async def _register_in_catalogue(rec: Dict[str, Any]) -> None:
     if urlparse(rec["mcp_url"]).hostname in _LOCAL_HOSTS:
         rec["registered"] = False
         rec["registration_error"] = (
-            "работает локально, в каталог не добавлен, "
-            "задай A2A_HOST в .env если нужна регистрация"
+            "served on a loopback address, so it was kept out of the shared "
+            "catalogue; set A2A_HOST in .env to a host other machines can reach"
         )
         return
 
     from CoScientist.tools.registry_bridge import register_mcp_server
 
     name = _repo_name(rec["repo_url"])
+    build = f" {rec['job_id']}" if rec.get("job_id") else ""
     try:
         server = await register_mcp_server(
-            rec["mcp_url"], name, description=f"Alembic build of {rec['repo_url']}"
+            rec["mcp_url"], name, description=f"Alembic build{build} of {rec['repo_url']}"
         )
     except Exception as exc:  # noqa: BLE001 — the build itself succeeded
         logger.warning("catalogue registration failed for %s: %s", name, exc)
         rec["registered"] = False
         rec["registration_error"] = f"{type(exc).__name__}: {exc}"
         return
+    # Kept so stopping the server can remove exactly this row; builds of one
+    # repo share the name, and the row id also hashes the url.
+    rec["server_id"] = getattr(server, "server_id", None)
 
     # A server row with no tools behind it is not a registration: retrieval
     # scores tools, so nothing will ever surface it. Say so instead of
@@ -480,6 +522,36 @@ def web_build_log_file(job_id: str) -> Optional[Path]:
     return p if p.exists() else None
 
 
+_BUILD_CONTAINER_RE = re.compile(r"--name (alembic-build-\S+)")
+
+
+def cancel_build(job_id: str) -> Dict[str, Any]:
+    """Stop a running build from the web page.
+
+    Removing the build container makes start_chain's ``docker run`` fail, so
+    start_chain exits and the build thread records the job as failed. Before
+    the container exists (the base image is still building) start_chain itself
+    is stopped.
+    """
+    with _LOCK:
+        rec = _JOBS.get(job_id)
+    job = rec if rec is not None else (_read_job_meta(job_id) or {})
+    if job.get("status") != "running":
+        return {"ok": False, "error": f"build {job_id} is not running"}
+    names = _BUILD_CONTAINER_RE.findall(_read_log(job)) if job.get("log_file") else []
+    if names:
+        _docker("rm", "-f", names[-1], timeout=60)
+    elif job.get("pid"):
+        try:
+            os.kill(job["pid"], signal.SIGTERM)
+        except OSError:
+            pass
+    if rec is not None:
+        with _LOCK:
+            rec["error"] = "cancelled from the web page"
+    return {"ok": True}
+
+
 def web_build_workdir(job_id: str) -> Optional[Path]:
     """The alembic workdir for a build, or None if it never ran / never
     persisted one (pre-per-job-workdir legacy builds)."""
@@ -551,17 +623,25 @@ def web_build_snapshot(job_id: str) -> Optional[Dict[str, Any]]:
     if _WEB_BASE_URL:
         out["progress_url"] = f"{_WEB_BASE_URL}/alembic/builds/{job_id}"
     if status == "done":
-        url = _URL_RE.search(text)
-        image = _IMAGE_RE.search(text)
-        container = _CONTAINER_RE.search(text)
-        out["mcp_url"] = url.group(1) if url else None
-        out["image"] = image.group(1) if image else None
-        out["container"] = container.group(1) if container else None
+        # After a start or stop from the web page the meta file holds the
+        # current container and address. Before that the log's last serve
+        # summary does, and the meta file covers a build whose log is gone.
+        acted = bool(meta.get("served_at"))
+        for key, pattern in (("mcp_url", _URL_RE), ("image", _IMAGE_RE),
+                             ("container", _CONTAINER_RE)):
+            found = pattern.findall(text)
+            out[key] = meta.get(key) if (acted and meta.get(key)) or not found else found[-1]
+        for key in ("registered", "registration_error", "image_id", "image_deleted", "server_id"):
+            if key in meta:
+                out[key] = meta[key]
     elif status == "failed":
         out["error"] = "\n".join(text.splitlines()[-_LOG_TAIL_LINES:])
     stages = _STAGE_RE.findall(text)
     if stages:
         out["stage"] = f"{stages[-1][0]}/5 {stages[-1][1]}"
+    counts = _validator_counts(text)
+    if counts:
+        out["tool_counts"] = counts
     return out
 
 
@@ -603,6 +683,411 @@ def parse_event_line(line: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+# ── Serving controls for the web builds list ─────────────────────────────────
+# Start, restart and stop a finished build's MCP server, and delete its image.
+# Docker is asked about the live state at the moment of the action; the meta
+# file records the outcome and from then on wins over the build log.
+
+_SERVE_SETTLE_SECONDS = 8
+_TOOL_IMAGE = "alembic-tool"
+
+
+def _docker(*args: str, timeout: int = 120) -> subprocess.CompletedProcess:
+    try:
+        return subprocess.run(["docker", *args], capture_output=True, text=True,
+                              timeout=timeout, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return subprocess.CompletedProcess(["docker", *args], 1, "", str(exc))
+
+
+def docker_inventory() -> Dict[str, Any]:
+    """Images (id to size), tags (tag to id) and containers (name to image id and
+    running flag) on the local daemon, read in three docker calls."""
+    inv: Dict[str, Any] = {"images": {}, "tags": {}, "containers": {}}
+    r = _docker("images", "--no-trunc", "--format",
+                "{{.ID}}|{{.Repository}}:{{.Tag}}|{{.Size}}", timeout=30)
+    for line in r.stdout.splitlines() if r.returncode == 0 else []:
+        parts = line.split("|", 2)
+        if len(parts) != 3:
+            continue
+        image_id, tag, size = parts
+        inv["images"][image_id] = size
+        if "<none>" not in tag:
+            inv["tags"][tag] = image_id
+    names = _docker("ps", "-aq", timeout=30).stdout.split()
+    if names:
+        # docker inspect still prints the containers it found when one vanished
+        # in between, so the output is read whatever the exit code.
+        r = _docker("inspect", "-f", "{{.Name}}|{{.Image}}|{{.State.Running}}", *names,
+                    timeout=30)
+        for line in r.stdout.splitlines():
+            parts = line.split("|", 2)
+            if len(parts) == 3:
+                inv["containers"][parts[0].lstrip("/")] = {
+                    "image_id": parts[1], "running": parts[2] == "true"}
+    return inv
+
+
+def job_image(job: Dict[str, Any], inv: Dict[str, Any]) -> Optional[str]:
+    """The id of the image a build serves from: its own, never alembic-tool:<repo>.
+
+    That tag moves to every newer build of the repository, so starting from it
+    would serve another build under this build's name.
+    """
+    if job.get("image_deleted"):
+        return None
+    if job.get("image_id") in inv["images"]:
+        return job["image_id"]
+    own = inv["tags"].get(f"{_TOOL_IMAGE}:{job.get('job_id')}")
+    if own:
+        return own
+    container = inv["containers"].get(job.get("container") or "")
+    if container and container["image_id"] in inv["images"]:
+        return container["image_id"]
+    return None
+
+
+def _container_state(name: Optional[str]) -> Dict[str, Any]:
+    if not name:
+        return {"exists": False, "running": False}
+    r = _docker("inspect", "-f", "{{.State.Running}}|{{.Image}}", name, timeout=30)
+    if r.returncode != 0 or "|" not in r.stdout:
+        return {"exists": False, "running": False}
+    running, image_id = r.stdout.strip().split("|", 1)
+    port = None
+    if running == "true":
+        p = _docker("port", name, "8000/tcp", timeout=30)
+        if p.returncode == 0 and p.stdout.strip():
+            port = p.stdout.strip().splitlines()[0].rsplit(":", 1)[-1]
+    return {"exists": True, "running": running == "true", "image_id": image_id, "port": port}
+
+
+def _stays_up(name: str) -> bool:
+    """A server that cannot start (no server.py, broken venv) exits within a
+    second or two; still running after the settle time rules that out."""
+    deadline = time.monotonic() + _SERVE_SETTLE_SECONDS
+    while True:
+        if not _container_state(name)["running"]:
+            return False
+        if time.monotonic() >= deadline:
+            return True
+        time.sleep(1)
+
+
+def _exited_error(name: str) -> str:
+    logs = _docker("logs", "--tail", "20", name, timeout=30)
+    return (f"MCP server container {name} exited right after start:\n"
+            f"{(logs.stdout + logs.stderr).strip()[-1500:]}")
+
+
+def _advertised_url(port: str) -> str:
+    """The address other machines reach the server at, resolved the way
+    start_chain does when it serves (A2A_HOST, else localhost)."""
+    from CoScientist.alembic.remote import advertised_url, resolve_advertise_host
+
+    return advertised_url(resolve_advertise_host(a2a_host=os.environ.get("A2A_HOST")), port)
+
+
+def _unregister(server_id: str) -> Optional[str]:
+    """Remove a catalogue row. Returns the error text, or None once it is gone."""
+    from CoScientist.tools.registry_bridge import unregister_mcp_server
+
+    try:
+        asyncio.run(unregister_mcp_server(server_id))
+    except Exception as exc:  # noqa: BLE001  reported to the page, never raised
+        return f"{type(exc).__name__}: {exc}"
+    return None
+
+
+def _job(job_id: str) -> tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    """(the in-memory record or None, everything known about the build)."""
+    snap = web_build_snapshot(job_id) or {}
+    meta = _read_job_meta(job_id) or {}
+    with _LOCK:
+        rec = _JOBS.get(job_id)
+        live = dict(rec) if rec is not None else {}
+    return rec, {**snap, **meta, **live, "job_id": job_id}
+
+
+def _update_job(job: Dict[str, Any], rec: Optional[Dict[str, Any]],
+                fields: Dict[str, Any]) -> None:
+    """Apply an action's outcome to the in-memory record, if any, and the meta file."""
+    if rec is not None:
+        with _LOCK:
+            rec.update(fields)
+            current = dict(rec)
+        _write_job_meta(current)
+        return
+    meta = {k: job.get(k) for k in _META_FIELDS}
+    meta.update(fields)
+    _write_job_meta(meta)
+
+
+def _log_event(job: Dict[str, Any], text: str) -> None:
+    """Append to the build log, which is the build's history."""
+    path = Path(job.get("log_file") or LOG_DIR / f"{job['job_id']}.log")
+    try:
+        with open(path, "a", encoding="utf-8") as fh:
+            fh.write(f"[web] {time.strftime('%Y-%m-%d %H:%M:%S')} {text}\n")
+    except OSError as exc:
+        logger.warning("could not append to %s: %s", path, exc)
+
+
+def _refresh_registration(job: Dict[str, Any], mcp_url: str) -> Dict[str, Any]:
+    """The build-time catalogue check, run against the server's current address.
+
+    server_id hashes the url, so a new address is a new catalogue row: the row
+    for the previous address is removed first.
+    """
+    notes = []
+    old_id = job.get("server_id")
+    same_url = job.get("mcp_url") == mcp_url
+    if old_id and not same_url:
+        err = _unregister(old_id)
+        if err:
+            notes.append(f"the entry for {job.get('mcp_url')} was not removed: {err}")
+    probe: Dict[str, Any] = {"status": "done", "mcp_url": mcp_url,
+                             "repo_url": job["repo_url"], "job_id": job["job_id"]}
+    try:
+        asyncio.run(_register_in_catalogue(probe))
+    except Exception as exc:  # noqa: BLE001  the server runs, only the catalogue step failed
+        probe.update(registered=False, registration_error=f"{type(exc).__name__}: {exc}")
+    errors = [e for e in (probe.get("registration_error"), *notes) if e]
+    return {
+        "mcp_url": mcp_url,
+        "registered": bool(probe.get("registered")),
+        # A failed re-registration at the same address leaves the old row in place.
+        "server_id": probe.get("server_id") or (old_id if same_url else None),
+        "registration_error": "; ".join(errors) or None,
+    }
+
+
+def _serve_new_container(job: Dict[str, Any], image_ref: str) -> tuple[Optional[str], str]:
+    """Serve the image in a new container through start_chain --serve-only, so
+    the port, env file, GPU flag and start check match a build's own serve."""
+    cmd = [sys.executable, str(START_CHAIN), job["repo_url"], "--serve-only", "--image", image_ref]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, cwd=PROJECT_ROOT,
+                           timeout=300, check=False)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f"could not run start_chain: {exc}"
+    output = (r.stdout + r.stderr).strip()
+    _log_event(job, f"serving {image_ref} in a new container\n{output}")
+    containers = _CONTAINER_RE.findall(r.stdout)
+    if r.returncode != 0 or not containers:
+        return None, output[-1500:] or f"start_chain exited with {r.returncode}"
+    return containers[-1], ""
+
+
+def _now_serving(job: Dict[str, Any], rec: Optional[Dict[str, Any]], name: str,
+                 verb: str, **fields: Any) -> Dict[str, Any]:
+    """Finish a start or restart: re-check registration at the container's
+    current address, record the outcome and log it."""
+    port = _container_state(name).get("port")
+    if not port:
+        return {"ok": False, "error": f"{name} is running but publishes no port for 8000"}
+    fields.update(_refresh_registration(job, _advertised_url(port)), served_at=time.time())
+    _update_job(job, rec, fields)
+    _log_event(job, f"{verb} {name}; serving at {fields['mcp_url']}")
+    return {"ok": True, **fields}
+
+
+def start_build_server(job_id: str) -> Dict[str, Any]:
+    """Start a finished build's MCP server and re-check its catalogue registration.
+
+    The build's container comes back with ``docker start``, keeping its port
+    and address. A new container is made from the build's image only when that
+    container is gone or refuses to start (its port was taken meanwhile).
+    """
+    rec, job = _job(job_id)
+    if job.get("status") != "done":
+        return {"ok": False, "error": "only a finished build has a server to start"}
+    inv = docker_inventory()
+    image = job_image(job, inv)
+    if not image:
+        return {"ok": False, "error": "this build has no image of its own on this host"}
+    name = job.get("container")
+    state = _container_state(name)
+    if state["running"]:
+        return {"ok": False, "error": f"{name} is already running"}
+    if state["exists"] and state.get("image_id") == image and _docker("start", name).returncode == 0:
+        if not _stays_up(name):
+            return {"ok": False, "error": _exited_error(name)}
+    else:
+        own_tag = f"{_TOOL_IMAGE}:{job_id}"
+        new_name, error = _serve_new_container(job, own_tag if inv["tags"].get(own_tag) == image else image)
+        if not new_name:
+            return {"ok": False, "error": error}
+        if state["exists"]:
+            _docker("rm", name)  # the container this one replaces
+        name = new_name
+    return _now_serving(job, rec, name, "started", container=name, image_id=image)
+
+
+def restart_build_server(job_id: str) -> Dict[str, Any]:
+    """Restart a running build server and re-check its catalogue registration."""
+    rec, job = _job(job_id)
+    name = job.get("container")
+    if not _container_state(name)["running"]:
+        return {"ok": False, "error": "the server is not running; use Start"}
+    r = _docker("restart", name)
+    if r.returncode != 0:
+        return {"ok": False, "error": f"docker restart failed: {(r.stderr or r.stdout).strip()[-500:]}"}
+    if not _stays_up(name):
+        return {"ok": False, "error": _exited_error(name)}
+    return _now_serving(job, rec, name, "restarted")
+
+
+def stop_build_server(job_id: str) -> Dict[str, Any]:
+    """Stop a build server. Once the stop succeeds, a registered server leaves
+    the shared catalogue; when that removal fails, the next Stop retries it."""
+    rec, job = _job(job_id)
+    name = job.get("container")
+    if _container_state(name)["running"]:
+        r = _docker("stop", name)
+        if r.returncode != 0:
+            return {"ok": False, "error": f"docker stop failed: {(r.stderr or r.stdout).strip()[-500:]}"}
+    fields: Dict[str, Any] = {"served_at": time.time()}
+    result: Dict[str, Any] = {"ok": True}
+    server_id = job.get("server_id")
+    if job.get("registered") and server_id:
+        err = _unregister(server_id)
+        if err:
+            result["warning"] = fields["registration_error"] = (
+                f"stopped, but the catalogue entry was not removed: {err}")
+        else:
+            fields.update(registered=False, server_id=None,
+                          registration_error="stopped; removed from the shared catalogue")
+    _update_job(job, rec, fields)
+    _log_event(job, f"stopped {name}" + (f"; {result['warning']}" if "warning" in result else ""))
+    return {**result, **{k: v for k, v in fields.items() if k != "served_at"}}
+
+
+def _builds_sharing(image: str, job_id: str, inv: Dict[str, Any]) -> list:
+    """Other finished builds whose image resolves to the same image id. Older
+    builds without a job tag can share one: both served from alembic-tool:<repo>."""
+    return [b["job_id"] for b in web_list_builds()
+            if b.get("job_id") != job_id and b.get("status") == "done"
+            and job_image(b, inv) == image]
+
+
+def delete_build_image(job_id: str, include_shared: bool = False) -> Dict[str, Any]:
+    """Delete a build's image together with its containers and every tag on it.
+
+    When other builds use the same image, nothing happens unless
+    ``include_shared`` confirms it; they all lose the image then. Registered
+    servers leave the catalogue first, and while that fails the image stays, so
+    no catalogue row is left pointing at a server that cannot come back.
+    """
+    rec, job = _job(job_id)
+    inv = docker_inventory()
+    image = job_image(job, inv)
+    if not image:
+        return {"ok": False, "error": "this build has no image of its own on this host"}
+    shared = _builds_sharing(image, job_id, inv)
+    if shared and not include_shared:
+        return {"ok": False, "shared_with": shared,
+                "error": f"the image is also the image of {', '.join(shared)}; "
+                         "deleting it takes it from those builds too"}
+    affected = [(rec, job)] + [_job(other) for other in shared]
+    unregistered = []
+    for owner_rec, owner in affected:
+        if owner.get("registered") and owner.get("server_id"):
+            err = _unregister(owner["server_id"])
+            if err:
+                for done_rec, done in unregistered:
+                    _update_job(done, done_rec, {"registered": False, "server_id": None})
+                return {"ok": False, "error": f"the catalogue entry of {owner['job_id']} could not "
+                                              f"be removed, so the image was kept: {err}"}
+            unregistered.append((owner_rec, owner))
+    # Exact image id: `docker ps --filter ancestor=` also matches containers of
+    # images built on top of this one.
+    containers = [name for name, c in inv["containers"].items() if c["image_id"] == image]
+    for container in containers:
+        _docker("rm", "-f", container)
+    tags = [tag for tag, image_id in inv["tags"].items() if image_id == image]
+    r = _docker("rmi", *(tags or [image]))
+    if r.returncode != 0:
+        for done_rec, done in unregistered:
+            _update_job(done, done_rec, {"registered": False, "server_id": None})
+        return {"ok": False, "error": f"docker rmi failed: {(r.stderr or r.stdout).strip()[-500:]}"}
+    now = time.time()
+    for owner_rec, owner in affected:
+        fields: Dict[str, Any] = {"image_deleted": True, "image_id": None,
+                                  "registration_error": None, "served_at": now}
+        if (owner_rec, owner) in unregistered:
+            fields.update(registered=False, server_id=None)
+        _update_job(owner, owner_rec, fields)
+        together = "" if owner is job else f" together with {job_id}"
+        _log_event(owner, f"deleted image {image}{together} (tags: {', '.join(tags) or 'none'}; "
+                          f"containers: {', '.join(containers) or 'none'})")
+    return {"ok": True, "removed_tags": tags, "removed_containers": containers,
+            "also_deleted_for": shared}
+
+
+def non_runnable_builds(inv: Dict[str, Any]) -> list:
+    """Builds that cannot be served again from this host: failed ones, and
+    finished ones without an image of their own. Running builds are left out."""
+    return [b for b in web_list_builds()
+            if b.get("status") != "running"
+            and not (b.get("status") == "done" and job_image(b, inv))]
+
+
+def _forget_build(job_id: str, inv: Dict[str, Any]) -> Optional[str]:
+    """Remove one build from the history. Returns why it was kept, or None."""
+    rec, job = _job(job_id)
+    if job.get("status") == "running":
+        return "the build is running"
+    if job.get("registered") and job.get("server_id"):
+        err = _unregister(job["server_id"])
+        if err:
+            return f"its catalogue entry could not be removed: {err}"
+        _update_job(job, rec, {"registered": False, "server_id": None})
+    container = job.get("container")
+    state = inv["containers"].get(container or "")
+    if state and state["running"]:
+        return f"{container} is running"
+    if state:
+        _docker("rm", container)
+        if state["image_id"] not in inv["tags"].values():
+            # An untagged image that only this container kept alive is garbage
+            # now; rmi refuses when another container or image still needs it.
+            _docker("rmi", state["image_id"])
+    artifacts = LOG_DIR / job_id
+    if artifacts.exists():
+        shutil.rmtree(artifacts, ignore_errors=True)
+    if artifacts.exists():
+        # Builds from before start_chain handed the workdir back to the user
+        # left root-owned files, which a container can remove.
+        _docker("run", "--rm", "-v", f"{LOG_DIR}:/builds", "--entrypoint", "rm",
+                "alembic-base:latest", "-rf", f"/builds/{job_id}")
+    if artifacts.exists():
+        return f"could not delete {artifacts}"
+    for path in {Path(job.get("log_file") or LOG_DIR / f"{job_id}.log"), _meta_path(job_id)}:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError as exc:
+            return f"could not delete {path}: {exc}"
+    with _LOCK:
+        _JOBS.pop(job_id, None)
+    return None
+
+
+def clear_non_runnable_builds() -> Dict[str, Any]:
+    """Remove every non-runnable build from the history: artifacts, stopped
+    container, log and meta file. A build that cannot be removed completely
+    stays, and the result says why."""
+    inv = docker_inventory()
+    removed, kept = [], []
+    for b in non_runnable_builds(inv):
+        reason = _forget_build(b["job_id"], inv)
+        if reason:
+            kept.append({"job_id": b["job_id"], "reason": reason})
+        else:
+            removed.append(b["job_id"])
+    return {"ok": not kept, "removed": removed, "kept": kept}
+
+
 # ── Session-bundle helpers ────────────────────────────────────────────────────
 # Called by session_bundle.py to snapshot / restore the in-memory job registry
 # when exporting or importing a .cossession.zip archive.
@@ -640,5 +1125,8 @@ def import_jobs_snapshot(jobs: list) -> None:
 
 __all__ = ["ALEMBIC_TOOLS", "build_mcp_server", "check_mcp_build", "list_mcp_builds",
            "web_build_log_file", "web_build_snapshot", "web_build_workdir",
-           "web_build_repo_url", "web_list_builds", "parse_event_line",
+           "web_build_repo_url", "web_list_builds", "cancel_build", "parse_event_line",
+           "docker_inventory", "job_image", "start_build_server", "restart_build_server",
+           "stop_build_server", "delete_build_image", "non_runnable_builds",
+           "clear_non_runnable_builds",
            "export_jobs_snapshot", "import_jobs_snapshot", "LOG_DIR"]

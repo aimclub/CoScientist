@@ -30,6 +30,7 @@ import random
 import secrets
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -179,10 +180,10 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
         cmd += ["--gpus", ns.gpus]
     cmd += _mount_args(repo, ns)
     # Bind-mount a host-side workdir into the container's ALEMBIC_WORKDIR so
-    # the pipeline's on-disk artifacts (exploration.md, plan.json, output/*)
-    # survive after the build container exits. Used by the web UI to render
-    # per-job reports; opt-in via env so nothing changes when unset.
-    host_workdir = os.environ.get("ALEMBIC_HOST_WORKDIR")
+    # the web UI can render the pipeline's artifacts while the build runs.
+    # Opt-in via env. A bind mount resolves on the daemon's filesystem, so the
+    # local path exists only for the local daemon.
+    host_workdir = None if ns.context else os.environ.get("ALEMBIC_HOST_WORKDIR")
     if host_workdir:
         Path(host_workdir).mkdir(parents=True, exist_ok=True)
         cmd += ["-v", f"{host_workdir}:/work/.alembic"]
@@ -198,6 +199,8 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
         cmd += ["--until", ns.until]
 
     r = _run(cmd)
+    if host_workdir:
+        _return_to_host_user(ns, host_workdir)
     if r.returncode != 0:
         sys.stderr.write(
             f"\n[start-chain] pipeline failed (exit {r.returncode}).\n"
@@ -239,7 +242,76 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
         sys.exit(c.returncode)
     _run([*docker_cli(context=ns.context), "rm", cname],
          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if host_workdir:
+        _bake_workdir(ns, tool_image, host_workdir)
+    job_id = os.environ.get("ALEMBIC_JOB_ID")
+    if job_id:
+        # alembic-tool:<repo> (what the benchmark reads) moves to every newer
+        # build of the repo; the job tag keeps pointing at this one.
+        job_image = f"{TOOL_REPO}:{job_id}"
+        if _run([*docker_cli(context=ns.context), "tag", tool_image, job_image]).returncode == 0:
+            return job_image
     return tool_image
+
+
+def _return_to_host_user(ns: argparse.Namespace, host_workdir: str) -> None:
+    """Give the bind-mounted workdir back to the invoking user.
+
+    The build container runs as root, so everything it wrote through the mount
+    is root-owned on the host, and the user cannot delete it without sudo.
+    """
+    if not hasattr(os, "getuid"):
+        return
+    _run([*docker_cli(context=ns.context), "run", "--rm",
+          "-v", f"{host_workdir}:/w", "--entrypoint", "chown", BASE_IMAGE,
+          "-R", f"{os.getuid()}:{os.getgid()}", "/w"],
+         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _bake_workdir(ns: argparse.Namespace, tool_image: str, host_workdir: str) -> None:
+    """Copy the bind-mounted workdir into the tool image, at the same path.
+
+    ``docker commit`` leaves bind mounts out, so the committed image has an
+    empty /work/.alembic and the serve container finds no server.py. The path
+    stays the same, so venv shebangs and setup.sh paths remain valid.
+    pipeline.log stays out: agent stderr in it may echo API keys.
+    """
+    docker = docker_cli(context=ns.context)
+    tmp = f"alembic-bake-{secrets.token_hex(3)}"
+    print(f"[start-chain] baking {host_workdir} into {tool_image}", flush=True)
+    if _run([*docker, "create", "--name", tmp, tool_image]).returncode != 0:
+        sys.exit(1)
+    try:
+        tar = subprocess.Popen(
+            ["tar", "-C", host_workdir, "--exclude=pipeline.log", "-cf", "-", "."],
+            stdout=subprocess.PIPE,
+        )
+        cp = _run([*docker, "cp", "-", f"{tmp}:/work/.alembic"], stdin=tar.stdout)
+        tar.stdout.close()
+        if tar.wait() != 0 or cp.returncode != 0:
+            sys.exit(cp.returncode or 1)
+        if _run([*docker, "commit", tmp, tool_image]).returncode != 0:
+            sys.exit(1)
+    finally:
+        _run([*docker, "rm", tmp], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+# A server that cannot start (no server.py, broken venv) exits within a second
+# or two. A container still running after this long has got past that.
+SERVE_SETTLE_SECONDS = 8
+
+
+def _stays_up(ns: argparse.Namespace, cname: str) -> bool:
+    deadline = time.monotonic() + SERVE_SETTLE_SECONDS
+    while time.monotonic() < deadline:
+        r = subprocess.run(
+            [*docker_cli(context=ns.context), "inspect", "-f", "{{.State.Running}}", cname],
+            capture_output=True, text=True, env=docker_env(api_version=_API_VERSION),
+        )
+        if r.returncode != 0 or r.stdout.strip() != "true":
+            return False
+        time.sleep(1)
+    return True
 
 
 def serve_image(repo_url: str, tool_image: str, ns: argparse.Namespace) -> None:
@@ -260,6 +332,12 @@ def serve_image(repo_url: str, tool_image: str, ns: argparse.Namespace) -> None:
     r = _run(cmd)
     if r.returncode != 0:
         sys.exit(r.returncode)
+    if not _stays_up(ns, cname):
+        _run([*docker_cli(context=ns.context), "logs", "--tail", "30", cname])
+        sys.stderr.write(
+            f"\n[start-chain] MCP server container {cname} exited right after start.\n"
+        )
+        sys.exit(1)
 
     host = resolve_advertise_host(
         explicit=ns.advertise_host,
@@ -310,6 +388,13 @@ def parse_args() -> argparse.Namespace:
                          "inside the build container (TM-Bench input data).")
     ap.add_argument("--no-serve", action="store_true",
                     help="Build and commit only; do not launch the MCP server")
+    ap.add_argument("--serve-only", action="store_true",
+                    help="Skip the pipeline entirely and serve an already-committed "
+                         "image. Fails if that image does not exist on the target "
+                         "daemon.")
+    ap.add_argument("--image", default=None,
+                    help="Image to serve with --serve-only. Default: "
+                         "alembic-tool:<repo>.")
     ap.add_argument("--context", default=None,
                     help="Docker context to build and serve on (a remote daemon). "
                          "Default: the local daemon.")
@@ -347,6 +432,18 @@ def main() -> None:
         ns.gpus = "all"
         where = f" on {ns.context}" if ns.context else ""
         print(f"[start-chain] GPU detected{where} — passing --gpus all.")
+    if ns.serve_only:
+        image = ns.image or f"{TOOL_REPO}:{get_repo_name(ns.repo_url)}"
+        check = _run([*docker_cli(context=ns.context), "image", "inspect", image],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if check.returncode != 0:
+            sys.stderr.write(
+                f"[start-chain] --serve-only: image {image} not found on "
+                f"{ns.context or 'the local daemon'}; run a full build first.\n"
+            )
+            sys.exit(1)
+        serve_image(ns.repo_url, image, ns)
+        return
     ensure_base_image(BASE_DOCKERFILE, PROJECT_ROOT,
                       platform=ns.platform, rebuild=ns.rebuild_base,
                       context=ns.context)
