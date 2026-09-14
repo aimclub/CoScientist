@@ -160,11 +160,26 @@ async def generate_via_moosechem(
 
     # Write hypotheses directly into state so downstream consumers
     # (orchestrator, tests) find them without depending on LLM relay.
+    #
+    # [2026-09-14] Also stash research_question here as last_research_question.
+    # Observed the LLM (gpt-4o-mini) omitting research_question when calling
+    # run_critic_loop right after this tool, after a long tool chain -- ADK
+    # rejects the call outright ("mandatory input parameters are not present"),
+    # and on retry the model has sometimes re-run generate_via_moosechem from
+    # scratch instead of just fixing the missing argument (wastes the ~20-60min
+    # MooseChem run). This state entry is the fallback source run_critic_loop
+    # reads from when the model doesn't pass research_question explicitly.
+    # research_question itself is still required by the critic loop logic
+    # downstream (loop_coordinator.run_critic_loop) -- this doesn't change that,
+    # it just makes sure it always gets a value from a reliable source instead
+    # of solely depending on the LLM re-stating it correctly every time.
     if tool_context is not None:
         try:
             tool_context.state["generated_hypotheses"] = {"hypotheses": hypotheses_dicts}
+            tool_context.state["last_research_question"] = research_question
             if getattr(tool_context, "actions", None) is not None:
                 tool_context.actions.state_delta["generated_hypotheses"] = {"hypotheses": hypotheses_dicts}
+                tool_context.actions.state_delta["last_research_question"] = research_question
         except Exception:
             pass
 
@@ -178,7 +193,19 @@ async def generate_via_moosechem(
 @track(name="run_critic_loop")
 async def run_critic_loop(
     hypotheses_json: str,
-    research_question: str,
+    # [2026-09-14] Made optional (was: required `str`). ADK enforces
+    # "required" at the call layer, before this function body ever runs --
+    # so when the LLM omitted this argument, ADK rejected the whole call
+    # with "mandatory input parameters are not present" and the function
+    # never got a chance to fall back to anything. Observed the model
+    # (gpt-4o-mini) drop this argument after a long tool chain, then on
+    # retry re-run generate_via_moosechem from scratch instead of just
+    # re-calling this with the missing arg -- wasting a full MooseChem run
+    # (~20-60 min). research_question is still REQUIRED by the critic loop
+    # logic below (loop_coordinator.run_critic_loop) -- this does not relax
+    # that. It only adds a reliable fallback source (state, written by
+    # generate_via_moosechem) for the rare case the model doesn't pass it.
+    research_question: Optional[str] = None,
     tool_context: Optional[ToolContext] = None,
 ) -> Dict[str, Any]:
     """
@@ -191,6 +218,12 @@ async def run_critic_loop(
     Args:
         hypotheses_json: JSON string of HypothesisList with 'hypotheses' key.
         research_question: The original research question for context.
+            Optional at the call layer so ADK doesn't hard-reject the tool
+            call when the model omits it; falls back to
+            state["last_research_question"] (set by generate_via_moosechem)
+            when not provided. Still effectively required -- if neither the
+            argument nor the state fallback is available, this is an empty
+            string and the critic loses question context.
 
     Returns:
         Dict with 'hypotheses' key containing the refined HypothesisList.
@@ -200,9 +233,31 @@ async def run_critic_loop(
     if tool_context:
         loop_coordinator = tool_context.state.get("loop_coordinator")
         audit = tool_context.state.get("hypothesis_audit")
+        if not research_question:
+            research_question = tool_context.state.get("last_research_question", "")
 
-    parsed = json.loads(hypotheses_json) if isinstance(hypotheses_json, str) else hypotheses_json
-    raw_hypotheses = parsed.get("hypotheses", []) if isinstance(parsed, dict) else []
+    # Prefer hypotheses already written to state by generate_via_moosechem —
+    # more reliable than depending on the LLM to re-serialize a potentially
+    # huge JSON (formulas, special chars) back into a string argument.
+    # On large payloads the model sometimes breaks escaping
+    # (json.JSONDecodeError: Invalid \\escape), crashing the whole critic step
+    # instead of just running it.
+    raw_hypotheses = None
+    if tool_context:
+        state_data = tool_context.state.get("generated_hypotheses")
+        if isinstance(state_data, dict) and state_data.get("hypotheses"):
+            raw_hypotheses = state_data["hypotheses"]
+
+    if raw_hypotheses is None:
+        try:
+            parsed = json.loads(hypotheses_json) if isinstance(hypotheses_json, str) else hypotheses_json
+            raw_hypotheses = parsed.get("hypotheses", []) if isinstance(parsed, dict) else []
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "[run_critic_loop] hypotheses_json malformed (%s) and no state fallback available; proceeding with empty list",
+                exc,
+            )
+            raw_hypotheses = []
 
     if loop_coordinator is None:
         # No critic loop available — return as-is (standalone/fallback).
