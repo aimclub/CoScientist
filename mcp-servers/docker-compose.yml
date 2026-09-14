@@ -26,8 +26,8 @@ services:
   
   chemical-mcp-server:
     build:
-      context: ./chemical-mcp-server
-      dockerfile: Dockerfile
+      context: ..
+      dockerfile: mcp-servers/chemical-mcp-server/Dockerfile
     ports:
       - "7332:7331"
     volumes:
