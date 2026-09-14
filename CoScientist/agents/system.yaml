@@ -301,7 +301,6 @@ agents:
       before_tool: [WebSearchLimiter, resolve_link_refs]
       after_tool: [log_research_tool_calls, register_tool_result_links]
       after_model: [expand_link_refs, guard_unknown_tools]
-    hitl: true
     # Every agent asks before acting on a decision; inert until HITL__ENABLED.
     hitl: true
     a2a:
