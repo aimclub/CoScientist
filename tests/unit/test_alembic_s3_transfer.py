@@ -35,6 +35,7 @@ s3t = _load()
 
 _ALL_ENV = s3t.S3_ENV + tuple(f"S3__{name}" for name in s3t.S3_ENV) + (
     "S3_PRESIGN_EXPIRATION", "S3_REGION", "S3_HTTP_TIMEOUT", "S3_HTTP_MAX_BYTES",
+    "S3_UPLOAD_MAX_BYTES", "S3__EXTERNAL_ENDPOINT_URL",
 )
 
 
@@ -696,6 +697,7 @@ def test_maybe_upload_returns_bucket_alongside_the_key_and_url(tmp_path, monkeyp
         "bucket": "bucket",
         "s3_key": "prefix/output_path/data.csv",
         "presigned_url": uploaded["presigned_url"],
+        "expires_in": 3600,
     }
 
 
@@ -835,13 +837,15 @@ def test_maybe_upload_logs_the_failure_reason_to_stderr(tmp_path, monkeypatch, c
             raise RuntimeError("network down")
 
     monkeypatch.setattr(s3t, "_client_factory", lambda: _BrokenClient())
+    src = tmp_path / "result.csv"
+    src.write_text("x", encoding="utf-8")
 
-    out = s3t.maybe_upload("/tmp/some/result.csv", "prefix", "result_path")
+    out = s3t.maybe_upload(str(src), "prefix", "result_path")
 
     assert out is None
     err = capsys.readouterr().err
     assert "[s3] upload failed" in err
-    assert "/tmp/some/result.csv" in err
+    assert str(src) in err
     assert "RuntimeError" in err   # exception type is logged...
     assert "network down" in err   # ...alongside a (truncated) message
 
@@ -955,7 +959,7 @@ def test_client_factory_passes_a_region_default_and_override(monkeypatch):
     calls = []
 
     class _FakeConfig:
-        def __init__(self, signature_version):
+        def __init__(self, signature_version, **bounds):
             self.signature_version = signature_version
 
     fake_boto3 = types.ModuleType("boto3")
@@ -1084,3 +1088,98 @@ def test_publish_result_output_is_found_by_the_real_artifact_walker(tmp_path, mo
 
     assert len(artifacts) == 1
     assert artifacts[0]["s3_uri"] == "s3://bucket/prefix/output_path/result.csv"
+
+
+# ── bounds, external endpoint, upload cap ─────────────────────────────────
+
+def test_client_factory_bounds_every_call_and_takes_an_endpoint_override(monkeypatch):
+    """Same bounds as paper_parser/s3_connection.py (#349): an endpoint that
+    drops packets must fail in seconds, not hold the tool call for minutes."""
+    _clear_env(monkeypatch)
+    _set_env(monkeypatch)
+    import boto3
+
+    seen = {}
+    monkeypatch.setattr(boto3, "client", lambda service, **kw: seen.update(kw) or object())
+
+    s3t._client_factory()
+    config = seen["config"]
+    assert (config.connect_timeout, config.read_timeout) == (5, 30)
+    assert config.retries["max_attempts"] == 3
+    assert seen["endpoint_url"] == "https://s3.example.com"
+
+    s3t._client_factory("http://localhost:9000")
+    assert seen["endpoint_url"] == "http://localhost:9000"
+
+
+def test_maybe_upload_presigns_for_the_external_endpoint(tmp_path, monkeypatch):
+    """The serve container uploads through its own endpoint, while the link is
+    signed for the host the caller opens it from."""
+    _clear_env(monkeypatch)
+    _set_env(monkeypatch)
+    monkeypatch.setenv("S3__EXTERNAL_ENDPOINT_URL", "http://localhost:9000")
+    inner, outer = _FakeUploadClient(), _FakeUploadClient()
+    monkeypatch.setattr(
+        s3t, "_client_factory", lambda endpoint_url=None: outer if endpoint_url else inner)
+
+    src = tmp_path / "a.csv"
+    src.write_text("x", encoding="utf-8")
+    assert s3t.maybe_upload(str(src), "prefix", "out_path") is not None
+
+    assert len(inner.uploads) == 1 and not outer.uploads
+    assert outer.presign_calls and not inner.presign_calls
+
+
+def test_maybe_upload_presigns_with_the_same_client_without_an_external_endpoint(tmp_path, monkeypatch):
+    _clear_env(monkeypatch)
+    _set_env(monkeypatch)
+    monkeypatch.setenv("S3__EXTERNAL_ENDPOINT_URL", "https://s3.example.com")
+    client = _FakeUploadClient()
+    monkeypatch.setattr(s3t, "_client_factory", lambda endpoint_url=None: client)
+
+    src = tmp_path / "a.csv"
+    src.write_text("x", encoding="utf-8")
+    s3t.maybe_upload(str(src), "prefix", "out_path")
+
+    assert len(client.uploads) == 1 and len(client.presign_calls) == 1
+
+
+def test_maybe_upload_skips_a_file_over_the_upload_cap(tmp_path, monkeypatch, capsys):
+    _clear_env(monkeypatch)
+    _set_env(monkeypatch)
+    monkeypatch.setenv("S3_UPLOAD_MAX_BYTES", "4")
+    monkeypatch.setattr(s3t, "_client_factory", lambda *a, **k: (_ for _ in ()).throw(
+        AssertionError("must not upload a file over the cap")))
+
+    src = tmp_path / "checkpoint.pt"
+    src.write_bytes(b"0123456789")
+
+    assert s3t.maybe_upload(str(src), "prefix", "model_path") is None
+    assert "S3_UPLOAD_MAX_BYTES" in capsys.readouterr().err
+
+
+def test_download_http_decodes_a_percent_encoded_filename(tmp_path, monkeypatch):
+    _clear_env(monkeypatch)
+
+    class _FakeResponse:
+        headers = None
+
+        def __init__(self):
+            self._chunks = [b"a,b\n"]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, n=-1):
+            return self._chunks.pop() if self._chunks else b""
+
+    monkeypatch.setattr(s3t.urllib.request, "urlopen", lambda url, timeout=None: _FakeResponse())
+
+    local = s3t.resolve_input(
+        "http://example.com/in/%D0%B4%D0%B0%D0%BD%D0%BD%D1%8B%D0%B5.csv?X-Amz-Signature=1",
+        tmp_path / "scratch")
+
+    assert Path(local).name == "данные.csv"

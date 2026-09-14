@@ -31,6 +31,7 @@ failure just because publishing its result to S3 did not work.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import os
 import re
 import sys
@@ -38,7 +39,7 @@ import time
 import urllib.request
 import uuid
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 # All four must be set (and non-empty) for S3 handling to switch on at all.
 # Each is read via _env(): the vault contract's ``S3__<name>`` spelling first
@@ -66,7 +67,17 @@ _DEFAULT_REGION = "us-east-1"
 
 _DEFAULT_HTTP_TIMEOUT = 300  # seconds
 _DEFAULT_HTTP_MAX_BYTES = 1024 * 1024 * 1024  # 1 GiB
+_DEFAULT_UPLOAD_MAX_BYTES = 1024 * 1024 * 1024  # 1 GiB
 _HTTP_CHUNK_SIZE = 1024 * 1024
+
+# Same bounds as CoScientist/paper_parser/s3_connection.py (#349). botocore's
+# defaults are 60 s to connect, 60 s to read and up to 5 attempts, so an
+# endpoint that drops packets blocks a tool call for minutes, past the client's
+# MCP read timeout. read_timeout is per socket read, so a large transfer still
+# completes.
+_CONNECT_TIMEOUT_SECONDS = 5
+_READ_TIMEOUT_SECONDS = 30
+_MAX_ATTEMPTS = 3
 
 
 def _env(name: str) -> str | None:
@@ -213,24 +224,42 @@ def call_prefix(scope: tuple[str, str], repo_name: str, tool: str) -> str:
     )
 
 
-def _client_factory():
+def _client_factory(endpoint_url: str | None = None):
     """boto3 S3 client built from ``S3_ENV`` (+ optional ``S3_REGION``). A
     module attribute (not inlined into its callers) so tests can swap it out
     without moto or real credentials — see
     ``paper_parser/s3_connection.py:S3BucketService`` for the pattern this
     mirrors. ``region_name`` is required by botocore even for a fully custom
-    ``endpoint_url`` — omitting it raises ``NoRegionError``."""
+    ``endpoint_url`` — omitting it raises ``NoRegionError``.
+
+    ``endpoint_url`` overrides ``ENDPOINT_URL``; ``maybe_upload`` passes the
+    external endpoint to presign links for the caller's side."""
     import boto3
     from botocore.client import Config
 
     return boto3.client(
         "s3",
-        endpoint_url=_env("ENDPOINT_URL"),
+        endpoint_url=endpoint_url or _env("ENDPOINT_URL"),
         aws_access_key_id=_env("ACCESS_KEY"),
         aws_secret_access_key=_env("SECRET_KEY"),
         region_name=os.environ.get("S3_REGION", _DEFAULT_REGION),
-        config=Config(signature_version="s3v4"),
+        config=Config(
+            signature_version="s3v4",
+            connect_timeout=_CONNECT_TIMEOUT_SECONDS,
+            read_timeout=_READ_TIMEOUT_SECONDS,
+            retries={"max_attempts": _MAX_ATTEMPTS, "mode": "standard"},
+        ),
     )
+
+
+def _external_endpoint() -> str | None:
+    """The endpoint the caller reaches S3 at, when it differs from the one this
+    server uses. Named as in mcp-servers/vault-mcp-server. A SigV4 signature
+    covers the host, so a link must be presigned for the host that will open
+    it. start_chain.py sets this when it points a serve container at the host's
+    loopback MinIO through host.docker.internal."""
+    external = os.environ.get("S3__EXTERNAL_ENDPOINT_URL")
+    return external if external and external != _env("ENDPOINT_URL") else None
 
 
 def _presign_expiration() -> int:
@@ -253,6 +282,13 @@ def _http_max_bytes() -> int:
         return int(os.environ.get("S3_HTTP_MAX_BYTES", _DEFAULT_HTTP_MAX_BYTES))
     except ValueError:
         return _DEFAULT_HTTP_MAX_BYTES
+
+
+def _upload_max_bytes() -> int:
+    try:
+        return int(os.environ.get("S3_UPLOAD_MAX_BYTES", _DEFAULT_UPLOAD_MAX_BYTES))
+    except ValueError:
+        return _DEFAULT_UPLOAD_MAX_BYTES
 
 
 def _download_dir(scratch_dir: Path) -> Path:
@@ -332,7 +368,9 @@ def _download_http(uri: str, scratch_dir: Path) -> str:
     hours), and an ``S3_HTTP_MAX_BYTES`` cap checked against ``Content-Length``
     up front and against bytes actually received as they arrive. A partially
     written file is removed before the error propagates."""
-    local_path = _download_dir(scratch_dir) / _safe_filename(Path(urlparse(uri).path).name)
+    # A URL path is percent-encoded: данные.csv arrives as %D0%B4...csv.
+    local_path = _download_dir(scratch_dir) / _safe_filename(
+        unquote(Path(urlparse(uri).path).name))
     timeout = _http_timeout()
     max_bytes = _http_max_bytes()
     deadline = time.monotonic() + timeout
@@ -420,6 +458,13 @@ def maybe_upload(local_path: str, prefix: str, field_key: str) -> dict | None:
     if not s3_enabled():
         return None
     try:
+        # A tool returning a checkpoint path must not hold the call for the
+        # whole upload, and the report collector later downloads what it finds.
+        size, limit = Path(local_path).stat().st_size, _upload_max_bytes()
+        if size > limit:
+            print(f"[s3] upload skipped for {local_path}: {size} bytes is over the "
+                  f"{limit}-byte limit (S3_UPLOAD_MAX_BYTES)", file=sys.stderr)
+            return None
         client = _client_factory()
         bucket = _env("BUCKET_NAME")
         raw_name = Path(local_path).name
@@ -430,12 +475,16 @@ def maybe_upload(local_path: str, prefix: str, field_key: str) -> dict | None:
             safe_name = f"{p.stem}_{digest}{p.suffix}"
         key = f"{prefix}/{safe_component(field_key)}/{safe_name}"
         client.upload_file(local_path, bucket, key)
-        url = client.generate_presigned_url(
+        external = _external_endpoint()
+        presigner = _client_factory(external) if external else client
+        expires_in = _presign_expiration()
+        url = presigner.generate_presigned_url(
             "get_object",
             Params={"Bucket": bucket, "Key": key},
-            ExpiresIn=_presign_expiration(),
+            ExpiresIn=expires_in,
         )
-        return {"bucket": bucket, "s3_key": key, "presigned_url": url}
+        return {"bucket": bucket, "s3_key": key, "presigned_url": url,
+                "expires_in": expires_in}
     except Exception as exc:  # noqa: BLE001 - a publish failure must not fail the call
         print(f"[s3] upload failed for {local_path}: {type(exc).__name__}: {str(exc)[:200]}",
               file=sys.stderr)
@@ -498,3 +547,11 @@ def publish_result(result: object, prefix: str, deny_roots) -> object:
     if isinstance(result, list):
         return [publish_result(item, prefix, roots) for item in result]
     return result
+
+
+# The build installs boto3 into .venv-server, but a failed install only logs a
+# warning there and the build goes on. Say so once at server start, so that the
+# per-call "No module named 'boto3'" errors have a visible cause in docker logs.
+if s3_enabled() and importlib.util.find_spec("boto3") is None:
+    print("[s3] S3 is configured but boto3 is not installed in this venv: "
+          "s3:// inputs will fail and outputs will not be uploaded", file=sys.stderr)

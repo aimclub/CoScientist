@@ -222,6 +222,8 @@ All settings are passed through environment variables (`.env` or shell):
 | `S3_PRESIGN_EXPIRATION` | `3600` (1 hour) | Seconds a presigned URL for an uploaded output file stays valid (clamped to 1–604800) |
 | `S3_HTTP_TIMEOUT` | `300` | Seconds before an `http(s)://` input download times out |
 | `S3_HTTP_MAX_BYTES` | `1073741824` (1 GiB) | Size cap for an `http(s)://` input download; exceeding it aborts the call |
+| `S3_UPLOAD_MAX_BYTES` | `1073741824` (1 GiB) | Size cap for an uploaded output file; a larger file stays local and the call still succeeds |
+| `S3__EXTERNAL_ENDPOINT_URL` | `S3__ENDPOINT_URL` | Endpoint presigned links are built for, when the caller reaches S3 at another address than the serve container |
 
 ### S3 file pass-through
 
@@ -247,10 +249,11 @@ degrades the same way (S3 off) rather than breaking the server's import.
   different input URIs that happen to share a basename never collide — each
   download gets an isolated subdirectory.
 - **Output.** A `*_path`/`*_file` result field that is an existing local file
-  outside the cloned repo and outside the per-call scratch dir is uploaded and
-  presigned after the tool returns; the original local field is kept, and one
-  nested `<field>_s3` entry — `{"bucket", "s3_key", "presigned_url"}` — is
-  added alongside it. Not flat `<field>_s3_key` / `<field>_presigned_url`
+  outside the cloned repo, the mounted `/mount/data` and the per-call scratch
+  dir, and no larger than `S3_UPLOAD_MAX_BYTES`, is uploaded and presigned
+  after the tool returns; the original local field is kept, and one nested
+  `<field>_s3` entry — `{"bucket", "s3_key", "presigned_url", "expires_in"}` —
+  is added alongside it. Not flat `<field>_s3_key` / `<field>_presigned_url`
   siblings: the framework's artifact walker
   (`CoScientist/utils/s3_refs.py:_walk`) only recognises a durable reference
   from a dict that carries both `bucket` and `s3_key` together, same as every
@@ -294,13 +297,25 @@ degrades the same way (S3 off) rather than breaking the server's import.
 - **Not a security boundary.** Neither the param- nor the header-derived
   scoping is a security boundary, just a namespacing convenience; a presigned
   URL grants access to anyone who holds it, and nothing here authenticates
-  the caller.
+  the caller. An `http(s)://` input is fetched from inside the serve
+  container, which holds the S3 credentials, and any host that container can
+  reach is allowed.
+- **Reaching S3 from the serve container.** The endpoint is opened from inside
+  the container, where `localhost` and `0.0.0.0` are the container itself.
+  `start_chain.py` handles a loopback endpoint on the local daemon: the
+  container gets it as `host.docker.internal` (`--add-host
+  host.docker.internal:host-gateway`), and `S3__EXTERNAL_ENDPOINT_URL` keeps
+  the configured address for presigned links. MinIO then has to listen on the
+  docker bridge as well, a `-p 127.0.0.1:9000:9000` publish is not enough. A
+  remote endpoint is passed as is. S3 calls are bounded like the rest of the
+  project (5 s to connect, 30 s per read, 3 attempts).
 - **`build_serve.sh`** forwards all S3 variables (`ENDPOINT_URL`/
   `ACCESS_KEY`/`SECRET_KEY`/`BUCKET_NAME`/`S3_REGION`/`S3_PRESIGN_EXPIRATION`/
-  `S3_HTTP_TIMEOUT`/`S3_HTTP_MAX_BYTES`, plus the four `S3__*` names) to the
-  serve container straight from the calling shell's environment — it does
-  **not** read `.env` (that's `start_chain.py`'s job); export them yourself
-  before invoking it.
+  `S3_HTTP_TIMEOUT`/`S3_HTTP_MAX_BYTES`/`S3_UPLOAD_MAX_BYTES`, plus the
+  `S3__*` names) to the serve container straight from the calling shell's
+  environment — it does **not** read `.env` (that's `start_chain.py`'s job)
+  and does not rewrite a loopback endpoint; export them yourself before
+  invoking it.
 - **Serve-only, by design.** `start_chain.py` never forwards these into the
   *build* container (it runs arbitrary repository code) — only into *serve*.
   A consequence: a tool whose recorded `sample_args` references an `s3://`

@@ -41,6 +41,7 @@ docker run -d --name "$CONTAINER" -p "$PORT:8000" -e MCP_PORT=8000 \
     -e ENDPOINT_URL -e ACCESS_KEY -e SECRET_KEY -e BUCKET_NAME \
     -e S3_REGION -e S3_PRESIGN_EXPIRATION -e S3_HTTP_TIMEOUT -e S3_HTTP_MAX_BYTES \
     -e S3__ENDPOINT_URL -e S3__ACCESS_KEY -e S3__SECRET_KEY -e S3__BUCKET_NAME \
+    -e S3__EXTERNAL_ENDPOINT_URL -e S3_UPLOAD_MAX_BYTES \
     "$IMAGE" serve "$REPO_URL" >/dev/null
 
 # Wait until the container is up (streamable-http server has no plain "/" route,

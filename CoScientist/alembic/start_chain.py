@@ -24,6 +24,7 @@ Run from anywhere:
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import os
 import platform
 import random
@@ -31,6 +32,7 @@ import secrets
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import dotenv_values
 
@@ -91,7 +93,11 @@ SERVE_ONLY_ENV = (
     # deprecated legacy spelling; both must be excluded from the build
     # container regardless of which one is actually set.
     "S3__ENDPOINT_URL", "S3__ACCESS_KEY", "S3__SECRET_KEY", "S3__BUCKET_NAME",
+    "S3__EXTERNAL_ENDPOINT_URL", "S3_UPLOAD_MAX_BYTES",
 )
+
+# How a serve container reaches a service that listens on the host's loopback.
+HOST_ALIAS = "host.docker.internal"
 
 
 def _redact_cmd(cmd: list[str]) -> str:
@@ -140,26 +146,79 @@ def _random_port() -> int:
     return random.randint(*PORT_RANGE)
 
 
+def _env_values(
+    env_file: Path | None,
+    exclude: tuple[str, ...] = (),
+    extra_env: tuple[str, ...] = (),
+) -> dict[str, str]:
+    """A container's environment: every ``env_file`` entry not in ``exclude``,
+    then every ``PASSTHROUGH_ENV`` (+ ``extra_env``) var set in this process,
+    which wins over the file. ``exclude`` keeps a var out even when the
+    ``.env`` file defines it (build_image uses it for ``SERVE_ONLY_ENV`` — S3
+    credentials must never reach a container that runs arbitrary repository
+    code)."""
+    values: dict[str, str] = {}
+    if env_file and env_file.exists():
+        for k, v in dotenv_values(env_file).items():
+            if v is not None and k not in exclude:
+                values[k] = v
+    for var in (*PASSTHROUGH_ENV, *extra_env):
+        if var in os.environ:
+            values[var] = os.environ[var]
+    return values
+
+
 def _env_args(
     env_file: Path | None,
     exclude: tuple[str, ...] = (),
     extra_env: tuple[str, ...] = (),
+    overrides: dict[str, str] | None = None,
 ) -> list[str]:
-    """``-e`` args for a container: every ``env_file`` entry not in
-    ``exclude``, plus every ``PASSTHROUGH_ENV`` (+ ``extra_env``) var that is
-    set in this process's own environment. ``exclude`` keeps a var out of a
-    container's env even when the ``.env`` file defines it (build_image uses
-    it for ``SERVE_ONLY_ENV`` — S3 credentials must never reach a container
-    that runs arbitrary repository code)."""
-    args: list[str] = []
-    if env_file and env_file.exists():
-        for k, v in dotenv_values(env_file).items():
-            if v is not None and k not in exclude:
-                args += ["-e", f"{k}={v}"]
-    for var in (*PASSTHROUGH_ENV, *extra_env):
-        if var in os.environ:
-            args += ["-e", f"{var}={os.environ[var]}"]
-    return args
+    """``-e`` args for ``_env_values``, one per name. A repeated ``-e`` for the
+    same name would leave both entries in the container, so ``overrides``
+    replace values here rather than being appended."""
+    values = {**_env_values(env_file, exclude, extra_env), **(overrides or {})}
+    return [arg for k, v in values.items() for arg in ("-e", f"{k}={v}")]
+
+
+def _is_loopback(host: str | None) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        addr = ipaddress.ip_address(host or "")
+    except ValueError:
+        return False
+    return addr.is_loopback or addr.is_unspecified
+
+
+def _s3_endpoint_args(ns: argparse.Namespace) -> tuple[list[str], dict[str, str]]:
+    """Docker args and env overrides that let a serve container reach an S3
+    endpoint configured on the host's loopback (a local MinIO).
+
+    Inside the container ``localhost`` and ``0.0.0.0`` are the container itself,
+    so every s3:// input would fail and every output would stay local. The
+    container gets the endpoint through ``host.docker.internal`` instead, and
+    presigned links keep the configured address through
+    ``S3__EXTERNAL_ENDPOINT_URL``, since the caller opens them from the host.
+    MinIO has to listen on the docker bridge for this, not only on 127.0.0.1.
+    """
+    values = _env_values(ns.env_file, extra_env=SERVE_ONLY_ENV)
+    name = next((n for n in ("S3__ENDPOINT_URL", "ENDPOINT_URL") if values.get(n)), None)
+    if name is None:
+        return [], {}
+    endpoint = values[name]
+    parsed = urlparse(endpoint)
+    if not _is_loopback(parsed.hostname):
+        return [], {}
+    if host_from_endpoint(context_endpoint(ns.context)) is not None:
+        print(f"[start-chain] warning: {name}={endpoint} is a loopback address, "
+              f"which on the remote daemon means that machine, not this one.", flush=True)
+        return [], {}
+    netloc = f"{HOST_ALIAS}:{parsed.port}" if parsed.port else HOST_ALIAS
+    overrides = {name: parsed._replace(netloc=netloc).geturl()}
+    if not values.get("S3__EXTERNAL_ENDPOINT_URL"):
+        overrides["S3__EXTERNAL_ENDPOINT_URL"] = endpoint
+    return ["--add-host", f"{HOST_ALIAS}:host-gateway"], overrides
 
 
 def _volume_exists(context: str | None, volume: str) -> bool:
@@ -278,7 +337,9 @@ def serve_image(repo_url: str, tool_image: str, ns: argparse.Namespace) -> None:
     if ns.gpus:
         cmd += ["--gpus", ns.gpus]
     cmd += _mount_args(repo, ns)
-    cmd += _env_args(ns.env_file, extra_env=SERVE_ONLY_ENV)
+    s3_net, s3_env = _s3_endpoint_args(ns)
+    cmd += s3_net
+    cmd += _env_args(ns.env_file, extra_env=SERVE_ONLY_ENV, overrides=s3_env)
     cmd += [tool_image, "serve", repo_url]
 
     r = _run(cmd)

@@ -718,3 +718,44 @@ def test_generated_tool_function_works_without_s3_env_ignoring_scope_params(tmp_
     assert mod.predict(input_path="/local/x.csv") == {"ok": True}
     assert mod.predict(input_path="/local/x.csv", user_id="alice", session_id="s1") == {"ok": True}
     assert not (tmp_path / ".scratch").exists()
+
+
+def test_rendered_server_denies_the_mounted_benchmark_data():
+    server = cg.render_server("demo", [_SIG])
+    assert '_MOUNT_DATA = Path("/mount/data")' in server
+    assert "(_REPOS_DIR, _MOUNT_DATA, scratch)" in server
+
+
+def test_call_does_not_publish_an_echoed_path_from_the_mounted_data(tmp_path, monkeypatch):
+    """A tool given a local /mount/data path often returns it; uploading it
+    would copy the benchmark dataset into the bucket on every call."""
+    _set_s3_env(monkeypatch)
+    server_path = _write_rendered_server(
+        tmp_path / "work" / "output", helper_source=_REAL_S3_TRANSFER.read_text(encoding="utf-8"))
+    mod = _load_server_module(server_path, monkeypatch)
+    mount = tmp_path / "mount"
+    mount.mkdir()
+    data = mount / "train.csv"
+    data.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(mod, "_MOUNT_DATA", mount)
+
+    uploaded = []
+
+    class _FakeClient:
+        def upload_file(self, local_path, bucket, key):
+            uploaded.append(key)
+
+        def generate_presigned_url(self, method, Params, ExpiresIn):
+            return f"https://signed/{Params['Key']}"
+
+    monkeypatch.setattr(mod._s3, "_client_factory", lambda *a, **k: _FakeClient())
+    out_file = tmp_path / "result.csv"
+    out_file.write_text("out", encoding="utf-8")
+    monkeypatch.setattr(mod.subprocess, "run", lambda cmd, **kw: _FakeCompleted(_sentinel_stdout(
+        {"data_path": str(data), "result_path": str(out_file)})))
+
+    result = mod._call("predict", {"data_path": str(data)})
+
+    assert "data_path_s3" not in result
+    assert "result_path_s3" in result
+    assert len(uploaded) == 1

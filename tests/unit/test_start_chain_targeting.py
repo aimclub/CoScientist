@@ -132,3 +132,53 @@ def test_without_a_pin_the_docker_call_keeps_the_ambient_environment(monkeypatch
     sc._run(["docker", "info"])
 
     assert "DOCKER_API_VERSION" not in seen["env"]
+
+
+def _s3_ns(monkeypatch, tmp_path, env_text, **kw):
+    for name in sc.SERVE_ONLY_ENV:
+        monkeypatch.delenv(name, raising=False)
+    env_file = tmp_path / ".env"
+    env_file.write_text(env_text, encoding="utf-8")
+    return _ns(env_file=env_file, **kw)
+
+
+def test_a_loopback_s3_endpoint_reaches_the_serve_container_through_the_host(monkeypatch, tmp_path):
+    ns = _s3_ns(monkeypatch, tmp_path, "S3__ENDPOINT_URL=http://0.0.0.0:9000\n")
+
+    args, env = sc._s3_endpoint_args(ns)
+
+    assert args == ["--add-host", "host.docker.internal:host-gateway"]
+    assert env == {
+        "S3__ENDPOINT_URL": "http://host.docker.internal:9000",
+        "S3__EXTERNAL_ENDPOINT_URL": "http://0.0.0.0:9000",
+    }
+
+
+def test_a_remote_s3_endpoint_is_passed_as_is(monkeypatch, tmp_path):
+    ns = _s3_ns(monkeypatch, tmp_path, "S3__ENDPOINT_URL=https://storage.yandexcloud.net\n")
+    assert sc._s3_endpoint_args(ns) == ([], {})
+
+
+def test_an_explicit_external_endpoint_is_kept(monkeypatch, tmp_path):
+    ns = _s3_ns(monkeypatch, tmp_path,
+                "ENDPOINT_URL=http://localhost:9000\nS3__EXTERNAL_ENDPOINT_URL=http://minio.lan:9000\n")
+
+    _, env = sc._s3_endpoint_args(ns)
+
+    assert env == {"ENDPOINT_URL": "http://host.docker.internal:9000"}
+
+
+def test_a_loopback_s3_endpoint_on_a_remote_daemon_is_left_alone(monkeypatch, tmp_path):
+    monkeypatch.setattr(sc, "context_endpoint", lambda ctx: "ssh://user@gpu-box:22")
+    ns = _s3_ns(monkeypatch, tmp_path, "S3__ENDPOINT_URL=http://localhost:9000\n", context="gpu")
+    assert sc._s3_endpoint_args(ns) == ([], {})
+
+
+def test_an_env_override_replaces_the_value_instead_of_repeating_it(monkeypatch, tmp_path):
+    ns = _s3_ns(monkeypatch, tmp_path, "S3__ENDPOINT_URL=http://0.0.0.0:9000\n")
+
+    args = sc._env_args(ns.env_file, extra_env=sc.SERVE_ONLY_ENV,
+                        overrides={"S3__ENDPOINT_URL": "http://host.docker.internal:9000"})
+
+    endpoint = [a for a in args if a.startswith("S3__ENDPOINT_URL=")]
+    assert endpoint == ["S3__ENDPOINT_URL=http://host.docker.internal:9000"]

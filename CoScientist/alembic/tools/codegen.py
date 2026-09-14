@@ -15,7 +15,7 @@ import re
 import shutil
 from pathlib import Path
 
-from alembic.tools.paths import RUN_FUNCTION_SCRIPT, S3_TRANSFER_SCRIPT, output_dir
+from alembic.tools.paths import MOUNT_DATA, RUN_FUNCTION_SCRIPT, S3_TRANSFER_SCRIPT, output_dir
 
 # Builtins + typing names the generated server is guaranteed to know (it does
 # ``from typing import *`` of these). Capitalised typing generics are included so
@@ -284,7 +284,7 @@ When S3 is configured (ENDPOINT_URL/ACCESS_KEY/SECRET_KEY/BUCKET_NAME — see
 helpers/s3_transfer.py) a *_path/*_file kwarg given as an s3:// or http(s)://
 URI is downloaded to a per-call scratch dir before the tool runs, and any
 *_path/*_file the tool returns as an existing local file (outside the cloned
-repo) is uploaded and presigned after it. Without those four variables set
+repo and the mounted data) is uploaded and presigned after it. Without those four variables set
 the RUNTIME behaves exactly as before S3 support existed — but the tool
 SCHEMA does not: every tool below always declares the trailing
 user_id/session_id params regardless of whether S3 is configured, since that
@@ -309,6 +309,7 @@ _OUT = Path(__file__).resolve().parent
 _PYTHON = str(_OUT / ".venv" / "bin" / "python")   # main venv: repo + deps
 _RUNNER = str(_OUT / "helpers" / "run_function.py")
 _REPOS_DIR = _OUT.parent / "repos"                  # S3-publish deny root (per-call scratch joins it)
+_MOUNT_DATA = Path("{MOUNT_DATA}")                  # read-only benchmark data, never published
 _SENTINEL = "<<<ALEMBIC_RESULT>>>"
 
 mcp = FastMCP("{repo_name}")
@@ -395,8 +396,10 @@ def _call(tool: str, kwargs: dict, user_id: str = "", session_id: str = "") -> d
                         _s3_scope(user_id, session_id), "{repo_name}", tool)
                     # scratch is denied too: a tool echoing its downloaded
                     # input_path must not re-upload it or return a local path
-                    # the finally below is about to delete.
-                    result = _s3.publish_result(result, prefix, (_REPOS_DIR, scratch))
+                    # the finally below is about to delete. The mounted data
+                    # is the same case for an input given as a local path.
+                    result = _s3.publish_result(
+                        result, prefix, (_REPOS_DIR, _MOUNT_DATA, scratch))
                 return result
             raise RuntimeError(out.get("error") or "tool failed")
         raise RuntimeError((r.stderr or r.stdout)[-2000:] or "runner produced no output")
