@@ -679,6 +679,10 @@ def _wire_hitl(runtime: WebRuntime) -> None:
     if coder_toolset._hitl_handler is not None:
         coder_toolset._hitl_handler = runtime.hitl_handler
 
+    from CoScientist.agents.common import hitl_handler as common_hitl_handler
+    if hasattr(common_hitl_handler, "set_delegate"):
+        common_hitl_handler.set_delegate(runtime.hitl_handler)
+
     logging.getLogger("CoScientist.web").info(
         "Session-routing WebHITLHandler wired into: %s", wired,
     )

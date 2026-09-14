@@ -1015,6 +1015,12 @@ def _hitl_before_model():
     return make_hitl_before_callback(hitl_handler)
 
 
+def _hitl_before_tool():
+    from CoScientist.agents.common import hitl_handler
+    from CoScientist.hitl.callbacks import make_hitl_before_tool_callback
+    return make_hitl_before_tool_callback(hitl_handler, target_tools=("sandbox",))
+
+
 # Plain callbacks are registered through tiny lazy factories that ignore the
 # context — so importing bindings never drags in S3/opik/etc. transitively.
 _cb("save_uploaded_artifacts", "before_model", factory=lambda ctx: _save_uploaded_artifacts())
@@ -1051,9 +1057,10 @@ _cb("redact_link_urls", "before_model", factory=lambda ctx: _redact_link_urls())
 _cb("resolve_link_refs", "before_tool", factory=lambda ctx: _resolve_link_refs())
 _cb("register_tool_result_links", "after_tool", factory=lambda ctx: _register_tool_result_links())
 _cb("expand_link_refs", "after_model", factory=lambda ctx: _expand_link_refs())
-# Human-In-The-Loop approval callback before model/agent execution.
+# Human-In-The-Loop approval callback before model/agent/tool execution.
 _cb("hitl_before_model", "before_model", factory=lambda ctx: _hitl_before_model())
 _cb("hitl_before_agent", "before_agent", factory=lambda ctx: _hitl_before_model())
+_cb("hitl_before_tool", "before_tool", factory=lambda ctx: _hitl_before_tool())
 # Limit web search calls per agent turn.
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
 # Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.

@@ -410,10 +410,9 @@ agents:
       # Catch hallucinated tool names (e.g. calling `find` directly) and return a
       # corrective message instead of letting ADK crash the whole run.
       after_model: [expand_link_refs, guard_unknown_tools]
-      before_tool: [resolve_link_refs]
+      before_tool: [resolve_link_refs, hitl_before_tool]
       after_tool: [register_tool_result_links]
     # Every agent asks before acting on a decision; inert until HITL__ENABLED.
-    hitl: true
     hitl: true
     a2a:
       key: coder
