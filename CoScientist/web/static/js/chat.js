@@ -248,7 +248,7 @@
       const collapsed = box.classList.toggle(button.dataset.fold);
       box.classList.toggle('overflow-hidden', collapsed);
       button.textContent = collapsed ? button.dataset.label : 'Collapse';
-      if (collapsed) box.scrollIntoView({ block: 'nearest' }); else scrollChat();
+      if (collapsed) box.scrollIntoView({ block: 'nearest' });
     }
 
     function addUserMsg(text, timestamp = null) {
