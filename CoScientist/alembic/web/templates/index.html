@@ -112,6 +112,21 @@
       border-radius: 8px; padding: 5px 9px; }
     details > summary { list-style: none; }
     details > summary::-webkit-details-marker { display: none; }
+
+    /* result image viewer: zoom with the wheel, pan by dragging */
+    #right-panel .tool-runs img, #right-panel .tool-runs .svgbox { cursor: zoom-in; }
+    #viewer { position: fixed; inset: 0; z-index: 300; background: rgba(5, 7, 10, .92); }
+    #viewer-stage { position: absolute; inset: 0; overflow: hidden; cursor: grab; touch-action: none; }
+    #viewer-stage.dragging { cursor: grabbing; }
+    #viewer-content { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+    #viewer-content img { max-width: none; max-height: none; display: block; }
+    #viewer-content .viewer-svg { background: #fff; border-radius: 8px; padding: 8px; }
+    #viewer-content .viewer-svg svg { display: block; }
+    /* the bar and hint sit over the image, which is often white when zoomed in */
+    #viewer-bar { position: absolute; top: 12px; right: 16px; display: flex; gap: 8px; align-items: center;
+      background: rgba(11, 14, 20, .88); padding: 4px 6px 4px 10px; border-radius: 10px; }
+    #viewer-hint { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); pointer-events: none;
+      background: rgba(11, 14, 20, .88); padding: 4px 10px; border-radius: 8px; white-space: nowrap; }
   </style>
 </head>
 
@@ -157,12 +172,6 @@
           <span class="material-symbols-outlined text-[19px]">add</span> New MCP from repo
         </a>
       </div>
-      <div class="flex items-center gap-2 bg-surface/60 rounded-control border border-outline-variant/20 px-3 h-7 focus-within:border-primary/40 transition-colors">
-        <span class="material-symbols-outlined text-outline text-[15px]">target</span>
-        <input id="target-input" type="text" spellcheck="false"
-          placeholder="optional target task — JSON spec or path (forces a tool for a specific experiment)"
-          class="flex-1 bg-transparent border-0 focus:ring-0 p-0 text-[11px] font-mono text-on-surface placeholder:text-outline/55" />
-      </div>
     </div>
   </header>
 
@@ -189,11 +198,6 @@
         <h2 class="font-head text-sm font-semibold text-on-surface-dim">Generated tools</h2>
         <div id="check-badges" class="ml-auto flex items-center gap-1.5"></div>
         <a id="serve-status" href="#" target="_blank" class="hidden text-[11px] font-mono px-2 h-6 rounded-full border items-center gap-1"></a>
-        <label id="serve-toggle-wrap" title="Build + serve the MCP in a container (docker)"
-          class="flex items-center gap-1 text-[11px] font-mono text-outline cursor-pointer select-none px-2 h-6 rounded-full border border-outline-variant/25 hover:border-primary/40 transition">
-          <input id="serve-toggle" type="checkbox" class="accent-primary w-3 h-3 cursor-pointer" />
-          <span class="material-symbols-outlined text-[14px]">dns</span>serve
-        </label>
         <button id="download-btn" title="Download build artefacts (zip)"
           class="flex items-center gap-1 text-[11px] font-mono text-outline px-2 h-6 rounded-full border border-outline-variant/25 hover:border-primary/40 hover:text-on-surface transition disabled:opacity-40"
           disabled>
@@ -236,8 +240,6 @@
     //   (b) Common web UI mounts the same alembic app under "/alembic": paths
     //       become "/alembic/", "/alembic/builds[/{jid}]" — everything the
     //       template fetches must be prefixed with BASE.
-    // The common UI ALSO renders this template at its own top-level "/builds*"
-    // (history index / per-job) using its own shared router — no BASE there.
     const _p = location.pathname;
     const IS_MOUNTED_ALEMBIC = _p === "/alembic" || _p.startsWith("/alembic/");
     const BASE = IS_MOUNTED_ALEMBIC ? "/alembic" : "";
@@ -250,8 +252,7 @@
 
     // ─── state ──────────────────────────────────────────────────────
     let ws;
-    let lastRepo = "";               // repo of the most recent run (for artefacts / serve)
-    let currentJobId = JOB_ID;       // set from snapshot event in live mode
+    let currentJobId = JOB_ID;       // refreshed from the snapshot event
     const stageState = {};
     // left panel = an accumulating column, filled as the run progresses
     const left = { exploration: null, files: null, setup: null, examples: null };
@@ -262,6 +263,7 @@
     const expandedTools = new Set();
     const callState = {};            // name -> {status, output, error, traceback, argsText}
     let callSeq = 0;                 // id matching invoke -> invoke_result
+    const mcpTools = {};             // name -> inputSchema, as the served MCP server lists them
     let feedOpen = true, feedN = 0;
 
     // ─── markdown ───────────────────────────────────────────────────
@@ -399,6 +401,7 @@
       if (t.invoc_total) bits.push(metaChip(`invoc ${t.invoc_passed || 0}/${t.invoc_total}`,
         (t.invoc_passed || 0) === t.invoc_total ? "#40e56c" : "#ffb4ab"));
       if (t.perfect) bits.push(metaChip("★ perfect", "#00daf3"));
+      if (mcpTools[t.name]) bits.push(metaChip("served via MCP", "#40e56c"));
       return bits.length ? `<div class="px-3.5 pb-2 -mt-0.5">${bits.join("")}</div>` : "";
     }
     function renderServer() {
@@ -478,26 +481,39 @@
       wireCallForm(name);
     }
 
+    // Default Call args: the last recorded invocation, else the defaults from
+    // the served tool's input schema.
+    function defaultArgs(name) {
+      const runs = toolRuns[name] || [];
+      const last = runs.length ? runs[runs.length - 1].input : null;
+      if (last && Object.keys(last).length) return last;
+      const props = (mcpTools[name] || {}).properties || {};
+      const out = {};
+      for (const [k, p] of Object.entries(props)) out[k] = p.default !== undefined ? p.default : "";
+      return out;
+    }
     function callFormHtml(name) {
       const cs = callState[name] || {};
-      const runs = toolRuns[name] || [];
-      const lastInput = runs.length ? runs[runs.length - 1].input : null;
-      const def = cs.argsText != null ? cs.argsText
-        : (lastInput && Object.keys(lastInput).length ? JSON.stringify(lastInput, null, 2) : "{}");
+      const def = cs.argsText != null ? cs.argsText : JSON.stringify(defaultArgs(name), null, 2);
       const busy = cs.status === "calling";
+      const via = cs.via === "container" ? "container (debug)" : "MCP";
       let result = "";
       if (cs.status === "done")
-        result = `<div class="lbl mt-2">Result</div>${vizOutput(cs.output)}${cs.reason ? `<div class="text-[11px] text-outline font-mono mt-1">${esc(cs.reason)}</div>` : ""}`;
+        result = `<div class="lbl mt-2">Result · via ${via}</div>${vizOutput(cs.output)}${cs.reason ? `<div class="text-[11px] text-outline font-mono mt-1">${esc(cs.reason)}</div>` : ""}`;
       else if (cs.status === "error")
-        result = `<pre class="err mt-2">${esc(cs.error || 'call failed')}${cs.traceback ? "\n\n" + esc(cs.traceback) : ""}</pre>`;
+        result = `<div class="lbl mt-2">Error · via ${via}</div><pre class="err">${esc(cs.error || 'call failed')}${cs.traceback ? "\n\n" + esc(cs.traceback) : ""}</pre>`;
       return `
         <div class="px-3.5 py-3 space-y-2 border-t border-outline-variant/10 bg-surface-lowest/60">
-          <div class="lbl">Call this tool <span class="text-primary">· live</span></div>
+          <div class="lbl">Call this tool <span class="text-primary">· live via MCP</span></div>
           <textarea class="call-args w-full bg-surface-lowest border border-outline-variant/40 rounded-control font-mono text-[11px] text-on-surface p-2 focus:ring-0 focus:border-primary/60 resize-y" rows="4" spellcheck="false" ${busy ? "disabled" : ""}>${esc(def)}</textarea>
           <div class="flex items-center gap-2">
             <button class="call-btn flex items-center gap-1.5 bg-primary text-on-primary font-head font-semibold text-xs px-3 h-8 rounded-control hover:brightness-110 active:scale-[.98] transition disabled:opacity-50" ${busy ? "disabled" : ""}>
               ${busy ? `<span class="material-symbols-outlined text-[16px] spin">progress_activity</span> calling…`
             : `<span class="material-symbols-outlined text-[16px]">bolt</span> Call`}
+            </button>
+            <button class="debug-btn flex items-center gap-1 text-[11px] font-mono text-outline px-2 h-8 rounded-control border border-outline-variant/30 hover:border-primary/40 hover:text-on-surface transition disabled:opacity-50"
+              title="Debug: run the tool function inside the build's container, bypassing the MCP server" ${busy ? "disabled" : ""}>
+              <span class="material-symbols-outlined text-[15px]">terminal</span> Run in container
             </button>
             <span class="call-msg text-[11px] font-mono text-outline"></span>
           </div>
@@ -508,10 +524,12 @@
       const box = toolCards[name].querySelector(".tool-runs");
       const ta = box.querySelector(".call-args");
       const btn = box.querySelector(".call-btn");
+      const dbg = box.querySelector(".debug-btn");
       if (ta) ta.oninput = () => { callState[name] = { ...(callState[name] || {}), argsText: ta.value }; };
-      if (btn) btn.onclick = () => doCall(name);
+      if (btn) btn.onclick = () => doCall(name, "mcp");
+      if (dbg) dbg.onclick = () => doCall(name, "container");
     }
-    function doCall(name) {
+    function doCall(name, mode) {
       const box = toolCards[name].querySelector(".tool-runs");
       const ta = box.querySelector(".call-args");
       const msg = box.querySelector(".call-msg");
@@ -526,9 +544,9 @@
       }
       if (!ws || ws.readyState !== 1) { msg.textContent = "not connected"; msg.style.color = "#ffb4ab"; return; }
       const id = ++callSeq;
-      callState[name] = { status: "calling", argsText: ta.value, callId: id };
+      callState[name] = { status: "calling", argsText: ta.value, callId: id, via: mode };
       renderRuns(name);
-      ws.send(JSON.stringify({ type: "invoke", tool: name, args, call_id: id }));
+      ws.send(JSON.stringify({ type: "invoke", tool: name, args, call_id: id, mode }));
     }
     function runHtml(r, i, total) {
       const s = r.passed ? { c: "#40e56c", t: "pass", ic: "check_circle" }
@@ -648,14 +666,20 @@
       return false;
     }
 
-    function pushFeed(stage, name, args) {
+    // pending=false for rows that never get a tool_result (log lines, summaries):
+    // they are drawn finished, so no spinner is left running.
+    function pushFeed(stage, name, args, pending = true) {
       const feed = document.getElementById("feed");
       const argStr = args && Object.keys(args).length ? JSON.stringify(args) : "";
       const row = document.createElement("div");
       row.className = "enter flex items-center gap-2.5 text-xs py-1.5 border-b border-outline-variant/5";
       row.setAttribute("data-tool", name);
+      if (!pending) row.dataset.done = "1";
+      const ico = pending
+        ? `<span class="ico material-symbols-outlined text-[16px] spin shrink-0 text-primary">progress_activity</span>`
+        : `<span class="ico material-symbols-outlined text-[16px] shrink-0 text-outline">notes</span>`;
       row.innerHTML = `
-        <span class="ico material-symbols-outlined text-[16px] spin shrink-0 text-primary">progress_activity</span>
+        ${ico}
         <span class="font-mono text-[9.5px] uppercase tracking-wide text-outline bg-surface rounded px-1.5 py-0.5 shrink-0 w-[84px] text-center">${esc(stage || 'sys')}</span>
         <span class="font-mono text-primary shrink-0">${esc(name)}</span>
         <span class="font-mono text-outline truncate flex-1" title="${esc(argStr)}">${esc(argStr.slice(0, 160))}</span>`;
@@ -698,7 +722,12 @@
           else if (m.status === "error") { setRunning(false); setNow("error: " + (m.message || ""), "#ffb4ab"); }
           else if (m.status === "cancelled") { setRunning(false); setNow("cancelled", "#8c90a1"); }
           break;
-        case "stage": setStage(m.stage, m.status); break;
+        case "stage":
+          setStage(m.stage, m.status);
+          // The wrapper writes server.py without tool calls; this list is its result.
+          if (m.stage === "wrapper" && m.status === "done" && m.tools_wrapped)
+            pushFeed("wrapper", "server.py", { tools: m.tools_wrapped }, false);
+          break;
         case "tool_call": pushFeed(m.stage, m.name, m.args); break;
         case "tool_result": markFeedDone(m.name); break;
         case "report":
@@ -713,27 +742,19 @@
           break;
         case "validation": patchValidation(m); break;
         case "check": setCheck(m.name, m.passed, m.detail); break;
-        case "serve_status":
-          if (m.status === "ready") setServeStatus("ready", "MCP ▸ " + m.url, m.url);
-          else if (m.status === "error") {
-            setServeStatus("error", m.message || "serve failed", null);
-            document.getElementById("serve-toggle").checked = false;
-          } else setServeStatus("building", m.message || "building…", null);
-          break;
-        case "serve_log": pushFeed("serve", "docker", { line: m.line }); break;
         case "invoke_result": {
           const nm = m.tool, cs = callState[nm] || {};
           callState[nm] = {
             status: m.ok ? "done" : "error",
             output: m.output, reason: m.reason, error: m.error, traceback: m.traceback,
-            argsText: cs.argsText, callId: m.call_id,
+            argsText: cs.argsText, callId: m.call_id, via: m.via,
           };
           if (expandedTools.has(nm)) renderRuns(nm);
           break;
         }
         // per-job WS: initial snapshot + terminal status + raw log lines
         case "snapshot":
-          if (m.repo_url) { lastRepo = m.repo_url; document.getElementById("repo-input").value = m.repo_url; }
+          if (m.repo_url) document.getElementById("repo-input").value = m.repo_url;
           if (m.job_id) currentJobId = m.job_id;
           if (m.status === "running") setRunning(true);
           break;
@@ -742,7 +763,12 @@
           if (m.status === "done") {
             setNow("build complete", "#40e56c");
             STAGES.forEach(s => { if (stageState[s.key] === "running") stageState[s.key] = "done"; });
-            if (m.mcp_url) setServeStatus("ready", "MCP ▸ " + m.mcp_url, m.mcp_url);
+            if (m.mcp_url) { setServeStatus("ready", "MCP ▸ " + m.mcp_url, m.mcp_url); loadMcpTools(); }
+            if (m.registration_error) {
+              pushFeed("catalogue", "not registered", { reason: m.registration_error }, false);
+              attachTip(document.getElementById("serve-status"),
+                "Not in the shared catalogue: " + m.registration_error);
+            }
           } else {
             setNow(m.error ? ("failed: " + m.error.split("\n")[0]) : "failed", "#ffb4ab");
             STAGES.forEach(s => { if (stageState[s.key] === "running") stageState[s.key] = "failed"; });
@@ -754,7 +780,7 @@
           // tool_call/tool_result events. Kept server-side in the .log file;
           // silent in the feed unless it is clearly a pipeline / docker /
           // error signal worth surfacing.
-          if (isImportantLog(m.line)) pushFeed("log", "log", { line: m.line });
+          if (isImportantLog(m.line)) pushFeed("log", "log", { line: m.line }, false);
           break;
         case "error":
           setNow("error: " + (m.message || ""), "#ffb4ab");
@@ -793,7 +819,6 @@
       emptyState(document.getElementById("right-panel"), "build", "awaiting explorer");
       document.getElementById("check-badges").innerHTML = "";
       document.getElementById("download-btn").disabled = true;
-      document.getElementById("serve-toggle").checked = false;
       document.getElementById("serve-status").classList.add("hidden");
       document.getElementById("feed").innerHTML = "";
       feedN = 0; document.getElementById("feed-count").textContent = 0;
@@ -839,25 +864,36 @@
       if (e.key === "Enter") document.getElementById("run-btn").click();
     });
 
-    // download build artefacts (zip) for the current repo
+    // Download this build's docker-buildable bundle (zip).
     document.getElementById("download-btn").onclick = () => {
-      if (lastRepo) window.open(`${BASE}/artifacts?repo=` + encodeURIComponent(lastRepo), "_blank");
+      if (currentJobId) window.open(`${BASE}/builds/${encodeURIComponent(currentJobId)}/artifacts.zip`, "_blank");
     };
-    // serve toggle: on enable, build + run the MCP in a container
+    // MCP address pill in the tools header.
     function setServeStatus(state, text, url) {
       const el = document.getElementById("serve-status");
       el.classList.remove("hidden"); el.classList.add("flex");
-      const col = { building: "#ffcf6b", ready: "#40e56c", error: "#ffb4ab" }[state] || "#8c90a1";
+      const col = { ready: "#40e56c", error: "#ffb4ab" }[state] || "#8c90a1";
       el.style.borderColor = col + "66"; el.style.color = col;
       el.textContent = text; el.href = (state === "ready" && url) ? url : "#";
     }
-    document.getElementById("serve-toggle").addEventListener("change", e => {
-      if (!e.target.checked) { document.getElementById("serve-status").classList.add("hidden"); return; }
-      const repo = lastRepo || document.getElementById("repo-input").value.trim();
-      if (!repo || !ws || ws.readyState !== 1) { e.target.checked = false; return; }
-      setServeStatus("building", "building container…", null);
-      ws.send(JSON.stringify({ type: "serve", repo_url: repo }));
-    });
+    // The served server's own tool list: shows that the endpoint answers and
+    // gives the input schemas the Call form falls back to.
+    async function loadMcpTools() {
+      if (!currentJobId) return;
+      let body;
+      try {
+        const r = await fetch(`${BASE}/api/builds/${encodeURIComponent(currentJobId)}/mcp_tools`, { cache: "no-store" });
+        body = await r.json();
+      } catch (e) { return; }
+      Object.keys(mcpTools).forEach(k => delete mcpTools[k]);
+      Object.assign(mcpTools, body.tools || {});
+      if (body.error) {
+        const el = document.getElementById("serve-status");
+        setServeStatus("error", el.textContent + " · not answering", null);
+        attachTip(el, body.error);
+      }
+      renderServer();
+    }
     document.getElementById("feed-toggle").onclick = () => {
       feedOpen = !feedOpen;
       document.getElementById("feed").style.display = feedOpen ? "block" : "none";
@@ -883,6 +919,116 @@
       tipEl.style.left = left + "px";
       tipEl.style.top = top + "px";
     }
+
+    // ─── result image viewer: click an image to zoom (wheel) and pan (drag) ───
+    const viewer = document.createElement("div");
+    viewer.id = "viewer";
+    viewer.hidden = true;
+    viewer.innerHTML = `
+      <div id="viewer-stage"><div id="viewer-content"></div></div>
+      <div id="viewer-bar" class="text-[11px] font-mono text-on-surface-dim">
+        <span id="viewer-zoom">100%</span>
+        <button id="viewer-fit" class="px-2 h-7 rounded-control border border-outline-variant/40 hover:border-primary/60 hover:text-primary">fit</button>
+        <button id="viewer-close" title="Close (Esc)" class="flex items-center justify-center w-7 h-7 rounded-control border border-outline-variant/40 hover:border-primary/60 hover:text-primary">
+          <span class="material-symbols-outlined text-[18px]">close</span></button>
+      </div>
+      <div id="viewer-hint" class="text-[11px] font-mono text-outline">wheel: zoom · drag: pan · double-click or 0: fit · Esc: close</div>`;
+    document.body.appendChild(viewer);
+    const vStage = document.getElementById("viewer-stage");
+    const vContent = document.getElementById("viewer-content");
+    const view = { s: 1, x: 0, y: 0 };
+
+    function applyView() {
+      vContent.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.s})`;
+      document.getElementById("viewer-zoom").textContent = Math.round(view.s * 100) + "%";
+    }
+    function fitView() {
+      vContent.style.transform = "none";
+      const w = vContent.offsetWidth, h = vContent.offsetHeight;
+      const W = vStage.clientWidth, H = vStage.clientHeight;
+      if (!w || !h) return;
+      view.s = Math.min(W * 0.9 / w, H * 0.9 / h);
+      view.x = (W - w * view.s) / 2;
+      view.y = (H - h * view.s) / 2;
+      applyView();
+    }
+    function zoomAt(factor, cx, cy) {
+      const s = Math.min(40, Math.max(0.05, view.s * factor));
+      view.x = cx - (cx - view.x) * (s / view.s);
+      view.y = cy - (cy - view.y) * (s / view.s);
+      view.s = s;
+      applyView();
+    }
+    function openViewer(source) {
+      vContent.innerHTML = "";
+      if (source.tagName === "IMG") {
+        const img = new Image();
+        img.draggable = false;
+        img.onload = fitView;
+        img.src = source.src;
+        vContent.appendChild(img);
+      } else {
+        // The card's SVG was already stripped of scripts by vizOutput.
+        const box = document.createElement("div");
+        box.className = "viewer-svg";
+        box.innerHTML = source.innerHTML;
+        const svg = box.querySelector("svg");
+        if (svg && !svg.getAttribute("width")) {
+          // An SVG sized only by viewBox collapses in an absolutely placed box.
+          const vb = (svg.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+          svg.setAttribute("width", vb.length === 4 && vb[2] ? vb[2] : 800);
+          if (!svg.getAttribute("height") && vb.length === 4 && vb[3]) svg.setAttribute("height", vb[3]);
+        }
+        vContent.appendChild(box);
+      }
+      viewer.hidden = false;
+      fitView();
+    }
+    function closeViewer() {
+      viewer.hidden = true;
+      vContent.innerHTML = "";
+    }
+
+    document.getElementById("right-panel").addEventListener("click", e => {
+      const target = e.target.closest(".tool-runs img, .tool-runs .svgbox");
+      if (target) openViewer(target);
+    });
+    vStage.addEventListener("wheel", e => {
+      e.preventDefault();
+      // Firefox scrolls the wheel in lines (deltaMode 1), Chrome in pixels.
+      const dy = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+      const r = vStage.getBoundingClientRect();
+      zoomAt(Math.exp(-dy * 0.0015), e.clientX - r.left, e.clientY - r.top);
+    }, { passive: false });
+    let drag = null;
+    vStage.addEventListener("pointerdown", e => {
+      drag = { id: e.pointerId, x: e.clientX, y: e.clientY };
+      vStage.setPointerCapture(e.pointerId);
+      vStage.classList.add("dragging");
+    });
+    vStage.addEventListener("pointermove", e => {
+      if (!drag || e.pointerId !== drag.id) return;
+      view.x += e.clientX - drag.x;
+      view.y += e.clientY - drag.y;
+      drag.x = e.clientX;
+      drag.y = e.clientY;
+      applyView();
+    });
+    const endDrag = () => { drag = null; vStage.classList.remove("dragging"); };
+    vStage.addEventListener("pointerup", endDrag);
+    vStage.addEventListener("pointercancel", endDrag);
+    vStage.addEventListener("dblclick", fitView);
+    document.getElementById("viewer-fit").onclick = fitView;
+    document.getElementById("viewer-close").onclick = closeViewer;
+    document.addEventListener("keydown", e => {
+      if (viewer.hidden) return;
+      const cx = vStage.clientWidth / 2, cy = vStage.clientHeight / 2;
+      if (e.key === "Escape") closeViewer();
+      else if (e.key === "+" || e.key === "=") zoomAt(1.25, cx, cy);
+      else if (e.key === "-") zoomAt(0.8, cx, cy);
+      else if (e.key === "0") fitView();
+    });
+    window.addEventListener("resize", () => { if (!viewer.hidden) fitView(); });
 
     // ─── resizable activity panel (drag the grabber) ────────────────
     (() => {
@@ -913,10 +1059,10 @@
 
     // ─── mode-driven UI adjustments ─────────────────────────────────
     if (MODE === "history") {
-      // In per-job view we are NOT running a live pipeline — hide controls
-      // that only make sense against the standalone /ws endpoint, and swap
-      // in the "New MCP from repo" CTA that leads back to the live entry.
-      for (const id of ["run-btn", "stop-btn", "serve-toggle-wrap", "target-input", "repo-input"]) {
+      // The per-job page watches a build that already exists: hide the start
+      // controls and show the "New MCP from repo" link. Stop comes back while
+      // the build runs (setRunning).
+      for (const id of ["run-btn", "stop-btn", "repo-input"]) {
         const el = document.getElementById(id);
         if (el) el.classList.add("hidden");
       }
@@ -925,10 +1071,6 @@
       if (repoWrap) repoWrap.classList.add("hidden");
       const newBtn = document.getElementById("new-build-link");
       if (newBtn) { newBtn.classList.remove("hidden"); newBtn.classList.add("flex"); newBtn.href = `${BASE}/`; }
-      // Bundle download → the shared router's per-job zip.
-      document.getElementById("download-btn").onclick = () => {
-        if (currentJobId) window.open(`${BASE}/builds/${encodeURIComponent(currentJobId)}/artifacts.zip`, "_blank");
-      };
     }
 
     // Header "Builds" button → mount-local history index.
