@@ -8,7 +8,7 @@ import requests
 from CoScientist.paper_analysis.research_taxonomy import DOMAIN_TO_SUBDOMAINS
 from CoScientist.papers_processing_refactoring.app.settings import OpenAlexSettings
 
-
+UNKNOWN_PUBLICATION_YEAR = 9999
 OPENALEX_WORKS_URL = "https://api.openalex.org/works"
 CROSSREF_WORKS_URL = "https://api.crossref.org/works"
 logger = logging.getLogger(__name__)
@@ -36,21 +36,24 @@ def _request_json(
     for attempt in range(max_retries):
         try:
             response = requests.get(url, params=params, timeout=30)
-            if response.status_code == 200:
-                payload = response.json()
-                if not isinstance(payload, dict):
-                    raise RuntimeError(f"{url} returned an unexpected response")
-                return payload
-            if response.status_code != 429 and response.status_code < 500:
-                response.raise_for_status()
         except requests.exceptions.RequestException:
             if attempt < max_retries - 1:
                 time.sleep(2 ** attempt)
                 continue
             raise
 
-        if attempt < max_retries - 1:
+        if response.status_code == 200:
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise RuntimeError(f"{url} returned an unexpected response")
+            return payload
+
+        is_retryable = response.status_code == 429 or response.status_code >= 500
+        if is_retryable and attempt < max_retries - 1:
             time.sleep(2 ** attempt)
+            continue
+
+        response.raise_for_status()
 
     raise RuntimeError(f"{url} request failed after retries")
 
@@ -78,7 +81,7 @@ def _exact_openalex_work(
         and isinstance(work.get("title"), str)
         and _normalize_title(work["title"]) == normalized_title
     ]
-    if publication_year != 9999:
+    if publication_year != UNKNOWN_PUBLICATION_YEAR:
         year_matches = [work for work in exact_matches if work.get("publication_year") == publication_year]
         if year_matches:
             return year_matches[0]
@@ -118,7 +121,7 @@ def _find_doi_in_crossref(title: str, publication_year: int) -> str | None:
     settings = OpenAlexSettings()
     if settings.email:
         params["mailto"] = settings.email
-    if publication_year != 9999:
+    if publication_year != UNKNOWN_PUBLICATION_YEAR:
         params["filter"] = (
             f"from-pub-date:{publication_year}-01-01,"
             f"until-pub-date:{publication_year}-12-31"
@@ -140,7 +143,7 @@ def _find_doi_in_crossref(title: str, publication_year: int) -> str | None:
         if not isinstance(candidate_title, str) or _normalize_title(candidate_title) != normalized_title:
             continue
         exact_matches.append(work)
-        if publication_year != 9999 and _crossref_publication_year(work) == publication_year:
+        if publication_year != UNKNOWN_PUBLICATION_YEAR and _crossref_publication_year(work) == publication_year:
             doi = work.get("DOI")
             if isinstance(doi, str) and doi.strip():
                 return _normalize_doi(doi)
@@ -164,6 +167,8 @@ def find_doi_by_title(title: str, publication_year: int) -> str | None:
             doi = _find_doi_in_crossref(title, publication_year)
         except (requests.exceptions.RequestException, RuntimeError, ValueError) as exc:
             logger.warning("Crossref DOI lookup failed for %r: %s", title, exc)
+    if doi is None:
+        logger.warning("DOI was not found for %r in OpenAlex or Crossref", title)
     return doi
 
 

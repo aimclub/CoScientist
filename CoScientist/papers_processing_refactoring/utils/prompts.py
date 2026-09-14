@@ -1,6 +1,7 @@
 from CoScientist.paper_analysis.research_taxonomy import (
     format_domain_subdomain_mapping_for_prompt,
 )
+from openalex import UNKNOWN_PUBLICATION_YEAR
 
 
 OPENALEX_TAXONOMY_FOR_PROMPT = format_domain_subdomain_mapping_for_prompt()
@@ -13,7 +14,7 @@ summarisation_prompt = (
     
     "### FIELD GUIDELINES:\n"
     "1. paper_title: Extract the full title. If missing, use 'NO TITLE'.\n"
-    "2. publication_year: Extract as an integer. If missing, use 9999.\n"
+    f"2. publication_year: Extract as an integer. If missing, use {UNKNOWN_PUBLICATION_YEAR}.\n"
     "3. authors: List as 'First Last, First Last'. If missing, use 'NO AUTHORS'.\n"
     "4. source: Journal name, conference, or publisher. If missing, use 'UNDEFINED'.\n"
     "5. paper_summary: This field MUST follow this internal structure:\n"
@@ -37,7 +38,7 @@ metadata_extraction_prompt = (
 
     "### FIELD GUIDELINES:\n"
     "1. paper_title: Extract the full title. If missing, use 'NO TITLE'.\n"
-    "2. publication_year: Extract as an integer. If missing, use 9999.\n"
+    f"2. publication_year: Extract as an integer. If missing, use {UNKNOWN_PUBLICATION_YEAR}.\n"
     "3. authors: List as 'First Last, First Last'. If missing, use 'NO AUTHORS'.\n"
     "4. source: Journal name, conference, or publisher. If missing, use 'UNDEFINED'.\n"
 

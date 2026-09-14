@@ -3,6 +3,7 @@ from langchain_core.messages import HumanMessage
 from ..base import ETLStep
 from ..context import ETLContext
 from ...utils.general_utils import OpenAlexClassification, PaperMetadata
+from ...utils.general_utils import invoke_llm_with_retry
 from ...utils.openalex import find_doi_by_title, get_openalex_domain_and_field
 from ...utils.prompts import classification_from_content_prompt, metadata_extraction_prompt
 
@@ -21,8 +22,10 @@ class MetadataExtractionStep(ETLStep):
 
         manifest_data = ctx.artifact_store.get_metadata(article_id, "image_captioning") or {}
         metadata_llm = ctx.llm.with_structured_output(PaperMetadata)
-        paper_metadata: PaperMetadata = metadata_llm.invoke(
-            [HumanMessage(content=metadata_extraction_prompt + html)]
+        paper_metadata: PaperMetadata = invoke_llm_with_retry(
+            metadata_llm,
+            [HumanMessage(content=metadata_extraction_prompt + html)],
+            operation=f"extract metadata for article {article_id}",
         )
 
         doi = find_doi_by_title(
@@ -36,7 +39,8 @@ class MetadataExtractionStep(ETLStep):
         )
         if classification is None:
             classification_llm = ctx.llm.with_structured_output(OpenAlexClassification)
-            llm_classification: OpenAlexClassification = classification_llm.invoke(
+            llm_classification: OpenAlexClassification = invoke_llm_with_retry(
+                classification_llm,
                 [
                     HumanMessage(
                         content=classification_from_content_prompt.format(
@@ -44,7 +48,8 @@ class MetadataExtractionStep(ETLStep):
                             ARTICLE_CONTENT=html,
                         )
                     )
-                ]
+                ],
+                operation=f"classify article {article_id}",
             )
             domain = llm_classification.primary_domain
             field = llm_classification.primary_field
