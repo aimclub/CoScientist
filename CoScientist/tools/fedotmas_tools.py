@@ -1,7 +1,6 @@
 """Tools for fedotmas inference"""
 
 import asyncio
-import uuid
 from typing import List, Optional, Dict, Any
 
 from google.adk.tools import BaseTool, ToolContext
@@ -13,15 +12,10 @@ from fedotmas.control import run_config_guardrails
 from fedotmas.plugins import LangfusePlugin, LoggingPlugin, WebSearchLimitPlugin
 
 from CoScientist.tools.fedot_artifact_plugin import ArtifactCapturePlugin
-from CoScientist.tools.fedot_trace_plugin import FedotTracePlugin
-from CoScientist.tools.fedot_trace_handler import fedot_trace_handler
 from CoScientist.logging.metrics import UsageMetricsPlugin
-from CoScientist.logging.fedot_bridge import patch_fedotmas_logging
 from rag_tools import MCPServer
 from rag_tools.storage import PostgresClient
 from rag_tools.config.settings import get_settings
-
-patch_fedotmas_logging()
 
 settings = get_settings()
 
@@ -106,8 +100,6 @@ class FedotMASToolset(BaseToolset):
                 FEDOT_TIMEOUT_S = None
         result = None
         status, err = "success", None
-        run_id = uuid.uuid4().hex
-        await fedot_trace_handler.mark_run_start(run_id, task_description)
         try:
             mas = MAW(
                 mcp_servers=servers_payload,
@@ -118,7 +110,6 @@ class FedotMASToolset(BaseToolset):
                     LoggingPlugin(),
                     WebSearchLimitPlugin(max_calls_per_agent=4),
                     LangfusePlugin(trace_name="coscientist:fedot"),
-                    FedotTracePlugin(fedot_trace_handler, run_id),
                     cap,
                     UsageMetricsPlugin(),
                 ],
@@ -139,8 +130,6 @@ class FedotMASToolset(BaseToolset):
             status, err = "timeout", f"FEDOT.MAS exceeded {FEDOT_TIMEOUT_S}s"
         except Exception as e:
             status, err = "error", f"FEDOT.MAS run failed: {e}"
-        finally:
-            await fedot_trace_handler.mark_run_end(run_id, status, err)
 
         # Fallback (F010.A4): scan the final MAS state for presigned URLs the plugin may
         # have missed (only when a result actually came back).

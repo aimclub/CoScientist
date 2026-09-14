@@ -27,7 +27,6 @@ from CoScientist.web.session_registry import LocalSessionRegistry
 from CoScientist.agents import agent_system, planner_agent
 from CoScientist.config import ReportConfig
 from CoScientist.reporting import finalize_report
-from CoScientist.tools.fedot_trace_handler import fedot_trace_handler
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.config import get_settings
 from CoScientist.tools.coder_tools.coder_tools import coder_toolset
@@ -1509,6 +1508,7 @@ def create_app() -> FastAPI:
         except Exception as exc:  # noqa: BLE001 — never crash the server on a UI tail
             print(f"[BuildWS] error ({job_id}): {exc}")
 
+
     @app.get("/fedot-trace", response_class=HTMLResponse)
     async def fedot_trace_page():
         return HTMLResponse(
@@ -1516,19 +1516,74 @@ def create_app() -> FastAPI:
             headers={"Cache-Control": "no-store"},
         )
 
-    @app.websocket("/ws/fedot-trace")
-    async def fedot_trace_ws(ws: WebSocket):
-        """Live feed for the /fedot-trace tab — see fedot_trace_handler.py."""
-        await ws.accept()
-        await ws.send_json({"type": "connected", "run_active": fedot_trace_handler.is_active})
-        await fedot_trace_handler.attach_websocket(ws)
+    @app.get("/api/fedot-langfuse-trace")
+    async def fedot_langfuse_trace():
+        """Latest 'coscientist:fedot' trace from Langfuse, as a span tree.
+
+        A thin read-only proxy: LANGFUSE_SECRET_KEY never reaches the browser,
+        only the (already truncated) trace content does. Any failure — missing
+        keys, no trace yet, Langfuse unreachable — comes back as a normal JSON
+        body with status != "ok" rather than an HTTP error, so the page can
+        just render an empty state.
+        """
+        public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
+        secret_key = os.getenv("LANGFUSE_SECRET_KEY")
+        base_url = os.getenv("LANGFUSE_BASE_URL") or os.getenv("LANGFUSE_HOST") or "https://cloud.langfuse.com"
+        if not public_key or not secret_key:
+            return JSONResponse({
+                "status": "unconfigured",
+                "detail": "LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are not set",
+            })
+
+        def _truncate(value, limit: int = 800):
+            if value is None:
+                return None
+            text = value if isinstance(value, str) else json.dumps(value, default=str, ensure_ascii=False)
+            return text if len(text) <= limit else text[:limit] + f"… ({len(text)} chars total)"
+
+        def _fetch():
+            from langfuse.api.client import LangfuseAPI
+
+            client = LangfuseAPI(base_url=base_url, username=public_key, password=secret_key)
+            traces = client.trace.list(name="coscientist:fedot", limit=1, order_by="timestamp.desc")
+            if not traces.data:
+                return {"status": "empty"}
+            full = client.trace.get(traces.data[0].id)
+            observations = sorted(
+                (
+                    {
+                        "id": o.id,
+                        "parent_id": o.parent_observation_id,
+                        "type": o.type,
+                        "name": o.name,
+                        "start_time": o.start_time.isoformat() if o.start_time else None,
+                        "end_time": o.end_time.isoformat() if o.end_time else None,
+                        "level": o.level,
+                        "status_message": o.status_message,
+                        "input": _truncate(o.input),
+                        "output": _truncate(o.output),
+                        "usage": o.usage.dict() if o.usage else None,
+                    }
+                    for o in (full.observations or [])
+                ),
+                key=lambda o: o["start_time"] or "",
+            )
+            return {
+                "status": "ok",
+                "trace_id": full.id,
+                "name": full.name,
+                "timestamp": full.timestamp.isoformat() if full.timestamp else None,
+                "latency": full.latency,
+                "total_cost": full.total_cost,
+                "langfuse_url": f"{base_url}{full.html_path}" if full.html_path else None,
+                "observations": observations,
+            }
+
         try:
-            while True:
-                await ws.receive_text()
-        except WebSocketDisconnect:
-            print("[FedotTraceWS] client disconnected")
-        finally:
-            fedot_trace_handler.detach_websocket(ws)
+            result = await asyncio.to_thread(_fetch)
+        except Exception as exc:  # noqa: BLE001 — surface as JSON, never crash the server
+            result = {"status": "error", "detail": str(exc)}
+        return JSONResponse(result)
 
     # --- Roadmap endpoints ---
     @app.get("/api/users/{user_id}/sessions/{session_id}/roadmap")
