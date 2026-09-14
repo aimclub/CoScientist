@@ -4,6 +4,16 @@
     // =========================================================================
     // HITL UI
     // =========================================================================
+    // Internal-loop HITL requests arrive with a fixed English message
+    // ("Agent 'X' proposes its result. Please review.", legacy ones carry an
+    // "[INTERNAL_LOOP: ...]" prefix). Show a localized version instead.
+    const INTERNAL_LOOP_RE = /^(?:\[INTERNAL_LOOP:[^\]]*\]\s*)?Agent '([^']+)' proposes its result\. Please review\.?\s*$/;
+    function localizeHitlMessage(message) {
+      const m = INTERNAL_LOOP_RE.exec(message || '');
+      if (!m) return message;
+      return t('hitl.internalLoop').replace('{agent}', m[1]);
+    }
+
     function showHITL(data) {
       const panel = document.getElementById('hitl-panel');
       const feed = document.getElementById('chat-feed');
@@ -60,7 +70,7 @@
           </div>
           <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">HITL Required</h3>
         </div>
-        <p class="text-xs text-on-surface-variant leading-relaxed">${escHtml(data.message)}</p>
+        <p class="text-xs text-on-surface-variant leading-relaxed">${escHtml(localizeHitlMessage(data.message))}</p>
         ${sidebarButtons}
         ${openRoadmapSidebarBtn}
       </div>
@@ -83,7 +93,7 @@
           </div>
           <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">Human-In-The-Loop Required</h3>
         </div>
-        <p class="text-sm text-on-surface-variant leading-relaxed pl-11">${escHtml(data.message)}</p>
+        <p class="text-sm text-on-surface-variant leading-relaxed pl-11">${escHtml(localizeHitlMessage(data.message))}</p>
         <p class="text-[10px] text-outline-variant font-mono mt-2 pl-11">CTX: ${data.request_id.slice(0, 8)} · ${escHtml(data.agent_name || '')}</p>
         ${outputBlock}
         ${isProvideInput ? `
@@ -236,27 +246,37 @@
     function renderHitlForm(panel, feed, data) {
       const form = data.form;
       const rid = data.request_id;
+      // The backend sends {en, ru} dicts for the display strings. The canonical
+      // Russian `title` / `name` stay the round-trip keys in data-block / data-field.
+      const loc = (v, fallback) => {
+        if (v && typeof v === 'object') return v[currentLang] || v.ru || v.en || fallback;
+        return v || fallback;
+      };
       const blocksHtml = form.blocks.map((b, bi) => {
         const fieldsHtml = (b.fields || []).map((f, fi) => {
           const openTag = f.open
-            ? '<span class="text-[9px] text-error uppercase tracking-wider">не задано</span>'
+            ? `<span class="text-[9px] text-error uppercase tracking-wider">${escHtml(t('hitl.form.notSet'))}</span>`
             : `<span class="text-[9px] text-outline-variant uppercase tracking-wider">${escHtml(f.status || '')}</span>`;
           const val = f.open ? '' : String(f.value || '');
+          const label = loc(f.label, f.name);
+          const placeholder = loc(f.placeholder, t('hitl.form.placeholderFallback'));
           return `
             <div class="flex flex-col gap-1">
               <div class="flex items-center justify-between">
-                <label class="text-[11px] font-mono text-on-surface-variant">${escHtml(f.name)}</label>
+                <label class="text-[11px] font-mono text-on-surface-variant">${escHtml(label)}</label>
                 ${openTag}
               </div>
               <textarea id="frm-${rid}-${bi}-${fi}" data-block="${escJs(b.title)}" data-field="${escJs(f.name)}"
-                rows="2" placeholder="${escHtml(f.placeholder || 'Оставьте пустым, чтобы агент подставил рабочее значение')}"
+                rows="2" placeholder="${escHtml(placeholder)}"
                 class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50">${escHtml(val)}</textarea>
             </div>`;
         }).join('');
+        const blockTitle = loc(b.title_i18n, b.title);
+        const blockUsage = loc(b.usage_i18n, b.usage);
         return `
           <div class="mt-3 border border-outline-variant/10 rounded-lg p-3 bg-surface-container-high/40">
-            <p class="text-[11px] font-bold text-on-surface uppercase tracking-wider">${escHtml(b.title)}</p>
-            ${b.usage ? `<p class="text-[10px] text-outline-variant mb-2">${escHtml(b.usage)}</p>` : '<div class="mb-2"></div>'}
+            <p class="text-[11px] font-bold text-on-surface uppercase tracking-wider">${escHtml(blockTitle)}</p>
+            ${blockUsage ? `<p class="text-[10px] text-outline-variant mb-2">${escHtml(blockUsage)}</p>` : '<div class="mb-2"></div>'}
             <div class="flex flex-col gap-2">${fieldsHtml}</div>
           </div>`;
       }).join('');
@@ -264,10 +284,12 @@
       panel.classList.remove('hidden');
       panel.innerHTML = `
         <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-2">
-          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">Рамка исследования</h3>
-          <p class="text-[11px] text-on-surface-variant">Заполните форму в чате. Пустые поля агент заполнит сам.</p>
+          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${escHtml(t('hitl.form.sidebarTitle'))}</h3>
+          <p class="text-[11px] text-on-surface-variant">${escHtml(t('hitl.form.sidebarHint'))}</p>
         </div>`;
 
+      const formTitle = loc(form.title_i18n, form.title || t('hitl.form.title'));
+      const formIntro = loc(form.intro_i18n, form.intro || data.message || '');
       feed.innerHTML += `
         <div id="hitl-controls-${rid}" class="my-6 relative msg-enter">
           <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
@@ -275,16 +297,16 @@
               <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
                 <span class="material-symbols-outlined text-on-primary text-sm">fact_check</span>
               </div>
-              <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${escHtml(form.title || 'Рамка исследования')}</h3>
+              <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${escHtml(formTitle)}</h3>
             </div>
-            <p class="text-xs text-on-surface-variant leading-relaxed">${escHtml(form.intro || data.message || '')}</p>
+            <p class="text-xs text-on-surface-variant leading-relaxed">${escHtml(formIntro)}</p>
             ${blocksHtml}
             <div class="flex flex-wrap gap-3 mt-4">
               <button onclick="respondHITLForm('${rid}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-                <span class="material-symbols-outlined text-base">check_circle</span> Сохранить рамку
+                <span class="material-symbols-outlined text-base">check_circle</span> ${escHtml(t('hitl.form.save'))}
               </button>
               <button onclick="respondHITLForm('${rid}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
-                <span class="material-symbols-outlined text-base">skip_next</span> Пропустить (агент решит)
+                <span class="material-symbols-outlined text-base">skip_next</span> ${escHtml(t('hitl.form.skip'))}
               </button>
             </div>
           </div>
@@ -316,6 +338,6 @@
       document.getElementById('hitl-panel').classList.add('hidden');
       disableHitlControls(requestId);
       const n = formValues ? Object.values(formValues).reduce((s, o) => s + Object.keys(o).length, 0) : 0;
-      addSystemMsg(collect ? `✓ Рамка сохранена (${n} поле(й) заданы оператором)` : '→ Рамка пропущена — агент подставит значения');
+      addSystemMsg(collect ? t('hitl.form.saved').replace('{n}', n) : t('hitl.form.skipped'));
     }
 

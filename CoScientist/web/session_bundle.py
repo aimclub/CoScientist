@@ -191,17 +191,17 @@ async def export_session(
                         encoding="utf-8", errors="replace"
                     )
             # Collect docker-buildable bundles for completed builds
-            done_repos = {r["repo_url"] for r in snapshot
-                          if r.get("status") == "done" and r.get("repo_url")}
-            if done_repos:
+            done = [r for r in snapshot
+                    if r.get("status") == "done" and r.get("repo_url")]
+            if done:
                 try:
-                    from CoScientist.alembic.web.app import _bundle_zip
-                    for repo_url in done_repos:
-                        bundle_data = _bundle_zip(repo_url)
+                    from CoScientist.alembic.web.artifacts import _repo_name, bundle_zip
+                    from CoScientist.tools.alembic_tools import web_build_workdir
+                    for r in done:
+                        workdir = web_build_workdir(r["job_id"])
+                        bundle_data = bundle_zip(workdir, r["repo_url"]) if workdir else None
                         if bundle_data:
-                            import re
-                            name = re.sub(r"\.git$", "", repo_url.rstrip("/").split("/")[-1])
-                            mcp_bundles[name] = bundle_data
+                            mcp_bundles[_repo_name(r["repo_url"])] = bundle_data
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("Could not collect MCP bundles: %s", exc)
     except Exception as exc:  # noqa: BLE001

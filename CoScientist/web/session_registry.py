@@ -1,8 +1,10 @@
-"""Process-local user and session catalogue for the development Web UI.
+"""User and session catalogue for the development Web UI.
 
 The ADK session service owns agent state and event history.  This registry only
 adds the small amount of UI metadata ADK does not provide (nickname, title,
-last selected session).  Persistence is intentionally deferred to SQLite.
+last selected session) — and persists it to disk (see web/session_store.py), so
+past conversations can still be opened after a restart instead of vanishing
+while their graphs and artifacts stay on disk.
 """
 
 from __future__ import annotations
@@ -20,11 +22,48 @@ def _now() -> str:
 class LocalSessionRegistry:
     """Thread-safe, in-memory catalogue of local users and their sessions."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, persist: bool = True) -> None:
         self._users: dict[str, dict[str, Any]] = {}
         self._nickname_index: dict[str, str] = {}
         self._sessions: dict[tuple[str, str], dict[str, Any]] = {}
         self._lock = RLock()
+        self._persist_enabled = persist
+        if persist:
+            self._restore()
+
+    # ── persistence ──────────────────────────────────────────────────────────
+    def _restore(self) -> None:
+        """Load the catalogue written by a previous process (best-effort)."""
+        try:
+            from CoScientist.web.session_store import load_registry
+            data = load_registry()
+        except Exception:  # noqa: BLE001
+            return
+        with self._lock:
+            for user in data.get("users", []):
+                uid = user.get("id")
+                nick = user.get("nickname")
+                if not uid or not nick:
+                    continue
+                self._users[uid] = dict(user)
+                self._nickname_index[str(nick).casefold()] = uid
+            for session in data.get("sessions", []):
+                uid, sid = session.get("user_id"), session.get("id")
+                if uid in self._users and sid:
+                    # A session cannot still be running in a fresh process.
+                    session = dict(session)
+                    if session.get("status") == "processing":
+                        session["status"] = "idle"
+                    self._sessions[(uid, sid)] = session
+
+    def _save(self) -> None:
+        if not self._persist_enabled:
+            return
+        try:
+            from CoScientist.web.session_store import save_registry
+            save_registry(self._users, self._sessions)
+        except Exception:  # noqa: BLE001
+            pass
 
     def list_users(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -56,6 +95,7 @@ class LocalSessionRegistry:
             }
             self._users[user_id] = user
             self._nickname_index[nickname_key] = user_id
+            self._save()
             return dict(user)
 
     def get_user(self, user_id: str) -> Optional[dict[str, Any]]:
@@ -103,6 +143,7 @@ class LocalSessionRegistry:
             }
             self._sessions[key] = session
             self._users[user_id]["last_session_id"] = session_id
+            self._save()
             return dict(session)
 
     def get_session(self, user_id: str, session_id: str) -> Optional[dict[str, Any]]:
@@ -119,6 +160,7 @@ class LocalSessionRegistry:
             if status is not None:
                 session["status"] = status
             self._users[user_id]["last_session_id"] = session_id
+            self._save()
             return dict(session)
 
     def rename_session(self, user_id: str, session_id: str, title: str) -> dict[str, Any]:
@@ -136,6 +178,7 @@ class LocalSessionRegistry:
             session["title"] = title
             session["updated_at"] = _now()
             self._users[user_id]["last_session_id"] = session_id
+            self._save()
             return dict(session)
 
     def require_user(self, user_id: str) -> dict[str, Any]:

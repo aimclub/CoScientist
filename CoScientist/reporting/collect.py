@@ -20,6 +20,8 @@ from typing import Any, Callable, Dict, List, Optional, Set
 from CoScientist.reporting.artifact_index import load as load_artifact_index
 from CoScientist.utils.s3_refs import s3_uri
 
+from CoScientist.reporting.s3_upload import upload_and_presign
+
 logger = logging.getLogger(__name__)
 
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp")
@@ -181,6 +183,17 @@ def _download(url: str, dest: Path, timeout: int = 30) -> bool:
         return False
 
 
+def _artifact_link(dest: Path, session_id: str, kind: str, fallback: str) -> str:
+    """Presigned S3 URL for a collected artifact, else the local fallback path.
+
+    ``kind`` is ``figures`` or ``tables``; the object lands under
+    ``reports/<session_id>/<kind>/<name>``. With S3 off or on any upload
+    failure the returned markdown is byte-identical to the local-path form.
+    """
+    url = upload_and_presign(dest, f"reports/{session_id}/{kind}")
+    return url or fallback
+
+
 def collect_artifacts(
     session_id: str,
     state: Optional[Dict[str, Any]] = None,
@@ -313,7 +326,8 @@ def collect_artifacts(
                         unresolved += 1
                     continue
             figures.append(str(dest))
-            figure_blocks.append(f"### {label}\n\n![{label}](figures/{name})")
+            link = _artifact_link(dest, session_id, "figures", f"figures/{name}")
+            figure_blocks.append(f"### {label}\n\n![{label}]({link})")
             _note_source(art, dest)
         else:  # default remote artifacts to tabular
             name = f"{label}_{_url_filename(url, '.csv')}"
@@ -326,7 +340,8 @@ def collect_artifacts(
                     continue
             tables.append(str(dest))
             md = _table_to_markdown(dest)
-            head = f"### {label} — [download]({_rel(dest, report_dir)})"
+            link = _artifact_link(dest, session_id, "tables", _rel(dest, report_dir))
+            head = f"### {label} — [download]({link})"
             table_blocks.append(f"{head}\n\n{md}" if md else head)
             _note_source(art, dest)
 
@@ -360,7 +375,8 @@ def collect_artifacts(
                     dest = figures_dir / fname
                     _safe_copy(src, dest)
                     figures.append(str(dest))
-                    figure_blocks.append(f"### {stem}\n\n![{stem}](figures/{fname})")
+                    link = _artifact_link(dest, session_id, "figures", f"figures/{fname}")
+                    figure_blocks.append(f"### {stem}\n\n![{stem}]({link})")
                     ws_figures += 1
                 elif _looks_like(fname, _TABLE_EXTS):
                     if ws_tables >= _MAX_WORKSPACE_FILES:
@@ -369,7 +385,8 @@ def collect_artifacts(
                     _safe_copy(src, dest)
                     tables.append(str(dest))
                     md = _table_to_markdown(dest)
-                    head = f"### {stem} — [download](tables/{fname})"
+                    link = _artifact_link(dest, session_id, "tables", f"tables/{fname}")
+                    head = f"### {stem} — [download]({link})"
                     table_blocks.append(f"{head}\n\n{md}" if md else head)
                     ws_tables += 1
 

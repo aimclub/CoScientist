@@ -600,9 +600,44 @@ def forward_predict(
     result["metadata"] = metadata
     return result
 
+# Every tool that makes a figure, a table or a CSV stores it in S3. Without this
+# configuration the server starts, accepts a call, and then fails inside boto3.
+_REQUIRED_S3_SETTINGS = (
+    ("S3__ENDPOINT_URL", "s3_endpoint_url"),
+    ("S3__BUCKET_NAME", "s3_bucket_name"),
+    ("S3__ACCESS_KEY", "s3_access_key"),
+    ("S3__SECRET_KEY", "s3_secret_key"),
+)
+
+
+def _check_s3_settings(settings) -> None:
+    """Stop the server when the S3 configuration is incomplete.
+
+    A missing endpoint sends boto3 to the real AWS endpoint of the bucket name.
+    On a host without that egress the call blocks until the retries run out. The
+    tool returns nothing, the file reaches no bucket, and the log shows only the
+    stream teardown that follows. Refuse to start instead.
+    """
+    missing = [name for name, attr in _REQUIRED_S3_SETTINGS if not getattr(settings, attr)]
+    if missing:
+        raise SystemExit(
+            "chemical-mcp-server: missing S3 configuration: "
+            + ", ".join(missing)
+            + ". Set these in the env_file of the service. Two compose files"
+            " start this server, and they read different files:"
+            " mcp-servers/docker-compose.yml reads mcp-servers/.env, and"
+            " mcp-servers/chemical-mcp-server/docker-compose.yml reads"
+            " mcp-servers/chemical-mcp-server/.env."
+        )
+
+
 def main() -> None:
     """Entry point for the MCP server."""
     settings = get_settings()
+    _check_s3_settings(settings)
+    logger.info(
+        "S3 endpoint %s, bucket %s", settings.s3_endpoint_url, settings.s3_bucket_name,
+    )
     mcp.run(
         transport="http",
         host=settings.chem_mcp_host,

@@ -54,6 +54,10 @@ def run_web(host: str = "127.0.0.1", port: int = 8000, reload: bool = False) -> 
         port=port,
         reload=reload,
         log_level="info",
+        # Above the 5 s polling of the builds page. At uvicorn's default of 5 s
+        # a POST could land on a connection the server was closing, and the
+        # browser reported a NetworkError for an action that never arrived.
+        timeout_keep_alive=30,
     )
 
 
@@ -117,38 +121,23 @@ def _run_graph(
     user_id: Optional[str] = None,
     session_id: Optional[str] = None,
 ) -> None:
-    """Knowledge-graph utilities over legacy or user/session snapshots.
-
-    view=execution → the raw log graph; view=knowledge → the projected
-    knowledge graph (Question/Finding/Hypothesis/Method).
-    """
+    """Execution-graph utilities over legacy or user/session snapshots."""
     from CoScientist.graph import viz
 
-    if view == "memory":
-        from CoScientist.graph.memory_store import get_global_knowledge_memory
-        full = get_global_knowledge_memory().full()
+    if bool(user_id) != bool(session_id):
+        raise ValueError("--user-id and --session-id must be provided together")
+    if user_id and session_id:
+        import os
+
+        from CoScientist.graph.session_scope import storage_dir
+
+        directory = storage_dir(
+            os.getenv("GRAPH_SNAPSHOT_DIR", "./graph_runs"),
+            (user_id, session_id),
+        )
+        full = viz.load_snapshot("execution", snapshot_dir=str(directory))
     else:
-        if bool(user_id) != bool(session_id):
-            raise ValueError("--user-id and --session-id must be provided together")
-        if user_id and session_id:
-            import os
-
-            from CoScientist.graph.session_scope import storage_dir
-
-            directory = storage_dir(
-                os.getenv("GRAPH_SNAPSHOT_DIR", "./graph_runs"),
-                (user_id, session_id),
-            )
-            full = viz.load_snapshot("execution", snapshot_dir=str(directory))
-        else:
-            full = viz.load_snapshot(run_id)
-        if view == "knowledge":
-            from CoScientist.graph.knowledge import to_knowledge_graph
-            full = to_knowledge_graph(
-                full,
-                user_id=user_id,
-                session_id=session_id,
-            )
+        full = viz.load_snapshot(run_id)
 
     graph_label = session_id or run_id
 
@@ -210,8 +199,8 @@ def build_parser() -> argparse.ArgumentParser:
     graph.add_argument("--user-id", default=None, help="user id for a scoped Web/CLI snapshot.")
     graph.add_argument("--session-id", default=None, help="session id for a scoped Web/CLI snapshot.")
     graph.add_argument("--out", default=None, help="output file (viz writes HTML here).")
-    graph.add_argument("--view", choices=["execution", "knowledge", "memory"], default="execution",
-                       help="execution=session log; knowledge=session projection; memory=global knowledge memory.")
+    graph.add_argument("--view", choices=["execution"], default="execution",
+                       help="execution=the session call log.")
     return parser
 
 

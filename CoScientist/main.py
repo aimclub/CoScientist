@@ -169,7 +169,6 @@ class CoScientistManager:
 
             if self.session_service is None:
                 self.session_service = InMemorySessionService()
-
             session = await self.session_service.get_session(
                 app_name=self.app_name,
                 user_id=self.user_id,
@@ -202,6 +201,8 @@ class CoScientistManager:
             from CoScientist.graph.research.validator import BackgroundValidatorPlugin
             from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
             from CoScientist.tools.mcp_artifact_plugin import McpArtifactCapturePlugin
+            from CoScientist.verify.gate_plugin import ArtifactGatePlugin
+            from CoScientist.agents.loop_guard_plugin import RepeatCallGuardPlugin
             from CoScientist.tools.session_scope_plugin import SessionScopePlugin
 
             # Build the agent system (reads start_mode + tunable params from settings).
@@ -211,6 +212,12 @@ class CoScientistManager:
                 name=self.app_name,
                 root_agent=system.run_root,
                 plugins=[
+                    # First: deterministically refuse training on a fabricated
+                    # dataset (before_tool gate) — fabrication buys nothing.
+                    ArtifactGatePlugin(),
+                    # Refuse the Nth identical tool call: any agent can fall into a
+                    # tight loop (a collector once repeated one web search 39 times).
+                    RepeatCallGuardPlugin(),
                     EventLoggerPlugin(),
                     # Observer: reports tool use from nested AgentTool runners
                     # too, which the top-level event stream cannot see. Inert
@@ -304,36 +311,63 @@ class CoScientistManager:
 
         content = types.Content(role="user", parts=[types.Part(text=query)])
 
+        # When an agent hallucinates a tool it doesn't have, the unknown-tool guard
+        # replaces the model turn with a corrective message. On the ROOT agent that
+        # text-only turn is treated by ADK as the final answer, so the run would end
+        # on the correction ("… not in your tool list …"). Detect that and CONTINUE
+        # the same session (graph + workspace persist) with a nudge instead of
+        # stopping — bounded so a persistently-confused model can't loop forever.
+        _GUARD_SIG = "not in your tool list"
+        _nudge = types.Content(role="user", parts=[types.Part(text=(
+            "Continue the task — do not stop. Call ONLY tools you actually have: "
+            "delegate literature/research to ResearchAgent and coding/experiments "
+            "to CoderAgent or TaskExecutorAgent instead of calling their tools "
+            "yourself. Keep working until the concrete deliverable is produced."))])
+        msg = content
+
         # The report is the LAST final-response text of the run — i.e. the terminal
         # aggregator stage. If a mid-run failure (e.g. a slow MCP tool's 300s
         # timeout) aborts the invocation, we swallow it and fall through to the
         # deterministic finalizer below so captured artifacts still reach the user.
         report_markdown = ""
-        try:
-            async for event in self.runner.run_async(
-                user_id=self.user_id,
-                session_id=self.session_id,
-                new_message=content,
-                # Lift ADK's 500-LLM-call default so a long autonomous run driven by
-                # a single prompt isn't cut off mid-work (finite cost backstop).
-                run_config=RunConfig(
-                    max_llm_calls=get_settings().orchestrator.max_llm_calls
-                ),
-            ):
-                if verbose:
-                    print(
-                        f"[Event] {event.author} | {type(event).__name__} | "
-                        f"Final={event.is_final_response()}"
-                    )
-                text = self._final_text(event)
-                if text is not None:
-                    report_markdown = text
-        except Exception as exc:
-            self._run_error = exc
-            logger.error(
-                "run loop raised (%s: %s); attempting partial delivery from captured "
-                "S3 artifacts.", type(exc).__name__, str(exc)[:200],
-            )
+        for _attempt in range(6):
+            self._run_error = None
+            try:
+                async for event in self.runner.run_async(
+                    user_id=self.user_id,
+                    session_id=self.session_id,
+                    new_message=msg,
+                    # Lift ADK's 500-LLM-call default so a long autonomous run driven
+                    # by a single prompt isn't cut off mid-work (finite cost backstop).
+                    run_config=RunConfig(
+                        max_llm_calls=get_settings().orchestrator.max_llm_calls
+                    ),
+                ):
+                    if verbose:
+                        print(
+                            f"[Event] {event.author} | {type(event).__name__} | "
+                            f"Final={event.is_final_response()}"
+                        )
+                    text = self._final_text(event)
+                    if text is not None:
+                        report_markdown = text
+            except Exception as exc:
+                self._run_error = exc
+                logger.error(
+                    "run loop raised (%s: %s); attempting partial delivery from captured "
+                    "S3 artifacts.", type(exc).__name__, str(exc)[:200],
+                )
+                break
+
+            if (self._run_error is None and _GUARD_SIG in (report_markdown or "")
+                    and _attempt < 5):
+                logger.warning(
+                    "guard-correction surfaced as the final answer (hallucinated "
+                    "tool); continuing the same session with a nudge."
+                )
+                msg = _nudge
+                continue
+            break
 
         # Read session state once, for the S3 fallback and reference extraction.
         try:
@@ -388,6 +422,20 @@ class CoScientistManager:
                     "I couldn't complete this request within the available steps — the orchestrator "
                     "did not reach a tool that produced a result. Please retry or narrow the request."
                 )
+
+        # Index this research so LATER runs can find and reuse it. The graph is
+        # already persisted per session, but nothing ever read it back — without
+        # an index every run rediscovers what the system already settled. Derived
+        # and best-effort: indexing must never affect the answer.
+        try:
+            from CoScientist.graph.research.index import index_research
+            from CoScientist.graph.research.store import get_research_graph
+
+            rg = get_research_graph(user_id=self.user_id, session_id=self.session_id)
+            index_research(rg.full(), path=str(getattr(rg, "_path", "")),
+                           user_id=self.user_id, session_id=self.session_id)
+        except Exception:  # noqa: BLE001
+            pass
 
         # Package the deliverable: report.md + LaTeX (per config) + MANIFEST.json.
         return await asyncio.to_thread(

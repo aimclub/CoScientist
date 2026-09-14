@@ -10,6 +10,14 @@ from google.adk.agents.readonly_context import ReadonlyContext
 from fedotmas import MAS, HttpMCPServer
 from fedotmas.plugins import LoggingPlugin, WebSearchLimitPlugin
 
+try:  # Tracing is optional telemetry, and newer than the pinned-by-nothing dep.
+    from fedotmas.plugins import LangfusePlugin
+except ImportError:  # pragma: no cover - depends on the installed FEDOT.MAS
+    # The dependency is tracked by git URL with no version, so an environment
+    # can easily predate this plugin. Losing traces is a nuisance; refusing to
+    # import is the whole application failing to start over telemetry.
+    LangfusePlugin = None
+
 from CoScientist.tools.fedot_artifact_plugin import ArtifactCapturePlugin
 from CoScientist.logging.metrics import UsageMetricsPlugin
 from rag_tools import MCPServer
@@ -17,6 +25,7 @@ from rag_tools.storage import PostgresClient
 from rag_tools.config.settings import get_settings
 
 settings = get_settings()
+
 
 class FedotMASToolset(BaseToolset):
     """Toolset for fedotmas usage"""
@@ -104,7 +113,14 @@ class FedotMASToolset(BaseToolset):
                 # UsageMetricsPlugin bills FEDOT.MAS sub-agents' own LLM traffic
                 # against them, same as any other AgentTool sub-runner — without
                 # it their model calls are invisible to the cost ledger.
-                plugins=[LoggingPlugin(), WebSearchLimitPlugin(max_calls_per_agent=4), cap, UsageMetricsPlugin()],
+                plugins=[
+                    LoggingPlugin(),
+                    WebSearchLimitPlugin(max_calls_per_agent=4),
+                    *([LangfusePlugin(trace_name="coscientist:fedot")]
+                      if LangfusePlugin is not None else []),
+                    cap,
+                    UsageMetricsPlugin(),
+                ],
             )
             result = await mas.run(task_description, timeout=FEDOT_TIMEOUT_S)
         except (asyncio.TimeoutError, TimeoutError):
