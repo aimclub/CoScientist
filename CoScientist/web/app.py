@@ -132,6 +132,7 @@ def _apply_frontend_settings(frontend: dict) -> None:
     is always up-to-date when the system is (re)built.
     """
     from CoScientist.config import get_settings
+    _startup_settings()  # pin the launch values before the first write
     web = get_settings().web
 
     general = frontend.get("general", {})
@@ -223,12 +224,32 @@ def _apply_frontend_settings(frontend: dict) -> None:
         web.coder_mode = str(coder["mode"])
 
 
+_startup_settings_snapshot: dict | None = None
+
+
+def _startup_settings() -> dict:
+    """The settings the server was launched with (.env and settings.py).
+
+    Captured before the UI writes anything, so "reset to defaults" in the
+    settings modal restores the launch values rather than the last save.
+    """
+    global _startup_settings_snapshot
+    if _startup_settings_snapshot is None:
+        _startup_settings_snapshot = _current_settings()
+    return _startup_settings_snapshot
+
+
 def _settings_payload() -> dict:
-    """The frontend ``appSettings`` shape, read back off the config singleton.
+    """The frontend ``appSettings`` shape plus the launch values as ``defaults``.
 
     Both /api/settings endpoints answer with it, so a GET and the echo of a
     POST can never drift apart.
     """
+    return {**_current_settings(), "defaults": _startup_settings()}
+
+
+def _current_settings() -> dict:
+    """The frontend ``appSettings`` shape, read back off the config singleton."""
     from CoScientist.config import get_settings
     settings = get_settings()
     web = settings.web
@@ -962,6 +983,7 @@ def _esc(text: str) -> str:
 
 def create_app() -> FastAPI:
     os.environ["COSCIENTIST_WEB_MODE"] = "true"
+    _startup_settings()
     runtime = WebRuntime()
     _wire_hitl(runtime)
     _wire_sandbox_links(runtime)

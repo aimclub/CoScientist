@@ -20,6 +20,8 @@ const NICK_STORAGE_KEY = 'coscientist.nickname';
 const SIDE_NAV_KEY = 'coscientist.side_nav';
 const LANG_STORAGE_KEY = 'coscientist.lang';
 
+// Mirror of the server settings (/api/settings). The settings modal edits a
+// draft copy and writes it back here after a successful save.
 const appSettings = {
   general: {
     openrouterProviderSort: 'default', // 'default' | 'price' | 'throughput' | 'latency'
@@ -27,17 +29,15 @@ const appSettings = {
     startMode: 'planner',   // 'planner' | 'orchestrator' | 'orchestrator_planner'
     maxRetries: 3,
     hitlEnabled: false,
-    hitlAutoApproveTimeout: 300,
     workOrderEnabled: true,
-    workOrderVetoSeconds: -1,          // -1 = no auto-approve
-    usePlanner: true,
-    useProxy: true,
+    useProxy: true,                    // read-only: USE_PROXY in .env
     opikEnabled: false,
     autoNamingEnabled: true,
     contextInitEnabled: true,
     knowledgeGraphEnabled: true,
-    autoClearGraphEnabled: false,
+    autoClearGraphEnabled: false,      // read-only: GRAPH__AUTO_CLEAR in .env
     researchGraphEnabled: true,
+    coscientistUsername: '',
   },
   researchAgent: {
     maxSearches: 2,
@@ -47,11 +47,10 @@ const appSettings = {
     abstainScore: 0.2,
   },
   coderAgent: {
-    sandboxUrl: 'http://localhost:8884',
+    sandboxUrl: '',                    // empty: the sandbox button falls back to localhost:8884
     workspaceId: '',
     mode: 'local',
   },
-  orchestratorAgent: {},
   plannerAgent: {
     retrievalEnabled: true,
     graphEnabled: true,
@@ -62,8 +61,6 @@ const appSettings = {
   hypothesesAgent: {
     maxActiveHypotheses: 1,
   },
-  medicalAgent: {},
-  experimentAgent: {},
 };
 
 function escHtml(s) {

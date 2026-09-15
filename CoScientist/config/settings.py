@@ -302,7 +302,7 @@ class WebSettings(BaseModel):
     """
     openrouter_provider_sort: str = _default_openrouter_provider_sort()   # "default" | "price" | "throughput" | "latency"
     openrouter_provider_order: str = _default_openrouter_provider_order() # e.g. "Together, DeepInfra" or empty
-    start_mode: str = _os.getenv("START_MODE", "orchestrator")        # "init" | "planner" | "orchestrator" | "orchestrator_planner"
+    start_mode: str = _os.getenv("START_MODE", "planner")             # "init" | "planner" | "orchestrator" | "orchestrator_planner"
     max_searches: int = int(_os.getenv("RESEARCH_AGENT_SEARCHES", "2"))           # WebSearchLimiter per-turn cap
     max_retries: int = int(_os.getenv("LLM_MAX_RETRIES", "3"))
     hitl_enabled: bool = _os.getenv("HITL__ENABLED", "false").lower() in ("true", "1", "yes")

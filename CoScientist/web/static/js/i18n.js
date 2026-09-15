@@ -47,71 +47,357 @@ const i18n = {
   'rail.noTools': { en: 'No tool calls yet', ru: 'Инструменты ещё не вызывались' },
   'rail.toggle': { en: 'Show/hide agent activity', ru: 'Показать/скрыть активность агентов' },
 
-  // ── Settings modal header ──
+  // ── Settings modal (rendered by modals/settings.js) ───────────────────────
   'settings.title': { en: 'Settings', ru: 'Настройки' },
-  'settings.subtitle': { en: 'System Configuration', ru: 'Конфигурация системы' },
-
-  // ── General section ──
-  'settings.general': { en: 'General', ru: 'Общие' },
-  'settings.general.hint': {
-    en: '(Default values are set in .env or settings.py)',
-    ru: '(Значения по умолчанию задаются в .env или settings.py)'
+  'settings.search': { en: 'Search settings', ru: 'Поиск настроек' },
+  'settings.noResults': { en: 'Nothing found', ru: 'Ничего не найдено' },
+  'settings.banner': {
+    en: 'Shared by every user of this server and reset when it restarts. Permanent values live in .env.',
+    ru: 'Настройки общие для всех пользователей сервера и сбрасываются при его перезапуске. Постоянные значения задаются в .env.'
+  },
+  'settings.reset': { en: 'Reset to defaults', ru: 'Сбросить к умолчаниям' },
+  'settings.resetHint': {
+    en: 'Restore the values the server was started with (.env). Saved only after you press Save.',
+    ru: 'Вернуть значения, с которыми запущен сервер (.env). Сохраняются только после нажатия «Сохранить».'
+  },
+  'settings.advanced': { en: 'Advanced ({n})', ru: 'Расширенные ({n})' },
+  'settings.differsDefault': { en: 'Differs from default: {value}', ru: 'Отличается от значения по умолчанию: {value}' },
+  'settings.envVar': { en: 'Default comes from .env: {name}', ru: 'Значение по умолчанию задаётся в .env: {name}' },
+  'settings.goto': { en: 'Open section', ru: 'Перейти' },
+  'settings.value.on': { en: 'On', ru: 'Вкл' },
+  'settings.value.off': { en: 'Off', ru: 'Выкл' },
+  'settings.value.empty': { en: 'empty', ru: 'пусто' },
+  'settings.discard': { en: 'Discard changes', ru: 'Отменить изменения' },
+  'settings.close': { en: 'Close', ru: 'Закрыть' },
+  'settings.save': { en: 'Save', ru: 'Сохранить' },
+  'settings.confirmDiscard': {
+    en: 'You have unsaved changes. Close without saving?',
+    ru: 'Есть несохранённые изменения. Закрыть без сохранения?'
   },
 
-  'settings.startMode.label': { en: 'Session Start Mode', ru: 'Режим запуска сессии' },
-  'settings.startMode.desc': {
-    en: 'Choose which agent starts the session. <strong>PlannerAgent</strong> runs PlannerAgent first, then OrchestratorAgent. <strong>OrchestratorAgent</strong> starts directly with the orchestrator. <strong>Orchestrator as a planner</strong> gives Orchestrator the plan tool and disables PlannerAgent.',
-    ru: 'Выберите, какой агент запускает сессию. <strong>PlannerAgent</strong> сначала запускает PlannerAgent, затем OrchestratorAgent. <strong>OrchestratorAgent</strong> запускает оркестратор напрямую. <strong>Orchestrator as a planner</strong> даёт оркестратору инструмент планирования и отключает PlannerAgent.'
+  // When a change takes effect
+  'settings.scope.instant': { en: 'Immediately', ru: 'Сразу' },
+  'settings.scope.instant.hint': {
+    en: 'Takes effect right after saving, including sessions that are already running.',
+    ru: 'Действует сразу после сохранения, в том числе в уже запущенных сессиях.'
   },
-  'settings.startMode.planner': { en: 'PlannerAgent', ru: 'PlannerAgent' },
-  'settings.startMode.init': { en: 'PlannerAgent', ru: 'PlannerAgent' },
-  'settings.startMode.orchestrator': { en: 'OrchestratorAgent', ru: 'OrchestratorAgent' },
-  'settings.startMode.orchestratorPlanner': { en: 'Orchestrator as a planner', ru: 'Orchestrator в роли планировщика' },
-
-  'settings.maxRetries.label': { en: 'Max LLM Retries', ru: 'Макс. повторов LLM' },
-  'settings.maxRetries.desc': {
-    en: 'Number of LLM call retry attempts on transient network or upstream API errors.',
-    ru: 'Количество повторных попыток вызова LLM при временных сбоях сети или API.'
+  'settings.scope.session': { en: 'New sessions', ru: 'Новые сессии' },
+  'settings.scope.session.hint': {
+    en: 'Agents are built when a session first runs — sessions that already ran keep the previous value.',
+    ru: 'Агенты собираются при первом запуске сессии — уже запускавшиеся сессии сохранят прежнее значение.'
   },
-  'settings.openrouterProvider.label': { en: 'OpenRouter Provider Routing', ru: 'Маршрутизация провайдеров OpenRouter' },
-  'settings.openrouterProvider.desc': {
-    en: 'Route OpenRouter requests by strategy: Lowest Price, Lowest Latency, or Highest Throughput.',
-    ru: 'Стратегия маршрутизации запросов OpenRouter: минимальная цена, задержка или максимальная скорость.'
+  'settings.scope.browser': { en: 'This browser', ru: 'Этот браузер' },
+  'settings.scope.browser.hint': {
+    en: 'Stored in this browser and applied at once; not saved on the server.',
+    ru: 'Хранится в этом браузере и применяется сразу; на сервер не сохраняется.'
   },
-  'settings.openrouterProvider.default': { en: 'Default (Balanced)', ru: 'По умолчанию (сбалансированный)' },
-  'settings.openrouterProvider.price': { en: 'Lowest Price (Cheapest)', ru: 'Самый дешёвый (Lowest Price)' },
-  'settings.openrouterProvider.latency': { en: 'Lowest Latency', ru: 'Минимальная задержка (Lowest Latency)' },
-  'settings.openrouterProvider.throughput': { en: 'Highest Throughput', ru: 'Максимальная скорость (Highest Throughput)' },
-
-  'settings.openrouterOrder.label': { en: 'OpenRouter Preferred Provider(s)', ru: 'Приоритетный провайдер OpenRouter' },
-  'settings.openrouterOrder.desc': {
-    en: 'Pin or prioritize specific hosters (e.g. Together, DeepInfra, Fireworks, Groq) or leave empty for any.',
-    ru: 'Зафиксировать или предпочесть конкретных провайдеров (Together, DeepInfra, Fireworks, Groq) или пусто для любых.'
-  },
-  'settings.openrouterOrder.placeholder': {
-    en: 'e.g. Together, DeepInfra',
-    ru: 'например, Together, DeepInfra'
+  'settings.scope.reload': { en: 'On page reload', ru: 'После перезагрузки' },
+  'settings.scope.reload.hint': {
+    en: 'Takes effect the next time the page is opened.',
+    ru: 'Действует при следующем открытии страницы.'
   },
 
-  'settings.hitl.label': { en: 'HITL Enabled', ru: 'Включить HITL (подтверждения)' },
-  'settings.hitl.desc': {
-    en: 'Toggle Human-in-the-Loop approval for dangerous or outward-facing actions.',
-    ru: 'Включить подтверждение человеком (Human-in-the-Loop) для опасных или внешних действий.'
+  // Why a field is greyed out
+  'settings.inactive.noPlanner': {
+    en: 'Not used: in "Orchestrator plans" mode there is no separate planner.',
+    ru: 'Не действует: в режиме «Оркестратор планирует сам» отдельного планировщика нет.'
   },
-  'settings.hitlTimeout.label': { en: 'HITL Auto-Approve Timeout (s)', ru: 'Автоподтверждение HITL (сек)' },
-  'settings.hitlTimeout.desc': {
-    en: 'Seconds before auto-approving HITL requests (-1 for no timeout / wait for human).',
-    ru: 'Секунды до автоподтверждения HITL (-1 — без тайм-аута, ждать человека).'
+  'settings.inactive.knowledgeGraph': {
+    en: 'Not used: the knowledge graph is off.',
+    ru: 'Не действует: граф знаний выключен.'
   },
-  'settings.workOrder.label': { en: 'Work Orders', ru: 'Планы работы агента (Work Order)' },
-  'settings.workOrder.desc': {
-    en: 'Executor agents declare their plan and assumptions before acting (requires HITL).',
-    ru: 'Агенты-исполнители объявляют план, условия и ограничения до начала работы (нужен HITL).'
+  'settings.inactive.parentOff': {
+    en: 'Works only while "{parent}" is on.',
+    ru: 'Действует, только когда включено «{parent}».'
   },
-  'settings.workOrderVeto.label': { en: 'Work Order Veto Window (s)', ru: 'Окно вето плана работы (сек)' },
-  'settings.workOrderVeto.desc': {
-    en: 'Compute-tier work orders start automatically after this many seconds unless paused (-1 — no auto-approve, wait for human).',
-    ru: 'Планы работы уровня «вычисления» стартуют автоматически через столько секунд, если их не поставить на паузу (-1 — без автоподтверждения, ждать человека).'
+
+  // Validation
+  'settings.err.rangeInt': { en: 'Enter a whole number from {min} to {max}', ru: 'Введите целое число от {min} до {max}' },
+  'settings.err.rangeFloat': { en: 'Enter a number from {min} to {max}', ru: 'Введите число от {min} до {max}' },
+  'settings.err.abstainAboveKeep': {
+    en: 'Must not exceed the keep threshold ({keep})',
+    ru: 'Не может быть больше порога отбора ({keep})'
+  },
+  'settings.err.sandboxRequired': {
+    en: 'Required: without a URL the OpenHands mode cannot run code',
+    ru: 'Укажите адрес: без него режим OpenHands не сможет выполнять код'
+  },
+  'settings.err.url': { en: 'The URL must start with http:// or https://', ru: 'Адрес должен начинаться с http:// или https://' },
+
+  // Footer status
+  'settings.status.loading': { en: 'Loading…', ru: 'Загрузка…' },
+  'settings.status.loadFailed': {
+    en: 'Could not load settings from the server — showing the last known values.',
+    ru: 'Не удалось загрузить настройки с сервера — показаны последние известные значения.'
+  },
+  'settings.status.clean': { en: 'No unsaved changes', ru: 'Нет несохранённых изменений' },
+  'settings.status.dirty': { en: 'Unsaved changes: {n}', ru: 'Несохранённых изменений: {n}' },
+  'settings.status.errors': { en: 'Fix errors to save: {n}', ru: 'Исправьте ошибки, чтобы сохранить: {n}' },
+  'settings.status.saving': { en: 'Saving…', ru: 'Сохранение…' },
+  'settings.status.saved': { en: 'Saved.', ru: 'Сохранено.' },
+  'settings.status.savedSession': {
+    en: 'Saved. Some changes take effect in new sessions.',
+    ru: 'Сохранено. Часть изменений вступит в силу в новых сессиях.'
+  },
+  'settings.status.savedReload': {
+    en: 'Saved. The change takes effect after a page reload.',
+    ru: 'Сохранено. Изменение вступит в силу после перезагрузки страницы.'
+  },
+  'settings.status.saveFailed': { en: 'Could not save: {error}', ru: 'Не удалось сохранить: {error}' },
+
+  // Sections
+  'settings.section.interface': { en: 'Interface', ru: 'Интерфейс' },
+  'settings.section.interface.desc': { en: 'How the web interface looks and behaves.', ru: 'Как выглядит и ведёт себя веб-интерфейс.' },
+  'settings.section.research': { en: 'Research flow', ru: 'Ход исследования' },
+  'settings.section.research.desc': {
+    en: 'How a session starts and how the work gets planned.',
+    ru: 'С чего начинается сессия и как планируется работа.'
+  },
+  'settings.section.approvals': { en: 'Approvals', ru: 'Подтверждения' },
+  'settings.section.approvals.desc': {
+    en: 'When the system stops and waits for your decision.',
+    ru: 'Когда система останавливается и ждёт вашего решения.'
+  },
+  'settings.section.tools': { en: 'Tools & code', ru: 'Инструменты и код' },
+  'settings.section.tools.desc': {
+    en: 'Web search, code execution and MCP tool selection.',
+    ru: 'Поиск в сети, выполнение кода и подбор MCP-инструментов.'
+  },
+  'settings.section.models': { en: 'Models', ru: 'Модели' },
+  'settings.section.models.desc': {
+    en: 'How requests to language models are routed through OpenRouter.',
+    ru: 'Как запросы к языковым моделям распределяются через OpenRouter.'
+  },
+  'settings.section.graphs': { en: 'Graphs & memory', ru: 'Графы и память' },
+  'settings.section.graphs.desc': {
+    en: 'What the system records about runs and research.',
+    ru: 'Что система запоминает о запусках и исследовании.'
+  },
+  'settings.section.system': { en: 'System', ru: 'Система' },
+  'settings.section.system.desc': {
+    en: 'Server-level options and values that are set only in .env.',
+    ru: 'Параметры сервера и значения, которые задаются только в .env.'
+  },
+
+  // Groups inside sections
+  'settings.group.planning': { en: 'Planning', ru: 'Планирование' },
+  'settings.group.search': { en: 'Web search', ru: 'Поиск в сети' },
+  'settings.group.code': { en: 'Code execution', ru: 'Выполнение кода' },
+  'settings.group.toolSelection': { en: 'Tool selection', ru: 'Подбор инструментов' },
+  'settings.group.toolSelection.desc': {
+    en: 'How TaskExecutorAgent decides which of the found MCP tools to use.',
+    ru: 'Как TaskExecutorAgent решает, какие из найденных MCP-инструментов использовать.'
+  },
+  'settings.group.danger': { en: 'Delete data', ru: 'Удаление данных' },
+  'settings.group.danger.desc': {
+    en: 'These actions run immediately and are not affected by Save or Discard.',
+    ru: 'Эти действия выполняются сразу и не зависят от кнопок «Сохранить» и «Отменить».'
+  },
+  'settings.group.envOnly': { en: 'Set only in .env', ru: 'Задаётся только в .env' },
+  'settings.group.envOnly.desc': {
+    en: 'To change these, edit .env and restart the server.',
+    ru: 'Чтобы изменить, отредактируйте .env и перезапустите сервер.'
+  },
+
+  // Fields — Interface
+  'settings.f.language.label': { en: 'Interface language', ru: 'Язык интерфейса' },
+  'settings.f.language.desc': {
+    en: 'Language of menus and hints. The report language is chosen separately, next to the message box.',
+    ru: 'Язык меню и подсказок. Язык отчёта выбирается отдельно — рядом с полем ввода запроса.'
+  },
+  'settings.f.autoNaming.label': { en: 'Auto-name sessions', ru: 'Автоназвание сессий' },
+  'settings.f.autoNaming.desc': {
+    en: 'Title a new session after its first request.',
+    ru: 'Придумывать название новой сессии по первому запросу.'
+  },
+
+  // Fields — Research flow
+  'settings.f.startMode.label': { en: 'How a session starts', ru: 'С чего начинается сессия' },
+  'settings.f.startMode.desc': { en: 'Who picks up your request first.', ru: 'Кто первым берётся за ваш запрос.' },
+  'settings.f.startMode.opt.planner': { en: 'Plan first', ru: 'Сначала план' },
+  'settings.f.startMode.opt.planner.desc': {
+    en: 'The planner writes a roadmap, then the orchestrator carries it out step by step.',
+    ru: 'Планировщик составляет план, затем оркестратор выполняет его по шагам.'
+  },
+  'settings.f.startMode.opt.planner.flow': { en: 'Planner → Orchestrator', ru: 'Планировщик → Оркестратор' },
+  'settings.f.startMode.opt.orchestrator': { en: 'Straight to work', ru: 'Сразу к делу' },
+  'settings.f.startMode.opt.orchestrator.desc': {
+    en: 'The orchestrator starts right away, without an upfront roadmap.',
+    ru: 'Оркестратор начинает работу сразу, без предварительного плана.'
+  },
+  'settings.f.startMode.opt.orchestrator.flow': { en: 'Orchestrator', ru: 'Оркестратор' },
+  'settings.f.startMode.opt.orchestrator_planner': { en: 'Orchestrator plans', ru: 'Оркестратор планирует сам' },
+  'settings.f.startMode.opt.orchestrator_planner.desc': {
+    en: 'The orchestrator writes the roadmap itself; the separate planner is switched off.',
+    ru: 'Оркестратор сам составляет план; отдельный планировщик отключён.'
+  },
+  'settings.f.startMode.opt.orchestrator_planner.flow': { en: 'Orchestrator + plan', ru: 'Оркестратор + план' },
+  'settings.f.contextInit.label': { en: 'Research frame', ru: 'Рамка исследования' },
+  'settings.f.contextInit.desc': {
+    en: 'Before the run, an agent drafts the question, constraints and success criteria and records them in the research graph. With approvals on, you can edit the frame in a form.',
+    ru: 'Перед стартом агент формулирует вопрос, ограничения и критерии успеха и заносит их в граф исследования. При включённых подтверждениях рамку можно поправить в форме.'
+  },
+  'settings.f.maxHypotheses.label': { en: 'Hypotheses tested at once', ru: 'Гипотез проверяется одновременно' },
+  'settings.f.maxHypotheses.desc': {
+    en: '1 — one at a time: the best hypothesis is picked and the rest wait. More — several branches are tested in parallel, which takes longer and costs more.',
+    ru: '1 — по одной: выбирается лучшая гипотеза, остальные ждут. Больше — несколько веток проверяются параллельно, это дольше и дороже.'
+  },
+  'settings.f.critic.label': { en: 'Review the plan with a critic', ru: 'Проверять план критиком' },
+  'settings.f.critic.desc': {
+    en: 'Before execution a separate model checks the roadmap (assignees, coverage, dependencies) and sends it back if it objects. One extra model call per review.',
+    ru: 'Перед выполнением отдельная модель проверяет план (исполнители, полнота, зависимости) и при замечаниях возвращает его на доработку. +1 вызов модели на проверку.'
+  },
+  'settings.f.criticRounds.label': { en: 'Times the plan can be sent back', ru: 'Сколько раз можно вернуть план' },
+  'settings.f.criticRounds.desc': {
+    en: '1 — a single review, after which the revised plan stands. Every extra round is a full replan.',
+    ru: '1 — одна проверка, после доработки план принимается. Каждый дополнительный раунд — полное перепланирование.'
+  },
+  'settings.f.mergeTasks.label': { en: 'Merge adjacent tasks', ru: 'Объединять соседние задачи' },
+  'settings.f.mergeTasks.desc': {
+    en: 'Consecutive tasks for the same executor run as one. Turn off to run every planned task separately.',
+    ru: 'Идущие подряд задачи одного исполнителя выполняются как одна. Выключите, чтобы каждая задача плана шла отдельно.'
+  },
+  'settings.f.plannerRetrieval.label': { en: 'Planner sees the tool catalog', ru: 'Планировщик видит каталог инструментов' },
+  'settings.f.plannerRetrieval.desc': {
+    en: 'The planner looks up suitable MCP tools and names them in tasks. When off, the plan describes only the expected outcome.',
+    ru: 'Планировщик ищет подходящие MCP-инструменты и называет их в задачах. Если выключено — план описывает только ожидаемый результат.'
+  },
+  'settings.f.plannerGraph.label': { en: 'Planner reads the knowledge graph', ru: 'Планировщик читает граф знаний' },
+  'settings.f.plannerGraph.desc': {
+    en: 'The planner takes past runs into account and does not re-plan work that is already done.',
+    ru: 'Планировщик учитывает прошлые запуски и не планирует заново уже сделанную работу.'
+  },
+
+  // Fields — Approvals
+  'settings.f.hitl.label': { en: 'Ask for my approval', ru: 'Спрашивать моё подтверждение' },
+  'settings.f.hitl.desc': {
+    en: 'Before risky actions (outward-facing requests, irreversible commands) and at key steps, agents stop and wait for your decision in the chat.',
+    ru: 'Перед рискованными действиями (внешние запросы, необратимые команды) и на ключевых шагах агенты останавливаются и ждут вашего решения в чате.'
+  },
+  'settings.f.workOrder.label': { en: "Show the agent's work plan", ru: 'Показывать план работы агента' },
+  'settings.f.workOrder.desc': {
+    en: 'Before starting, an executor agent shows its goal, steps, tools and assumptions. You can accept, correct or reject the plan.',
+    ru: 'Перед началом агент-исполнитель показывает цель, шаги, инструменты и допущения. План можно принять, поправить или отклонить.'
+  },
+
+  // Fields — Tools & code
+  'settings.f.maxSearches.label': { en: 'Web searches per turn', ru: 'Поисков в сети за один ход' },
+  'settings.f.maxSearches.desc': {
+    en: 'How many times an agent may search the web before it must answer from what it found. 0 — web search is off.',
+    ru: 'Сколько раз агент может искать в интернете, прежде чем отвечать по найденному. 0 — поиск запрещён.'
+  },
+  'settings.f.coderMode.label': { en: 'Where code runs', ru: 'Где выполняется код' },
+  'settings.f.coderMode.desc': {
+    en: 'Locally — the agent runs commands and edits files on this server. OpenHands — tasks go to an agent in a remote sandbox.',
+    ru: 'Локально — агент сам запускает команды и правит файлы на этом сервере. OpenHands — задачи передаются агенту в удалённой песочнице.'
+  },
+  'settings.f.coderMode.opt.local': { en: 'Locally', ru: 'Локально' },
+  'settings.f.coderMode.opt.openhands': { en: 'OpenHands sandbox', ru: 'Песочница OpenHands' },
+  'settings.f.sandboxUrl.label': { en: 'Sandbox URL', ru: 'Адрес песочницы' },
+  'settings.f.sandboxUrl.desc': {
+    en: 'Server that executes code in isolation. Required in OpenHands mode.',
+    ru: 'Сервер изолированного выполнения кода. Обязателен в режиме OpenHands.'
+  },
+  'settings.f.workspaceId.label': { en: 'Persistent workspace', ru: 'Постоянная рабочая папка' },
+  'settings.f.workspaceId.desc': {
+    en: 'Folder name where code is kept between tasks. Empty — a folder is created automatically.',
+    ru: 'Имя папки, в которой код сохраняется между задачами. Пусто — папка создаётся автоматически.'
+  },
+  'settings.f.workspaceId.placeholder': { en: 'e.g. workspace_1', ru: 'например, workspace_1' },
+  'settings.f.keepScore.label': { en: 'Keep threshold', ru: 'Порог отбора' },
+  'settings.f.keepScore.desc': {
+    en: 'A found tool is given to the agent if its relevance to the task is at least this value (0–1).',
+    ru: 'Найденный инструмент передаётся агенту, если его релевантность задаче не ниже этого значения (0–1).'
+  },
+  'settings.f.abstainScore.label': { en: 'Hand-off threshold', ru: 'Порог передачи в CoderAgent' },
+  'settings.f.abstainScore.desc': {
+    en: 'If no tool reaches the keep threshold: the best is at least this value — the top two are used anyway; below it — the task goes to CoderAgent.',
+    ru: 'Если ни один инструмент не прошёл порог отбора: лучший не ниже этого значения — берутся два лучших; ниже — задача передаётся CoderAgent.'
+  },
+
+  // Fields — Models
+  'settings.f.providerSort.label': { en: 'Provider priority', ru: 'Приоритет при выборе провайдера' },
+  'settings.f.providerSort.desc': {
+    en: 'OpenRouter picks which host runs the model. Applies only to models served through OpenRouter.',
+    ru: 'OpenRouter выбирает, у какого хостера запускать модель. Действует только для моделей через OpenRouter.'
+  },
+  'settings.f.providerSort.opt.default': { en: 'Balanced', ru: 'Баланс' },
+  'settings.f.providerSort.opt.price': { en: 'Price', ru: 'Цена' },
+  'settings.f.providerSort.opt.latency': { en: 'Latency', ru: 'Отклик' },
+  'settings.f.providerSort.opt.throughput': { en: 'Throughput', ru: 'Скорость' },
+  'settings.f.providerOrder.label': { en: 'Preferred providers', ru: 'Предпочтительные провайдеры' },
+  'settings.f.providerOrder.desc': {
+    en: 'These hosts are tried first, in the order shown. Empty — any host.',
+    ru: 'Эти хостеры пробуются первыми, в указанном порядке. Пусто — любые.'
+  },
+  'settings.f.providerOrder.placeholder': { en: 'Type a name and press Enter', ru: 'Введите название и нажмите Enter' },
+  'settings.f.maxRetries.label': { en: 'Retries on failures', ru: 'Повторы при сбоях' },
+  'settings.f.maxRetries.desc': {
+    en: 'How many times to retry a model call after a temporary network or API error. 0 — do not retry.',
+    ru: 'Сколько раз повторять запрос к модели при временной ошибке сети или API. 0 — не повторять.'
+  },
+
+  // Fields — Graphs & memory
+  'settings.f.knowledgeGraph.label': { en: 'Knowledge graph', ru: 'Граф знаний' },
+  'settings.f.knowledgeGraph.desc': {
+    en: 'Records how each run went so agents can build on past work, and the Knowledge Graph view shows it. When off, nothing is recorded and agents work without history.',
+    ru: 'Записывает ход каждого запуска: агенты опираются на прошлую работу, а вкладка «Граф знаний» её показывает. Если выключить — ничего не записывается, и агенты работают без истории.'
+  },
+  'settings.f.researchGraph.label': { en: 'Research graph', ru: 'Граф исследования' },
+  'settings.f.researchGraph.desc': {
+    en: 'A shared board where agents record findings, hypotheses and conclusions. When off, agents pass context only through their answers.',
+    ru: 'Общая доска, куда агенты заносят находки, гипотезы и выводы. Если выключить — агенты передают контекст только через свои ответы.'
+  },
+  'settings.danger.session.label': { en: "Clear this session's graphs", ru: 'Очистить графы этой сессии' },
+  'settings.danger.session.desc': {
+    en: 'Removes the execution and research graphs of the open session. The research graph is archived first; the execution graph keeps only the agent list.',
+    ru: 'Удаляет граф выполнения и граф исследования открытой сессии. Граф исследования сначала архивируется; в графе выполнения остаётся только список агентов.'
+  },
+  'settings.danger.session.btn': { en: 'Clear', ru: 'Очистить' },
+  'settings.danger.session.confirm': {
+    en: 'Clear the graphs of session "{name}"? This cannot be undone from the interface.',
+    ru: 'Очистить графы сессии «{name}»? Отменить это из интерфейса нельзя.'
+  },
+  'settings.danger.memory.label': { en: 'Delete the shared knowledge memory', ru: 'Удалить общую память знаний' },
+  'settings.danger.memory.desc': {
+    en: 'There is one knowledge memory for the whole server — it disappears for every session at once. An archive is made first.',
+    ru: 'Память знаний одна на весь сервер — она исчезнет во всех сессиях сразу. Перед удалением создаётся архив.'
+  },
+  'settings.danger.memory.btn': { en: 'Delete', ru: 'Удалить' },
+  'settings.danger.memory.confirm': {
+    en: 'Type "{word}" to delete the memory for all sessions.',
+    ru: 'Введите «{word}», чтобы удалить память для всех сессий.'
+  },
+  'settings.danger.memory.word': { en: 'delete', ru: 'удалить' },
+  'settings.danger.noSession': { en: 'Open a session first.', ru: 'Сначала откройте сессию.' },
+  'settings.danger.confirmBtn': { en: 'Yes, delete', ru: 'Да, удалить' },
+  'settings.danger.cancel': { en: 'Cancel', ru: 'Отмена' },
+  'settings.danger.deleting': { en: 'Deleting…', ru: 'Удаление…' },
+  'settings.danger.done': { en: 'Deleted: {what}.', ru: 'Удалено: {what}.' },
+  'settings.danger.nothing': { en: 'nothing', ru: 'ничего' },
+  'settings.danger.failed': { en: 'Deletion failed: {error}', ru: 'Ошибка удаления: {error}' },
+
+  // Fields — System
+  'settings.f.defaultUsername.label': { en: 'Default user', ru: 'Пользователь по умолчанию' },
+  'settings.f.defaultUsername.desc': {
+    en: 'Selected automatically when the interface opens; created if it does not exist yet.',
+    ru: 'Выбирается автоматически при открытии интерфейса; если такого нет — создаётся.'
+  },
+  'settings.f.defaultUsername.placeholder': { en: 'not set', ru: 'не задан' },
+  'settings.f.opik.label': { en: 'Opik tracing', ru: 'Трассировка в Opik' },
+  'settings.f.opik.desc': {
+    en: 'Send agent logs and traces to the Opik dashboard for debugging.',
+    ru: 'Отправлять логи и трассы агентов в дашборд Opik для отладки.'
+  },
+  'settings.f.useProxy.label': { en: 'Corporate proxy', ru: 'Корпоративный прокси' },
+  'settings.f.useProxy.desc': {
+    en: 'Model calls go through the proxy from SERVICES__PROXY_URL.',
+    ru: 'Запросы к моделям идут через прокси из SERVICES__PROXY_URL.'
+  },
+  'settings.f.autoClearGraph.label': { en: 'Clear graphs before a session', ru: 'Очищать графы перед сессией' },
+  'settings.f.autoClearGraph.desc': {
+    en: "A session's graphs are cleared before its agents are first built.",
+    ru: 'Графы сессии очищаются перед первой сборкой её агентов.'
   },
 
   // ── Work Order cards (hitl.js) ──
@@ -253,174 +539,6 @@ const i18n = {
   'hitl.ph.input': { en: 'Enter instructions for the agent...', ru: 'Введите инструкции для агента...' },
   'hitl.ph.reply': { en: 'Your answer to the question, then «Reply»', ru: 'Ваш ответ на вопрос — затем «Ответить»' },
   'hitl.ph.revise': { en: 'Corrections for the agent, then Revise', ru: 'Введите правки для агента, затем нажмите «Доработать»' },
-
-  // ── Settings ─────────────────────────────────────────────────────────────
-  'settings.usePlanner.label': { en: 'Use Planner', ru: 'Использовать планировщик' },
-  'settings.usePlanner.note': {
-    en: '(disabled when using PlannerAgent mode)',
-    ru: '(отключено в режиме PlannerAgent)'
-  },
-  'settings.usePlanner.desc': {
-    en: 'Whether the orchestrator delegates to PlannerAgent for task decomposition.',
-    ru: 'Делегирует ли оркестратор декомпозицию задач компоненту PlannerAgent.'
-  },
-
-  'settings.contextInit.label': { en: 'Research Frame', ru: 'Рамка исследования' },
-  'settings.contextInit.desc': {
-    en: 'Draft research frame and seed it into the research graph before the orchestrator runs.',
-    ru: 'Формировать фрейм исследования и добавлять его в граф исследований до запуска оркестратора.'
-  },
-
-  'settings.useProxy.label': { en: 'Use Corporate Proxy', ru: 'Корпоративный прокси' },
-  'settings.useProxy.note': { en: '(set only in env)', ru: '(задаётся в .env)' },
-  'settings.useProxy.desc': {
-    en: 'Route LLM model calls through corporate proxy (SERVICES__PROXY_URL).',
-    ru: 'Маршрутизировать вызовы моделей LLM через корпоративный прокси (SERVICES__PROXY_URL).'
-  },
-
-  'settings.opik.label': { en: 'Enable Opik Tracing', ru: 'Включить трассировку Opik' },
-  'settings.opik.desc': {
-    en: 'Send execution logs and agent traces to your Opik dashboard.',
-    ru: 'Отправлять логи выполнения и трассировки агентов в дашборд Opik.'
-  },
-
-  'settings.autoNaming.label': { en: 'Auto-name Sessions', ru: 'Авто-наименование сессий' },
-  'settings.autoNaming.desc': {
-    en: 'Automatically generate session titles based on the first prompt.',
-    ru: 'Автоматически генерировать названия сессий на основе первого запроса.'
-  },
-
-  'settings.defaultUsername.label': { en: 'Default Username', ru: 'Имя пользователя по умолчанию' },
-  'settings.defaultUsername.desc': {
-    en: 'Auto-selects user on startup (can also be set via COSCIENTIST_USERNAME in .env).',
-    ru: 'Автоматически выбирает пользователя при старте (задаётся также через COSCIENTIST_USERNAME в .env).'
-  },
-  'settings.defaultUsername.placeholder': {
-    en: 'e.g. COSCIENTIST_USERNAME in .env',
-    ru: 'например COSCIENTIST_USERNAME в .env'
-  },
-
-  // ── Graphs section ──
-  'settings.graphs': { en: 'Graphs', ru: 'Графы' },
-  'settings.knowledgeGraph.label': { en: 'Knowledge Graph', ru: 'Граф знаний' },
-  'settings.knowledgeGraph.desc': {
-    en: 'Records the execution graph of every run and lets agents read it (<span class="font-mono">get_graph_history</span>, <span class="font-mono">get_agents_info</span>, <span class="font-mono">search_knowledge_memory</span>). When off, nothing is recorded, the Graph view stays empty, and the tools disappear from every agent and from their prompts.',
-    ru: 'Записывает граф выполнения каждого запуска и позволяет агентам читать его (<span class="font-mono">get_graph_history</span>, <span class="font-mono">get_agents_info</span>, <span class="font-mono">search_knowledge_memory</span>). Когда выключен, ничего не записывается, вкладка графа пуста, а инструменты убираются у всех агентов.'
-  },
-
-  'settings.researchGraph.label': { en: 'Research Graph', ru: 'Граф исследований' },
-  'settings.researchGraph.desc': {
-    en: 'The typed research blackboard agents commit findings to (<span class="font-mono">research_commit</span>, <span class="font-mono">research_context_slice</span>, orchestrator triggers). When off, the whole feature — tools and prompt sections — drops out and agents pass context through their answers only.',
-    ru: 'Доска исследований, куда агенты записывают результаты (<span class="font-mono">research_commit</span>, <span class="font-mono">research_context_slice</span>, триггеры оркестратора). Когда выключен, инструменты и секции промптов отключаются, контекст передается только в ответах.'
-  },
-
-  'settings.graphs.sessionNote': {
-    en: 'Applies to new sessions — the agent system is built once per session.',
-    ru: 'Применяется к новым сессиям — система агентов инициализируется при создании сессии.'
-  },
-
-  'settings.deleteGraph.label': { en: 'Delete Graph Data', ru: 'Удалить данные графов' },
-  'settings.deleteGraph.desc': {
-    en: 'Wipe what the graphs have recorded. The execution and research graphs belong to the <strong>current session</strong>; the knowledge memory is installation-wide and disappears for every session at once. The research graph and the knowledge memory are archived next to their files first; the execution graph keeps only the agent roster.',
-    ru: 'Очистить записанные данными графов. Графы выполнения и исследований относятся к <strong>текущей сессии</strong>; память знаний распространяется на всю систему. Граф исследований и память знаний архивируются; граф выполнения сохраняет только список агентов.'
-  },
-  'settings.deleteGraph.optExecution': { en: 'Execution (session)', ru: 'Выполнение (сессия)' },
-  'settings.deleteGraph.optResearch': { en: 'Research (session)', ru: 'Исследования (сессия)' },
-  'settings.deleteGraph.optMemory': { en: 'Knowledge memory (global)', ru: 'Память знаний (глобальная)' },
-  'settings.deleteGraph.optAll': { en: 'All of the above', ru: 'Всё вышеперечисленное' },
-  'settings.deleteGraph.btn': { en: 'Delete', ru: 'Удалить' },
-
-  'settings.autoClearGraph.label': { en: 'Auto-clear Graph Before Session', ru: 'Автоочистка графов перед сессией' },
-  'settings.autoClearGraph.note': { en: '(set only in env)', ru: '(задаётся в .env)' },
-  'settings.autoClearGraph.desc': {
-    en: 'Automatically clear graph data before each session starts.',
-    ru: 'Автоматически очищать данные графов перед началом каждой сессии.'
-  },
-
-  // ── PlannerAgent section ──
-  'settings.planner.retrieval.label': { en: 'Retrieval Tools', ru: 'Инструменты поиска' },
-  'settings.planner.retrieval.desc': {
-    en: 'Let the planner search the MCP registry (<span class="font-mono">retrieve_tools</span>, <span class="font-mono">get_server_info</span>) before writing the roadmap. When off, it plans by outcome and never names concrete tools or server ids.',
-    ru: 'Разрешить планировщику искать в реестре MCP (<span class="font-mono">retrieve_tools</span>, <span class="font-mono">get_server_info</span>) перед созданием плана. Когда выключено, планирование происходит без указания конкретных инструментов.'
-  },
-
-  'settings.planner.graph.label': { en: 'Graph Tools', ru: 'Инструменты графа' },
-  'settings.planner.graph.note': { en: '(disabled — Knowledge Graph is off)', ru: '(отключено — Граф знаний выключен)' },
-  'settings.planner.graph.desc': {
-    en: 'Let the planner read the shared knowledge graph (history, agent roster, knowledge memory) so it does not re-plan finished work.',
-    ru: 'Разрешить планировщику читать общий граф знаний (историю, список агентов, память знаний), чтобы не планировать заново выполненную работу.'
-  },
-
-  'settings.planner.critic.label': { en: 'Plan Critic', ru: 'Критик плана' },
-  'settings.planner.critic.desc': {
-    en: 'Have an LLM critic review the registered roadmap (assignees, coverage, dependencies) before it is executed, and send it back to the planner if it objects. Runs whether or not HITL is on, before a human sees the plan. Costs one extra LLM call per planning run.',
-    ru: 'Проверять созданный план с помощью LLM-критика (исполнители, покрытие, зависимости) перед выполнением и возвращать планировщику при наличии замечаний. Добавляет 1 вызов LLM на запуск планирования.'
-  },
-
-  'settings.planner.rounds.label': { en: 'Revision Rounds', ru: 'Раунды доработки' },
-  'settings.planner.rounds.desc': {
-    en: 'How many times the critic may send the roadmap back. <span class="font-mono">1</span> — it gets a single say and the rewrite then stands. Each extra round is a full replan, and a critic that never approves would otherwise keep the planner going.',
-    ru: 'Сколько раз критик может возвращать план на доработку. <span class="font-mono">1</span> — одна проверка, после чего версия утверждается. Каждый доп. раунд — полный переутверждённый план.'
-  },
-
-  'settings.planner.mergeTasks.label': { en: 'Merge Tasks', ru: 'Объединение задач' },
-  'settings.planner.mergeTasks.desc': {
-    en: 'Automatically merge consecutive tasks assigned to the same executor (CoderAgent / TaskExecutorAgent) into a single task. Turn off to keep every task the planner wrote as a separate unit of work.',
-    ru: 'Автоматически объединять последовательные задачи, назначенные одному исполнителю (CoderAgent / TaskExecutorAgent), в одну задачу.'
-  },
-
-  // ── ResearchAgent section ──
-  'settings.research.maxSearches.label': { en: 'Per-turn — max searches', ru: 'Макс. поисков за ход' },
-  'settings.research.maxSearches.desc': {
-    en: 'Maximum number of web search tool calls per agent turn. After this limit, the agent must synthesize from existing results.',
-    ru: 'Максимальное количество вызовов поиска в сети за один ход агента. После превышения лимита агент должен отвечать из имеющихся данных.'
-  },
-
-  // ── HypothesesAgent section ──
-  'settings.hypotheses.maxActive.label': { en: 'Max Active Hypotheses', ru: 'Макс. активных гипотез' },
-  'settings.hypotheses.maxActive.desc': {
-    en: 'How many hypotheses are kept as active (<span class="font-mono">formulated</span>) simultaneously for parallel verification. <span class="font-mono">1</span> — the classic "one at a time" mode: the agent picks the single best hypothesis and postpones the rest. Higher values let the orchestrator verify several branches in parallel.',
-    ru: 'Сколько гипотез одновременно сохраняются активными (<span class="font-mono">formulated</span>) для параллельной проверки. <span class="font-mono">1</span> — режим "по одной": выбирается 1 лучшая гипотеза. Более высокие значения позволяют проверять несколько веток параллельно.'
-  },
-
-  // ── CoderAgent section ──
-  'settings.coder.mode.label': { en: 'Coder Execution Mode', ru: 'Режим выполнения Coder' },
-  'settings.coder.mode.note': { en: '(no Sandbox URL set — OpenHands mode requires a Sandbox URL)', ru: '(не задан URL песочницы — для режима OpenHands требуется URL песочницы)' },
-  'settings.coder.mode.desc': {
-    en: 'Choose execution mode: <strong>local</strong> uses in-process tools (<span class="font-mono">execute_bash</span>, file edits, git); <strong>openhands</strong> relays tasks to the remote OpenHands sandbox agent.',
-    ru: 'Выберите режим выполнения: <strong>local</strong> использует локальные инструменты (<span class="font-mono">execute_bash</span>, правка файлов, git); <strong>openhands</strong> передаёт задачи удалённому агенту в песочнице OpenHands.'
-  },
-
-  'settings.coder.sandboxUrl.label': { en: 'Sandbox Remote URL', ru: 'Удалённый URL песочницы' },
-  'settings.coder.sandboxUrl.desc': {
-    en: 'The endpoint URL of the isolated code-execution sandbox server.',
-    ru: 'URL-адрес изолированного сервера-песочницы для выполнения кода.'
-  },
-
-  'settings.coder.workspaceId.label': { en: 'Coder Workspace ID', ru: 'ID рабочей области Coder' },
-  'settings.coder.workspaceId.desc': {
-    en: 'Pin a custom persistent workspace folder name to save code state across delegations. Leave empty to auto-generate.',
-    ru: 'Указать имя папки рабочей области для сохранения состояния кода между вызовами. Оставьте пустым для автогенерации.'
-  },
-  'settings.coder.workspaceId.placeholder': { en: 'e.g. workspace_1', ru: 'например workspace_1' },
-
-  // ── TaskExecutorAgent section ──
-  'settings.taskExec.keepScore.label': { en: 'Tool Keep Threshold', ru: 'Порог релевантности инструментов' },
-  'settings.taskExec.keepScore.desc': {
-    en: 'Minimum relevance score (0.0 to 1.0) for a retrieved MCP tool to be loaded into context.',
-    ru: 'Минимальный балл релевантности (от 0.0 до 1.0) для загрузки найденного инструмента MCP в контекст.'
-  },
-
-  'settings.taskExec.abstainScore.label': { en: 'Tool Abstain Threshold', ru: 'Порог отказа от инструментов' },
-  'settings.taskExec.abstainScore.desc': {
-    en: 'Threshold below which the tool pipeline completely abstains, so the executor re-routes the task to the CoderAgent.',
-    ru: 'Порог, ниже которого пайплайн инструментов отказывается от выполнения, и исполнитель перенаправляет задачу в CoderAgent.'
-  },
-
-  // ── Empty / Common sections ──
-  'settings.noConfig': { en: 'No configurable parameters yet.', ru: 'Пока нет настраиваемых параметров.' },
-  'settings.cancel': { en: 'Cancel', ru: 'Отмена' },
-  'settings.save': { en: 'Save Settings', ru: 'Сохранить настройки' },
 };
 
 /** Применяет текущий язык ко всем элементам с data-i18n / data-i18n-placeholder */
@@ -467,17 +585,8 @@ function applyLanguage(lang) {
     badgeEl.textContent = (entry && entry[currentLang]) || (isWsOpen ? 'Online' : 'Offline');
   }
 
-  // Обновляем кнопки переключателя языка
-  const btnEn = document.getElementById('lang-btn-en');
-  const btnRu = document.getElementById('lang-btn-ru');
-  if (btnEn) {
-    btnEn.classList.toggle('bg-primary', currentLang === 'en');
-    btnEn.classList.toggle('text-on-primary', currentLang === 'en');
-  }
-  if (btnRu) {
-    btnRu.classList.toggle('bg-primary', currentLang === 'ru');
-    btnRu.classList.toggle('text-on-primary', currentLang === 'ru');
-  }
+  // The settings modal builds its fields (and the language switch) in JS.
+  if (typeof renderSettings === 'function') renderSettings();
 
   // HITL cards compose their header text in JS (agent / tool / trigger).
   if (typeof relocalizeHitlCards === 'function') relocalizeHitlCards();
