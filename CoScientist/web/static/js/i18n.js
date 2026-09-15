@@ -65,6 +65,13 @@ const i18n = {
   'settings.advanced': { en: 'Advanced ({n})', ru: 'Расширенные ({n})' },
   'settings.differsDefault': { en: 'Differs from default: {value}', ru: 'Отличается от значения по умолчанию: {value}' },
   'settings.envVar': { en: 'Default comes from .env: {name}', ru: 'Значение по умолчанию задаётся в .env: {name}' },
+  'settings.envValues': { en: 'Allowed values:', ru: 'Допустимые значения:' },
+  'settings.timeout.mode.wait': { en: 'Wait for me', ru: 'Ждать решения' },
+  'settings.timeout.mode.auto': { en: 'Approve after', ru: 'Одобрить через' },
+  'settings.timeout.after.label': { en: 'after', ru: 'через' },
+  'settings.timeout.seconds': { en: 's', ru: 'с' },
+  'settings.timeout.wait': { en: 'wait for a human', ru: 'ждать решения' },
+  'settings.timeout.after': { en: 'after {n} s', ru: 'через {n} с' },
   'settings.goto': { en: 'Open section', ru: 'Перейти' },
   'settings.value.on': { en: 'On', ru: 'Вкл' },
   'settings.value.off': { en: 'Off', ru: 'Выкл' },
@@ -201,6 +208,43 @@ const i18n = {
     ru: 'Чтобы изменить, отредактируйте .env и перезапустите сервер.'
   },
 
+  // Allowed .env values, shown in the ⓘ tooltip where the format is not obvious
+  'settings.f.startMode.envValues': {
+    en: 'planner — plan first\norchestrator — straight to work\norchestrator_planner — orchestrator plans',
+    ru: 'planner — сначала план\norchestrator — сразу к делу\norchestrator_planner — оркестратор планирует сам'
+  },
+  'settings.f.maxSearches.envValues': { en: '0–20 (integer). 0 — web search is off.', ru: '0–20 (целое). 0 — поиск запрещён.' },
+  'settings.f.coderMode.envValues': {
+    en: 'local — locally\nopenhands — OpenHands sandbox',
+    ru: 'local — локально\nopenhands — песочница OpenHands'
+  },
+  'settings.f.sandboxUrl.envValues': {
+    en: 'http(s)://host:port, e.g. http://localhost:8884. Empty — not set.',
+    ru: 'http(s)://хост:порт, например http://localhost:8884. Пусто — не задан.'
+  },
+  'settings.f.workspaceId.envValues': {
+    en: 'Folder name, e.g. workspace_1. Empty — created automatically.',
+    ru: 'Имя папки, например workspace_1. Пусто — создаётся автоматически.'
+  },
+  'settings.f.keepScore.envValues': { en: 'Number from 0 to 1, e.g. 0.3', ru: 'Число от 0 до 1, например 0.3' },
+  'settings.f.abstainScore.envValues': {
+    en: 'Number from 0 to 1, not above the keep threshold, e.g. 0.2',
+    ru: 'Число от 0 до 1, не больше порога отбора, например 0.2'
+  },
+  'settings.f.providerSort.envValues': {
+    en: 'default — balanced\nprice — price\nlatency — latency\nthroughput — throughput',
+    ru: 'default — баланс\nprice — цена\nlatency — отклик\nthroughput — скорость'
+  },
+  'settings.f.providerOrder.envValues': {
+    en: 'Comma-separated provider names in priority order, e.g. Together, DeepInfra. Empty — any.',
+    ru: 'Названия провайдеров через запятую в порядке приоритета, например Together, DeepInfra. Пусто — любые.'
+  },
+  'settings.f.maxRetries.envValues': { en: '0–10 (integer). 0 — do not retry.', ru: '0–10 (целое). 0 — не повторять.' },
+  'settings.f.defaultUsername.envValues': {
+    en: 'User nickname, e.g. alice. Also read from DEFAULT_USERNAME. Empty — not set.',
+    ru: 'Никнейм пользователя, например alice. Читается также из DEFAULT_USERNAME. Пусто — не задан.'
+  },
+
   // Fields — Interface
   'settings.f.language.label': { en: 'Interface language', ru: 'Язык интерфейса' },
   'settings.f.language.desc': {
@@ -239,10 +283,14 @@ const i18n = {
     en: 'Before the run, an agent drafts the question, constraints and success criteria and records them in the research graph. With approvals on, you can edit the frame in a form.',
     ru: 'Перед стартом агент формулирует вопрос, ограничения и критерии успеха и заносит их в граф исследования. При включённых подтверждениях рамку можно поправить в форме.'
   },
-  'settings.f.maxHypotheses.label': { en: 'Hypotheses tested at once', ru: 'Гипотез проверяется одновременно' },
+  'settings.f.maxHypotheses.label': { en: 'Hypotheses queued for testing', ru: 'Гипотез в очереди на проверку' },
   'settings.f.maxHypotheses.desc': {
-    en: '1 — one at a time: the best hypothesis is picked and the rest wait. More — several branches are tested in parallel, which takes longer and costs more.',
-    ru: '1 — по одной: выбирается лучшая гипотеза, остальные ждут. Больше — несколько веток проверяются параллельно, это дольше и дороже.'
+    en: 'How many of the hypotheses proposed in one batch go straight into the testing queue; the rest are set aside, and the orchestrator can bring them back later. Testing itself still goes one hypothesis at a time: the next one starts after the current one has a verdict.',
+    ru: 'Сколько гипотез из одной порции, предложенной генератором, сразу попадают в очередь на проверку; остальные откладываются, и оркестратор может вернуть их позже. Сама проверка всё равно идёт по одной: следующая гипотеза начинается, когда у текущей есть вердикт.'
+  },
+  'settings.f.maxHypotheses.envValues': {
+    en: '1–5 (integer). 1 — only the best hypothesis is queued.',
+    ru: '1–5 (целое). 1 — в очередь попадает только лучшая гипотеза.'
   },
   'settings.f.critic.label': { en: 'Review the plan with a critic', ru: 'Проверять план критиком' },
   'settings.f.critic.desc': {
@@ -254,6 +302,7 @@ const i18n = {
     en: '1 — a single review, after which the revised plan stands. Every extra round is a full replan.',
     ru: '1 — одна проверка, после доработки план принимается. Каждый дополнительный раунд — полное перепланирование.'
   },
+  'settings.f.criticRounds.envValues': { en: '1–5 (integer)', ru: '1–5 (целое)' },
   'settings.f.mergeTasks.label': { en: 'Merge adjacent tasks', ru: 'Объединять соседние задачи' },
   'settings.f.mergeTasks.desc': {
     en: 'Consecutive tasks for the same executor run as one. Turn off to run every planned task separately.',
@@ -280,6 +329,24 @@ const i18n = {
   'settings.f.workOrder.desc': {
     en: 'Before starting, an executor agent shows its goal, steps, tools and assumptions. You can accept, correct or reject the plan.',
     ru: 'Перед началом агент-исполнитель показывает цель, шаги, инструменты и допущения. План можно принять, поправить или отклонить.'
+  },
+  'settings.f.hitlTimeout.label': { en: 'If nobody answers', ru: 'Если никто не ответил' },
+  'settings.f.hitlTimeout.desc': {
+    en: 'What happens to an approval request left unanswered. "Approve after" — once the time is up, the action runs as if you had approved it.',
+    ru: 'Что делать с запросом подтверждения, на который никто не ответил. «Одобрить через» — по истечении времени действие выполняется так, будто вы его одобрили.'
+  },
+  'settings.f.hitlTimeout.envValues': {
+    en: '-1 — wait for a human (no auto-approval)\nN > 0 — approve automatically after N seconds',
+    ru: '-1 — ждать решения человека (без автоодобрения)\nN > 0 — одобрить автоматически через N секунд'
+  },
+  'settings.f.workOrderVeto.label': { en: 'Computation plans without an answer', ru: 'Планы вычислений без ответа' },
+  'settings.f.workOrderVeto.desc': {
+    en: 'Work plans that only run computations can start automatically after this time unless you pause them. Plans with external side effects follow the rule above.',
+    ru: 'Планы работы, в которых агент только выполняет вычисления, могут стартовать автоматически через это время, если вы не поставили их на паузу. Планы с внешними последствиями подчиняются правилу выше.'
+  },
+  'settings.f.workOrderVeto.envValues': {
+    en: '-1 — wait for a human (no auto-start)\nN > 0 — start automatically after N seconds',
+    ru: '-1 — ждать решения человека (без автостарта)\nN > 0 — стартовать автоматически через N секунд'
   },
 
   // Fields — Tools & code
@@ -367,10 +434,18 @@ const i18n = {
   },
   'settings.danger.memory.btn': { en: 'Delete', ru: 'Удалить' },
   'settings.danger.memory.confirm': {
-    en: 'Type "{word}" to delete the memory for all sessions.',
-    ru: 'Введите «{word}», чтобы удалить память для всех сессий.'
+    en: 'Delete the knowledge memory for all sessions of this server?',
+    ru: 'Удалить память знаний для всех сессий этого сервера?'
   },
-  'settings.danger.memory.word': { en: 'delete', ru: 'удалить' },
+  'settings.danger.memory.finalTitle': {
+    en: 'Are you sure you want to delete the knowledge memory?',
+    ru: 'Вы уверены, что хотите удалить память знаний?'
+  },
+  'settings.danger.memory.finalText': {
+    en: 'It disappears for every session and every user of this server at once. It cannot be restored from the interface.',
+    ru: 'Она исчезнет сразу во всех сессиях у всех пользователей этого сервера. Восстановить её из интерфейса нельзя.'
+  },
+  'settings.danger.memory.finalBtn': { en: 'Delete memory', ru: 'Удалить память' },
   'settings.danger.noSession': { en: 'Open a session first.', ru: 'Сначала откройте сессию.' },
   'settings.danger.confirmBtn': { en: 'Yes, delete', ru: 'Да, удалить' },
   'settings.danger.cancel': { en: 'Cancel', ru: 'Отмена' },

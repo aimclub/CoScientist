@@ -29,7 +29,9 @@ const appSettings = {
     startMode: 'planner',   // 'planner' | 'orchestrator' | 'orchestrator_planner'
     maxRetries: 3,
     hitlEnabled: false,
+    hitlAutoApproveTimeout: -1,        // seconds; -1 = wait for the human
     workOrderEnabled: true,
+    workOrderVetoSeconds: -1,          // seconds; -1 = wait for the human
     useProxy: true,                    // read-only: USE_PROXY in .env
     opikEnabled: false,
     autoNamingEnabled: true,

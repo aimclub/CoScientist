@@ -57,9 +57,9 @@
               { id: 'critic', path: 'plannerAgent.criticEnabled', type: 'toggle', scope: 'session', env: 'PLANNER__CRITIC_ENABLED', inactive: plannerInactive },
               { id: 'criticRounds', path: 'plannerAgent.criticRounds', type: 'number', min: 1, max: 5, scope: 'session', parent: 'critic', env: 'PLANNER__CRITIC_ROUNDS', inactive: plannerInactive },
               { id: 'mergeTasks', path: 'plannerAgent.mergeTasksEnabled', type: 'toggle', scope: 'instant', env: 'PLANNER__MERGE_TASKS' },
-              { id: 'plannerRetrieval', path: 'plannerAgent.retrievalEnabled', type: 'toggle', scope: 'session', advanced: true, env: 'PLANNER__RETRIEVAL_ENABLED', inactive: plannerInactive },
+              { id: 'plannerRetrieval', path: 'plannerAgent.retrievalEnabled', type: 'toggle', scope: 'session', env: 'PLANNER__RETRIEVAL_ENABLED', inactive: plannerInactive },
               {
-                id: 'plannerGraph', path: 'plannerAgent.graphEnabled', type: 'toggle', scope: 'session', advanced: true, env: 'PLANNER__GRAPH_ENABLED',
+                id: 'plannerGraph', path: 'plannerAgent.graphEnabled', type: 'toggle', scope: 'session', env: 'PLANNER__GRAPH_ENABLED',
                 inactive: d => plannerInactive(d) || (getSettingPath(d, 'general.knowledgeGraphEnabled')
                   ? null : { key: 'settings.inactive.knowledgeGraph', section: 'graphs' }),
               },
@@ -72,7 +72,10 @@
         groups: [{
           fields: [
             { id: 'hitl', path: 'general.hitlEnabled', type: 'toggle', scope: 'session', env: 'HITL__ENABLED' },
+            // -1 = no deadline, wait for the human; N > 0 = approved after N seconds.
+            { id: 'hitlTimeout', path: 'general.hitlAutoApproveTimeout', type: 'timeout', fallback: 300, scope: 'instant', parent: 'hitl', env: 'HITL_AUTO_APPROVE_TIMEOUT' },
             { id: 'workOrder', path: 'general.workOrderEnabled', type: 'toggle', scope: 'session', parent: 'hitl', env: 'WORK_ORDER__ENABLED' },
+            { id: 'workOrderVeto', path: 'general.workOrderVetoSeconds', type: 'timeout', fallback: 60, scope: 'instant', parent: 'workOrder', env: 'WORK_ORDER__VETO_SECONDS' },
           ],
         }],
       },
@@ -166,7 +169,10 @@
       section.groups.flatMap(group => group.fields.map(field => ({ ...field, section: section.id }))));
     const SETTINGS_FIELD_BY_ID = Object.fromEntries(SETTINGS_FIELDS.map(f => [f.id, f]));
     // Fields whose value is sent on Save (read-only .env values are not).
-    const EDITABLE_TYPES = new Set(['toggle', 'number', 'text', 'cards', 'segmented', 'chips']);
+    const EDITABLE_TYPES = new Set(['toggle', 'number', 'text', 'cards', 'segmented', 'chips', 'timeout']);
+    const TIMEOUT_MAX_SECONDS = 86400;
+    // Seconds last typed into a timeout field, restored when "wait" is switched back to auto.
+    const settingsLastTimeout = {};
     const EDITABLE_FIELDS = SETTINGS_FIELDS.filter(f => f.path && EDITABLE_TYPES.has(f.type));
 
     let settingsSaved = null;      // last values confirmed by the server
@@ -177,7 +183,8 @@
     let settingsLoadFailed = false;
     let settingsStatus = null;     // { key, vars, kind } shown in the footer
     const settingsAdvancedOpen = new Set();
-    const settingsDanger = { pending: null, typed: '', busy: false, message: '', kind: '' };
+    // pending: null | 'session' | 'memory' (inline confirm) | 'memory-final' (second dialog)
+    const settingsDanger = { pending: null, busy: false, message: '', kind: '' };
 
     // ── helpers ─────────────────────────────────────────────────────────────
     function getSettingPath(obj, path) {
@@ -214,6 +221,9 @@
 
     function formatSettingValue(field, value) {
       if (field.type === 'toggle' || field.type === 'env') return t(value ? 'settings.value.on' : 'settings.value.off');
+      if (field.type === 'timeout') {
+        return typeof value === 'number' && value > 0 ? tf('settings.timeout.after', { n: value }) : t('settings.timeout.wait');
+      }
       if (value === '' || value == null) return t('settings.value.empty');
       if (field.type === 'cards' || field.type === 'segmented') {
         return t(`settings.f.${field.id}.opt.${value}`, String(value));
@@ -231,12 +241,29 @@
           return { key: field.float ? 'settings.err.rangeFloat' : 'settings.err.rangeInt', vars: { min: field.min, max: field.max } };
         }
       }
+      if (field.type === 'timeout' && value !== -1) {
+        if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > TIMEOUT_MAX_SECONDS) {
+          return { key: 'settings.err.rangeInt', vars: { min: 1, max: TIMEOUT_MAX_SECONDS } };
+        }
+      }
       return field.validate ? field.validate(draft) : null;
     }
 
-    // Children are only meaningful while their parent switch is on.
+    // Children are only meaningful while their parent switch (and its parents) is on.
     function parentOff(field, draft) {
-      return !!field.parent && !getSettingPath(draft, SETTINGS_FIELD_BY_ID[field.parent].path);
+      if (!field.parent) return false;
+      const parent = SETTINGS_FIELD_BY_ID[field.parent];
+      return !getSettingPath(draft, parent.path) || parentOff(parent, draft);
+    }
+
+    // The switch that hides this field: the outermost parent that is off.
+    function blockingParent(field, draft) {
+      let blocker = null;
+      for (let f = field; f.parent; ) {
+        f = SETTINGS_FIELD_BY_ID[f.parent];
+        if (!getSettingPath(draft, f.path)) blocker = f;
+      }
+      return blocker;
     }
 
     function dirtyFields() {
@@ -341,7 +368,12 @@
     }
 
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && settingsModalOpen()) closeSettings();
+      if (e.key !== 'Escape' || !settingsModalOpen()) return;
+      if (settingsDanger.pending === 'memory-final') {
+        if (!settingsDanger.busy) { settingsDanger.pending = null; renderSettings(); }
+        return;
+      }
+      closeSettings();
     });
 
     // ── rendering ───────────────────────────────────────────────────────────
@@ -353,6 +385,7 @@
         ? (settingsQuery ? renderSettingsSearch() : renderSettingsSection(SETTINGS_SECTIONS.find(s => s.id === settingsSection)))
         : `<p class="text-xs text-outline-variant">${escHtml(t('settings.status.loading'))}</p>`;
       decorateSettings();
+      renderSettingsDialog();
     }
 
     function renderSettingsNav() {
@@ -448,20 +481,24 @@
     function renderSettingRow(field, opts = {}) {
       let inactive = field.inactive ? field.inactive(settingsDraft) : null;
       if (!inactive && opts.search && parentOff(field, settingsDraft)) {
-        const parent = SETTINGS_FIELD_BY_ID[field.parent];
+        const parent = blockingParent(field, settingsDraft);
         inactive = { key: 'settings.inactive.parentOff', vars: { parent: t(`settings.f.${parent.id}.label`) }, section: parent.section };
       }
       const disabled = !!inactive;
       const label = escHtml(t(`settings.f.${field.id}.label`));
       const desc = i18n[`settings.f.${field.id}.desc`] ? t(`settings.f.${field.id}.desc`) : '';
       const wide = field.type === 'cards' || field.type === 'chips';
+      const scopeHint = field.scope ? `${t(`settings.scope.${field.scope}`)} — ${t(`settings.scope.${field.scope}.hint`)}` : '';
       const scope = field.scope ? `
-        <span class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded bg-surface-container-high text-outline-variant"
-          title="${escHtml(t(`settings.scope.${field.scope}.hint`))}">
-          <span class="material-symbols-outlined text-[12px]">${SETTINGS_SCOPES[field.scope]}</span>${escHtml(t(`settings.scope.${field.scope}`))}
-        </span>` : '';
+        <span class="material-symbols-outlined text-[14px] text-outline-variant/70 cursor-help"
+          role="img" aria-label="${escHtml(scopeHint)}" title="${escHtml(scopeHint)}">${SETTINGS_SCOPES[field.scope]}</span>` : '';
+      let envHint = field.env ? tf('settings.envVar', { name: field.env }) : '';
+      if (envHint && i18n[`settings.f.${field.id}.envValues`]) {
+        envHint += '\n' + t('settings.envValues') + '\n' + t(`settings.f.${field.id}.envValues`);
+      }
       const envInfo = field.env && field.type !== 'env' ? `
-        <span class="material-symbols-outlined text-[14px] text-outline-variant/60 cursor-help" title="${escHtml(tf('settings.envVar', { name: field.env }))}">info</span>` : '';
+        <span class="material-symbols-outlined text-[14px] text-outline-variant/60 cursor-help"
+          role="img" aria-label="${escHtml(envHint)}" title="${escHtml(envHint)}">info</span>` : '';
       const inactiveNote = inactive ? `
         <p class="text-[11px] text-tertiary/90 mt-1.5 flex items-center gap-1 flex-wrap">
           <span class="material-symbols-outlined text-sm">block</span>${escHtml(tf(inactive.key, inactive.vars))}
@@ -498,6 +535,27 @@
               <span class="w-10 h-6 rounded-full bg-surface-variant border border-outline-variant/30 peer-checked:bg-primary peer-checked:border-primary transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-primary/50"></span>
               <span class="absolute left-1 top-1 w-4 h-4 rounded-full bg-on-surface-variant peer-checked:bg-on-primary peer-checked:translate-x-4 transition-transform"></span>
             </label>`;
+        case 'timeout': {
+          const auto = value !== -1;
+          return `
+            <div class="flex flex-col items-end gap-2">
+              <div id="sf-${field.id}" role="radiogroup" class="inline-flex gap-0.5 p-0.5 rounded-md bg-surface-container-high border border-outline-variant/20">
+                ${[['wait', !auto], ['auto', auto]].map(([mode, selected]) => `
+                  <button type="button" role="radio" aria-checked="${selected}" data-action="timeout-mode" data-field="${field.id}" data-mode="${mode}" ${dis}
+                    class="px-3 py-1.5 rounded text-[11px] font-semibold transition-colors ${selected ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:text-on-surface'}">
+                    ${escHtml(t(`settings.timeout.mode.${mode}`))}
+                  </button>`).join('')}
+              </div>
+              ${auto ? `
+                <label class="flex items-center gap-2 text-[11px] text-on-surface-variant">
+                  ${escHtml(t('settings.timeout.after.label'))}
+                  <input type="number" inputmode="numeric" data-field="${field.id}" data-timeout-seconds min="1" max="${TIMEOUT_MAX_SECONDS}" step="1"
+                    value="${escHtml(value ?? '')}" ${dis} aria-label="${escHtml(t('settings.timeout.after.label'))}"
+                    class="${inputCls} font-mono w-24 text-center" />
+                  ${escHtml(t('settings.timeout.seconds'))}
+                </label>` : ''}
+            </div>`;
+        }
         case 'number':
           return `<input id="sf-${field.id}" type="number" inputmode="${field.float ? 'decimal' : 'numeric'}" data-field="${field.id}"
             min="${field.min}" max="${field.max}" step="${field.step || 1}" value="${escHtml(value ?? '')}" ${dis}
@@ -678,6 +736,17 @@
             break;
           }
           case 'choose': updateSettingDraft(field, btn.dataset.value, true); break;
+          case 'timeout-mode': {
+            const current = getSettingPath(settingsDraft, field.path);
+            if (btn.dataset.mode === 'wait') {
+              if (current !== -1) settingsLastTimeout[field.id] = current;
+              updateSettingDraft(field, -1, true);
+            } else if (current === -1) {
+              updateSettingDraft(field, settingsLastTimeout[field.id] ?? field.fallback, true);
+              body.querySelector(`[data-field="${field.id}"][data-timeout-seconds]`)?.focus();
+            }
+            break;
+          }
           case 'chip-remove': {
             const items = String(getSettingPath(settingsDraft, field.path) || '').split(',').map(s => s.trim()).filter(Boolean);
             items.splice(Number(btn.dataset.index), 1);
@@ -685,9 +754,13 @@
             break;
           }
           case 'language': applyLanguage(btn.dataset.lang); break;
-          case 'danger-ask': settingsDanger.pending = btn.dataset.target; settingsDanger.typed = ''; settingsDanger.message = ''; renderSettings(); break;
+          case 'danger-ask': settingsDanger.pending = btn.dataset.target; settingsDanger.message = ''; renderSettings(); break;
           case 'danger-cancel': settingsDanger.pending = null; renderSettings(); break;
-          case 'danger-confirm': deleteGraphData(settingsDanger.pending); break;
+          case 'danger-confirm':
+            if (settingsDanger.pending === 'memory') { settingsDanger.pending = 'memory-final'; renderSettings(); }
+            else deleteGraphData(settingsDanger.pending);
+            break;
+          case 'danger-final': deleteGraphData('memory'); break;
         }
       });
 
@@ -698,15 +771,9 @@
 
       body.addEventListener('input', (e) => {
         const el = e.target;
-        if (el.dataset.dangerTyped !== undefined) {
-          settingsDanger.typed = el.value;
-          const confirmBtn = document.getElementById('settings-danger-confirm');
-          if (confirmBtn) confirmBtn.disabled = el.value.trim().toLowerCase() !== t('settings.danger.memory.word');
-          return;
-        }
         const field = SETTINGS_FIELD_BY_ID[el.dataset.field];
         if (!field) return;
-        if (field.type === 'number') updateSettingDraft(field, parseSettingNumber(el.value), false);
+        if (field.type === 'number' || field.type === 'timeout') updateSettingDraft(field, parseSettingNumber(el.value), false);
         else if (field.type === 'text') updateSettingDraft(field, el.value, false);
       });
 
@@ -785,20 +852,14 @@
       const noSession = !activeUser || !activeSession;
       const btnCls = 'shrink-0 px-3 py-2 rounded-md text-[11px] font-bold uppercase tracking-wider border border-error/30 text-error hover:bg-error/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1.5';
       const row = (target, icon) => {
-        const pending = settingsDanger.pending === target;
+        const pending = settingsDanger.pending === target || (target === 'memory' && settingsDanger.pending === 'memory-final');
         let confirmBlock = '';
         if (pending) {
-          const needsWord = target === 'memory';
           confirmBlock = `
             <div class="mt-3 p-3 rounded-md bg-error-container/20 border border-error/20 space-y-2">
-              <p class="text-[11.5px] text-on-surface">${escHtml(needsWord
-                ? tf('settings.danger.memory.confirm', { word: t('settings.danger.memory.word') })
-                : tf('settings.danger.session.confirm', { name: session }))}</p>
+              <p class="text-[11.5px] text-on-surface">${escHtml(tf(`settings.danger.${target}.confirm`, { name: session }))}</p>
               <div class="flex flex-wrap items-center gap-2">
-                ${needsWord ? `<input type="text" data-danger-typed value="${escHtml(settingsDanger.typed)}" autocomplete="off"
-                  class="bg-surface-container-high border border-error/30 text-on-surface text-xs font-mono rounded-md px-3 py-1.5 w-40 focus:ring-1 focus:ring-error/40" />` : ''}
-                <button type="button" id="settings-danger-confirm" data-action="danger-confirm"
-                  ${settingsDanger.busy || (needsWord && settingsDanger.typed.trim().toLowerCase() !== t('settings.danger.memory.word')) ? 'disabled' : ''}
+                <button type="button" id="settings-danger-confirm" data-action="danger-confirm" ${settingsDanger.busy ? 'disabled' : ''}
                   class="px-3 py-1.5 rounded-md text-[11px] font-bold bg-error text-on-error hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed">
                   ${escHtml(t('settings.danger.confirmBtn'))}</button>
                 <button type="button" data-action="danger-cancel" ${settingsDanger.busy ? 'disabled' : ''}
@@ -830,6 +891,36 @@
           ${row('memory', 'delete_forever')}
           ${message}
         </div>`;
+    }
+
+    // The global memory takes a second, separate "are you sure" window: it is
+    // gone for every session at once, so one misclick must not be enough.
+    function renderSettingsDialog() {
+      const dialog = document.getElementById('settings-dialog');
+      const open = settingsModalOpen() && settingsDanger.pending === 'memory-final';
+      dialog.classList.toggle('hidden', !open);
+      if (!open) { dialog.innerHTML = ''; return; }
+      dialog.innerHTML = `
+        <div role="alertdialog" aria-modal="true" aria-labelledby="settings-dialog-title" aria-describedby="settings-dialog-text"
+          class="w-full max-w-md mx-4 rounded-xl border border-error/30 bg-surface-container shadow-2xl p-5">
+          <div class="flex items-start gap-3">
+            <span class="material-symbols-outlined text-error text-2xl">warning</span>
+            <div class="min-w-0">
+              <h4 id="settings-dialog-title" class="font-headline text-sm font-bold text-on-surface">${escHtml(t('settings.danger.memory.finalTitle'))}</h4>
+              <p id="settings-dialog-text" class="text-xs text-on-surface-variant mt-2 leading-relaxed">${escHtml(t('settings.danger.memory.finalText'))}</p>
+            </div>
+          </div>
+          <div class="flex justify-end gap-2 mt-5">
+            <button type="button" data-action="danger-cancel" ${settingsDanger.busy ? 'disabled' : ''}
+              class="px-4 py-2 rounded-md text-[11px] font-bold bg-surface-container-high border border-outline-variant/20 text-on-surface hover:bg-surface-variant/40">
+              ${escHtml(t('settings.danger.cancel'))}</button>
+            <button type="button" id="settings-dialog-confirm" data-action="danger-final" ${settingsDanger.busy ? 'disabled' : ''}
+              class="px-4 py-2 rounded-md text-[11px] font-bold bg-error text-on-error hover:brightness-110 disabled:opacity-40">
+              ${escHtml(t('settings.danger.memory.finalBtn'))}</button>
+          </div>
+        </div>`;
+      // Safe default: Enter/Space on the focused button cancels.
+      dialog.querySelector('[data-action="danger-cancel"]').focus();
     }
 
     function describeGraphDeletion(deleted) {
@@ -872,7 +963,6 @@
       } finally {
         settingsDanger.busy = false;
         settingsDanger.pending = null;
-        settingsDanger.typed = '';
         renderSettings();
       }
     }

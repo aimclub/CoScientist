@@ -681,7 +681,9 @@
   <div id="settings-modal"
     class="hidden fixed inset-0 z-[100] flex items-center justify-center bg-black/60 backdrop-blur-sm">
     <div role="dialog" aria-modal="true" aria-labelledby="settings-title"
-      class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col h-[85vh] mx-4">
+      class="relative bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col h-[85vh] mx-4">
+      <!-- Second confirmation for irreversible actions, drawn over the whole panel -->
+      <div id="settings-dialog" class="hidden absolute inset-0 z-10 flex items-center justify-center bg-black/60"></div>
       <!-- Modal Header -->
       <div
         class="px-5 py-3 border-b border-outline-variant/10 flex items-center gap-3 bg-surface-container-low/50">
