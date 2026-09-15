@@ -82,24 +82,32 @@ _WORK_ORDER_SECTION = """\
 ### Work Order — declare what you will do before you do it
 
 The human must be able to see your plan and the assumptions behind it BEFORE
-you act. Protocol:
+you act.
+
+Language: the human reads the work order in Russian. Write every human-readable
+value in Russian — `goal`, `done_criteria`, assumption texts, step titles and
+expected outcomes, `expected_outcome`, `fallback`, the `reason` of
+`update_work_order` and the `note` of `update_work_step` — even when the task,
+the context or these instructions are in English. Keep as they are: tool names,
+step and assumption ids, numbers, units, formulas,
+identifiers (database ids, file paths, links), paper titles and author names.
+
+Protocol:
 1. Orient yourself first if you need to: reading your own context (research
    context, active tasks, directory listings) is allowed before declaring.
 2. Call `declare_work_order` before your first external action (search, download,
    code run, graph write). Provide:
    - `goal`: what this run must achieve in 1-2 sentences.
    - `done_criteria`: concrete condition for completion.
-   - `assumptions`: list of dicts `[{"text": "...", "confidence": "low"|"medium"|"high"}]`.
+   - `assumptions`: list of strings, one assumption per item.
      Rules for assumptions:
-     * STRUCTURE: MUST be a list of dicts with 'text' and 'confidence', NEVER plain strings.
      * ATOMIC: each item is a single, falsifiable constraint (1 checkbox for the human). Never bundle multiple conditions into one item.
-     * NON-TRIVIAL: do NOT state obvious facts (e.g. "tools work", "data exists", "Python is available").
+     * NON-TRIVIAL: do NOT state obvious facts (e.g. "инструменты работают", "данные существуют", "Python доступен").
      * CONCRETE DOMAIN CONSTRAINTS:
        - Scope & cohort: exact date ranges (e.g. 2020-2025), organisms, clinical phases, target IDs.
        - Data & normalization: specific sources, units of measurement (e.g. nM vs µM), activity cutoffs (e.g. IC50 < 100 nM).
        - Methodology & filters: study designs accepted (RCTs only, peer-reviewed), exclusions (exclude case reports).
-       - Volume & sufficiency: e.g. "top 10 most cited papers are sufficient for initial landscape".
-     * CONFIDENCE: "high" (standard established constraint), "medium" (plausible standard choice), "low" (uncertain/heuristic choice).
+       - Volume & sufficiency: e.g. "10 самых цитируемых статей достаточно для первичного обзора".
    - `steps`: ordered steps `[{"title": "...", "tools": [...], "expected_outcome": "..."}]`.
    - `planned_tools`: all tool names you intend to call.
    - `expected_outcome`: concrete results (counts, ranges, metrics).
@@ -117,29 +125,34 @@ you act. Protocol:
    continue within the order.
 
 Keep the order honest and specific: a human who reads "search the literature"
-learns nothing; "search PubMed for RCTs on X since 2015, exclude case reports" is
-something they can correct. This work order replaces separate approval requests
+learns nothing; "искать в PubMed РКИ по X с 2015 года, без описаний клинических
+случаев" is something they can correct. This work order replaces separate approval requests
 for the plan itself — use `request_approval` only for decisions that come up
 along the way."""
 
 _WORK_ORDER_HINTS = (
     (("websearch",),
      "For searches, the query formulations and the source selection criteria "
-     "(recency, study types, venues) are assumptions — list them as atomic dicts "
-     '(e.g. {"text": "Only peer-reviewed articles from 2020-2025", "confidence": "high"}).'),
+     "(recency, study types, venues) are assumptions — list them as atomic items "
+     '(e.g. "Только рецензируемые статьи 2020–2025 гг.").'),
     (("papers_search",),
      "For paper downloads, state which papers or how many you will fetch, and why those as assumptions "
-     '(e.g. {"text": "Retrieve full-text PDFs for top 5 most relevant papers", "confidence": "medium"}).'),
+     '(e.g. "Скачать полные тексты 5 наиболее релевантных статей").'),
     (("medical",),
      "For clinical evidence, state the population, study designs and date range "
      "you will accept as separate atomic assumptions "
-     '(e.g. {"text": "Human adult cohort only, excluding pediatric studies", "confidence": "high"}, '
-     '{"text": "Only randomized controlled trials (RCTs)", "confidence": "high"}).'),
+     '(e.g. "Только взрослые пациенты, без педиатрических исследований", '
+     '"Только рандомизированные контролируемые исследования (РКИ)").'),
+    (("dynamic_tools",),
+     "For MCP tools, name the exact tools you will call in `planned_tools` and the steps; "
+     "the input values you choose (models, parameters, units, thresholds, number of runs) "
+     "are assumptions "
+     '(e.g. "Аффинность связывания в ккал/моль").'),
     (("coder", "sandbox"),
      "For data work, the data sources, filters, units and expected volumes are "
      "assumptions "
-     '(e.g. {"text": "Target compound activities expressed in nM", "confidence": "high"}, '
-     '{"text": "ChEMBL v33 or newer is the primary activity source", "confidence": "medium"}).'),
+     '(e.g. "Активность соединений выражена в нМ", '
+     '"Основной источник активностей — ChEMBL v33 или новее").'),
     (("research_graph",),
      "If you will write the research graph, name in the steps which nodes you will "
      "create or change."),

@@ -72,7 +72,7 @@ def _declare(env, **overrides):
     args = dict(
         goal="Collect a dataset",
         done_criteria="CSV written",
-        assumptions=[{"text": "ChEMBL is the source", "confidence": "high"}],
+        assumptions=["ChEMBL is the source"],
         steps=[{"title": "Download", "tools": ["execute_bash"]}],
         planned_tools=["execute_bash"],
         tool_context=env.ctx,

@@ -819,7 +819,7 @@ WORK_ORDER_TOOL_DOCS = (
         ),
         purpose=(
             "(Work Order) Declare your contract BEFORE your first external action: "
-            "goal, assumptions ([{'text': '...', 'confidence': 'low'|'medium'|'high'}]), "
+            "goal, assumptions (a list of strings), "
             "steps, tools, expected outcome. "
             "Returns status approved / revise / rejected."
         ),

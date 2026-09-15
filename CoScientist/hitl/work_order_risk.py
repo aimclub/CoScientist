@@ -106,9 +106,10 @@ ORIENTATION_TOOLS = frozenset({
     "list_sandbox_files",
 })
 
-# Never blocked: the Work Order protocol itself, the human channel, and task
-# status bookkeeping.
+# Never blocked: the Work Order protocol itself, the human channel, task status
+# bookkeeping, and waiting between checks on a long job (no effect of its own).
 EXEMPT_TOOLS = frozenset({
+    "sleep_tool",
     "declare_work_order",
     "update_work_order",
     "update_work_step",

@@ -106,7 +106,7 @@ const i18n = {
   'settings.workOrder.label': { en: 'Work Orders', ru: 'Планы работы агента (Work Order)' },
   'settings.workOrder.desc': {
     en: 'Executor agents declare their plan and assumptions before acting (requires HITL).',
-    ru: 'Агенты-исполнители объявляют план и допущения до начала работы (нужен HITL).'
+    ru: 'Агенты-исполнители объявляют план, условия и ограничения до начала работы (нужен HITL).'
   },
   'settings.workOrderVeto.label': { en: 'Work Order Veto Window (s)', ru: 'Окно вето плана работы (сек)' },
   'settings.workOrderVeto.desc': {
@@ -117,7 +117,7 @@ const i18n = {
   // ── Work Order cards (hitl.js) ──
   'hitl.msg.workOrder': {
     en: "Agent {agent} declares its work order. Review the plan and the assumptions.",
-    ru: "Агент {agent} объявляет план работы. Проверьте план и допущения."
+    ru: "Агент {agent} представил план работы. Проверьте план, условия и ограничения."
   },
   'hitl.msg.workOrderAmendment': {
     en: "Agent {agent} wants to amend its work order.",
@@ -133,10 +133,10 @@ const i18n = {
   'workOrder.tier.side_effect': { en: 'side effects', ru: 'побочные эффекты' },
   'workOrder.goal': { en: 'Goal', ru: 'Цель' },
   'workOrder.done': { en: 'Done when', ru: 'Критерий готовности' },
-  'workOrder.assumptions': { en: 'Assumptions', ru: 'Допущения' },
+  'workOrder.assumptions': { en: 'Assumptions', ru: 'Условия и ограничения' },
   'workOrder.assumptionsHint': {
     en: 'Uncheck the assumptions you reject — the agent must not rely on them.',
-    ru: 'Снимите галочку с допущений, которые вы отклоняете, — агент не должен на них опираться.'
+    ru: 'Снимите галочку с условий, которые вы отклоняете, — агент не должен на них опираться.'
   },
   'workOrder.steps': { en: 'Steps', ru: 'Шаги' },
   'workOrder.tools': { en: 'Tools', ru: 'Инструменты' },
@@ -155,7 +155,7 @@ const i18n = {
     ru: 'Заметки или правки для агента (для «Принять» — необязательно, для «Доработать» — обязательно)'
   },
   'workOrder.approved': { en: '✓ Work order approved', ru: '✓ План работы одобрен' },
-  'workOrder.rejectedAssumptions': { en: '{n} assumption(s) rejected', ru: 'отклонено допущений: {n}' },
+  'workOrder.rejectedAssumptions': { en: '{n} assumption(s) rejected', ru: 'отклонено условий: {n}' },
   'workOrder.deviation': { en: 'Blocked', ru: 'Заблокировано' },
   'workOrder.reason.no_work_order': { en: 'no work order declared yet', ru: 'план работы ещё не объявлен' },
   'workOrder.reason.rejected': { en: 'work order was rejected', ru: 'план работы отклонён' },

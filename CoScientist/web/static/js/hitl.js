@@ -485,16 +485,15 @@
     // The contract itself. interactive=true renders assumptions as checkboxes.
     function workOrderBody(order, rid, interactive) {
       const assumptions = (order.assumptions || []).map(a => {
-        const conf = a.confidence && a.confidence !== 'medium' ? ` ${woChip(a.confidence)}` : '';
         if (interactive) {
           return `
             <label class="flex items-start gap-2 cursor-pointer">
               <input type="checkbox" checked data-wo-assumption="${escHtml(a.id)}" class="mt-0.5 accent-primary" />
-              <span><span class="font-mono text-[10px] text-outline-variant">${escHtml(a.id)}</span> ${escHtml(a.text)}${conf}</span>
+              <span><span class="font-mono text-[10px] text-outline-variant">${escHtml(a.id)}</span> ${escHtml(a.text)}</span>
             </label>`;
         }
         const struck = a.rejected ? 'line-through text-outline-variant' : '';
-        return `<p class="${struck}"><span class="font-mono text-[10px] text-outline-variant">${escHtml(a.id)}</span> ${escHtml(a.text)}${conf}</p>`;
+        return `<p class="${struck}"><span class="font-mono text-[10px] text-outline-variant">${escHtml(a.id)}</span> ${escHtml(a.text)}</p>`;
       }).join('');
       const effects = (order.side_effects || []).map(e =>
         woChip((e.kind || e) + (e.detail ? ': ' + e.detail : ''), WO_TIER_STYLE.side_effect)).join(' ');

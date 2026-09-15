@@ -609,6 +609,9 @@ agents:
   ExperimentAgent:
     # Asks before acting on a decision; inert until HITL__ENABLED.
     hitl: true
+    # Declares a Work Order (which MCP tools, with which inputs) before running them.
+    # Its tools are resolved per task, so the planned names are not checked up front.
+    work_order: true
     class: llm
     description: >-
       Runs computational/experimental sub-tasks by directly using the

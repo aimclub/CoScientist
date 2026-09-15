@@ -51,10 +51,7 @@ def _declare(toolset, ctx, **overrides):
     args = dict(
         goal="Collect BTK inhibitors with IC50 from ChEMBL",
         done_criteria="A CSV with >= 500 unique compounds",
-        assumptions=[
-            {"text": "IC50 in nM", "confidence": "high"},
-            {"text": "Only human BTK (CHEMBL5251)", "confidence": "medium"},
-        ],
+        assumptions=["IC50 in nM", "Only human BTK (CHEMBL5251)"],
         steps=[
             {"title": "Download activities", "tools": ["execute_bash"],
              "expected_outcome": "~2k rows"},
@@ -103,7 +100,7 @@ def test_compute_tier_gets_the_veto_window(hitl_on):
     order = request.context["work_order"]
     assert [a["id"] for a in order["assumptions"]] == ["A1", "A2"]
     assert order["assumptions"][0] == {
-        "id": "A1", "text": "IC50 in nM", "confidence": "high", "rejected": False,
+        "id": "A1", "text": "IC50 in nM", "rejected": False,
     }
     assert [s["id"] for s in order["steps"]] == ["S1", "S2"]
 
@@ -289,32 +286,22 @@ def test_tools_build_valid_function_declarations():
     assert names == ["declare_work_order", "update_work_order", "update_work_step"]
 
 
-def test_string_assumptions_are_rejected(monkeypatch):
-    monkeypatch.setattr(get_settings().web, "hitl_enabled", False)
-    ctx = _context()
-    toolset = WorkOrderToolset(AGENT, TOOLS, _Handler())
-    result = _declare(toolset, ctx, assumptions=["IC50 in nM"])
-    assert result["status"] == "error"
-    assert "must be a dict" in result["message"]
-
-
-def test_invalid_assumption_format_errors(monkeypatch):
+def test_assumptions_are_strings_and_the_older_dict_shape_is_tolerated(monkeypatch):
     monkeypatch.setattr(get_settings().web, "hitl_enabled", False)
     ctx = _context()
     toolset = WorkOrderToolset(AGENT, TOOLS, _Handler())
 
-    # Empty text
-    res1 = _declare(toolset, ctx, assumptions=[{"text": "  ", "confidence": "high"}])
-    assert res1["status"] == "error"
-    assert "non-empty 'text'" in res1["message"]
-
-    # Invalid confidence
-    res2 = _declare(toolset, ctx, assumptions=[{"text": "valid", "confidence": "unknown"}])
-    assert res2["status"] == "error"
-    assert "invalid confidence" in res2["message"]
-
-    # Missing confidence defaults to medium
-    res3 = _declare(toolset, ctx, assumptions=[{"text": "valid"}])
-    assert res3["status"] == "approved"
+    result = _declare(toolset, ctx, assumptions=["  IC50 in nM ", {"text": "Only human BTK"}])
+    assert result["status"] == "approved"
     order = load_order(ctx.state, AGENT)
-    assert order.assumptions[0].confidence == "medium"
+    assert [(a.id, a.text) for a in order.assumptions] == [("A1", "IC50 in nM"), ("A2", "Only human BTK")]
+
+
+def test_empty_assumption_is_an_error(monkeypatch):
+    monkeypatch.setattr(get_settings().web, "hitl_enabled", False)
+    toolset = WorkOrderToolset(AGENT, TOOLS, _Handler())
+
+    for bad in ("  ", {"text": "  "}, {}):
+        result = _declare(toolset, _context(), assumptions=[bad])
+        assert result["status"] == "error"
+        assert "non-empty string" in result["message"]

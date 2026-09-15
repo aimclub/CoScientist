@@ -277,7 +277,6 @@ class ReplaySession:
                     {
                         "id": f"A{i}",
                         "text": cls._payload(a.get("text") if isinstance(a, dict) else str(a)),
-                        "confidence": a.get("confidence", "medium") if isinstance(a, dict) else "medium",
                     }
                     for i, a in enumerate(args.get("assumptions") or [], 1)
                 ],

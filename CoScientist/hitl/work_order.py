@@ -43,7 +43,6 @@ class WorkStep(BaseModel):
 class Assumption(BaseModel):
     id: str
     text: str
-    confidence: Literal["low", "medium", "high"] = "medium"
     rejected: bool = False
 
 
@@ -111,7 +110,7 @@ def render_work_order(order: WorkOrder) -> str:
         lines.append("\nAssumptions:")
         for a in order.assumptions:
             mark = " (rejected)" if a.rejected else ""
-            lines.append(f"  {a.id}. {a.text} [{a.confidence}]{mark}")
+            lines.append(f"  {a.id}. {a.text}{mark}")
     if order.steps:
         lines.append("\nSteps:")
         for s in order.steps:

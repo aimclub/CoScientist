@@ -622,7 +622,9 @@ def _as_list(callbacks):
 def test_work_order_agents_get_tools_guard_reset_and_prompt(monkeypatch, config):
     on = _build_with(monkeypatch, config, hitl_enabled=True)
     wired = [name for name, cfg in config.agents.items() if cfg.work_order]
-    assert set(wired) >= {"ResearchAgent", "DatasetCollectorAgent", "HypothesesAgent", "MedicalAgent"}
+    assert set(wired) >= {
+        "ResearchAgent", "DatasetCollectorAgent", "HypothesesAgent", "MedicalAgent", "ExperimentAgent",
+    }
 
     for name in wired:
         agent = on.agent(name)
@@ -656,6 +658,8 @@ def test_work_order_prompt_hints_follow_the_agent_tools(monkeypatch, config):
     assert "query formulations" in on.agent("ResearchAgent").instruction
     assert "population, study designs" in on.agent("MedicalAgent").instruction
     assert "query formulations" not in on.agent("MedicalAgent").instruction
+    assert "For MCP tools" in on.agent("ExperimentAgent").instruction
+    assert "For MCP tools" not in on.agent("ResearchAgent").instruction
 
 
 def test_work_order_requires_an_llm_agent_with_hitl():

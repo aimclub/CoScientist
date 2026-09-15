@@ -123,30 +123,13 @@ class WorkOrderToolset:
     def _parse_assumptions(raw: Optional[List[Any]]) -> List[Assumption] | str:
         assumptions: List[Assumption] = []
         for offset, item in enumerate(raw or []):
-            if not isinstance(item, dict):
-                return (
-                    f"Assumption at index {offset} must be a dict with 'text' and 'confidence' "
-                    f"('low', 'medium', 'high'), got {type(item).__name__}: {item!r}. "
-                    f"Example: {{\"text\": \"...\", \"confidence\": \"high\"}}."
-                )
-            text = str(item.get("text") or "").strip()
+            # A {"text": ...} dict is the older shape; models still send it now and then.
+            if isinstance(item, dict):
+                item = item.get("text")
+            text = str(item or "").strip()
             if not text:
-                return f"Assumption at index {offset} needs a non-empty 'text'."
-            conf = item.get("confidence")
-            if conf is None:
-                conf_val = "medium"
-            else:
-                conf_val = str(conf).strip().lower()
-                if conf_val not in ("low", "medium", "high"):
-                    return (
-                        f"Assumption at index {offset} has invalid confidence {conf!r}: "
-                        f"must be one of 'low', 'medium', 'high'."
-                    )
-            assumptions.append(Assumption(
-                id=f"A{offset + 1}",
-                text=text,
-                confidence=conf_val,  # type: ignore[arg-type]
-            ))
+                return f"Assumption at index {offset} must be a non-empty string."
+            assumptions.append(Assumption(id=f"A{offset + 1}", text=text))
         return assumptions
 
 
@@ -222,7 +205,7 @@ class WorkOrderToolset:
         self,
         goal: str,
         done_criteria: str,
-        assumptions: List[Dict[str, Any]],
+        assumptions: List[str],
         steps: List[Dict[str, Any]],
         planned_tools: List[str],
         tool_context: ToolContext,
@@ -238,9 +221,8 @@ class WorkOrderToolset:
         Args:
             goal: What this run must achieve, in one or two sentences.
             done_criteria: How you will know you are done.
-            assumptions: Every assumption your plan relies on. Each item must
-                be a dict: {"text": "...", "confidence": "low"|"medium"|"high"}.
-                Keep assumptions atomic (one condition per item) and non-trivial.
+            assumptions: Every assumption your plan relies on, one string per
+                item. Keep assumptions atomic (one condition per item) and non-trivial.
             steps: Ordered steps, each {"title", "tools": [tool names],
                 "expected_outcome"}.
             planned_tools: All tool names you intend to call.
