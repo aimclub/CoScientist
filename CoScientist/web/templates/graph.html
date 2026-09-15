@@ -4,6 +4,8 @@
   <meta charset="utf-8" />
   <title>CoScientist — Research Graph</title>
   <script src="/static/vis-network.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
   <style>
     :root {
       --bg: #14161a; --surface: #1c1f26; --surface2: #23272f; --line: #2c313a;
@@ -88,6 +90,72 @@
     #detail .prov .res { color: var(--ink2); font-size: 11.5px; margin-top: 5px; line-height: 1.5;
       white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; }
     #detail .empty { color: var(--ink3); font-style: italic; }
+
+    /* readable values: a mapping is labelled rows, not a wall of braces */
+    .kv { margin-top: 2px; }
+    .kv .row { display: grid; grid-template-columns: minmax(64px, max-content) 1fr; gap: 2px 12px;
+      padding: 5px 0; border-bottom: 1px solid var(--line); align-items: baseline; }
+    .kv .row:last-child { border-bottom: 0; }
+    .kv .key { color: var(--ink2); font-size: 11.5px; font-family: ui-monospace, monospace;
+      word-break: break-word; }
+    .kv .val { color: var(--ink); font-size: 12.5px; line-height: 1.45; white-space: pre-wrap;
+      overflow-wrap: anywhere; min-width: 0; }
+    .kv .val.block { grid-column: 1 / -1; background: var(--bg); border: 1px solid var(--line);
+      border-radius: 6px; padding: 7px 9px; max-height: 40vh; overflow-y: auto; }
+    .kv .val.dim { color: var(--ink3); font-size: 11px; }
+    .kv .mono { font-family: ui-monospace, monospace; font-size: 11.5px; }
+    .kv .nested { grid-column: 1 / -1; margin-left: 10px; padding-left: 10px;
+      border-left: 2px solid var(--line); }
+    .kv ol.items { margin: 0; padding-left: 18px; color: var(--ink); font-size: 12.5px; }
+    .kv ol.items li { margin: 3px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+    .kv ol.items li + li { border-top: 1px dashed var(--line); padding-top: 3px; }
+    .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11.5px;
+      background: var(--surface2); border: 1px solid var(--line); color: var(--ink);
+      margin: 0 4px 4px 0; white-space: nowrap; }
+
+    /* tool-call history under an agent: a folded row each, opened on click */
+    .call { border: 1px solid var(--line); border-radius: 8px; margin: 6px 0; background: var(--bg); }
+    .call .hd { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer;
+      user-select: none; }
+    .call .hd:hover { background: #1a1f28; }
+    .call .st { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+    .call .tool { font-family: ui-monospace, monospace; font-weight: 700; font-size: 12px;
+      color: var(--accent); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+      white-space: nowrap; }
+    .call .when { color: var(--ink3); font-size: 11px; font-variant-numeric: tabular-nums;
+      white-space: nowrap; }
+    .call .caret { color: var(--ink3); font-size: 9px; transition: transform .12s; }
+    .call.open .caret { transform: rotate(90deg); }
+    .call .gist { color: var(--ink2); font-size: 11.5px; padding: 0 10px 8px 26px;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .call .bd { display: none; padding: 0 10px 10px; border-top: 1px solid var(--line); }
+    .call.open .bd { display: block; }
+    .call .bd .k { margin-top: 10px; }
+    .call.focus { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+    /* an agent's report, rendered from its markdown */
+    .report { background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+      padding: 10px 12px; font-size: 12.5px; line-height: 1.55; max-height: 52vh; overflow-y: auto;
+      overflow-wrap: anywhere; }
+    .report > :first-child { margin-top: 0; } .report > :last-child { margin-bottom: 0; }
+    .report h1, .report h2, .report h3, .report h4 { font-size: 13px; margin: 12px 0 4px; color: var(--ink); }
+    .report h1 { font-size: 14px; }
+    .report p, .report ul, .report ol { margin: 6px 0; } .report li { margin: 2px 0; }
+    .report code { font-family: ui-monospace, monospace; font-size: 11.5px; background: var(--surface2);
+      padding: 1px 4px; border-radius: 4px; }
+    .report pre { max-height: none; margin: 6px 0; } .report pre code { background: none; padding: 0; }
+    .report a { color: var(--accent); } .report img { max-width: 100%; border-radius: 6px; }
+    .report table { border-collapse: collapse; font-size: 11.5px; }
+    .report th, .report td { border: 1px solid var(--line); padding: 3px 6px; }
+    .report blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--line); color: var(--ink2); }
+    /* artifacts: what the agent left behind */
+    .art { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+    .art:last-child { border-bottom: 0; }
+    .art .ic { flex: none; }
+    .art .uri { font-family: ui-monospace, monospace; font-size: 11.5px; overflow-wrap: anywhere; color: var(--ink); }
+    .art a.uri { color: var(--accent); text-decoration: none; } .art a.uri:hover { text-decoration: underline; }
+    .art .by { color: var(--ink3); font-size: 11px; white-space: nowrap; margin-left: auto; }
+    #detail .note { color: var(--ink3); font-size: 11.5px; font-style: italic; margin: 2px 0 0; }
   </style>
 </head>
 <body>
@@ -193,9 +261,16 @@
     const colorOf = n => IDENTITY_COLOR[n.kind] || statusColor(n);
     const borderOf = n => IDENTITY_COLOR[n.kind] ? statusColor(n) : "#20232a";
     const shapeOf = n => SHAPE[n.kind] || "box";
-    const secsOf = n => (n.t_end && n.t_start)
-      ? ((n.t_end - n.t_start) < 1 ? (n.t_end - n.t_start).toFixed(2)
-                                   : (n.t_end - n.t_start).toFixed(1)) + "s" : "";
+    // How long it took, in the unit a reader thinks in: a sandbox run that
+    // waited six hours is "5h 51m", not "21081.8s".
+    const secsOf = n => {
+      if (!(n.t_end && n.t_start)) return "";
+      const s = n.t_end - n.t_start;
+      if (s < 1) return s.toFixed(2) + "s";
+      if (s < 60) return s.toFixed(1) + "s";
+      if (s < 3600) return Math.floor(s / 60) + "m " + Math.round(s % 60) + "s";
+      return Math.floor(s / 3600) + "h " + Math.round((s % 3600) / 60) + "m";
+    };
     // When the call was made. The canvas already places nodes along a time
     // axis, but reading a position off an axis is not the same as being told
     // the hour — and it is what a reader matches against a log line.
@@ -216,8 +291,17 @@
         return "❯ " + String(n.label || "request").slice(0, 46) + tail;
       if (n.kind === "result")
         return "✔ answer" + tail;
-      if (n.kind === "agent" || n.kind === "agent_call")
-        return String(n.executor_agent || n.label || "").slice(0, 34) + tail;
+      if (n.kind === "agent" || n.kind === "agent_call") {
+        // Numbered in the order the stages ran; an agent that ran more than
+        // once in the request says which run this is, so a loop reads as one.
+        // Its tool calls are folded into the card; the count says there is
+        // something to open, and how much.
+        const calls = Array.isArray(n.calls) ? n.calls.length : 0;
+        const name = String(n.executor_agent || n.label || "").slice(0, 30);
+        return (n.stage ? n.stage + ". " : "") + name
+          + (n.runs > 1 ? "  (run " + n.run + " of " + n.runs + ")" : "") + tail
+          + (calls ? "\n🛠 " + calls + (calls === 1 ? " call" : " calls") : "");
+      }
       return String(n.label || n.id || "").slice(0, 30) + tail;
     }
 
@@ -234,7 +318,7 @@
       const svg = box.querySelector("svg");
       if (svg) { svg.removeAttribute("height"); svg.style.width = "100%"; svg.style.height = "auto"; }
     }
-    function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+    function esc(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
     function rText(n){ return String(n.output||n.label||"").replace(/\s+/g," ").trim(); }
     // A card is a headline, not the document. Seven hundred characters of
     // formulation per node turned the canvas into a wall of prose nobody scans;
@@ -262,8 +346,9 @@
       return head + "\n" + body + (foot ? `\n<i>${foot}</i>` : "");
     }
     const shortAgent = a => String(a).replace(/Agent$/, "");
-    const titleOf = n => [ "id: "+n.id, "type: "+(n.kind||""),
+    const titleOf = n => [ "type: "+(n.kind||""),
       n.executor_agent?"source: "+n.executor_agent:"", "status: "+(n.status||""),
+      Array.isArray(n.calls) && n.calls.length ? "tool calls: " + n.calls.length : "",
       n.output?String(n.output).slice(0,300):"" ].filter(Boolean).join("\n");
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -296,6 +381,7 @@
       network.on("click", params => {
         if (!params.nodes.length) { closeDetail(); return; }
         selectedId = params.nodes[0];
+        focusCallId = null; focusPending = false;
         lastDetailStamp = JSON.stringify(nodeData[selectedId]);
         showDetail(nodeData[selectedId]);
       });
@@ -502,7 +588,8 @@
       + '⚙️ method · 🎯 criteria · 🔧 tool · ✅ conclusion</span></div>';
     const EX_LEGEND = '<div class="grp"><b>status</b>' + item("#f1c40f","running")
       + item("#22c55e","success") + item("#ef4444","failed")
-      + '</div><div class="grp"><b>type</b><span class="item">⬡ system · ● agent · ◆ goal · ▭ tool · ★ result</span></div>';
+      + '</div><div class="grp"><b>type</b><span class="item">❯ request · 1. 2. 3. … the agents, in the order they ran (a row per agent; "run 2 of 3" = a loop) · ✔ answer</span></div>'
+      + '<div class="grp"><b>click an agent</b><span class="item">its task, its report, the files it produced, its tool calls</span></div>';
     function item(c, t){ return `<span class="item"><i class="sw" style="background:${c}"></i>${t}</span>`; }
     function updateChrome(){
       const r = isResearch();
@@ -544,46 +631,295 @@
         + provHtml + `</div>`;
       document.getElementById("detail").style.display = "block";
     }
-    // The whole text, always, in a box that scrolls when it is long. The
-    // earlier fold-and-expand needed a button to work and the button did not;
-    // a scrollbar has no state to get wrong.
-    function textBlock(title, value){
-      if (value === null || value === undefined || value === "") return "";
-      const text = (typeof value === "object")
-        ? Object.entries(value).map(([k, v]) =>
-            `${k}: ${typeof v === "object" ? JSON.stringify(v, null, 2) : v}`).join("\n")
-        : String(value);
-      const size = text.length > 900
-        ? ` <span class="chars">${text.length.toLocaleString()} chars</span>` : "";
-      return `<div class="k">${title}${size}</div><pre>${esc(text)}</pre>`;
+    // ── readable values ──────────────────────────────────────────────────────
+    // What an agent or a tool was given and what it returned is recorded three
+    // ways, depending on the age of the snapshot: an object, a JSON string, or
+    // the recorder's "key: value" lines. All three come back as one object so
+    // the panel can lay them out as labelled rows instead of a wall of braces.
+    let salvaged = false;   // set by parseValue when a cut JSON value was repaired
+    function parseValue(v){
+      salvaged = false;
+      if (v === null || v === undefined) return null;
+      if (typeof v === "object") return v;
+      if (typeof v !== "string") return v;
+      const s = v.trim();
+      if (!s) return null;
+      if (/^[\[{]/.test(s)) {
+        try { return JSON.parse(s); } catch (e) {}
+        const saved = salvageJSON(s);
+        if (saved !== null) { salvaged = true; return saved; }
+      }
+      // Argument names, not prose: "Note: …" at the top of an answer is text.
+      const KEY = /^([a-z_][a-z0-9_.-]{0,40}):(?:\s(.*))?$/;
+      const lines = s.split("\n");
+      if (!KEY.test(lines[0])) return s;
+      const obj = {}; let key = null;
+      for (const line of lines) {
+        const m = line.match(KEY);
+        if (m) { key = m[1]; obj[key] = m[2] === undefined ? "" : m[2]; }
+        else obj[key] += (obj[key] ? "\n" : "") + line.replace(/^  /, "");
+      }
+      for (const k in obj) {
+        const t = String(obj[k]).trim();
+        if (/^[\[{]/.test(t)) { try { obj[k] = JSON.parse(t); } catch (e) {} }
+      }
+      return obj;
+    }
+    // The recorder keeps the first N characters of a value and says how many
+    // it dropped. A JSON dump cut that way no longer parses, and a wall of
+    // braces was the thing the panel is here to replace, so the open strings
+    // and brackets are closed and, failing that, the text is backed off to the
+    // last whole element until what is left parses. The note on how much was
+    // dropped stays; see truncationNote().
+    const CUT_MARK = /\n?… \[(\d+) more characters\]\s*$/;
+    function salvageJSON(s){
+      let text = s.replace(CUT_MARK, "");
+      for (let attempt = 0; attempt < 60; attempt++) {
+        try { return JSON.parse(closeOpen(text)); } catch (e) {}
+        const cut = Math.max(text.lastIndexOf(","), text.lastIndexOf("{"),
+                             text.lastIndexOf("["), text.lastIndexOf(":"));
+        if (cut <= 0) return null;
+        text = text.slice(0, cut);
+      }
+      return null;
+    }
+    function closeOpen(text){
+      const stack = []; let inStr = false, escaped = false;
+      for (const ch of text) {
+        if (inStr) {
+          if (escaped) escaped = false;
+          else if (ch === "\\") escaped = true;
+          else if (ch === '"') inStr = false;
+          continue;
+        }
+        if (ch === '"') inStr = true;
+        else if (ch === "{" || ch === "[") stack.push(ch === "{" ? "}" : "]");
+        else if (ch === "}" || ch === "]") stack.pop();
+      }
+      let out = inStr ? text + '"' : text;
+      out = out.replace(/,\s*$/, "").replace(/"(?:[^"\\]|\\.)*"\s*:\s*$/, "").replace(/,\s*$/, "");
+      return out + stack.reverse().join("");
+    }
+    function truncationNote(value, repaired){
+      const m = typeof value === "string" ? value.match(CUT_MARK) : null;
+      if (m) {
+        const kept = value.length - m[0].length;
+        return `<div class="empty" style="margin-top:6px">recorded up to ${kept.toLocaleString()} characters · `
+          + `${Number(m[1]).toLocaleString()} more were not kept</div>`;
+      }
+      // Cut by a recorder that left no marker: only the repair says so.
+      return repaired ? `<div class="empty" style="margin-top:6px">recorded value was cut short · shown up to the last complete field</div>` : "";
+    }
+    // Bookkeeping fields nobody reads, and values already said once.
+    const NOISE_KEYS = new Set(["is_root", "routing", "run_id", "semantic", "verdict",
+                                "parent_ids", "turn_id"]);
+    const isScalar = x => x === null || typeof x !== "object";
+    const isEmpty = v => v === null || v === undefined || v === ""
+      || (Array.isArray(v) && !v.length)
+      || (typeof v === "object" && !Array.isArray(v) && !Object.keys(v).length);
+    function tidy(obj, ctx){
+      const out = {}, seen = new Set();
+      for (const [k, v] of Object.entries(obj)) {
+        if (NOISE_KEYS.has(k) || isEmpty(v)) continue;
+        if (k === "name" && ctx && ctx.agent && v === ctx.agent) continue; // the heading says it
+        const sig = isScalar(v) ? String(v) : JSON.stringify(v);
+        if (seen.has(sig)) continue;                        // "role" repeating "description"
+        seen.add(sig); out[k] = v;
+      }
+      return out;
+    }
+    function kvRows(obj, depth){
+      return `<div class="kv">` + Object.entries(obj).map(([k, v]) => {
+        const key = `<span class="key">${esc(k)}</span>`;
+        if (!isScalar(v)) {
+          if (Array.isArray(v) && v.every(x => isScalar(x) && String(x).length <= 40))
+            return `<div class="row">${key}<span class="val">`
+              + v.map(x => `<span class="pill">${esc(x)}</span>`).join("") + `</span></div>`;
+          const count = Array.isArray(v) ? v.length + (v.length === 1 ? " item" : " items")
+                                         : Object.keys(v).length + " fields";
+          return `<div class="row">${key}<span class="val dim">${count}</span>`
+            + `<div class="nested">${nestedValue(v, depth + 1)}</div></div>`;
+        }
+        const text = String(v);
+        const long = text.length > 90 || text.includes("\n");
+        return `<div class="row">${key}<span class="val${long ? " block" : ""}">${esc(text)}</span></div>`;
+      }).join("") + `</div>`;
+    }
+    function nestedValue(v, depth){
+      if (depth > 4) return `<pre>${esc(JSON.stringify(v, null, 2))}</pre>`;
+      if (Array.isArray(v))
+        return `<ol class="items">` + v.map(x =>
+          `<li>${isScalar(x) ? esc(x) : nestedValue(x, depth)}</li>`).join("") + `</ol>`;
+      return kvRows(v, depth);
+    }
+    // A titled block: labelled rows for a mapping, a list for a list, the text
+    // itself for prose, and nothing at all when there is nothing to show.
+    function readable(title, value, ctx){
+      const v = parseValue(value), repaired = salvaged;
+      if (v === null) return "";
+      let body;
+      if (Array.isArray(v)) body = nestedValue(v, 0);
+      else if (typeof v === "object") {
+        const t = tidy(v, ctx);
+        if (!Object.keys(t).length) return "";
+        body = kvRows(t, 0);
+      } else body = `<pre>${esc(String(v))}</pre>`;
+      const raw = typeof value === "string" ? value.length : 0;
+      const size = raw > 900 ? ` <span class="chars">${raw.toLocaleString()} chars</span>` : "";
+      return `<div class="k">${title}${size}</div>${body}${truncationNote(value, repaired)}`;
+    }
+    // One line saying what a call was about, so the history scans unopened.
+    function gistOf(value){
+      const v = parseValue(value);
+      if (v === null) return "";
+      let text;
+      if (Array.isArray(v)) text = v.length + " items";
+      else if (typeof v === "object")
+        text = Object.entries(tidy(v)).map(([k, x]) => `${k}: `
+          + (isScalar(x) ? String(x).replace(/\s+/g, " ").slice(0, 48)
+                         : Array.isArray(x) ? x.length + " items" : "…")).join("  ·  ");
+      else text = String(v).replace(/\s+/g, " ");
+      return text.length > 140 ? text.slice(0, 140) + "…" : text;
     }
 
-    function showDetailClassic(n){
-      const row=(k,v)=>(v||v===0)?`<div class="attr"><span class="ak">${k}:</span> ${esc(v)}</div>`:"";
-      const dur=(n.t_start&&n.t_end)?(n.t_end-n.t_start).toFixed(2)+"s":"";
-      document.getElementById("detail").innerHTML =
-        `<div class="dhead"><span class="close" onclick="closeDetail()">✕</span>`
-        + `<h3>${esc(labelOf(n))}</h3><div class="sub">${esc(n.kind||"")}</div></div><div class="dbody">`
-        + row("agent",n.executor_agent)+row("status",n.status)
-        + row("called at",clockOf(n))+row("duration",dur)+row("id",n.id)
-        + textBlock("input", n.input) + textBlock("output", n.output) + `</div>`;
-      document.getElementById("detail").style.display = "block";
+    // ── the execution panel ──────────────────────────────────────────────────
+    const openCalls = new Set();      // calls the reader has unfolded
+    let focusCallId = null, focusPending = false;   // a call reached from evidence
+    let paintedId = null;
+    // Live redraws of the node already on show keep the reader's place; a new
+    // node opens at the top.
+    function paint(n, html){
+      const box = document.getElementById("detail");
+      const top = paintedId === n.id ? box.scrollTop : 0;
+      box.innerHTML = html; box.style.display = "block"; box.scrollTop = top;
+      paintedId = n.id;
+      if (focusCallId) {
+        const el = box.querySelector(`.call[data-call="${CSS.escape(focusCallId)}"]`);
+        if (el) { el.classList.add("focus");
+                  if (focusPending) { el.scrollIntoView({ block: "center" }); focusPending = false; } }
+      }
     }
-    function closeDetail(){ selectedId=null; lastDetailStamp=null;
+    const KIND_WORD = { goal:"request", result:"answer", agent:"agent", agent_call:"agent",
+                        tool_call:"tool call", system:"system" };
+    function headOf(n, title){
+      const c = statusColor(n), at = clockOf(n), dur = secsOf(n);
+      const sub = [KIND_WORD[n.kind] || n.kind || "",
+                   n.runs > 1 ? "run " + n.run + " of " + n.runs : "",
+                   at ? "started " + at : "", dur].filter(Boolean).join(" · ");
+      return `<div class="dhead"><span class="close" onclick="closeDetail()">✕</span>`
+        + `<h3>${esc(title)}</h3><div class="sub">${esc(sub)}</div>`
+        + (n.status ? `<span class="badge" style="background:${rgba(c,.18)};color:${c};border:1px solid ${c}">${esc(n.status)}</span>` : "")
+        + `</div>`;
+    }
+    function callRow(c){
+      const when = [clockOf(c), secsOf(c)].filter(Boolean).join(" · ");
+      const gist = gistOf(c.input);
+      const files = [...(c.input_files || []), ...(c.output_files || [])];
+      const body = (readable("arguments", c.input) || `<div class="k">arguments</div><div class="empty">none</div>`)
+        + readable("result", c.output)
+        + (files.length ? `<div class="k">files</div><div class="kv">` + files.map(f =>
+            `<div class="row"><span class="val mono">${esc(f)}</span></div>`).join("") + `</div>` : "");
+      return `<div class="call${openCalls.has(c.id) ? " open" : ""}" data-call="${esc(c.id)}">`
+        + `<div class="hd" onclick="toggleCall(this.parentNode)">`
+        + `<i class="st" style="background:${STATUS_COLOR[c.status] || "#cbd5e1"}" title="${esc(c.status || "")}"></i>`
+        + `<span class="tool">${esc(c.tool || "call")}</span><span class="when">${esc(when)}</span>`
+        + `<span class="caret">▶</span></div>`
+        + (gist ? `<div class="gist">${esc(gist)}</div>` : "")
+        + `<div class="bd">${body}</div></div>`;
+    }
+    function toggleCall(el){
+      const id = el.dataset.call;
+      if (openCalls.has(id)) { openCalls.delete(id); el.classList.remove("open"); }
+      else { openCalls.add(id); el.classList.add("open"); }
+    }
+    // An agent's final words, rendered as the document they are. Plain text
+    // when the markdown libraries did not load.
+    function reportBlock(title, text){
+      if (!text) return "";
+      const raw = String(text);
+      let html;
+      if (window.marked && window.DOMPurify) {
+        try { html = DOMPurify.sanitize(marked.parse(raw), { ADD_ATTR: ["target"] })
+                .replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" '); }
+        catch (e) { html = null; }
+      }
+      const size = raw.length > 900 ? ` <span class="chars">${raw.length.toLocaleString()} chars</span>` : "";
+      return `<div class="k">${title}${size}</div>`
+        + (html ? `<div class="report">${html}</div>` : `<pre>${esc(raw)}</pre>`)
+        + truncationNote(raw, false);
+    }
+    // What the agent left behind: files its tools wrote and links its report names.
+    function artifactsBlock(list){
+      if (!Array.isArray(list) || !list.length) return "";
+      return `<div class="k">artifacts <span class="chars">${list.length}</span></div>` + list.map(a => {
+        const file = a.kind === "file";
+        const name = file ? `<span class="uri">${esc(a.uri)}</span>`
+          : `<a class="uri" href="${esc(a.uri)}" target="_blank" rel="noopener noreferrer">${esc(a.uri)}</a>`;
+        return `<div class="art"><span class="ic">${file ? "📦" : "🔗"}</span>${name}`
+          + (a.tool ? `<span class="by">${esc(a.tool)}</span>` : "") + `</div>`;
+      }).join("");
+    }
+    // An agent opens on its task and its report, then what it produced, then
+    // the tool calls it made, folded, in the order they ran. A request opens
+    // on the prompt, an answer on the answer, and a call nobody owns on itself.
+    function showDetailClassic(n){
+      const isAgent = n.kind === "agent" || n.kind === "agent_call";
+      const name = String(n.executor_agent || n.label || "agent");
+      const title = isAgent ? (n.stage ? n.stage + ". " : "") + name
+        : n.kind === "goal" ? "❯ request" : n.kind === "result" ? "✔ answer"
+        : String(n.label || n.kind || "");
+      let body;
+      if (n.kind === "goal") body = readable("what was asked", n.label);
+      else if (n.kind === "result") body = reportBlock("answer", n.output || n.label);
+      else if (isAgent) {
+        const where = n.io_source === "delegation" ? "task and report come from the delegation that started this run"
+          : n.io_source === "request" ? "task and report come from the request this agent served and its answer" : "";
+        body = reportBlock("report", n.output)
+          + artifactsBlock(n.artifacts)
+          + readable("task", n.input, { agent: n.executor_agent })
+          + (where ? `<div class="note">${where}</div>` : "");
+      } else body = readable("arguments", n.input) + readable("result", n.output);
+      if (isAgent) {
+        // Older snapshots recorded nothing on the agent itself; say so, or
+        // the panel opening on the call list reads as a missing section.
+        if (!body) body = `<div class="k">task · report</div><div class="empty">not recorded for this agent</div>`;
+        const calls = Array.isArray(n.calls) ? n.calls : [];
+        const failed = calls.filter(c => c.status === "failed").length;
+        body += calls.length
+          ? `<div class="k">tool calls <span class="chars">${calls.length}${failed ? " · " + failed + " failed" : ""}</span></div>`
+            + calls.map(callRow).join("")
+          : `<div class="k">tool calls</div><div class="empty">none recorded</div>`;
+      }
+      if (!body) body = `<div class="empty">nothing recorded yet</div>`;
+      paint(n, headOf(n, title) + `<div class="dbody">${body}</div>`);
+    }
+    function closeDetail(){ selectedId=null; lastDetailStamp=null; paintedId=null;
+      focusCallId=null; focusPending=false;
       document.getElementById("detail").style.display="none"; }
 
-    // Jump from an Evidence's provenance to the exact tool-call node in the
-    // execution log (glues the research graph to the execution trace).
+    // Jump from an Evidence's provenance to the exact tool call in the
+    // execution log (glues the research graph to the execution trace). The
+    // call is folded into its agent's card, so the agent is what gets
+    // selected and the call is unfolded and lit inside it.
+    function ownerOfCall(execId){
+      for (const id in nodeData)
+        if ((nodeData[id].calls || []).some(c => c.id === execId)) return id;
+      return null;
+    }
     function jumpToExecution(execId){
       const sel = document.getElementById("view");
       if (sel.value !== "execution") { sel.value = "execution"; sel.onchange(); }
       let tries = 0;
       const t = setInterval(() => {
-        if (nodeData[execId] || tries++ > 16) {
+        const target = nodeData[execId] ? execId : ownerOfCall(execId);
+        if (target || tries++ > 16) {
           clearInterval(t);
-          if (nodeData[execId]) {
-            try { network.selectNodes([execId]); network.focus(execId, { scale: 1.1, animation: true }); } catch(e){}
-            selectedId = execId; showDetail(nodeData[execId]);
+          if (target) {
+            try { network.selectNodes([target]); network.focus(target, { scale: 1.1, animation: true }); } catch(e){}
+            selectedId = target;
+            if (target !== execId) { focusCallId = execId; focusPending = true; openCalls.add(execId); }
+            lastDetailStamp = JSON.stringify(nodeData[target]);
+            showDetail(nodeData[target]);
           } else {
             document.getElementById("status").textContent = "call " + execId + " not in the current execution log";
           }
@@ -601,7 +937,6 @@
       sel.innerHTML = ""; sel.dataset.keys = "";   // a request id is not a study id
       hardReset(); makeNetwork(); updateChrome(); poll();
     };
-    document.getElementById("prov").onchange = () => { hardReset(); poll(); };
     document.getElementById("turn").onchange = () => { hardReset(); poll(); };
     let timer=null;
     function loop(){ if (document.getElementById("auto").checked) poll(); timer=setTimeout(loop,1500); }

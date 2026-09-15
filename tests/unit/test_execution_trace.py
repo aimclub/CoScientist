@@ -174,7 +174,7 @@ def test_execution_tree_drops_the_roster_and_measures_depth():
         {"src": "goal:i1::agent:Research", "dst": "result:i1", "type": "produced"},
     ]}
 
-    tree = execution_tree(full)
+    tree = execution_tree(full, collapse_tools=False)
     ids = {n["id"] for n in tree["nodes"]}
     assert "agent:NeverCalled" not in ids, "an agent nothing called is roster"
     assert "system:root" not in ids, "the hub carries no information"
@@ -185,6 +185,90 @@ def test_execution_tree_drops_the_roster_and_measures_depth():
     assert level["tool:a"] == level["tool:b"] == 2
     # The answer ends the request, to the right of everything it did.
     assert level["result:i1"] > level["tool:a"]
+
+
+def _agent_with_calls():
+    return {"nodes": [
+        {"id": "goal:i1", "kind": "goal", "label": "do it", "t_start": 10.0,
+         "t_end": 30.0},
+        # Written by the last delegation of the session, not by this request.
+        {"id": "agent:Research", "kind": "agent", "executor_agent": "Research",
+         "status": "success", "input": "task: find papers",
+         "output": "found 3", "t_start": 14.0, "t_end": 15.0},
+        {"id": "tool:b", "kind": "tool_call", "label": "extract",
+         "executor_agent": "Research", "status": "success", "input": "url: x",
+         "output": "text", "t_start": 13.0, "t_end": 13.5,
+         "output_files": ["s3://b/k"]},
+        {"id": "tool:a", "kind": "tool_call", "label": "search",
+         "executor_agent": "Research", "status": "failed", "input": "q: y",
+         "output": "boom", "t_start": 12.0, "t_end": 12.25},
+        {"id": "tool:orphan", "kind": "tool_call", "label": "stray",
+         "t_start": 16.0},
+        {"id": "result:i1", "kind": "result", "output": "done", "t_start": 20.0},
+    ], "edges": [
+        {"src": "goal:i1", "dst": "agent:Research", "type": "caused_by"},
+        {"src": "agent:Research", "dst": "tool:a", "type": "caused_by"},
+        {"src": "agent:Research", "dst": "tool:b", "type": "caused_by"},
+        {"src": "goal:i1", "dst": "tool:orphan", "type": "caused_by"},
+        {"src": "agent:Research", "dst": "result:i1", "type": "produced"},
+    ]}
+
+
+def test_tool_calls_fold_into_the_agent_that_made_them():
+    """The canvas shows agents; what each one did is carried on its card."""
+    from CoScientist.graph.projection import execution_tree
+
+    tree = execution_tree(_agent_with_calls())
+    by_id = {n["id"]: n for n in tree["nodes"]}
+    assert "tool:a" not in by_id and "tool:b" not in by_id
+    # A call with no agent to fold into is kept, not lost.
+    assert "tool:orphan" in by_id
+
+    calls = by_id["agent:Research"]["calls"]
+    assert [c["tool"] for c in calls] == ["search", "extract"], "in the order run"
+    first = calls[0]
+    assert first["id"] == "tool:a" and first["status"] == "failed"
+    assert first["input"] == "q: y" and first["output"] == "boom"
+    assert first["duration"] == 0.25
+    assert calls[1]["output_files"] == ["s3://b/k"]
+
+    # No edge may name a card that is no longer drawn.
+    ends = {end for e in tree["edges"] for end in (e["src"], e["dst"])}
+    assert ends <= set(by_id)
+    # The agent's own input and output are untouched.
+    assert by_id["agent:Research"]["input"] == "task: find papers"
+    assert by_id["agent:Research"]["output"] == "found 3"
+
+
+def test_a_folded_agent_spans_its_calls():
+    """A shared agent node carries whatever delegation wrote last; in this
+    request it started no later than its first call and ended no earlier
+    than its last, so the card's clock and duration describe this request."""
+    from CoScientist.graph.projection import execution_tree
+
+    agent = {n["id"]: n for n in execution_tree(_agent_with_calls())["nodes"]}["agent:Research"]
+    assert agent["t_start"] == 12.0
+    assert agent["t_end"] == 15.0, "its own later end stands"
+
+    full = _agent_with_calls()
+    node = next(n for n in full["nodes"] if n["id"] == "agent:Research")
+    node["t_end"] = 12.1                       # ended before its own last call
+    agent = {n["id"]: n for n in execution_tree(full)["nodes"]}["agent:Research"]
+    assert agent["t_end"] == 13.5
+
+    node["status"], node["t_end"] = "running", None
+    agent = {n["id"]: n for n in execution_tree(full)["nodes"]}["agent:Research"]
+    assert agent["t_end"] is None, "still running: no duration to print"
+
+
+def test_a_folded_agent_keeps_its_place_in_time():
+    """Folding leaves the picture request -> agents -> answer, in time order."""
+    from CoScientist.graph.projection import execution_tree
+
+    placed = {n["id"]: n for n in execution_tree(_agent_with_calls())["nodes"]}
+    order = [n["id"] for n in sorted(placed.values(), key=lambda n: n["x"])]
+    assert order == ["goal:i1", "agent:Research", "tool:orphan", "result:i1"]
+    assert placed["agent:Research"]["row"] == 1
 
 
 def test_nodes_are_placed_by_when_they_ran_and_who_ran_them():
@@ -206,7 +290,7 @@ def test_nodes_are_placed_by_when_they_ran_and_who_ran_them():
         {"src": "a:Two", "dst": "t:3", "type": "caused_by"},
     ]}
 
-    placed = {n["id"]: n for n in execution_tree(full)["nodes"]}
+    placed = {n["id"]: n for n in execution_tree(full, collapse_tools=False)["nodes"]}
 
     # Reading left to right reads forward in time.
     order = sorted(placed.values(), key=lambda n: n["x"])
@@ -293,10 +377,16 @@ def test_a_request_keeps_only_its_own_calls():
     """Pulling shared agents in must not drag the other request's work along."""
     from CoScientist.graph.projection import execution_tree
 
-    tree = execution_tree(_two_requests_sharing_agents(), "one")
+    tree = execution_tree(_two_requests_sharing_agents(), "one",
+                          collapse_tools=False)
     present = {n["id"] for n in tree["nodes"]}
     assert {"goal:1", "t:1", "t:2"} <= present
     assert not present & {"goal:2", "t:3", "t:4", "res:2"}
+
+    # Folded, the same request lists the same calls under their agents.
+    folded = {n["id"]: n for n in execution_tree(_two_requests_sharing_agents(), "one")["nodes"]}
+    assert [c["id"] for c in folded["a:Orchestrator"]["calls"]] == ["t:1"]
+    assert [c["id"] for c in folded["a:Research"]["calls"]] == ["t:2"]
 
 
 def test_an_agent_that_did_nothing_here_stays_out():
@@ -310,3 +400,96 @@ def test_an_agent_that_did_nothing_here_stays_out():
                           "type": "delegated_to"})
 
     assert "a:Idle" not in {n["id"] for n in execution_tree(full, "two")["nodes"]}
+
+
+def test_agent_cards_are_numbered_stages_and_runs():
+    """Read down the request: 1. Planner, 2. Critic, 3. Planner (run 2 of 2)."""
+    from CoScientist.graph.projection import execution_tree
+
+    full = {"nodes": [
+        {"id": "goal:i", "kind": "goal", "label": "ask", "t_start": 0.0},
+        {"id": "a:Planner@i", "kind": "agent", "executor_agent": "Planner", "t_start": 1.0},
+        {"id": "a:Critic@i", "kind": "agent", "executor_agent": "Critic", "t_start": 2.0},
+        {"id": "a:Planner@i#2", "kind": "agent", "executor_agent": "Planner", "t_start": 3.0},
+    ], "edges": [
+        {"src": "goal:i", "dst": "a:Planner@i", "type": "caused_by"},
+        {"src": "goal:i", "dst": "a:Critic@i", "type": "caused_by"},
+        {"src": "goal:i", "dst": "a:Planner@i#2", "type": "caused_by"},
+    ]}
+    by_id = {n["id"]: n for n in execution_tree(full)["nodes"]}
+    assert (by_id["a:Planner@i"]["stage"], by_id["a:Planner@i"]["run"], by_id["a:Planner@i"]["runs"]) == (1, 1, 2)
+    assert (by_id["a:Critic@i"]["stage"], by_id["a:Critic@i"]["run"], by_id["a:Critic@i"]["runs"]) == (2, 1, 1)
+    assert (by_id["a:Planner@i#2"]["stage"], by_id["a:Planner@i#2"]["run"]) == (3, 2)
+    # Runs of one agent share its lane, so the loop reads across one row.
+    assert by_id["a:Planner@i"]["row"] == by_id["a:Planner@i#2"]["row"]
+
+
+def test_an_agent_lists_the_files_and_links_it_produced():
+    from CoScientist.graph.projection import execution_tree
+
+    full = _agent_with_calls()
+    agent = next(n for n in full["nodes"] if n["id"] == "agent:Research")
+    agent["output"] = "Saved the figure to s3://b/fig.png, see https://x.y/report (done)."
+    agent["output_files"] = ["s3://b/fig.png"]
+    got = {n["id"]: n for n in execution_tree(full)["nodes"]}["agent:Research"]["artifacts"]
+    assert [a["uri"] for a in got] == ["s3://b/k", "s3://b/fig.png", "https://x.y/report"]
+    assert got[0] == {"uri": "s3://b/k", "kind": "file", "tool": "extract"}
+    assert got[2]["kind"] == "link"
+
+
+def test_an_old_snapshot_borrows_task_and_report_for_its_agents():
+    """Recorded before activations: the delegation's arguments and result sit
+    on one node in the caller's request, the callee's calls on another in a
+    request of its own. The reader opens the second and must still see both."""
+    from CoScientist.graph.projection import execution_tree
+
+    full = {"nodes": [
+        {"id": "goal:outer", "kind": "goal", "turn_id": "outer", "label": "do it",
+         "t_start": 0.0, "t_end": 50.0},
+        {"id": "goal:outer::agent:Orch", "kind": "agent_call", "turn_id": "outer",
+         "executor_agent": "Orch", "t_start": 1.0, "t_end": 49.0},
+        # The delegation, in the caller's request, with the arguments and result.
+        {"id": "goal:outer::agent:Coder", "kind": "agent_call", "turn_id": "outer",
+         "executor_agent": "Coder", "input": "request: write it", "output": "wrote it",
+         "t_start": 10.0, "t_end": 40.0},
+        {"id": "result:outer", "kind": "result", "turn_id": "outer", "output": "all done",
+         "t_start": 50.0, "t_end": 50.0},
+        # The callee's own request: its goal repeats the task, its agent card is empty.
+        {"id": "goal:inner", "kind": "goal", "turn_id": "inner", "label": "write it",
+         "t_start": 10.5, "t_end": 39.5},
+        {"id": "goal:inner::agent:Coder", "kind": "agent_call", "turn_id": "inner",
+         "executor_agent": "Coder", "t_start": 11.0, "t_end": 39.0},
+        {"id": "t:1", "kind": "tool_call", "turn_id": "inner", "label": "bash",
+         "executor_agent": "Coder", "t_start": 12.0, "t_end": 13.0},
+        {"id": "result:inner", "kind": "result", "turn_id": "inner", "output": "wrote it",
+         "t_start": 39.5, "t_end": 39.5},
+        # No delegation record anywhere: falls back to the request it served.
+        {"id": "goal:solo", "kind": "goal", "turn_id": "solo", "label": "explore",
+         "t_start": 60.0, "t_end": 70.0},
+        {"id": "goal:solo::agent:Coder", "kind": "agent_call", "turn_id": "solo",
+         "executor_agent": "Coder", "t_start": 61.0, "t_end": 69.0},
+        {"id": "result:solo", "kind": "result", "turn_id": "solo", "output": "explored",
+         "t_start": 70.0, "t_end": 70.0},
+    ], "edges": [
+        {"src": "goal:outer", "dst": "goal:outer::agent:Orch", "type": "caused_by"},
+        {"src": "goal:outer::agent:Orch", "dst": "goal:outer::agent:Coder", "type": "delegated_to"},
+        {"src": "goal:outer::agent:Orch", "dst": "result:outer", "type": "produced"},
+        {"src": "goal:inner", "dst": "goal:inner::agent:Coder", "type": "caused_by"},
+        {"src": "goal:inner::agent:Coder", "dst": "t:1", "type": "caused_by"},
+        {"src": "goal:inner::agent:Coder", "dst": "result:inner", "type": "produced"},
+        {"src": "goal:solo", "dst": "goal:solo::agent:Coder", "type": "caused_by"},
+        {"src": "goal:solo::agent:Coder", "dst": "result:solo", "type": "produced"},
+    ]}
+    inner = {n["id"]: n for n in execution_tree(full, "inner")["nodes"]}["goal:inner::agent:Coder"]
+    assert inner["input"] == "request: write it"
+    assert inner["output"] == "wrote it"
+    assert inner["io_source"] == "delegation"
+    assert [c["tool"] for c in inner["calls"]] == ["bash"], "its own calls stay its own"
+
+    solo = {n["id"]: n for n in execution_tree(full, "solo")["nodes"]}["goal:solo::agent:Coder"]
+    assert solo["input"] == "explore" and solo["output"] == "explored"
+    assert solo["io_source"] == "request"
+
+    # The delegation node itself already says what it says.
+    outer = {n["id"]: n for n in execution_tree(full, "outer")["nodes"]}["goal:outer::agent:Coder"]
+    assert outer["input"] == "request: write it" and "io_source" not in outer
