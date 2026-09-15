@@ -6,7 +6,8 @@ tool names, so a contract can only name tools the agent actually has).
 How a contract is confirmed depends on its risk tier (work_order_risk.py):
 
   read         the human gets a notice card; the tool returns at once;
-  compute      a HITL request with a veto window — auto-approved when it runs out;
+  compute      a HITL request with a veto window — auto-approved when it runs out
+               (a window of -1 disables auto-approval: it waits for the human);
   side_effect  a HITL request under the operator's global HITL timeout.
 
 With HITL or Work Orders switched off, the contract is still recorded (the guard
@@ -15,7 +16,6 @@ keeps working as a budget/scope check) and approved without asking anyone.
 from __future__ import annotations
 
 import logging
-import re
 from typing import Any, Dict, Iterable, List, Optional
 
 from google.adk.tools import FunctionTool
@@ -47,7 +47,6 @@ from CoScientist.hitl.work_order_risk import (
 logger = logging.getLogger("CoScientist.hitl.work_order")
 
 _STEP_STATUSES = ("pending", "in_progress", "done", "skipped")
-_CONFIDENCE_RE = re.compile(r"\s*[\(\[]\s*confidence\s*[:=]\s*(low|medium|high)\s*[\)\]]\s*$", re.I)
 
 
 def work_order_active() -> bool:
@@ -101,16 +100,6 @@ class WorkOrderToolset:
             return []
         return [n for n in names if n not in self.valid_tool_names]
 
-    def _parse_side_effects(self, raw: Optional[List[Any]]) -> List[SideEffect] | str:
-        effects: List[SideEffect] = []
-        valid = [k.value for k in SideEffectKind]
-        for item in raw or []:
-            if isinstance(item, str):
-                item = {"kind": item}
-            if not isinstance(item, dict) or item.get("kind") not in valid:
-                return f"Invalid side effect {item!r}: 'kind' must be one of {valid}."
-            effects.append(SideEffect(kind=item["kind"], detail=str(item.get("detail") or "")))
-        return effects
 
     def _parse_steps(self, raw: Optional[List[Any]], start: int = 1) -> List[WorkStep] | str:
         steps: List[WorkStep] = []
@@ -131,17 +120,35 @@ class WorkOrderToolset:
         return steps
 
     @staticmethod
-    def _parse_budget(raw: Optional[Dict[str, Any]]) -> Dict[str, int] | str:
-        budget: Dict[str, int] = {}
-        for tool, limit in (raw or {}).items():
-            try:
-                value = int(limit)
-            except (TypeError, ValueError):
-                return f"Budget for {tool!r} must be an integer, got {limit!r}."
-            if value < 1:
-                return f"Budget for {tool!r} must be at least 1."
-            budget[str(tool)] = value
-        return budget
+    def _parse_assumptions(raw: Optional[List[Any]]) -> List[Assumption] | str:
+        assumptions: List[Assumption] = []
+        for offset, item in enumerate(raw or []):
+            if not isinstance(item, dict):
+                return (
+                    f"Assumption at index {offset} must be a dict with 'text' and 'confidence' "
+                    f"('low', 'medium', 'high'), got {type(item).__name__}: {item!r}. "
+                    f"Example: {{\"text\": \"...\", \"confidence\": \"high\"}}."
+                )
+            text = str(item.get("text") or "").strip()
+            if not text:
+                return f"Assumption at index {offset} needs a non-empty 'text'."
+            conf = item.get("confidence")
+            if conf is None:
+                conf_val = "medium"
+            else:
+                conf_val = str(conf).strip().lower()
+                if conf_val not in ("low", "medium", "high"):
+                    return (
+                        f"Assumption at index {offset} has invalid confidence {conf!r}: "
+                        f"must be one of 'low', 'medium', 'high'."
+                    )
+            assumptions.append(Assumption(
+                id=f"A{offset + 1}",
+                text=text,
+                confidence=conf_val,  # type: ignore[arg-type]
+            ))
+        return assumptions
+
 
     @staticmethod
     def _implied_side_effects(tools: Iterable[str], effects: List[SideEffect]) -> None:
@@ -186,8 +193,10 @@ class WorkOrderToolset:
                 logger.exception("%s: work order notice failed", self.agent_name)
             return None
 
-        web = get_settings().web
         veto = tier == Tier.COMPUTE and not force_blocking
+        # A non-positive window reaches the handler as-is: no deadline, wait for the human.
+        veto_seconds = get_settings().web.work_order_veto_seconds
+        veto_timeout = float(veto_seconds) if veto_seconds > 0 else -1.0
         request = HITLRequest(
             agent_name=self.agent_name,
             action_type=HITLAction.APPROVE,
@@ -204,7 +213,7 @@ class WorkOrderToolset:
             },
             invoked_via="tool",
             trigger=trigger,
-            timeout_seconds=float(web.work_order_veto_seconds) if veto else None,
+            timeout_seconds=veto_timeout if veto else None,
         )
         return await self.handler.handle_request(request)
 
@@ -213,34 +222,28 @@ class WorkOrderToolset:
         self,
         goal: str,
         done_criteria: str,
-        assumptions: List[str],
+        assumptions: List[Dict[str, Any]],
         steps: List[Dict[str, Any]],
         planned_tools: List[str],
         tool_context: ToolContext,
-        side_effects: Optional[List[Dict[str, Any]]] = None,
-        budget: Optional[Dict[str, int]] = None,
         expected_outcome: str = "",
         fallback: str = "",
     ) -> Dict[str, Any]:
         """Declare your work order BEFORE your first external action.
 
         The human sees it and may approve, adjust or reject it. After approval
-        you may only call the tools you declared, within the budget; to need
-        more, call update_work_order with a reason.
+        you may only call the tools you declared; to need more, call
+        update_work_order with a reason.
 
         Args:
             goal: What this run must achieve, in one or two sentences.
             done_criteria: How you will know you are done.
-            assumptions: Every assumption your plan relies on (data sources,
-                units, scope, filters, interpretation of the task). Append
-                "(confidence: low|medium|high)" to an item when unsure.
+            assumptions: Every assumption your plan relies on. Each item must
+                be a dict: {"text": "...", "confidence": "low"|"medium"|"high"}.
+                Keep assumptions atomic (one condition per item) and non-trivial.
             steps: Ordered steps, each {"title", "tools": [tool names],
                 "expected_outcome"}.
             planned_tools: All tool names you intend to call.
-            side_effects: Effects beyond reading/computing, each {"kind",
-                "detail"}; kind is one of package_install, network_download,
-                git_write, long_job, file_delete, external_share.
-            budget: Max calls per tool, e.g. {"tavily_search": 3}.
             expected_outcome: What result you expect (be concrete: counts,
                 ranges, metrics).
             fallback: What you will do if the plan does not work.
@@ -264,40 +267,24 @@ class WorkOrderToolset:
         if not str(goal or "").strip():
             return _error("'goal' must not be empty.")
 
+        parsed_assumptions = self._parse_assumptions(assumptions)
+        if isinstance(parsed_assumptions, str):
+            return _error(parsed_assumptions)
         parsed_steps = self._parse_steps(steps)
         if isinstance(parsed_steps, str):
             return _error(parsed_steps)
-        effects = self._parse_side_effects(side_effects)
-        if isinstance(effects, str):
-            return _error(effects)
-        parsed_budget = self._parse_budget(budget)
-        if isinstance(parsed_budget, str):
-            return _error(parsed_budget)
-
         tools: List[str] = []
         for name in list(planned_tools or []) + [t for s in parsed_steps for t in s.tools]:
             if name not in tools and name not in EXEMPT_TOOLS:
                 tools.append(name)
-        unknown = self._unknown_tools(tools + list(parsed_budget))
+        unknown = self._unknown_tools(tools)
         if unknown:
             return _error(
                 f"Unknown tools {unknown}. You can only plan tools you have: "
                 f"{sorted(self.valid_tool_names or [])}."
             )
-        stray_budget = [t for t in parsed_budget if t not in tools]
-        if stray_budget:
-            return _error(f"Budget names tools that are not planned: {stray_budget}.")
+        effects: List[SideEffect] = []
         self._implied_side_effects(tools, effects)
-
-        parsed_assumptions = []
-        for i, text in enumerate(assumptions or [], 1):
-            text = str(text)
-            m = _CONFIDENCE_RE.search(text)
-            parsed_assumptions.append(Assumption(
-                id=f"A{i}",
-                text=_CONFIDENCE_RE.sub("", text).strip(),
-                confidence=m.group(1).lower() if m else "medium",
-            ))
 
         order = WorkOrder(
             agent=self.agent_name,
@@ -307,7 +294,6 @@ class WorkOrderToolset:
             steps=parsed_steps,
             planned_tools=tools,
             side_effects=effects,
-            budget=parsed_budget,
             expected_outcome=str(expected_outcome or ""),
             fallback=str(fallback or ""),
         )
@@ -372,9 +358,7 @@ class WorkOrderToolset:
         reason: str,
         tool_context: ToolContext,
         add_tools: Optional[List[str]] = None,
-        add_side_effects: Optional[List[Dict[str, Any]]] = None,
         add_steps: Optional[List[Dict[str, Any]]] = None,
-        budget: Optional[Dict[str, int]] = None,
     ) -> Dict[str, Any]:
         """Amend your approved work order when you need to go beyond it.
 
@@ -385,10 +369,8 @@ class WorkOrderToolset:
         Args:
             reason: Why the amendment is needed (what you learned).
             add_tools: Tool names to add to the plan.
-            add_side_effects: Side effects to add, each {"kind", "detail"}.
             add_steps: Steps to append, each {"title", "tools",
                 "expected_outcome"}.
-            budget: New max calls per tool, e.g. {"tavily_search": 5}.
 
         Returns:
             {"status": "approved" | "revise" | "rejected" | "error", ...}.
@@ -403,41 +385,27 @@ class WorkOrderToolset:
         new_steps = self._parse_steps(add_steps, start=len(old.steps) + 1)
         if isinstance(new_steps, str):
             return _error(new_steps)
-        effects = self._parse_side_effects(add_side_effects)
-        if isinstance(effects, str):
-            return _error(effects)
-        parsed_budget = self._parse_budget(budget)
-        if isinstance(parsed_budget, str):
-            return _error(parsed_budget)
 
         new = old.model_copy(deep=True)
         for name in list(add_tools or []) + [t for s in new_steps for t in s.tools]:
             if name not in new.planned_tools and name not in EXEMPT_TOOLS:
                 new.planned_tools.append(name)
-        unknown = self._unknown_tools(new.planned_tools + list(parsed_budget))
+        unknown = self._unknown_tools(new.planned_tools)
         if unknown:
             return _error(
                 f"Unknown tools {unknown}. You can only plan tools you have: "
                 f"{sorted(self.valid_tool_names or [])}."
             )
-        stray_budget = [t for t in parsed_budget if t not in new.planned_tools]
-        if stray_budget:
-            return _error(f"Budget names tools that are not planned: {stray_budget}.")
         new.steps.extend(new_steps)
-        existing = {(e.kind, e.detail) for e in new.side_effects}
-        new.side_effects.extend(e for e in effects if (e.kind, e.detail) not in existing)
         self._implied_side_effects(new.planned_tools, new.side_effects)
-        new.budget.update(parsed_budget)
         new.revision = old.revision + 1
 
         diff = diff_work_orders(old, new)
         if not any(diff.values()):
-            return _error("The amendment changes nothing. Name the tools, side effects, "
-                          "steps or budget you need.")
+            return _error("The amendment changes nothing. Name the tools or steps you need.")
 
         delta_tier = max_tier(
             [tool_tier(t) for t in diff["added_tools"]]
-            + [tool_tier(t) for t in diff["budget_changes"]]
             + ([Tier.SIDE_EFFECT] if diff["added_side_effects"] else [])
         )
         new.recompute_tier()

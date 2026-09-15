@@ -29,7 +29,7 @@ const appSettings = {
     hitlEnabled: false,
     hitlAutoApproveTimeout: 300,
     workOrderEnabled: true,
-    workOrderVetoSeconds: 30,
+    workOrderVetoSeconds: -1,          // -1 = no auto-approve
     usePlanner: true,
     useProxy: true,
     opikEnabled: false,

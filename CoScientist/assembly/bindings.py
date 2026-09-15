@@ -815,20 +815,21 @@ WORK_ORDER_TOOL_DOCS = (
         name="declare_work_order",
         signature=(
             "declare_work_order(goal, done_criteria, assumptions, steps, planned_tools, "
-            "side_effects, budget, expected_outcome, fallback)"
+            "expected_outcome, fallback)"
         ),
         purpose=(
             "(Work Order) Declare your contract BEFORE your first external action: "
-            "goal, assumptions, steps, tools, side effects, budget, expected outcome. "
+            "goal, assumptions ([{'text': '...', 'confidence': 'low'|'medium'|'high'}]), "
+            "steps, tools, expected outcome. "
             "Returns status approved / revise / rejected."
         ),
     ),
     ToolDoc(
         name="update_work_order",
-        signature="update_work_order(reason, add_tools, add_side_effects, add_steps, budget)",
+        signature="update_work_order(reason, add_tools, add_steps)",
         purpose=(
-            "(Work Order) Amend the approved contract when you need a tool, budget or "
-            "side effect it does not cover. The human reviews the diff."
+            "(Work Order) Amend the approved contract when you need a tool or step "
+            "it does not cover. The human reviews the diff."
         ),
     ),
     ToolDoc(
@@ -1050,7 +1051,7 @@ def _hitl_before_model():
 def _hitl_before_tool():
     from CoScientist.agents.common import hitl_handler
     from CoScientist.hitl.callbacks import make_hitl_before_tool_callback
-    return make_hitl_before_tool_callback(hitl_handler, target_tools=("sandbox",))
+    return make_hitl_before_tool_callback(hitl_handler, target_tools=("run_sandbox_task",))
 
 
 # Plain callbacks are registered through tiny lazy factories that ignore the

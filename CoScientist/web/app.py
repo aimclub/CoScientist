@@ -152,7 +152,8 @@ def _apply_frontend_settings(frontend: dict) -> None:
     if "workOrderEnabled" in general:
         web.work_order_enabled = bool(general["workOrderEnabled"])
     if "workOrderVetoSeconds" in general:
-        web.work_order_veto_seconds = max(1, int(general["workOrderVetoSeconds"]))
+        val = int(general["workOrderVetoSeconds"])
+        web.work_order_veto_seconds = val if val > 0 else -1
     if "usePlanner" in general:
         web.use_planner = bool(general["usePlanner"])
     if "useProxy" in general:

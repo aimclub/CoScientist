@@ -72,11 +72,9 @@ def _declare(env, **overrides):
     args = dict(
         goal="Collect a dataset",
         done_criteria="CSV written",
-        assumptions=["ChEMBL is the source"],
+        assumptions=[{"text": "ChEMBL is the source", "confidence": "high"}],
         steps=[{"title": "Download", "tools": ["execute_bash"]}],
         planned_tools=["execute_bash"],
-        budget={"execute_bash": 2},
-        side_effects=[{"kind": "network_download", "detail": "ChEMBL dump"}],
         tool_context=env.ctx,
     )
     args.update(overrides)
@@ -94,15 +92,11 @@ def test_before_declaring_only_orientation_and_protocol_tools_pass(env):
     assert "declare_work_order" in blocked["message"]
 
 
-def test_declared_tools_pass_within_budget_and_are_counted(env):
+def test_declared_tools_pass_and_are_counted(env):
     _declare(env)
     assert _call(env, "execute_bash", {"command": "python fetch.py"}) is None
-    assert _call(env, "execute_bash", {"command": "wget https://x/y.gz"}) is None  # declared download
+    assert _call(env, "execute_bash", {"command": "wget https://x/y.gz"}) is None
     assert env.ctx.state[usage_key(AGENT)] == {"execute_bash": 2}
-
-    blocked = _call(env, "execute_bash", {"command": "ls"})
-    assert blocked["reason"] == "budget_exceeded"
-    assert blocked["budget"] == 2
 
 
 def test_undeclared_tool_is_blocked_with_an_amendment_hint_and_recorded(env):
@@ -117,13 +111,10 @@ def test_undeclared_tool_is_blocked_with_an_amendment_hint_and_recorded(env):
     assert env.handler.notices[-1]["kind"] == "deviation"
 
 
-def test_undeclared_side_effect_of_a_declared_tool_is_blocked(env):
+def test_declared_tool_runs_commands_without_side_effect_blocks(env):
     _declare(env)
-    blocked = _call(env, "execute_bash", {"command": "git push origin main"})
-    assert blocked["reason"] == "undeclared_side_effect"
-    assert blocked["side_effect"] == "git_write"
-    # A blocked call does not consume budget.
-    assert env.ctx.state.get(usage_key(AGENT), {}) == {}
+    assert _call(env, "execute_bash", {"command": "git push origin main"}) is None
+    assert env.ctx.state.get(usage_key(AGENT), {}).get("execute_bash") == 1
 
 
 def test_after_an_approved_amendment_the_call_goes_through(env):

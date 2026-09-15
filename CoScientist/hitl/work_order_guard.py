@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from CoScientist.hitl.work_order import load_order, order_key, save_order, usage_key
-from CoScientist.hitl.work_order_risk import EXEMPT_TOOLS, ORIENTATION_TOOLS, classify_call
+from CoScientist.hitl.work_order_risk import EXEMPT_TOOLS, ORIENTATION_TOOLS
 
 logger = logging.getLogger("CoScientist.hitl.work_order")
 
@@ -107,7 +107,6 @@ def make_work_order_guard(agent_name: str, handler: Any = None):
             )
 
         block = None
-        _, side_effect = classify_call(tool_name, actual_args)
         usage = dict(state.get(usage_key(agent_name)) or {})
         if tool_name not in order.planned_tools and tool_name not in ORIENTATION_TOOLS:
             block = _blocked(
@@ -115,23 +114,6 @@ def make_work_order_guard(agent_name: str, handler: Any = None):
                 f"BLOCKED: `{tool_name}` is not in your approved work order. If you "
                 f"really need it, call update_work_order(reason=..., "
                 f"add_tools=[\"{tool_name}\"]) — or continue with the planned tools.",
-            )
-        elif tool_name in order.budget and usage.get(tool_name, 0) >= order.budget[tool_name]:
-            block = _blocked(
-                "budget_exceeded", tool_name,
-                f"BLOCKED: the budget for `{tool_name}` ({order.budget[tool_name]} calls) "
-                f"is used up. Work with what you have, or call update_work_order("
-                f"reason=..., budget={{\"{tool_name}\": <new limit>}}).",
-                budget=order.budget[tool_name],
-            )
-        elif side_effect is not None and side_effect not in order.side_effect_kinds():
-            block = _blocked(
-                "undeclared_side_effect", tool_name,
-                f"BLOCKED: this call has a side effect ({side_effect.value}) your work "
-                f"order does not declare. Call update_work_order(reason=..., "
-                f"add_side_effects=[{{\"kind\": \"{side_effect.value}\", \"detail\": ...}}]) "
-                f"first, or do it without that side effect.",
-                side_effect=side_effect.value,
             )
 
         if block is not None:

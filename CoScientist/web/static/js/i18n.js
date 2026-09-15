@@ -103,31 +103,31 @@ const i18n = {
     en: 'Seconds before auto-approving HITL requests (-1 for no timeout / wait for human).',
     ru: 'Секунды до автоподтверждения HITL (-1 — без тайм-аута, ждать человека).'
   },
-  'settings.workOrder.label': { en: 'Work Orders', ru: 'Наряды на работу (Work Order)' },
+  'settings.workOrder.label': { en: 'Work Orders', ru: 'Планы работы агента (Work Order)' },
   'settings.workOrder.desc': {
     en: 'Executor agents declare their plan and assumptions before acting (requires HITL).',
     ru: 'Агенты-исполнители объявляют план и допущения до начала работы (нужен HITL).'
   },
-  'settings.workOrderVeto.label': { en: 'Work Order Veto Window (s)', ru: 'Окно вето наряда (сек)' },
+  'settings.workOrderVeto.label': { en: 'Work Order Veto Window (s)', ru: 'Окно вето плана работы (сек)' },
   'settings.workOrderVeto.desc': {
-    en: 'Compute-tier work orders start automatically after this many seconds unless paused.',
-    ru: 'Наряды уровня «вычисления» стартуют автоматически через столько секунд, если их не поставить на паузу.'
+    en: 'Compute-tier work orders start automatically after this many seconds unless paused (-1 — no auto-approve, wait for human).',
+    ru: 'Планы работы уровня «вычисления» стартуют автоматически через столько секунд, если их не поставить на паузу (-1 — без автоподтверждения, ждать человека).'
   },
 
   // ── Work Order cards (hitl.js) ──
   'hitl.msg.workOrder': {
-    en: "Agent '{agent}' declares its work order. Review the plan and the assumptions.",
-    ru: "Агент '{agent}' объявляет наряд на работу. Проверьте план и допущения."
+    en: "Agent {agent} declares its work order. Review the plan and the assumptions.",
+    ru: "Агент {agent} объявляет план работы. Проверьте план и допущения."
   },
   'hitl.msg.workOrderAmendment': {
-    en: "Agent '{agent}' wants to amend its work order.",
-    ru: "Агент '{agent}' хочет изменить свой наряд на работу."
+    en: "Agent {agent} wants to amend its work order.",
+    ru: "Агент {agent} хочет изменить свой план работы."
   },
-  'hitl.via.workOrder': { en: 'work order (plan before acting)', ru: 'наряд на работу (план до действий)' },
-  'hitl.via.workOrderAmendment': { en: 'work order amendment', ru: 'поправка к наряду' },
-  'workOrder.title': { en: 'Work Order', ru: 'Наряд на работу' },
-  'workOrder.amendTitle': { en: 'Work Order Amendment', ru: 'Поправка к наряду' },
-  'workOrder.noticeTitle': { en: 'Work Order (for information)', ru: 'Наряд на работу (для сведения)' },
+  'hitl.via.workOrder': { en: 'work order (plan before acting)', ru: 'план работы агента (план до действий)' },
+  'hitl.via.workOrderAmendment': { en: 'work order amendment', ru: 'поправка к плану работы' },
+  'workOrder.title': { en: 'Work Order', ru: 'План работы агента' },
+  'workOrder.amendTitle': { en: 'Work Order Amendment', ru: 'Поправка к плану работы' },
+  'workOrder.noticeTitle': { en: 'Work Order (for information)', ru: 'План работы агента' },
   'workOrder.tier.read': { en: 'read', ru: 'чтение' },
   'workOrder.tier.compute': { en: 'compute', ru: 'вычисления' },
   'workOrder.tier.side_effect': { en: 'side effects', ru: 'побочные эффекты' },
@@ -154,12 +154,12 @@ const i18n = {
     en: 'Notes or corrections for the agent (optional for Accept, required for Revise)',
     ru: 'Заметки или правки для агента (для «Принять» — необязательно, для «Доработать» — обязательно)'
   },
-  'workOrder.approved': { en: '✓ Work order approved', ru: '✓ Наряд одобрен' },
+  'workOrder.approved': { en: '✓ Work order approved', ru: '✓ План работы одобрен' },
   'workOrder.rejectedAssumptions': { en: '{n} assumption(s) rejected', ru: 'отклонено допущений: {n}' },
   'workOrder.deviation': { en: 'Blocked', ru: 'Заблокировано' },
-  'workOrder.reason.no_work_order': { en: 'no work order declared yet', ru: 'наряд ещё не объявлен' },
-  'workOrder.reason.rejected': { en: 'work order was rejected', ru: 'наряд отклонён' },
-  'workOrder.reason.undeclared_tool': { en: 'tool not in the work order', ru: 'инструмента нет в наряде' },
+  'workOrder.reason.no_work_order': { en: 'no work order declared yet', ru: 'план работы ещё не объявлен' },
+  'workOrder.reason.rejected': { en: 'work order was rejected', ru: 'план работы отклонён' },
+  'workOrder.reason.undeclared_tool': { en: 'tool not in the work order', ru: 'инструмента нет в плане работы' },
   'workOrder.reason.budget_exceeded': { en: 'budget used up', ru: 'бюджет исчерпан' },
   'workOrder.reason.undeclared_side_effect': { en: 'undeclared side effect', ru: 'незаявленный побочный эффект' },
 
@@ -188,8 +188,8 @@ const i18n = {
 
   // Internal-loop review request (agent name replaces {agent}).
   'hitl.internalLoop': {
-    en: "Agent '{agent}' proposes its result. Please review.",
-    ru: "Агент '{agent}' предлагает свой результат. Проверьте его."
+    en: "Agent {agent} proposes its result. Please review.",
+    ru: "Агент {agent} предлагает свой результат. Проверьте его."
   },
 
   // ── HITL request card (built at render time from agent_name / invoked_via / trigger) ──
@@ -198,20 +198,20 @@ const i18n = {
   'hitl.agentLabel': { en: 'Agent', ru: 'Агент' },
   'hitl.viaLabel': { en: 'Invoked via', ru: 'Способ вызова' },
   'hitl.msg.beforeTool': {
-    en: "Agent '{agent}' is about to execute tool '{tool}'. Approve execution?",
-    ru: "Агент '{agent}' собирается выполнить инструмент '{tool}'. Разрешить выполнение?"
+    en: "Agent {agent} is about to execute tool {tool}. Approve execution?",
+    ru: "Агент {agent} собирается выполнить инструмент {tool}. Разрешить выполнение?"
   },
   'hitl.msg.afterAgent': {
-    en: "Agent '{agent}' proposes the following output. Please review.",
-    ru: "Агент '{agent}' предлагает следующий результат. Проверьте его."
+    en: "Agent {agent} proposes the following output. Please review.",
+    ru: "Агент {agent} предлагает следующий результат. Проверьте его."
   },
   'hitl.msg.beforeAgent': {
-    en: "Agent '{agent}' is about to start. Approve?",
-    ru: "Агент '{agent}' собирается начать работу. Разрешить?"
+    en: "Agent {agent} is about to start. Approve?",
+    ru: "Агент {agent} собирается начать работу. Разрешить?"
   },
   'hitl.msg.bashCommand': {
-    en: "Agent '{agent}' wants to run a command that is outward-facing or hard to reverse. Approve execution?",
-    ru: "Агент '{agent}' хочет выполнить команду с внешними или необратимыми последствиями. Разрешить выполнение?"
+    en: "Agent {agent} wants to run a command that is outward-facing or hard to reverse. Approve execution?",
+    ru: "Агент {agent} хочет выполнить команду с внешними или необратимыми последствиями. Разрешить выполнение?"
   },
   'hitl.via.beforeTool': {
     en: 'confirmation before running tool «{tool}»',

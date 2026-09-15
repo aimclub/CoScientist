@@ -311,7 +311,8 @@ class WebSettings(BaseModel):
     # tools, side effects, budget) before acting. Inert unless HITL is on.
     work_order_enabled: bool = _os.getenv("WORK_ORDER__ENABLED", "true").lower() in ("true", "1", "yes")
     # Veto window for compute-tier contracts: auto-approved after this many seconds.
-    work_order_veto_seconds: int = int(_os.getenv("WORK_ORDER__VETO_SECONDS", "30"))
+    # -1 (default) disables auto-approval — the contract waits for the human.
+    work_order_veto_seconds: int = int(_os.getenv("WORK_ORDER__VETO_SECONDS", "-1"))
     # Amendments per agent run before every further one needs a blocking review.
     work_order_max_amendments: int = int(_os.getenv("WORK_ORDER__MAX_AMENDMENTS", "3"))
     use_planner: bool = _os.getenv("ORCHESTRATOR__USE_PLANNER", "true").lower() in ("true", "1", "yes")

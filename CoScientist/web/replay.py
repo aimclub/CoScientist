@@ -274,7 +274,11 @@ class ReplaySession:
                 "goal": cls._payload(args.get("goal") or ""),
                 "done_criteria": cls._payload(args.get("done_criteria") or ""),
                 "assumptions": [
-                    {"id": f"A{i}", "text": cls._payload(str(a))}
+                    {
+                        "id": f"A{i}",
+                        "text": cls._payload(a.get("text") if isinstance(a, dict) else str(a)),
+                        "confidence": a.get("confidence", "medium") if isinstance(a, dict) else "medium",
+                    }
                     for i, a in enumerate(args.get("assumptions") or [], 1)
                 ],
                 "steps": [

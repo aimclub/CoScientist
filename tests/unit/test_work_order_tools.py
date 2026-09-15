@@ -51,7 +51,10 @@ def _declare(toolset, ctx, **overrides):
     args = dict(
         goal="Collect BTK inhibitors with IC50 from ChEMBL",
         done_criteria="A CSV with >= 500 unique compounds",
-        assumptions=["IC50 in nM (confidence: high)", "Only human BTK (CHEMBL5251)"],
+        assumptions=[
+            {"text": "IC50 in nM", "confidence": "high"},
+            {"text": "Only human BTK (CHEMBL5251)", "confidence": "medium"},
+        ],
         steps=[
             {"title": "Download activities", "tools": ["execute_bash"],
              "expected_outcome": "~2k rows"},
@@ -103,6 +106,15 @@ def test_compute_tier_gets_the_veto_window(hitl_on):
         "id": "A1", "text": "IC50 in nM", "confidence": "high", "rejected": False,
     }
     assert [s["id"] for s in order["steps"]] == ["S1", "S2"]
+
+
+def test_compute_tier_without_veto_window_waits_for_the_human(hitl_on, monkeypatch):
+    monkeypatch.setattr(hitl_on, "work_order_veto_seconds", -1)
+    handler = _Handler()
+    _declare(WorkOrderToolset(AGENT, TOOLS, handler), _context())
+
+    # A non-positive timeout means no deadline in the handler (not the global timeout).
+    assert handler.requests[0].timeout_seconds == -1
 
 
 def test_side_effect_tier_blocks_under_the_global_timeout(hitl_on):
@@ -159,16 +171,10 @@ def test_reject_records_a_rejected_order_that_cannot_be_redeclared(hitl_on):
     assert len(handler.requests) == 1
 
 
-def test_unknown_tools_and_stray_budgets_are_refused(hitl_on):
+def test_unknown_tools_are_refused(hitl_on):
     toolset = WorkOrderToolset(AGENT, TOOLS, _Handler())
     unknown = _declare(toolset, _context(), planned_tools=["execute_bash", "git_push"])
     assert unknown["status"] == "error" and "git_push" in unknown["message"]
-
-    stray = _declare(toolset, _context(), budget={"tavily_search": 2})
-    assert stray["status"] == "error" and "not planned" in stray["message"]
-
-    bad_effect = _declare(toolset, _context(), side_effects=[{"kind": "teleport"}])
-    assert bad_effect["status"] == "error"
 
 
 def test_step_tools_join_the_planned_tools(hitl_on):
@@ -196,7 +202,7 @@ def test_amendment_is_reviewed_by_the_tier_of_what_it_adds(hitl_on):
     # Adding a read tool: a notice, no question.
     result = asyncio.run(toolset.update_work_order(
         reason="Need the ChEMBL target id", add_tools=["tavily_search"],
-        budget={"tavily_search": 2}, tool_context=ctx,
+        tool_context=ctx,
     ))
     assert result == {"status": "approved", "revision": 2,
                       "message": "Amendment approved. Proceed within the updated work order."}
@@ -281,3 +287,34 @@ def test_tools_build_valid_function_declarations():
         assert tool._get_declaration() is not None
         names.append(tool.name)
     assert names == ["declare_work_order", "update_work_order", "update_work_step"]
+
+
+def test_string_assumptions_are_rejected(monkeypatch):
+    monkeypatch.setattr(get_settings().web, "hitl_enabled", False)
+    ctx = _context()
+    toolset = WorkOrderToolset(AGENT, TOOLS, _Handler())
+    result = _declare(toolset, ctx, assumptions=["IC50 in nM"])
+    assert result["status"] == "error"
+    assert "must be a dict" in result["message"]
+
+
+def test_invalid_assumption_format_errors(monkeypatch):
+    monkeypatch.setattr(get_settings().web, "hitl_enabled", False)
+    ctx = _context()
+    toolset = WorkOrderToolset(AGENT, TOOLS, _Handler())
+
+    # Empty text
+    res1 = _declare(toolset, ctx, assumptions=[{"text": "  ", "confidence": "high"}])
+    assert res1["status"] == "error"
+    assert "non-empty 'text'" in res1["message"]
+
+    # Invalid confidence
+    res2 = _declare(toolset, ctx, assumptions=[{"text": "valid", "confidence": "unknown"}])
+    assert res2["status"] == "error"
+    assert "invalid confidence" in res2["message"]
+
+    # Missing confidence defaults to medium
+    res3 = _declare(toolset, ctx, assumptions=[{"text": "valid"}])
+    assert res3["status"] == "approved"
+    order = load_order(ctx.state, AGENT)
+    assert order.assumptions[0].confidence == "medium"

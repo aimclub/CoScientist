@@ -86,12 +86,24 @@ you act. Protocol:
 1. Orient yourself first if you need to: reading your own context (research
    context, active tasks, directory listings) is allowed before declaring.
 2. Call `declare_work_order` before your first external action (search, download,
-   code run, graph write). State: the goal; how you will know you are done; EVERY
-   assumption the plan relies on (append "(confidence: low)" when unsure); ordered
-   steps with the tools each uses and what you expect it to produce; all tools you
-   plan to call; side effects (package_install, network_download, git_write,
-   long_job, file_delete, external_share); a budget of calls per tool; the
-   concrete outcome you expect; and your fallback.
+   code run, graph write). Provide:
+   - `goal`: what this run must achieve in 1-2 sentences.
+   - `done_criteria`: concrete condition for completion.
+   - `assumptions`: list of dicts `[{"text": "...", "confidence": "low"|"medium"|"high"}]`.
+     Rules for assumptions:
+     * STRUCTURE: MUST be a list of dicts with 'text' and 'confidence', NEVER plain strings.
+     * ATOMIC: each item is a single, falsifiable constraint (1 checkbox for the human). Never bundle multiple conditions into one item.
+     * NON-TRIVIAL: do NOT state obvious facts (e.g. "tools work", "data exists", "Python is available").
+     * CONCRETE DOMAIN CONSTRAINTS:
+       - Scope & cohort: exact date ranges (e.g. 2020-2025), organisms, clinical phases, target IDs.
+       - Data & normalization: specific sources, units of measurement (e.g. nM vs µM), activity cutoffs (e.g. IC50 < 100 nM).
+       - Methodology & filters: study designs accepted (RCTs only, peer-reviewed), exclusions (exclude case reports).
+       - Volume & sufficiency: e.g. "top 10 most cited papers are sufficient for initial landscape".
+     * CONFIDENCE: "high" (standard established constraint), "medium" (plausible standard choice), "low" (uncertain/heuristic choice).
+   - `steps`: ordered steps `[{"title": "...", "tools": [...], "expected_outcome": "..."}]`.
+   - `planned_tools`: all tool names you intend to call.
+   - `expected_outcome`: concrete results (counts, ranges, metrics).
+   - `fallback`: alternative approach if the plan fails.
 3. Read the result:
    - `approved` — proceed. Assumptions the human rejected are listed: do not rely
      on them. Operator notes are instructions: follow them.
@@ -99,10 +111,10 @@ you act. Protocol:
    - `rejected` — do not act; finish and report why the task was not done.
 4. As you work, mark steps with `update_work_step` (in_progress, then done or
    skipped with a short note on what came out).
-5. A call outside the approved order (undeclared tool, budget used up, undeclared
-   side effect) is BLOCKED. Do not retry it: if you really need it, call
-   `update_work_order` with the reason — what you learned that the plan did not
-   foresee — and what you need added. Otherwise continue within the order.
+5. A call outside the approved order (undeclared tool) is BLOCKED. Do not retry
+   it: if you really need it, call `update_work_order` with the reason — what you
+   learned that the plan did not foresee — and what tools you need added. Otherwise
+   continue within the order.
 
 Keep the order honest and specific: a human who reads "search the literature"
 learns nothing; "search PubMed for RCTs on X since 2015, exclude case reports" is
@@ -113,15 +125,21 @@ along the way."""
 _WORK_ORDER_HINTS = (
     (("websearch",),
      "For searches, the query formulations and the source selection criteria "
-     "(recency, study types, venues) are assumptions — list them."),
+     "(recency, study types, venues) are assumptions — list them as atomic dicts "
+     '(e.g. {"text": "Only peer-reviewed articles from 2020-2025", "confidence": "high"}).'),
     (("papers_search",),
-     "For paper downloads, state which papers or how many you will fetch, and why those."),
+     "For paper downloads, state which papers or how many you will fetch, and why those as assumptions "
+     '(e.g. {"text": "Retrieve full-text PDFs for top 5 most relevant papers", "confidence": "medium"}).'),
     (("medical",),
      "For clinical evidence, state the population, study designs and date range "
-     "you will accept as assumptions."),
+     "you will accept as separate atomic assumptions "
+     '(e.g. {"text": "Human adult cohort only, excluding pediatric studies", "confidence": "high"}, '
+     '{"text": "Only randomized controlled trials (RCTs)", "confidence": "high"}).'),
     (("coder", "sandbox"),
      "For data work, the data sources, filters, units and expected volumes are "
-     "assumptions; downloads and installs are side effects."),
+     "assumptions "
+     '(e.g. {"text": "Target compound activities expressed in nM", "confidence": "high"}, '
+     '{"text": "ChEMBL v33 or newer is the primary activity source", "confidence": "medium"}).'),
     (("research_graph",),
      "If you will write the research graph, name in the steps which nodes you will "
      "create or change."),

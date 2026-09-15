@@ -17,7 +17,7 @@
             appSettings.general.hitlEnabled = data.general.hitlEnabled ?? false;
             appSettings.general.hitlAutoApproveTimeout = data.general.hitlAutoApproveTimeout ?? 300;
             appSettings.general.workOrderEnabled = data.general.workOrderEnabled ?? true;
-            appSettings.general.workOrderVetoSeconds = data.general.workOrderVetoSeconds ?? 30;
+            appSettings.general.workOrderVetoSeconds = data.general.workOrderVetoSeconds ?? -1;
             appSettings.general.usePlanner = data.general.usePlanner ?? true;
             appSettings.general.useProxy = data.general.useProxy ?? appSettings.general.useProxy;
             appSettings.general.opikEnabled = data.general.opikEnabled ?? false;
@@ -76,7 +76,7 @@
       document.getElementById('hitl-enabled-checkbox').checked = appSettings.general.hitlEnabled;
       document.getElementById('hitl-timeout-input').value = appSettings.general.hitlAutoApproveTimeout ?? 300;
       document.getElementById('work-order-enabled-checkbox').checked = appSettings.general.workOrderEnabled ?? true;
-      document.getElementById('work-order-veto-input').value = appSettings.general.workOrderVetoSeconds ?? 30;
+      document.getElementById('work-order-veto-input').value = appSettings.general.workOrderVetoSeconds ?? -1;
       document.getElementById('use-planner-checkbox').checked = appSettings.general.usePlanner;
       document.getElementById('use-proxy-checkbox').checked = appSettings.general.useProxy;
       document.getElementById('opik-enabled-checkbox').checked = appSettings.general.opikEnabled;
@@ -225,7 +225,7 @@
       appSettings.general.hitlAutoApproveTimeout = !isNaN(hitlTimeoutVal) ? hitlTimeoutVal : 300;
       appSettings.general.workOrderEnabled = document.getElementById('work-order-enabled-checkbox').checked;
       const vetoVal = parseInt(document.getElementById('work-order-veto-input').value, 10);
-      appSettings.general.workOrderVetoSeconds = !isNaN(vetoVal) && vetoVal > 0 ? vetoVal : 30;
+      appSettings.general.workOrderVetoSeconds = !isNaN(vetoVal) && vetoVal > 0 ? vetoVal : -1;
       if (appSettings.general.startMode === 'orchestrator') {
         appSettings.general.usePlanner = document.getElementById('use-planner-checkbox').checked;
       }

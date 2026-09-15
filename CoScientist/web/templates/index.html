@@ -835,9 +835,9 @@
               <div class="flex flex-col">
                 <label data-i18n="settings.workOrderVeto.label" class="text-xs font-bold text-on-surface">Work Order Veto Window (s)</label>
                 <p data-i18n="settings.workOrderVeto.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
-                  Compute-tier work orders start automatically after this many seconds unless paused.</p>
+                  Compute-tier work orders start automatically after this many seconds unless paused (-1 — no auto-approve, wait for human).</p>
               </div>
-              <input id="work-order-veto-input" type="number" min="1" step="1" value="30"
+              <input id="work-order-veto-input" type="number" min="-1" step="1" value="-1"
                 class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-3 py-2 w-24 text-center focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
             </div>
             <hr class="border-outline-variant/10" />
