@@ -320,6 +320,11 @@
     });
 
     // ─── table ─────────────────────────────────────────────────────
+    // Where a server without a build of its own came from: label and tooltip.
+    const ORIGIN = {
+      image: ["From image", "Built outside the builds tool. Its reports and generated tools were copied out of the tool image; there is no build log."],
+      unknown: ["External", "A server started outside the builds tool whose image carries no alembic artifacts."],
+    };
     // Stage, and how many generated tools passed validation.
     function stageCell(b) {
       const c = b.tool_counts;
@@ -333,7 +338,11 @@
           (c.tests_total ? `; tests ${c.tests_passed || 0}/${c.tests_total}` : "");
         chip = `<div class="mt-1"><span class="inline-block font-mono text-[10px] px-1.5 py-0.5 rounded-full border ${tone} cursor-help" title="${attr(tip)}">${passed}/${c.tools_total} tools</span></div>`;
       }
-      return `<span class="font-mono text-[11px] text-outline">${esc(b.stage || "")}</span>${chip}`;
+      const origin = ORIGIN[b.origin];
+      const originChip = origin
+        ? `<div class="mt-1"><span class="font-mono text-[11px] text-[#ffcf6b] cursor-help" title="${attr(origin[1])}">${esc(origin[0])}</span></div>`
+        : "";
+      return `<span class="font-mono text-[11px] text-outline">${esc(b.stage || "")}</span>${originChip}${chip}`;
     }
     function rowHtml(b) {
       const s = STATUS[b.status] || { color: "#8c90a1", icon: "help", label: b.status || "?" };
