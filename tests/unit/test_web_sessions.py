@@ -600,7 +600,7 @@ def test_text_file_controls_are_present_without_replacing_dataset_link_ui():
     assert "userTextFiles.forEach" in chat_js
     assert 'type="file" multiple' in html
     assert 'onchange="uploadUserTextFiles(this.files)"' in html
-    assert '/static/js/chat.js?v=multi-text-picker-2' in html
+    assert '/static/js/chat.js?v=multi-text-messages-3' in html
 
 
 def test_text_file_javascript_render_delete_and_sequential_picker():
@@ -662,7 +662,31 @@ async function apiJson(url, options) {
   assert.deepEqual(calls.slice(1).map(c => c.name), ['first.txt', 'bad.txt', 'last.md']);
   assert.deepEqual(userTextFiles.map(f => f.filename), ['b.md', 'a.txt', 'first.txt', 'last.md']);
   assert.equal(input.value, '');
-  assert.ok(messages.some(text => text.includes('Text file must be valid UTF-8.')));
+  assert.deepEqual(messages, [
+    'Файл удалён: третий файл.txt',
+    'Файл прикреплён: first.txt',
+    'Не удалось прикрепить bad.txt: файл должен быть корректным UTF-8.',
+    'Файл прикреплён: last.md',
+  ]);
+  const errors = [
+    ['Combined text files are too large (maximum 256 KiB).', 'общий размер текстовых файлов превышает 256 KiB.'],
+    ['A session can have at most 5 text files.', 'к сессии можно прикрепить не более 5 текстовых файлов.'],
+    ['A text file with this filename is already attached.', 'файл с таким именем уже прикреплён.'],
+    ['Only .txt and .md text files are supported.', 'поддерживаются только файлы .txt и .md.'],
+    ['Text file is empty or contains only whitespace.', 'файл пуст.'],
+    ['Text file must be valid UTF-8.', 'файл должен быть корректным UTF-8.'],
+    ['Text file is too large (maximum 256 KiB).', 'размер файла превышает 256 KiB.'],
+    ['Unexpected server error', 'Unexpected server error'],
+  ];
+  for (const [apiMessage, expected] of errors) {
+    apiJson = async () => { throw new Error(apiMessage); };
+    await uploadUserTextFile({name: 'DUPLICATE.TXT'});
+    assert.equal(messages.at(-1), 'Не удалось прикрепить DUPLICATE.TXT: ' + expected);
+  }
+  apiJson = async () => { throw new Error('Text file is not attached.'); };
+  await removeUserTextFile(0);
+  assert.equal(messages.at(-1), 'Не удалось удалить b.md: файл не прикреплён к сессии.');
+  assert.deepEqual(userTextFiles.map(f => f.filename), ['b.md', 'a.txt', 'first.txt', 'last.md']);
 })().catch(error => { console.error(error); process.exitCode = 1; });
 '''
     result = subprocess.run(

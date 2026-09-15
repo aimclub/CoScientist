@@ -389,8 +389,30 @@
         const endpoint = sessionApi('/text-file');
         for (const file of files) await uploadUserTextFile(file, endpoint);
       } catch (error) {
-        addSystemMsg('Could not upload text files: ' + error.message);
+        for (const file of files) {
+          addSystemMsg('Не удалось прикрепить ' + file.name + ': ' + textFileErrorMessage(error));
+        }
       }
+    }
+
+    function textFileErrorMessage(error) {
+      // Exact API messages: unknown errors retain their original detail.
+      const translations = new Map([
+        ['Combined text files are too large (maximum 256 KiB).', 'общий размер текстовых файлов превышает 256 KiB.'],
+        ['A session can have at most 5 text files.', 'к сессии можно прикрепить не более 5 текстовых файлов.'],
+        ['A text file with this filename is already attached.', 'файл с таким именем уже прикреплён.'],
+        ['Only .txt and .md text files are supported.', 'поддерживаются только файлы .txt и .md.'],
+        ['Text file is empty or contains only whitespace.', 'файл пуст.'],
+        ['Text file must be valid UTF-8.', 'файл должен быть корректным UTF-8.'],
+        ['Text file is too large (maximum 256 KiB).', 'размер файла превышает 256 KiB.'],
+        ['The uploaded text file must have a filename.', 'у файла должно быть имя.'],
+        ['No text file uploaded.', 'файл не передан.'],
+        ['Text file is not attached.', 'файл не прикреплён к сессии.'],
+        ['filename is required when multiple text files are attached.', 'не указано имя удаляемого файла.'],
+        ['Select a user and session first.', 'сначала выберите пользователя и сессию.'],
+      ]);
+      const message = error.message || String(error);
+      return translations.get(message) || message;
     }
 
     function isCurrentTextFileSession(endpoint) {
@@ -406,11 +428,11 @@
         const data = await apiJson(endpoint, { method: 'POST', body: form });
         if (!isCurrentTextFileSession(endpoint)) return;
         applyUserTextFiles(data.user_text_files);
-        addSystemMsg('Text file attached: ' + file.name);
+        addSystemMsg('Файл прикреплён: ' + file.name);
         addTelemetry('TEXT FILE :: attached');
       } catch (error) {
         if (endpoint && !isCurrentTextFileSession(endpoint)) return;
-        addSystemMsg('Text file rejected: ' + error.message);
+        addSystemMsg('Не удалось прикрепить ' + file.name + ': ' + textFileErrorMessage(error));
         addTelemetry('TEXT FILE :: rejected');
       }
     }
@@ -425,11 +447,11 @@
         const data = await apiJson(url, { method: 'DELETE' });
         if (!isCurrentTextFileSession(endpoint)) return;
         applyUserTextFiles(data.user_text_files);
-        addSystemMsg('Text file detached: ' + textFile.filename);
+        addSystemMsg('Файл удалён: ' + textFile.filename);
         addTelemetry('TEXT FILE :: detached');
       } catch (error) {
         if (endpoint && !isCurrentTextFileSession(endpoint)) return;
-        addSystemMsg('Could not detach text file: ' + error.message);
+        addSystemMsg('Не удалось удалить ' + textFile.filename + ': ' + textFileErrorMessage(error));
       }
     }
 
