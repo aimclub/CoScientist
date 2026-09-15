@@ -90,16 +90,16 @@ def test_notify_posts_point(monkeypatch):
     from CoScientist.checkpoints.model import CheckpointManifest, SessionRef
     captured = {}
 
-    def fake_post(url, json, timeout):
+    def enqueue(url, body):
         captured["url"] = url
-        captured["body"] = json
+        captured["body"] = body
         class R:
             status_code = 200
         return R()
 
     monkeypatch.setattr(synapse, "_synapse_cfg",
                         lambda: SimpleNamespace(enabled=True, callback_url="http://plat:9000"))
-    monkeypatch.setattr(synapse.httpx, "post", fake_post)
+    monkeypatch.setattr(synapse, "enqueue_snapshot", enqueue)
     m = CheckpointManifest(
         checkpoint_id="ckpt_X", label="T1_after_literature_review", run_id="run-1",
         created_at="t", session=SessionRef(app_name="a", user_id="u", session_id="s"),
@@ -118,7 +118,7 @@ def test_notify_noop_when_disabled(monkeypatch):
     monkeypatch.setattr(synapse, "_synapse_cfg",
                         lambda: SimpleNamespace(enabled=False, callback_url=None))
     called = {"n": 0}
-    monkeypatch.setattr(synapse.httpx, "post",
+    monkeypatch.setattr(synapse, "enqueue_snapshot",
                         lambda *a, **k: called.__setitem__("n", called["n"] + 1))
     m = CheckpointManifest(
         checkpoint_id="c", label="L", run_id="r", created_at="t",
@@ -129,7 +129,12 @@ def test_notify_noop_when_disabled(monkeypatch):
 
 # ── Task 5: POST /api/checkpoints/runs ───────────────────────────────────────
 
-def test_runs_endpoint_registers():
+def test_runs_endpoint_registers(monkeypatch):
+    import CoScientist.config
+    from pydantic import SecretStr
+    token = "test-only-platform-admin-credential"
+    monkeypatch.setattr(CoScientist.config, "get_settings", lambda: SimpleNamespace(
+        checkpoints=SimpleNamespace(api_token=SecretStr(token))))
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from CoScientist.checkpoints.api import make_checkpoint_router
@@ -141,7 +146,7 @@ def test_runs_endpoint_registers():
         session_service=object(), app_name="orchestrator",
         store=LocalZipStore(tempfile.mkdtemp())))
     c = TestClient(app)
-    r = c.post("/api/checkpoints/runs",
+    r = c.post("/api/checkpoints/runs", headers={"Authorization": f"Bearer {token}"},
                json={"context_id": "ctx-77", "run_id": "run-77", "traceparent": "00-t-s-01"})
     assert r.status_code == 200 and r.json()["ok"] is True
     assert synapse.run_id_for("ctx-77") == "run-77"
@@ -151,7 +156,6 @@ def test_runs_endpoint_registers():
 # ── Task 6: minimal OTel traceparent stitching ───────────────────────────────
 
 def test_otel_span_parents_on_traceparent():
-    from opentelemetry import trace
     from opentelemetry.sdk.trace import TracerProvider
     from opentelemetry.sdk.trace.export import SimpleSpanProcessor
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
@@ -172,6 +176,7 @@ def test_otel_span_parents_on_traceparent():
     assert any(s.name == "invoke_agent" for s in spans)
     inv = next(s for s in spans if s.name == "invoke_agent")
     assert format(inv.context.trace_id, "032x") == "0af7651916cd43dd8448eb211c80319c"
+    assert format(inv.parent.span_id, "016x") == "b7ad6b7169203331"
     assert inv.attributes["gen_ai.operation.name"] == "invoke_agent"
     assert inv.attributes["gen_ai.agent.name"] == "ScriptedOrchestrator"
     assert inv.attributes["run_id"] == "run-tr"

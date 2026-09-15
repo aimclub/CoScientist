@@ -36,6 +36,7 @@ PORT = int(os.getenv("E2E_SYNAPSE_PORT", "8138"))
 MOCK_PORT = int(os.getenv("E2E_SYNAPSE_MOCK_PORT", "9138"))
 BASE = f"http://127.0.0.1:{PORT}"
 APP_NAME = "orchestrator"
+TOKEN = "test-only-platform-admin-credential"
 
 
 # ─────────────────────────── server role ────────────────────────────────────
@@ -82,7 +83,9 @@ def _http(method: str, url: str, body: dict | None = None, timeout: float = 60.0
     import urllib.request
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method,
-                                 headers={"Content-Type": "application/json"})
+                                 headers={"Content-Type": "application/json",
+                                          **({"Authorization": f"Bearer {TOKEN}"}
+                                             if url.startswith(f"{BASE}/api/checkpoints") else {})})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode())
 
@@ -116,7 +119,7 @@ def wait_ready(url: str, proc: subprocess.Popen | None = None, timeout: float = 
 
 def spawn_server(ckpt_dir: str) -> subprocess.Popen:
     env = {**os.environ,
-           "CHECKPOINTS__ENABLED": "1", "CHECKPOINTS__DIR": ckpt_dir,
+           "CHECKPOINTS__ENABLED": "1", "CHECKPOINTS__API_TOKEN": TOKEN, "CHECKPOINTS__DIR": ckpt_dir,
            "SYNAPSE__ENABLED": "1",
            "SYNAPSE__CALLBACK_URL": f"http://127.0.0.1:{MOCK_PORT}",
            "SYNAPSE__BUNDLE_BASE_URL": BASE,
@@ -167,7 +170,13 @@ def main() -> None:
               {"context_id": ctx, "run_id": run_id, "traceparent": traceparent})
         a2a_send("start the literature phase for GSK3B", context_id=ctx)
 
-        points = _http("GET", f"http://127.0.0.1:{MOCK_PORT}/points")["points"]
+        deadline = time.monotonic() + 10
+        while True:
+            points = _http("GET", f"http://127.0.0.1:{MOCK_PORT}/points")["points"]
+            if any(p["label"] == "T1_after_literature_review" for p in points):
+                break
+            assert time.monotonic() < deadline, "snapshot callback timed out"
+            time.sleep(0.05)
         ok("platform received a snapshot-ready callback", len(points) >= 1,
            f"{len(points)} points")
         ok("point carries the PLATFORM run_id",
@@ -179,7 +188,8 @@ def main() -> None:
            str(ref))
         # the ref actually resolves to a downloadable bundle
         import urllib.request
-        with urllib.request.urlopen(ref, timeout=10) as r:
+        with urllib.request.urlopen(urllib.request.Request(
+                ref, headers={"Authorization": f"Bearer {TOKEN}"}), timeout=10) as r:
             ok("snapshot_ref resolves (bundle downloadable)", r.status == 200)
 
         listing = _http("GET", f"{BASE}/api/checkpoints?run_id={run_id}")["checkpoints"]

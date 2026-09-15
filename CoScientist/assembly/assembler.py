@@ -221,10 +221,19 @@ def _subordinate_instance(
         from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
         from CoScientist.a2a.config import AGENT_CARD_URLS
 
+        kwargs = {}
+        from CoScientist.config import get_settings
+
+        if get_settings().synapse.enabled:
+            from CoScientist.a2a.synapse_tracing import make_remote_agent_config
+
+            kwargs["config"] = make_remote_agent_config()
+
         return RemoteA2aAgent(
             name=sub.name,
             agent_card=AGENT_CARD_URLS[sub.a2a.key],
             description=sub.description,
+            **kwargs,
         )
     return built[sub.name]
 

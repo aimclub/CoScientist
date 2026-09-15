@@ -4,7 +4,7 @@ Application configuration using Pydantic Settings.
 from pathlib import Path
 from typing import List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from rag_tools.config import Settings as ToolRAGSettings
@@ -245,10 +245,13 @@ class CheckpointSettings(BaseModel):
 
     OFF by default: enabling adds the CheckpointPlugin to every runner and a
     /api/checkpoints router to the A2A/web apps. Override via
-    CHECKPOINTS__ENABLED / CHECKPOINTS__DIR.
+    CHECKPOINTS__ENABLED / CHECKPOINTS__DIR. Management API additionally requires
+    CHECKPOINTS__API_TOKEN; capture itself remains available without a token.
     """
     enabled: bool = False
     dir: str = "./checkpoints_data"
+    # Instance-admin credential; API fails closed without it. Never expose to A2A users.
+    api_token: Optional[SecretStr] = Field(default=None, min_length=32)
 
 
 # =========================
