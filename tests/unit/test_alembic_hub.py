@@ -23,6 +23,7 @@ from alembic.hub import (  # noqa: E402
     push_commands,
     unpack_bundle,
 )
+from alembic.portable import ARTEFACT_PATHS, SERVE_DOCKERFILE  # noqa: E402
 
 
 # ── credentials ──────────────────────────────────────────────────────────────
@@ -100,3 +101,13 @@ def test_a_bundle_cannot_write_outside_its_destination(tmp_path):
         pass
 
     assert victim.read_text(encoding="utf-8") == "original"
+
+
+def test_the_reports_travel_with_the_artefacts_and_the_rebuild_copies_them():
+    """plan.json and validation.json say how a tool was converted and validated.
+    A tool that came through the hub without them looks like a server of
+    unknown origin."""
+    dockerfile = SERVE_DOCKERFILE.read_text(encoding="utf-8")
+    assert "reports" in ARTEFACT_PATHS
+    for rel in ARTEFACT_PATHS:
+        assert f"COPY .alembic/${{REPO_NAME}}/{rel} " in dockerfile
