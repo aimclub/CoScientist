@@ -538,6 +538,17 @@ def test_clearing_runs_in_the_background_and_the_list_reports_it(monkeypatch):
     assert cleanup["result"]["removed"] == ["gget-failed"]
 
 
+def test_the_builds_list_records_unknown_running_servers_before_listing(monkeypatch):
+    calls = []
+    monkeypatch.setattr(alembic_tools, "adopt_unclaimed_servers", lambda: calls.append("adopt") or [])
+    monkeypatch.setattr(alembic_tools, "web_list_builds", lambda: calls.append("list") or [])
+    monkeypatch.setattr(alembic_tools, "docker_inventory",
+                        lambda: {"images": {}, "tags": {}, "containers": {}})
+
+    assert _client().get("/api/builds").status_code == 200
+    assert calls == ["adopt", "list"]
+
+
 class _UntaggedImage(_Docker):
     """A daemon that also answers `docker image inspect` for images with no tag left."""
 

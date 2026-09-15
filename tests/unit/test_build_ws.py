@@ -211,14 +211,22 @@ class _Done:
         self.stdout, self.stderr = stdout, stderr
 
 
-def _invoke(monkeypatch, running, stdout, stderr=""):
+# This build's own image, and a newer build of the repository that took the tag.
+_OWN_IMAGE, _NEWER_IMAGE = "sha256:old", "sha256:new"
+
+
+def _invoke(monkeypatch, running, stdout, stderr="", own_image=True):
     ran = []
     monkeypatch.setattr(build_api, "_container_running", lambda name: name in running)
     monkeypatch.setattr(build_api.subprocess, "run",
                         lambda cmd, **kw: ran.append(cmd) or _Done(stdout, stderr))
+    images = {_NEWER_IMAGE: "3GB", **({_OWN_IMAGE: "2GB"} if own_image else {})}
+    monkeypatch.setattr(build_api.alembic_tools, "docker_inventory", lambda: {
+        "images": images, "tags": {"alembic-tool:gget": _NEWER_IMAGE},
+        "containers": {_SERVE: {"image_id": _OWN_IMAGE, "running": False}} if own_image else {}})
     res = build_api._invoke_in_container(
-        {"repo_url": _REPO, "container": _SERVE}, "info", {"q": "x"})
-    return ran[0], res
+        {"repo_url": _REPO, "container": _SERVE, "image_id": _OWN_IMAGE}, "info", {"q": "x"})
+    return (ran[0] if ran else None), res
 
 
 def test_a_debug_run_uses_the_live_serve_container(monkeypatch):
@@ -229,11 +237,22 @@ def test_a_debug_run_uses_the_live_serve_container(monkeypatch):
     assert res == {"ok": True, "result": 1}
 
 
-def test_without_a_live_container_a_debug_run_starts_one_from_the_image(monkeypatch):
+def test_without_a_live_container_a_debug_run_starts_one_from_the_builds_own_image(monkeypatch):
+    """alembic-tool:<repo> moves to every newer build of the repository. An older
+    mordred build's calc_descriptors was looked up in the newer image, whose tool
+    is called calculate_descriptors, and came back "tools/calc_descriptors.py not found"."""
     cmd, _ = _invoke(monkeypatch, set(), 'ALEMBIC_INVOKE {"ok": true, "result": 1}\n')
 
     assert cmd[:3] == ["docker", "run", "--rm"]
-    assert "alembic-tool:gget" in cmd
+    assert _OWN_IMAGE in cmd
+    assert "alembic-tool:gget" not in cmd and _NEWER_IMAGE not in cmd
+
+
+def test_a_build_without_its_own_image_is_not_run_in_another_one(monkeypatch):
+    cmd, res = _invoke(monkeypatch, set(), "", own_image=False)
+
+    assert cmd is None
+    assert res["ok"] is False and "no image of its own" in res["error"]
 
 
 def test_a_runner_that_prints_no_result_is_reported(monkeypatch):
