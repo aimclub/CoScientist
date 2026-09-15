@@ -146,7 +146,7 @@
             document.getElementById('hitl-panel').classList.add('hidden');
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();
-            addSystemMsg('⏱ HITL: нет ответа ' + (data.timeout_seconds || 300) + ' с — предложение агента ' + (data.agent_name || '') + ' авто-подтверждено, пайплайн продолжен.');
+            addSystemMsg(hitlTimeoutSummary(data));
             addTelemetry('HITL :: auto-approve on timeout (' + (data.agent_name || '?') + ')');
             break;
           case 'hitl_hold':

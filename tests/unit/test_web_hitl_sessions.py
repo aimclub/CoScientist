@@ -209,3 +209,48 @@ def test_notify_reaches_only_its_session_and_is_logged():
         assert handler.get_event_log(other_key) == []
 
     asyncio.run(scenario())
+
+
+def test_hitl_request_and_its_answer_are_recorded_in_the_session_transcript():
+    """A reload, export or import rebuilds the chat from the transcript, so an
+    answered HITL card and the answer must both be in it — and only in its own
+    session's transcript."""
+    async def scenario():
+        handler = WebHITLHandler()
+        recorded = []
+        handler.set_recorder(lambda session_key, event: recorded.append((session_key, event)))
+        key = ("user_a", "session_a")
+        socket = _Socket()
+        await handler.attach_websocket(socket, key)
+
+        task = asyncio.create_task(handler.handle_request(_request(key, timeout_seconds=5)))
+        await asyncio.sleep(0)
+        request_id = socket.messages[0]["request_id"]
+        await handler.hold_request(request_id, key)
+        assert handler.resolve_request(request_id, {
+            "action": "approve",
+            "approved": True,
+            "instructions": "go",
+            "form_values": {"rejected_assumption_ids": ["A1"]},
+        }, key)
+        await task
+
+        assert [session_key for session_key, _ in recorded] == [key, key]
+        request_event, response_event = (event for _, event in recorded)
+        assert request_event["type"] == "hitl_request"
+        assert request_event["request_id"] == request_id
+        # Recorded as sent: a later hold must not rewrite the history copy.
+        assert request_event["timeout_seconds"] == 5
+        assert "held" not in request_event
+        assert response_event["type"] == "hitl_response"
+        assert response_event["request_id"] == request_id
+        assert response_event["instructions"] == "go"
+        assert response_event["form_values"] == {"rejected_assumption_ids": ["A1"]}
+
+        timed_out = await asyncio.wait_for(
+            handler.handle_request(_request(key, timeout_seconds=0.05)), timeout=2
+        )
+        assert timed_out.approved
+        assert recorded[-1][1]["type"] == "hitl_timeout"
+
+    asyncio.run(scenario())

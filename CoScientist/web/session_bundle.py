@@ -387,6 +387,12 @@ async def import_session(
     # --- Restore agent events ---
     if isinstance(agent_events, list) and agent_events:
         runtime.agent_events[key] = agent_events
+        # Also on disk, like a live session's transcript: otherwise the imported
+        # chat (HITL cards included) is gone after the next server restart.
+        from CoScientist.web.session_store import append_event
+        for event in agent_events:
+            if isinstance(event, dict):
+                append_event(user_id, session_id, event)
 
     # --- Restore metrics ---
     if metrics is not None:

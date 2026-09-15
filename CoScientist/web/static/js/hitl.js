@@ -96,28 +96,42 @@
     }
     window.relocalizeHitlCards = relocalizeHitlCards;
 
-    function showHITL(data) {
-      const panel = document.getElementById('hitl-panel');
-      const feed = document.getElementById('chat-feed');
+    // A card is keyed by its request id: a request the server redelivers (a
+    // reconnect while it is still open) replaces its disabled history copy in
+    // place instead of appearing twice.
+    function placeHitlCard(rid, html) {
+      const existing = rid ? document.querySelector(`[data-hitl-card="${CSS.escape(rid)}"]`) : null;
+      if (existing) {
+        existing.outerHTML = html;
+      } else {
+        appendMsgToFeed(html);
+      }
+    }
+
+    // history=true renders a card from the session transcript (reload, import):
+    // no sidebar panel, no countdown, controls disabled until the server
+    // redelivers the request as still open.
+    function showHITL(data, { history = false } = {}) {
+      const panel = history ? null : document.getElementById('hitl-panel');
+      hitlCards.set(data.request_id || '', data);
 
       // Structured intake (e.g. the research frame): render a per-field form
       // instead of the free-text review, then stop — the other HITL points keep
       // the free-text / option path below.
       if (data.form && Array.isArray(data.form.blocks)) {
-        renderHitlForm(panel, feed, data);
-        scrollChat();
-        return;
-      }
-
-      // Work Order (the agent's contract before it acts): its own card with
-      // assumptions to uncheck, a veto countdown and a Pause button.
-      if (String(data.trigger || '').startsWith('work_order')) {
+        renderHitlForm(panel, data);
+      } else if (String(data.trigger || '').startsWith('work_order')) {
+        // Work Order (the agent's contract before it acts): its own card with
+        // assumptions to uncheck, a veto countdown and a Pause button.
         renderWorkOrderCard(panel, data);
-        scrollChat();
-        return;
+      } else {
+        renderHitlCard(panel, data);
       }
+      if (history) disableHitlControls(data.request_id);
+      scrollChat();
+    }
 
-      hitlCards.set(data.request_id || '', data);
+    function renderHitlCard(panel, data) {
       const messageHtml = hitlDynamic(data, 'message', localizeHitlMessage(data));
       const viaHtml = hitlDynamic(data, 'via', describeHitlVia(data));
       const agentHtml = `<span class="font-bold text-on-surface">${escHtml(data.agent_name || '—')}</span>`;
@@ -154,8 +168,9 @@
             <span class="material-symbols-outlined text-base">close</span> ${hitlLabel('hitl.btn.reject')}
           </button>
         </div>`;
-      panel.classList.remove('hidden');
-      panel.innerHTML = `
+      if (panel) {
+        panel.classList.remove('hidden');
+        panel.innerHTML = `
     <div class="relative">
       <div class="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 blur-2xl opacity-40"></div>
       <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-4">
@@ -174,6 +189,7 @@
         ${openRoadmapSidebarBtn}
       </div>
     </div>`;
+      }
 
       // Also show in chat: the request details + Accept / Revise controls.
       const detail = hitlDetailBlock(data);
@@ -182,8 +198,8 @@
           <p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${hitlLabel(detail.labelKey)}</p>
           <pre class="font-mono text-[11px] leading-relaxed text-on-surface-variant whitespace-pre-wrap bg-surface-container-high p-3 rounded-lg border border-outline-variant/10 max-h-96 overflow-auto">${escHtml(detail.text)}</pre>
         </div>` : '';
-      appendMsgToFeed(`
-    <div class="my-6 relative msg-enter">
+      placeHitlCard(data.request_id, `
+    <div class="my-6 relative msg-enter" data-hitl-card="${escHtml(data.request_id || '')}">
       <div class="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 blur-2xl opacity-40"></div>
       <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
         <div class="flex items-center gap-3 mb-3">
@@ -251,6 +267,67 @@
 
     let currentPlannerHitlRequest = null;
 
+    // The chat line recording an answer. One place for both the live click and
+    // the transcript replay, so a reloaded session reads the same as the live one.
+    function hitlResponseSummary(response) {
+      const request = hitlCards.get(response.request_id || '') || {};
+      const feedback = String(response.instructions || response.free_input || '').trim();
+      const action = response.action;
+      if (request.form && Array.isArray(request.form.blocks)) {
+        const values = response.form_values;
+        const n = values ? Object.values(values).reduce((s, o) => s + Object.keys(o || {}).length, 0) : 0;
+        return values ? t('hitl.form.saved').replace('{n}', n) : t('hitl.form.skipped');
+      }
+      if (String(request.trigger || '').startsWith('work_order') && action === 'approve') {
+        const rejected = ((response.form_values || {}).rejected_assumption_ids || []).length;
+        return t('workOrder.approved')
+          + (rejected ? ' — ' + t('workOrder.rejectedAssumptions').replace('{n}', rejected) : '')
+          + (feedback ? ': ' + feedback : '');
+      }
+      if (action === 'provide_input') return '💬 HITL Input: ' + (feedback || '(empty)');
+      if (action === 'select') return '☑ ' + (response.selected_option || feedback);
+      if (action === 'edit') return '✎ HITL Revision requested: ' + feedback;
+      return response.approved ? '✓ HITL Approved' : '✗ HITL Rejected' + (feedback ? ': ' + feedback : '');
+    }
+
+    function hitlTimeoutSummary(data) {
+      return '⏱ HITL: нет ответа ' + (data.timeout_seconds || 300) + ' с — предложение агента ' + (data.agent_name || '') + ' авто-подтверждено, пайплайн продолжен.';
+    }
+    window.hitlTimeoutSummary = hitlTimeoutSummary;
+
+    // Replay of a recorded outcome onto its card: what the operator typed or
+    // unchecked is put back, then the card is locked.
+    function applyHitlOutcome(event) {
+      const rid = event.request_id || '';
+      if (event.type === 'hitl_response') {
+        const card = rid ? document.querySelector(`[data-hitl-card="${CSS.escape(rid)}"]`) : null;
+        const feedbackEl = document.getElementById('hitl-feedback-' + rid);
+        const feedback = event.instructions || event.free_input;
+        if (feedbackEl && feedback && event.action !== 'select') feedbackEl.value = feedback;
+        const values = event.form_values || {};
+        if (card) {
+          card.querySelectorAll('textarea[data-field]').forEach(el => {
+            const block = values[el.getAttribute('data-block')];
+            const value = block && block[el.getAttribute('data-field')];
+            if (value != null) el.value = value;
+          });
+          const rejected = values.rejected_assumption_ids || [];
+          card.querySelectorAll('input[data-wo-assumption]').forEach(el => {
+            el.checked = !rejected.includes(el.dataset.woAssumption);
+            el.disabled = true;
+          });
+        }
+        disableHitlControls(rid);
+        addSystemMsg(hitlResponseSummary(event), event.timestamp);
+      } else if (event.type === 'hitl_timeout') {
+        disableHitlControls(rid);
+        addSystemMsg(hitlTimeoutSummary(event), event.timestamp);
+      } else if (event.type === 'hitl_cancelled') {
+        disableHitlControls(rid);
+      }
+    }
+    window.applyHitlOutcome = applyHitlOutcome;
+
     function sendHitlResponse(payload) {
       if (ws && ws.readyState === 1) {
         ws.send(JSON.stringify(payload));
@@ -258,6 +335,7 @@
       if (window.StatusIndicator) {
         StatusIndicator.feed({ type: 'hitl_response', request_id: payload.request_id });
       }
+      addSystemMsg(hitlResponseSummary(payload));
     }
 
     function respondHITLInput(requestId) {
@@ -273,7 +351,6 @@
       });
       document.getElementById('hitl-panel').classList.add('hidden');
       disableHitlControls(requestId);
-      addSystemMsg('💬 HITL Input: ' + (feedback || '(empty)'));
 
       if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
         currentPlannerHitlRequest = null;
@@ -294,7 +371,6 @@
       });
       document.getElementById('hitl-panel').classList.add('hidden');
       disableHitlControls(requestId);
-      addSystemMsg(approved ? '✓ HITL Approved' : '✗ HITL Rejected' + (feedback ? ': ' + feedback : ''));
 
       if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
         currentPlannerHitlRequest = null;
@@ -315,7 +391,6 @@
       });
       document.getElementById('hitl-panel').classList.add('hidden');
       disableHitlControls(requestId);
-      addSystemMsg('☑ ' + option);
     }
 
     function respondHITLEdit(requestId) {
@@ -337,7 +412,6 @@
       });
       document.getElementById('hitl-panel').classList.add('hidden');
       disableHitlControls(requestId);
-      addSystemMsg('✎ HITL Revision requested: ' + feedback);
 
       if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
         currentPlannerHitlRequest = null;
@@ -346,7 +420,7 @@
     }
 
     // ── Structured frame form (research frame intake) ────────────────────────
-    function renderHitlForm(panel, feed, data) {
+    function renderHitlForm(panel, data) {
       const form = data.form;
       const rid = data.request_id;
       // The backend sends {en, ru} dicts for the display strings. The canonical
@@ -384,17 +458,21 @@
           </div>`;
       }).join('');
 
-      panel.classList.remove('hidden');
-      panel.innerHTML = `
+      if (panel) {
+        panel.classList.remove('hidden');
+        panel.innerHTML = `
         <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-2">
           <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${escHtml(t('hitl.form.sidebarTitle'))}</h3>
           <p class="text-[11px] text-on-surface-variant">${escHtml(t('hitl.form.sidebarHint'))}</p>
         </div>`;
+      }
 
       const formTitle = loc(form.title_i18n, form.title || t('hitl.form.title'));
       const formIntro = loc(form.intro_i18n, form.intro || data.message || '');
-      feed.innerHTML += `
-        <div id="hitl-controls-${rid}" class="my-6 relative msg-enter">
+      // insertAdjacentHTML, not `innerHTML +=`: re-parsing the whole feed would
+      // wipe whatever the operator is typing into the earlier cards.
+      placeHitlCard(rid, `
+        <div id="hitl-controls-${rid}" data-hitl-card="${escHtml(rid || '')}" class="my-6 relative msg-enter">
           <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
             <div class="flex items-center gap-3 mb-2">
               <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
@@ -413,7 +491,7 @@
               </button>
             </div>
           </div>
-        </div>`;
+        </div>`);
     }
 
     function respondHITLForm(requestId, collect) {
@@ -440,8 +518,6 @@
       });
       document.getElementById('hitl-panel').classList.add('hidden');
       disableHitlControls(requestId);
-      const n = formValues ? Object.values(formValues).reduce((s, o) => s + Object.keys(o).length, 0) : 0;
-      addSystemMsg(collect ? t('hitl.form.saved').replace('{n}', n) : t('hitl.form.skipped'));
     }
 
     // ── Work Order cards ─────────────────────────────────────────────────────
@@ -547,24 +623,26 @@
     }
 
     function renderWorkOrderCard(panel, data) {
-      hitlCards.set(data.request_id || '', data);
       const rid = data.request_id;
       const ctx = data.context || {};
       const order = ctx.work_order || {};
       const tier = ctx.tier || order.tier || 'compute';
       const isAmendment = data.trigger === 'work_order_amendment';
-      const timeout = Number(data.timeout_seconds) || 0;
+      // A history card (no panel) never counts down: its window has closed.
+      const timeout = panel ? (Number(data.timeout_seconds) || 0) : 0;
       const messageHtml = hitlDynamic(data, 'message', localizeHitlMessage(data));
 
-      panel.classList.remove('hidden');
-      panel.innerHTML = `
+      if (panel) {
+        panel.classList.remove('hidden');
+        panel.innerHTML = `
         <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-2">
           <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${hitlLabel(isAmendment ? 'workOrder.amendTitle' : 'workOrder.title')}</h3>
           <p class="text-[11px] text-on-surface-variant">${messageHtml}</p>
           <p class="text-[10px] text-outline-variant leading-relaxed">${hitlLabel('hitl.answerInChat')}</p>
         </div>`;
+      }
 
-      const countdown = timeout > 0 && !data.held ? `
+      const countdown = !panel ? '' : timeout > 0 && !data.held ? `
         <div id="wo-countdown-${rid}" class="mt-4 flex flex-col gap-1">
           <p class="text-[11px] text-tertiary" data-wo-countdown-text>${escHtml(t('workOrder.countdown').replace('{s}', Math.ceil(timeout)))}</p>
           <div class="h-1 w-full bg-surface-container-high rounded overflow-hidden">
@@ -573,8 +651,8 @@
         </div>` : `
         <p id="wo-countdown-${rid}" class="mt-4 text-[11px] text-outline-variant">${hitlLabel(data.held ? 'workOrder.paused' : 'workOrder.blocking')}</p>`;
 
-      appendMsgToFeed(`
-        <div class="my-6 relative msg-enter" data-wo-agent="${escHtml(data.agent_name || '')}" data-wo-rev="${escHtml(String(order.revision || 1))}">
+      placeHitlCard(rid, `
+        <div class="my-6 relative msg-enter" data-hitl-card="${escHtml(rid || '')}" data-wo-agent="${escHtml(data.agent_name || '')}" data-wo-rev="${escHtml(String(order.revision || 1))}">
           <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
             ${woHeader(isAmendment ? 'edit_note' : 'assignment', isAmendment ? 'workOrder.amendTitle' : 'workOrder.title',
                        tier, data.agent_name, order.revision)}
@@ -676,15 +754,6 @@
       disableHitlControls(rid);
       const box = document.getElementById('wo-countdown-' + rid);
       if (box) box.remove();
-      if (action === 'approve') {
-        addSystemMsg(t('workOrder.approved')
-          + (rejectedIds.length ? ' — ' + t('workOrder.rejectedAssumptions').replace('{n}', rejectedIds.length) : '')
-          + (feedback ? ': ' + feedback : ''));
-      } else if (action === 'edit') {
-        addSystemMsg('✎ HITL Revision requested: ' + feedback);
-      } else {
-        addSystemMsg('✗ HITL Rejected' + (feedback ? ': ' + feedback : ''));
-      }
     }
 
     function latestWorkOrderCard(agent) {

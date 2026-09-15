@@ -22,7 +22,7 @@ from CoScientist.agents.callbacks.report_language import (
     REPORT_LANGUAGE_STATE_KEY,
 )
 from CoScientist.main import CoScientistManager
-from CoScientist.web.handler import WebHITLHandler
+from CoScientist.web.handler import WebHITLHandler, hitl_response_event
 from CoScientist.web.session_registry import LocalSessionRegistry
 from CoScientist.agents import agent_system, planner_agent
 from CoScientist.config import ReportConfig
@@ -331,6 +331,7 @@ class WebRuntime:
         self.pending_hitl: dict[str, dict[str, Any]] = {}
         self.hitl_handler = WebHITLHandler()
         self.hitl_handler.set_sender(self.send_socket)
+        self.hitl_handler.set_recorder(self.record_event)
         self.sockets: dict[SessionKey, list[WebSocket]] = defaultdict(list)
         self.active_runs: dict[SessionKey, asyncio.Task] = {}
         # Run execution times (start to finish) per session
@@ -1879,6 +1880,16 @@ def create_app() -> FastAPI:
 
         key = (user_id, session_id)
         runtime.registry.touch_session(user_id, session_id)
+        if not runtime.agent_events.get(key):
+            # A session from an earlier process: its chat and HITL cards live
+            # only in the on-disk transcript until something reloads them.
+            try:
+                from CoScientist.web.session_store import load_events
+                events = load_events(user_id, session_id)
+                if events:
+                    runtime.agent_events[key] = list(events)
+            except Exception:  # noqa: BLE001
+                pass
         adk_session = await runtime.session_service.get_session(
             app_name=APP_NAME,
             user_id=user_id,
@@ -2256,6 +2267,7 @@ async def _run_chat_invocation(
                             "session_key": key,
                             "payload": hitl_payload,
                         }
+                    runtime.record_event(key, hitl_payload)
                     await runtime.send(key, hitl_payload)
 
                 runtime.record_event(key, event_data)
@@ -2291,13 +2303,16 @@ async def _run_chat_invocation(
                     for iid in interrupt_ids:
                         if iid in runtime.pending_hitl and runtime.pending_hitl[iid]["response"] is None:
                             runtime.pending_hitl[iid]["response"] = {"approved": True}
-                    await runtime.send(key, {
+                    timeout_event = {
                         "type": "hitl_timeout",
                         "request_id": interrupt_ids[0] if interrupt_ids else "",
                         "interrupt_ids": interrupt_ids,
                         "agent_name": hitl_interrupt_event.author or "system",
                         "timeout_seconds": 600,
-                    })
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                    runtime.record_event(key, timeout_event)
+                    await runtime.send(key, timeout_event)
 
                 # Build FunctionResponse message for resume
                 response_parts = []
@@ -2429,4 +2444,5 @@ def _handle_hitl_response(runtime: WebRuntime, key: SessionKey, data: dict):
         if v["event"] is wait_event and v.get("session_key") == key
     )
     if all_resolved:
+        runtime.record_event(key, hitl_response_event(lookup_id, data))
         wait_event.set()  # Unblock the _handle_chat loop

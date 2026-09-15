@@ -4,12 +4,28 @@ import asyncio
 import logging
 import time
 import uuid
+from datetime import datetime
 
 from CoScientist.hitl.handler import AbstractHITLHandler
 from CoScientist.hitl.models import HITLAction, HITLRequest, HITLResponse
 
 logger = logging.getLogger("CoScientist.web.hitl")
 SessionKey = tuple[str, str]
+
+
+def hitl_response_event(request_id: str, response_data: dict) -> dict:
+    """The operator's answer to one HITL card, as a transcript entry."""
+    return {
+        "type": "hitl_response",
+        "request_id": request_id,
+        "action": response_data.get("action"),
+        "approved": response_data.get("approved"),
+        "selected_option": response_data.get("selected_option"),
+        "instructions": response_data.get("instructions"),
+        "free_input": response_data.get("free_input"),
+        "form_values": response_data.get("form_values"),
+        "timestamp": datetime.now().isoformat(),
+    }
 
 
 class WebHITLHandler(AbstractHITLHandler):
@@ -23,6 +39,9 @@ class WebHITLHandler(AbstractHITLHandler):
         self._sockets: dict[SessionKey | None, list] = {}
         self._event_log: list[dict] = []
         self._sender = None
+        # Writes HITL cards and their answers into the session transcript, so a
+        # reload, an export or an import still shows decisions already taken.
+        self._recorder = None
 
     @property
     def hitl_timeout_seconds(self) -> float:
@@ -58,6 +77,19 @@ class WebHITLHandler(AbstractHITLHandler):
     def set_sender(self, sender) -> None:
         """Use the Web runtime's serialized socket writer when available."""
         self._sender = sender
+
+    def set_recorder(self, recorder) -> None:
+        """Persist HITL events through ``recorder(session_key, event)``."""
+        self._recorder = recorder
+
+    def _record(self, session_key: SessionKey | None, event: dict) -> None:
+        if self._recorder is None or session_key is None:
+            return
+        try:
+            # A copy: a hold later mutates the live payload for redelivery.
+            self._recorder(session_key, dict(event))
+        except Exception as exc:  # noqa: BLE001 — persistence must never break a run
+            logger.warning("HITL event could not be recorded: %s", exc)
 
     async def _send_json(self, ws, payload: dict, session_key) -> None:
         if self._sender is not None:
@@ -182,7 +214,9 @@ class WebHITLHandler(AbstractHITLHandler):
             "invoked_via": request.invoked_via,
             "trigger": request.trigger,
             "timeout_seconds": timeout_sec,
+            "timestamp": datetime.now().isoformat(),
         }
+        self._record(session_key, payload)
 
         log_payload = dict(payload)
         log_payload["_session_key"] = session_key
@@ -221,24 +255,24 @@ class WebHITLHandler(AbstractHITLHandler):
             response_data = await self._await_response(entry)
         except asyncio.TimeoutError:
             response_data = {"action": "approve", "approved": True}
-            await self._broadcast(
-                {
-                    "type": "hitl_timeout",
-                    "request_id": request_id,
-                    "agent_name": request.agent_name,
-                    "timeout_seconds": timeout_sec,
-                },
-                session_key,
-            )
+            timeout_event = {
+                "type": "hitl_timeout",
+                "request_id": request_id,
+                "agent_name": request.agent_name,
+                "timeout_seconds": timeout_sec,
+                "timestamp": datetime.now().isoformat(),
+            }
+            self._record(session_key, timeout_event)
+            await self._broadcast(timeout_event, session_key)
         except asyncio.CancelledError:
-            await self._broadcast(
-                {
-                    "type": "hitl_cancelled",
-                    "request_id": request_id,
-                    "agent_name": request.agent_name,
-                },
-                session_key,
-            )
+            cancelled_event = {
+                "type": "hitl_cancelled",
+                "request_id": request_id,
+                "agent_name": request.agent_name,
+                "timestamp": datetime.now().isoformat(),
+            }
+            self._record(session_key, cancelled_event)
+            await self._broadcast(cancelled_event, session_key)
             raise
         finally:
             # ``shield`` deliberately keeps the response future alive when the
@@ -312,6 +346,7 @@ class WebHITLHandler(AbstractHITLHandler):
         if isinstance(session, dict) and session.get("user_id") and session.get("session_id"):
             session_key = (str(session["user_id"]), str(session["session_id"]))
         message = {"type": "work_order_notice", "timestamp": time.time(), **body}
+        self._record(session_key, message)
         log_payload = dict(message)
         log_payload["_session_key"] = session_key
         self._event_log.append(log_payload)
@@ -331,6 +366,7 @@ class WebHITLHandler(AbstractHITLHandler):
         entry = self._pending.pop(request_id, None)
         if entry and not entry["future"].done():
             entry["future"].set_result(response_data)
+            self._record(entry.get("session_key"), hitl_response_event(request_id, response_data))
             return True
         return False
 

@@ -325,6 +325,14 @@
           addAgentOutputMsg(message.agent, message.content, message.timestamp, message.caller);
         } else if (message.type === 'tool_activity') {
           applyToolActivity(message, true);
+        } else if (message.type === 'hitl_request') {
+          // Drawn locked; a request that is still open is redelivered by the
+          // server right after the snapshot and unlocks its card in place.
+          showHITL(message, { history: true });
+        } else if (['hitl_response', 'hitl_timeout', 'hitl_cancelled'].includes(message.type)) {
+          applyHitlOutcome(message);
+        } else if (message.type === 'work_order_notice') {
+          renderWorkOrderNotice(message);
         } else if (message.type === 'error') {
           addSystemMsg('Error: ' + message.message, message.timestamp);
         }
