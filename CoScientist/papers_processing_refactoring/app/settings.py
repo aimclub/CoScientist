@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 
 from CoScientist.papers_processing_refactoring.definitions import CONFIG_PATH
 
@@ -14,6 +14,17 @@ class LLMSettings(BaseSettings):
     
     model_config = SettingsConfigDict(
         env_prefix="ETL_",
+        extra="ignore",
+    )
+
+
+class OpenAlexSettings(BaseSettings):
+
+    email: str | None = None
+    api_key: SecretStr | None = None
+
+    model_config = SettingsConfigDict(
+        env_prefix="SERVICES__OPENALEX_",
         extra="ignore",
     )
 
@@ -92,8 +103,13 @@ class DatabaseSettings(BaseSettings):
 
     type: str = Field(default="sqlite", alias="DATABASE_TYPE")
     sqlite_path: str = Field(default="./data/db.sqlite", alias="SQLITE_PATH")
-    
-    postgresql_dsn: str = Field(alias="POSTGRESQL_DSN")
+    postgresql_dsn: str | None = Field(default=None, alias="POSTGRESQL_DSN")
+
+    @model_validator(mode="after")
+    def validate_postgresql_dsn(self) -> "DatabaseSettings":
+        if self.type == "postgres" and not self.postgresql_dsn:
+            raise ValueError("POSTGRESQL_DSN is required when DATABASE_TYPE=postgres")
+        return self
 
     model_config = SettingsConfigDict(
         extra="ignore",
@@ -117,6 +133,7 @@ class AppSettings(BaseSettings):
     s3: S3Settings = Field(default_factory=S3Settings)
     database: DatabaseSettings = Field(default_factory=DatabaseSettings)
     llm: LLMSettings = Field(default_factory=LLMSettings)
+    openalex: OpenAlexSettings = Field(default_factory=OpenAlexSettings)
     files: FilesSettings = Field(default_factory=FilesSettings)
     
     model_config = SettingsConfigDict(

@@ -180,50 +180,52 @@ def explore_my_papers(task: str, s3_keys: list[str]) -> dict:
 
 @mcp.tool()
 def find_papers_in_db(
-        task: str, initial_number_of_papers: int = 30, number_of_papers_after_rerank: int = 10
+        task: str, initial_number_of_chunks: int = 60, number_of_chunks_after_rerank: int = 20
 ) -> list |dict:
-    """Find relevant papers in database for the given task
+    """Find relevant papers by searching and reranking their body chunks.
 
     Args:
         task (str): The user's question, query or task
-        initial_number_of_papers (int): The number of papers that initial search returns
-        number_of_papers_after_rerank (int): The number of papers that returns after reranking
+        initial_number_of_chunks (int): The number of body chunks returned by the initial search
+        number_of_chunks_after_rerank (int): The number of body chunks retained after reranking
 
     Returns:
-        A list of relevant papers in the database with available metadata
+        A list of unique relevant papers with metadata and retrieval scores
     """
     meta_filter = extract_metadata_filters(
         task, VISION_LLM_URL, extract_query_filters_prompt
     )
     meta_filter_chroma = build_chroma_where_filter(meta_filter)
-    summary_filters: dict = {"role": {"$eq": "summary"}}
+    body_filters: dict = {"role": {"$eq": "body"}}
     if meta_filter_chroma:
-        summary_filters = {
-            "$and": [meta_filter_chroma, {"role": {"$eq": "summary"}}]
+        body_filters = {
+            "$and": [meta_filter_chroma, {"role": {"$eq": "body"}}]
         }
 
     try:
-        res = retriever.retrieve(
+        chunks = retriever.retrieve(
             query=task,
-            top_k=initial_number_of_papers,
-            rerank_k=number_of_papers_after_rerank,
-            filters = summary_filters
+            top_k=initial_number_of_chunks,
+            rerank_k=number_of_chunks_after_rerank,
+            filters=body_filters,
         )
-        return [
-            {
-                "article_id": c.article_id,
-                "title": c.metadata["paper_title"],
-                "summary": c.content,
-                "domain": c.domain,
-                "field": c.field,
-                "initial_score": c.metadata.get("chroma_score"),
-                "rerank_score": c.metadata.get("reranker_score"),
-            }
-            for c in res
-        ]
+        papers_by_id: dict[str, dict] = {}
+        for chunk in chunks:
+            papers_by_id.setdefault(
+                chunk.article_id,
+                {
+                    "article_id": chunk.article_id,
+                    "title": chunk.metadata["paper_title"],
+                    "domain": chunk.domain,
+                    "field": chunk.field,
+                    "initial_score": chunk.metadata.get("chroma_score"),
+                    "rerank_score": chunk.metadata.get("reranker_score"),
+                },
+            )
+        return list(papers_by_id.values())
     except Exception as e:
         logger.error(f'find_papers_in_db ERROR: {e}')
-        return {'answer': f'Could not any paper in DB. Error: {e}'}
+        return {'answer': f'Could not find any paper in DB. Error: {e}'}
 
 
 @mcp.tool()
