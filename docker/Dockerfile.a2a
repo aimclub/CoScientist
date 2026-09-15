@@ -15,7 +15,7 @@ RUN apt-get update \
         git \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir uv
+RUN pip install --no-cache-dir uv==0.12.14
 
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --frozen --no-dev --no-install-project
