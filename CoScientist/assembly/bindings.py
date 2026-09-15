@@ -897,6 +897,11 @@ def _inject_fedot_candidates():
     return inject_fedot_candidates
 
 
+def _announce_attached_tools():
+    from CoScientist.agents.callbacks import announce_attached_tools
+    return announce_attached_tools
+
+
 def _before_get_task():
     from CoScientist.agents.callbacks import before_get_task
     return before_get_task
@@ -1054,6 +1059,9 @@ _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranke
 _cb("redirect_when_no_tools", "before_agent", factory=lambda ctx: _redirect_when_no_tools())
 # Reranker fallback: show FedotAgent the candidate pool fedot_tool will receive.
 _cb("inject_fedot_candidates", "before_agent", factory=lambda ctx: _inject_fedot_candidates())
+# State the executor's real tool list, so a catalogue "nothing matched" verdict
+# earlier in the conversation cannot override the tools it is actually holding.
+_cb("announce_attached_tools", "before_model", factory=lambda ctx: _announce_attached_tools())
 # Load active tasks into agent state before the agent runs.
 _cb("before_get_task", "before_agent", factory=lambda ctx: _before_get_task())
 _cb("inject_original_query", "before_model", factory=lambda ctx: _inject_original_query())
