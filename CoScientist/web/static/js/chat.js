@@ -370,24 +370,83 @@
       renderAttachments();
     }
 
+    function applyUserTextFiles(files) {
+      userTextFiles = Array.isArray(files) ? files : [];
+      renderAttachments();
+    }
+
+    function chooseUserTextFile() {
+      toggleAttachMenu(false);
+      document.getElementById('user-text-file-input').click();
+    }
+
+    async function uploadUserTextFile(file) {
+      const input = document.getElementById('user-text-file-input');
+      if (!file) return;
+      try {
+        const form = new FormData();
+        form.append('file', file);
+        const data = await apiJson(sessionApi('/text-file'), {
+          method: 'POST', body: form
+        });
+        applyUserTextFiles(data.user_text_files);
+        addSystemMsg('Text file attached: ' + file.name);
+        addTelemetry('TEXT FILE :: attached');
+      } catch (error) {
+        addSystemMsg('Text file rejected: ' + error.message);
+        addTelemetry('TEXT FILE :: rejected');
+      } finally {
+        input.value = '';
+      }
+    }
+
+    async function removeUserTextFile() {
+      try {
+        const data = await apiJson(sessionApi('/text-file'), { method: 'DELETE' });
+        applyUserTextFiles(data.user_text_files);
+        addSystemMsg('Text file detached.');
+        addTelemetry('TEXT FILE :: detached');
+      } catch (error) {
+        addSystemMsg('Could not detach text file: ' + error.message);
+      }
+    }
+
     function renderAttachments() {
       const row = document.getElementById('attachment-chips');
       if (!row) return;
-      if (!datasetUrl) {
+      const chips = [];
+      if (datasetUrl) chips.push(`
+        <span class="flex items-center gap-1.5 max-w-full bg-surface-container-high border border-primary/20 rounded-md pl-2 pr-1 py-1">
+          <span class="material-symbols-outlined text-primary text-sm">folder_zip</span>
+          <a href="${escHtml(datasetUrl)}" target="_blank" title="${escHtml(datasetUrl)}"
+            class="font-mono text-[10px] text-on-surface-variant truncate max-w-[24rem] hover:text-primary">${escHtml(datasetUrl)}</a>
+          <button type="button" onclick="clearDatasetLink()" title="Detach dataset"
+            class="p-0.5 text-outline-variant hover:text-error transition-colors flex items-center">
+            <span class="material-symbols-outlined text-sm">close</span>
+          </button>
+        </span>`);
+      const textFile = userTextFiles[0];
+      if (textFile) {
+        const size = Number(textFile.size) || 0;
+        const sizeLabel = size < 1024 ? `${size} B` : `${(size / 1024).toFixed(1)} KiB`;
+        chips.push(`
+        <span class="flex items-center gap-1.5 max-w-full bg-surface-container-high border border-primary/20 rounded-md pl-2 pr-1 py-1">
+          <span class="material-symbols-outlined text-primary text-sm">description</span>
+          <span title="${escHtml(textFile.filename)}"
+            class="font-mono text-[10px] text-on-surface-variant truncate max-w-[24rem]">${escHtml(textFile.filename)}</span>
+          <span class="font-mono text-[9px] text-outline-variant">${sizeLabel}</span>
+          <button type="button" onclick="removeUserTextFile()" title="Detach text file"
+            class="p-0.5 text-outline-variant hover:text-error transition-colors flex items-center">
+            <span class="material-symbols-outlined text-sm">close</span>
+          </button>
+        </span>`);
+      }
+      if (!chips.length) {
         row.innerHTML = '';
         row.classList.add('hidden');
         return;
       }
-      row.innerHTML = `
-    <span class="flex items-center gap-1.5 max-w-full bg-surface-container-high border border-primary/20 rounded-md pl-2 pr-1 py-1">
-      <span class="material-symbols-outlined text-primary text-sm">folder_zip</span>
-      <a href="${escHtml(datasetUrl)}" target="_blank" title="${escHtml(datasetUrl)}"
-        class="font-mono text-[10px] text-on-surface-variant truncate max-w-[24rem] hover:text-primary">${escHtml(datasetUrl)}</a>
-      <button type="button" onclick="clearDatasetLink()" title="Detach dataset"
-        class="p-0.5 text-outline-variant hover:text-error transition-colors flex items-center">
-        <span class="material-symbols-outlined text-sm">close</span>
-      </button>
-    </span>`;
+      row.innerHTML = chips.join('');
       row.classList.remove('hidden');
     }
 

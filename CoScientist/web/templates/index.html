@@ -298,7 +298,15 @@
                 <span class="material-symbols-outlined text-base text-primary">folder_zip</span>
                 Dataset link (.zip)
               </button>
+              <button type="button" onclick="chooseUserTextFile()"
+                class="w-full flex items-center gap-2 px-3 py-2.5 text-left text-[11px] font-medium text-on-surface hover:bg-surface-container-high transition-colors">
+                <span class="material-symbols-outlined text-base text-primary">description</span>
+                Text file (.txt/.md)
+              </button>
             </div>
+            <input id="user-text-file-input" type="file"
+              accept=".txt,.md,text/plain,text/markdown" class="hidden"
+              onchange="uploadUserTextFile(this.files[0])">
           </div>
           <!-- Report language for THIS session. Separate from the interface
                language toggle (lang-btn-en / lang-btn-ru) in the sidebar. -->

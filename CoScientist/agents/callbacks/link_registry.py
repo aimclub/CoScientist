@@ -536,7 +536,12 @@ def _user_text(callback_context: CallbackContext) -> str:
 # agent's `before_agent` list (system.yaml) — by the time it runs,
 # inject_graph_root / inject_research_context / inject_dataset_context have
 # already populated their keys for THIS turn.
-_CONTEXT_SOURCE_KEYS = ("graph_root", "research_context", "dataset_context")
+_CONTEXT_SOURCE_KEYS = (
+    "graph_root",
+    "research_context",
+    "dataset_context",
+    "user_files_context",
+)
 
 
 def _context_text(state: Any) -> str:

@@ -167,6 +167,10 @@
             addSystemMsg('Dataset link rejected: ' + data.message);
             addTelemetry('DATASET :: rejected');
             break;
+          case 'user_text_files':
+            applyUserTextFiles(data.user_text_files);
+            addTelemetry('TEXT FILE :: ' + (userTextFiles.length ? 'attached' : 'detached'));
+            break;
           case 'report_language':
             applyReportLanguage(data.report_language);
             addTelemetry('REPORT LANG :: ' + data.report_language);

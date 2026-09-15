@@ -16,7 +16,10 @@ from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconn
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from CoScientist.agents.callbacks.tool_callbacks import DATASET_URL_STATE_KEY
+from CoScientist.agents.callbacks.tool_callbacks import (
+    DATASET_URL_STATE_KEY,
+    USER_TEXT_FILES_STATE_KEY,
+)
 from CoScientist.agents.callbacks.report_language import (
     REPORT_LANGUAGES,
     REPORT_LANGUAGE_STATE_KEY,
@@ -82,6 +85,8 @@ TOOL_ACTIVITY_TRIM_SLACK = 200
 # was actually truncated get one.
 MAX_TOOL_FULL_VALUES = 300
 DATASET_URL_MAX_LENGTH = 2048
+USER_TEXT_FILE_MAX_BYTES = 256 * 1024
+USER_TEXT_FILE_EXTENSIONS = (".txt", ".md")
 # Graph stores the Settings modal can wipe. The derived ``knowledge`` view is
 # absent on purpose: it is a projection of ``execution`` plus ``memory``.
 GRAPH_DELETE_TARGETS = ("execution", "research")
@@ -106,6 +111,34 @@ def _validated_dataset_url(raw: Any) -> str:
     if not parsed.path.lower().endswith(".zip"):
         raise ValueError("Dataset link must point to a .zip archive.")
     return url
+
+
+def _validated_user_text_file(filename: Any, raw: bytes) -> dict[str, Any]:
+    """Validate and normalize one prompt-sized local text attachment."""
+    safe_name = Path(str(filename or "").strip()).name
+    if not safe_name:
+        raise ValueError("The uploaded text file must have a filename.")
+    if Path(safe_name).suffix.lower() not in USER_TEXT_FILE_EXTENSIONS:
+        raise ValueError("Only .txt and .md text files are supported.")
+    if len(raw) > USER_TEXT_FILE_MAX_BYTES:
+        raise ValueError(
+            f"Text file is too large (maximum {USER_TEXT_FILE_MAX_BYTES // 1024} KiB)."
+        )
+    try:
+        content = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError("Text file must be valid UTF-8.") from exc
+    if not content.strip():
+        raise ValueError("Text file is empty or contains only whitespace.")
+    return {"filename": safe_name, "size": len(raw), "content": content}
+
+
+def _user_text_file_metadata(files: Any) -> list[dict[str, Any]]:
+    """Return the browser-safe portion of normalized attachment records."""
+    return [
+        {"filename": item["filename"], "size": item["size"]}
+        for item in files if isinstance(item, dict)
+    ] if isinstance(files, list) else []
 
 
 def _validated_report_language(raw: Any) -> str:
@@ -290,6 +323,9 @@ class WebRuntime:
         # here as well as in ADK state so a reconnecting tab and a session whose
         # manager has not been built yet both see the same link.
         self.dataset_urls: dict[SessionKey, str] = {}
+        # One small local .txt/.md attachment per session.  Content stays on the
+        # server; snapshots expose only metadata needed to render the chip.
+        self.user_text_files: dict[SessionKey, list[dict[str, Any]]] = {}
         # Report language chosen for a session from the chat composer. Holds
         # ONLY explicit choices — an absent key means the browser has not spoken
         # yet, which is what lets the UI default follow its interface language.
@@ -531,6 +567,9 @@ class WebRuntime:
                     "run_status_version": version,
                     "metrics": self.metrics.get(key),
                     "dataset_url": self.dataset_urls.get(key, ""),
+                    "user_text_files": _user_text_file_metadata(
+                        self.user_text_files.get(key, [])
+                    ),
                     "report_language": self.report_languages.get(key, ""),
                 })
             except Exception:
@@ -572,6 +611,41 @@ class WebRuntime:
                 author="user",
                 actions=EventActions(
                     state_delta={DATASET_URL_STATE_KEY: current},
+                ),
+            ),
+        )
+        return current
+
+    async def apply_user_text_files(
+        self,
+        key: SessionKey,
+        files: list[dict[str, Any]] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Set/clear or re-sync the session's local text attachment."""
+        if files is not None:
+            if files:
+                self.user_text_files[key] = files
+            else:
+                self.user_text_files.pop(key, None)
+        current = self.user_text_files.get(key, [])
+
+        user_id, session_id = key
+        adk_session = await self.session_service.get_session(
+            app_name=APP_NAME,
+            user_id=user_id,
+            session_id=session_id,
+        )
+        if adk_session is None:
+            return current
+        if adk_session.state.get(USER_TEXT_FILES_STATE_KEY, []) == current:
+            return current
+        await self.session_service.append_event(
+            adk_session,
+            Event(
+                invocation_id=f"user_text_file_{uuid4().hex}",
+                author="user",
+                actions=EventActions(
+                    state_delta={USER_TEXT_FILES_STATE_KEY: current},
                 ),
             ),
         )
@@ -1194,6 +1268,54 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse({"session": session})
+
+    @app.post("/api/users/{user_id}/sessions/{session_id}/text-file")
+    async def upload_user_text_file(
+        user_id: str,
+        session_id: str,
+        request: Request,
+    ):
+        """Attach one small UTF-8 .txt/.md file as session prompt context."""
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        try:
+            form = await request.form()
+            upload = form.get("file")
+            if upload is None or not hasattr(upload, "read"):
+                raise ValueError("No text file uploaded.")
+            raw = await upload.read(USER_TEXT_FILE_MAX_BYTES + 1)
+            record = _validated_user_text_file(
+                getattr(upload, "filename", ""), raw
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        key = (user_id, session_id)
+        files = await runtime.apply_user_text_files(key, [record])
+        metadata = _user_text_file_metadata(files)
+        await runtime.send(key, {
+            "type": "user_text_files",
+            "user_text_files": metadata,
+        })
+        return JSONResponse({"user_text_files": metadata}, status_code=201)
+
+    @app.delete("/api/users/{user_id}/sessions/{session_id}/text-file")
+    async def delete_user_text_file(user_id: str, session_id: str):
+        """Detach the session's local text attachment from runtime and ADK."""
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        key = (user_id, session_id)
+        await runtime.apply_user_text_files(key, [])
+        await runtime.send(key, {
+            "type": "user_text_files",
+            "user_text_files": [],
+        })
+        return JSONResponse({"user_text_files": []})
 
     # --- Session export / import / save / restore ---
     @app.post("/api/users/{user_id}/sessions/{session_id}/export")
@@ -1990,6 +2112,10 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
         # manager), so mirror it into state now that the session exists — this is
         # what puts the link in front of CoderAgent.
         await runtime.apply_dataset_url(key)
+        # Local text context follows the same late-manager synchronization
+        # rule, but remains a separate state key visible to all user-facing
+        # agents rather than becoming sandbox dataset context.
+        await runtime.apply_user_text_files(key)
         # Same reason as the attachment above: the language may have been picked
         # before the ADK session existed.
         await runtime.apply_report_language(key)

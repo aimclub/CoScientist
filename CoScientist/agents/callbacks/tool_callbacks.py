@@ -436,6 +436,32 @@ def inject_graph_root(callback_context: CallbackContext):
 DATASET_URL_STATE_KEY = "dataset_url"
 DATASET_CONTEXT_STATE_KEY = "dataset_context"
 
+# Text supplied directly by the user through the web UI.  Unlike a dataset
+# URL, this content is prompt context and never needs to cross into a sandbox.
+USER_TEXT_FILES_STATE_KEY = "user_text_files"
+USER_FILES_CONTEXT_STATE_KEY = "user_files_context"
+
+
+def inject_user_files_context(callback_context: CallbackContext):
+    """before_agent: render the session's user-attached text file.
+
+    The web layer currently keeps at most one record, represented as a list so
+    the state shape can grow later without changing the prompt contract.
+    """
+    files = callback_context.state.get(USER_TEXT_FILES_STATE_KEY) or []
+    blocks = []
+    for item in files if isinstance(files, list) else []:
+        if not isinstance(item, dict):
+            continue
+        filename = str(item.get("filename") or "").strip()
+        content = item.get("content")
+        if filename and isinstance(content, str) and content.strip():
+            blocks.append(f"### {filename}\n{content}")
+    callback_context.state[USER_FILES_CONTEXT_STATE_KEY] = (
+        "## User-attached text files\n\n" + "\n\n".join(blocks)
+    ) if blocks else ""
+    return None
+
 
 def inject_dataset_context(callback_context: CallbackContext):
     """before_agent: render state['dataset_url'] into the prompt's dataset block.

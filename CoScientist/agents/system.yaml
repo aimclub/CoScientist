@@ -91,7 +91,7 @@ agents:
       - McpBuilderAgent
     callbacks:
       before_model: [save_uploaded_artifacts, seed_coder_workspace, redact_link_urls]
-      before_agent: [before_get_task, inject_graph_root, inject_research_context, user_links]
+      before_agent: [before_get_task, inject_graph_root, inject_research_context, inject_user_files_context, user_links]
       # Catch hallucinated tool calls (e.g. the orchestrator inventing a
       # sub-agent's `execute_bash`) and correct them, instead of ADK raising
       # ValueError('Tool not found') and crashing the whole run.
@@ -151,7 +151,7 @@ agents:
     output_key: planner_roadmap
     report_output: true
     callbacks:
-      before_agent: [inject_graph_root, inject_research_context, user_links]
+      before_agent: [inject_graph_root, inject_research_context, inject_user_files_context, user_links]
       before_model: [redact_link_urls]
       after_model: [expand_link_refs, guard_unknown_tools, finish_after_plan_registered]
       before_tool: [resolve_link_refs]
@@ -192,7 +192,7 @@ agents:
     output_schema: research_frame
     hitl: true
     callbacks:
-      before_agent: [user_links]
+      before_agent: [inject_user_files_context, user_links]
       before_model: [redact_link_urls]
       # expand_link_refs MUST come first: ADK's after_model chain stops at the
       # first callback that returns a response, and sanitize_json_output
@@ -222,7 +222,7 @@ agents:
     # figures/tables collected by format_results, not from the raw transcript.
     include_contents: none
     callbacks:
-      before_agent: [inject_research_context, inject_report_language, user_links]
+      before_agent: [inject_research_context, inject_report_language, inject_user_files_context, user_links]
       before_model: [redact_link_urls]
       after_model: [expand_link_refs]
       before_tool: [resolve_link_refs]
@@ -253,7 +253,7 @@ agents:
     # hypotheses and ask for acceptance criteria when the human didn't add any.
     hitl: true
     callbacks:
-      before_agent: [before_get_task, inject_research_context, user_links]
+      before_agent: [before_get_task, inject_research_context, inject_user_files_context, user_links]
       before_model: [redact_link_urls]
       after_model: [expand_link_refs, guard_unknown_tools]
       before_tool: [resolve_link_refs]
@@ -296,7 +296,7 @@ agents:
     output_key: search_results
     report_output: true
     callbacks:
-      before_agent: [before_get_task, inject_research_context, user_links]
+      before_agent: [before_get_task, inject_research_context, inject_user_files_context, user_links]
       before_model: [inject_uploaded_papers, redact_link_urls]
       before_tool: [WebSearchLimiter, resolve_link_refs]
       after_tool: [log_research_tool_calls, register_tool_result_links]
@@ -342,7 +342,7 @@ agents:
     report_output: true
     callbacks:
       after_model: [expand_link_refs, guard_unknown_tools]
-      before_agent: [user_links]
+      before_agent: [inject_user_files_context, user_links]
       before_model: [redact_link_urls]
       before_tool: [resolve_link_refs]
       after_tool: [register_tool_result_links]
@@ -404,7 +404,7 @@ agents:
     subordinates: [DatasetCollectorAgent]
     output_key: coder_results
     callbacks:
-      before_agent: [inject_research_context, inject_dataset_context, user_links]
+      before_agent: [inject_research_context, inject_dataset_context, inject_user_files_context, user_links]
       before_model: [redact_link_urls]
       #before_model: [hitl_before_model]
       # Catch hallucinated tool names (e.g. calling `find` directly) and return a
@@ -458,7 +458,7 @@ agents:
     tools: [coder, sandbox, websearch, research_graph, verify, vault]
     output_key: dataset_results
     callbacks:
-      before_agent: [inject_research_context, inject_dataset_context, user_links]
+      before_agent: [inject_research_context, inject_dataset_context, inject_user_files_context, user_links]
       before_model: [redact_link_urls]
       after_model: [expand_link_refs, guard_unknown_tools]
       before_tool: [resolve_link_refs]
@@ -484,7 +484,7 @@ agents:
     output_key: medical_results
     report_output: true
     callbacks:
-      before_agent: [before_get_task, inject_research_context, user_links]
+      before_agent: [before_get_task, inject_research_context, inject_user_files_context, user_links]
       before_model: [inject_medical_artifacts, redact_link_urls]
       before_tool: [resolve_link_refs]
       after_tool: [register_tool_result_links]
@@ -530,7 +530,7 @@ agents:
     output_key: mcp_build_results
     callbacks:
       after_model: [expand_link_refs, guard_unknown_tools]
-      before_agent: [user_links]
+      before_agent: [inject_user_files_context, user_links]
       before_model: [redact_link_urls]
       before_tool: [resolve_link_refs]
       after_tool: [register_tool_result_links]
@@ -617,7 +617,7 @@ agents:
     callbacks:
       # Abstain → recommend CoderAgent when the tool-prep pipeline found no tool
       # that actually matches the task (instead of running a nearest-but-wrong one).
-      before_agent: [redirect_when_no_tools, before_get_task, inject_research_context, user_links]
+      before_agent: [redirect_when_no_tools, before_get_task, inject_research_context, inject_user_files_context, user_links]
       before_model: [redact_link_urls]
       before_tool: [resolve_link_refs]
       after_model: [expand_link_refs]
@@ -658,7 +658,7 @@ agents:
     callbacks:
       # No redirect_when_no_tools here: this agent IS the no-usable-ranking path,
       # and abstaining to CoderAgent is precisely what it exists to avoid.
-      before_agent: [inject_fedot_candidates, before_get_task, user_links]
+      before_agent: [inject_fedot_candidates, before_get_task, inject_user_files_context, user_links]
       before_model: [redact_link_urls]
       before_tool: [resolve_link_refs]
       after_tool: [register_tool_result_links]

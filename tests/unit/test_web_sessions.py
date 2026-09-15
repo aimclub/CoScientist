@@ -2,6 +2,7 @@ import asyncio
 import importlib
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from CoScientist.web.app import APP_NAME, create_app
@@ -371,6 +372,146 @@ def test_dataset_link_is_validated_stored_and_broadcast_per_session():
             assert websocket.receive_json() == {"type": "dataset_url", "dataset_url": ""}
         assert key not in runtime.dataset_urls
         assert adk_session.state[web_app.DATASET_URL_STATE_KEY] == ""
+
+
+@pytest.mark.parametrize(
+    ("filename", "payload", "expected"),
+    [
+        ("notes.txt", b"plain UTF-8", "plain UTF-8"),
+        ("notes.md", b"# Markdown\n\nBody", "# Markdown\n\nBody"),
+        ("NOTES.TXT", "Кириллица".encode("utf-8"), "Кириллица"),
+        ("NOTES.MD", b"\xef\xbb\xbf# BOM", "# BOM"),
+    ],
+)
+def test_text_file_upload_accepts_utf8_markdown_bom_and_case_insensitive_extensions(
+    filename, payload, expected
+):
+    app = create_app()
+    runtime = app.state.runtime
+    with TestClient(app) as client:
+        user = _create_user(client, f"User {filename}")
+        session = _create_session(client, user["id"], "Text")
+        key = (user["id"], session["id"])
+        response = client.post(
+            f"/api/users/{user['id']}/sessions/{session['id']}/text-file",
+            files={"file": (filename, payload, "application/octet-stream")},
+        )
+
+        assert response.status_code == 201
+        assert response.json()["user_text_files"] == [
+            {"filename": filename, "size": len(payload)}
+        ]
+        assert runtime.user_text_files[key][0]["content"] == expected
+        adk_session = runtime.session_service.sessions[APP_NAME][user["id"]][session["id"]]
+        assert adk_session.state[web_app.USER_TEXT_FILES_STATE_KEY][0]["content"] == expected
+
+
+@pytest.mark.parametrize(
+    ("filename", "payload", "message"),
+    [
+        ("notes.rtf", b"text", ".txt and .md"),
+        ("notes.txt", b"\xff\xfe", "valid UTF-8"),
+        ("notes.md", b"", "empty"),
+        ("notes.txt", b" \n\t", "whitespace"),
+        (
+            "large.txt",
+            b"x" * (web_app.USER_TEXT_FILE_MAX_BYTES + 1),
+            "too large",
+        ),
+    ],
+    ids=["unsupported", "invalid-utf8", "empty", "whitespace", "oversized"],
+)
+def test_text_file_upload_rejects_invalid_input(filename, payload, message):
+    app = create_app()
+    with TestClient(app) as client:
+        user = _create_user(client, f"Bad {filename} {len(payload)}")
+        session = _create_session(client, user["id"], "Text")
+        response = client.post(
+            f"/api/users/{user['id']}/sessions/{session['id']}/text-file",
+            files={"file": (filename, payload, "text/plain")},
+        )
+        assert response.status_code == 400
+        assert message.lower() in response.json()["detail"].lower()
+        assert (user["id"], session["id"]) not in app.state.runtime.user_text_files
+
+
+def test_text_file_is_session_scoped_reconnects_as_metadata_and_detaches():
+    app = create_app()
+    runtime = app.state.runtime
+    with TestClient(app) as client:
+        user = _create_user(client, "Scoped text")
+        session = _create_session(client, user["id"], "Work")
+        other = _create_session(client, user["id"], "Other")
+        key = (user["id"], session["id"])
+        response = client.post(
+            f"/api/users/{user['id']}/sessions/{session['id']}/text-file",
+            files={"file": ("context.md", "секрет".encode("utf-8"), "text/markdown")},
+        )
+        metadata = response.json()["user_text_files"]
+
+        with client.websocket_connect(
+            f"/ws?user_id={user['id']}&session_id={session['id']}"
+        ) as websocket:
+            websocket.receive_json()
+            snapshot = websocket.receive_json()
+            assert snapshot["user_text_files"] == metadata
+            assert "content" not in snapshot["user_text_files"][0]
+        with client.websocket_connect(
+            f"/ws?user_id={user['id']}&session_id={other['id']}"
+        ) as websocket:
+            websocket.receive_json()
+            assert websocket.receive_json()["user_text_files"] == []
+
+        response = client.delete(
+            f"/api/users/{user['id']}/sessions/{session['id']}/text-file"
+        )
+        assert response.status_code == 200
+        assert key not in runtime.user_text_files
+        adk_session = runtime.session_service.sessions[APP_NAME][user["id"]][session["id"]]
+        assert adk_session.state[web_app.USER_TEXT_FILES_STATE_KEY] == []
+
+
+def test_text_file_controls_are_present_without_replacing_dataset_link_ui():
+    root = web_app.WEB_DIR
+    html = (root / "templates" / "index.html").read_text(encoding="utf-8")
+    chat_js = (root / "static" / "js" / "chat.js").read_text(encoding="utf-8")
+    assert "Dataset link (.zip)" in html
+    assert 'accept=".txt,.md,text/plain,text/markdown"' in html
+    assert "uploadUserTextFile" in chat_js
+    assert "removeUserTextFile" in chat_js
+
+
+def test_text_file_survives_session_export_and_import(monkeypatch):
+    bundle = importlib.import_module("CoScientist.web.session_bundle")
+    monkeypatch.setattr(bundle, "_restore_graph_files", lambda *args: None)
+    monkeypatch.setattr(bundle, "_restore_mcp_builds", lambda *args: None)
+    app = create_app()
+    runtime = app.state.runtime
+    with TestClient(app) as client:
+        user = _create_user(client, "Bundle source")
+        session = _create_session(client, user["id"], "Portable text")
+        client.post(
+            f"/api/users/{user['id']}/sessions/{session['id']}/text-file",
+            files={"file": ("portable.md", b"# Portable", "text/markdown")},
+        )
+        exported = client.post(
+            f"/api/users/{user['id']}/sessions/{session['id']}/export"
+        )
+        assert exported.status_code == 200
+
+        imported = client.post(
+            f"/api/users/{user['id']}/import-session",
+            content=exported.content,
+            headers={"Content-Type": "application/zip"},
+        )
+        assert imported.status_code == 201
+        imported_user = imported.json()["user"]
+        imported_session = imported.json()["session"]
+        key = (imported_user["id"], imported_session["id"])
+        assert runtime.user_text_files[key][0]["filename"] == "portable.md"
+        assert runtime.user_text_files[key][0]["content"] == "# Portable"
+        adk_session = runtime.session_service.sessions[APP_NAME][key[0]][key[1]]
+        assert adk_session.state[web_app.USER_TEXT_FILES_STATE_KEY][0]["content"] == "# Portable"
 
 
 def test_report_language_is_validated_stored_and_broadcast_per_session():

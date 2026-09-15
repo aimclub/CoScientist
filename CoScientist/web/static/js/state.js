@@ -11,6 +11,7 @@ let runStatusVersion = -1;
 let knownUsers = [];
 let knownSessions = [];
 let datasetUrl = '';
+let userTextFiles = [];
 let reportLanguage = '';
 let activeSandboxWatchUrl = null;
 

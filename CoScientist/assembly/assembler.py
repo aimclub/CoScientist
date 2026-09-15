@@ -160,6 +160,11 @@ def _callback_kwargs(cfg: AgentConfig, ctx: PromptContext) -> dict:
 
 def _render_instruction(cfg: AgentConfig, ctx: PromptContext) -> str:
     instruction = REGISTRY.prompt(cfg.prompt)(ctx)
+    # User text files are common session context.  Opting an agent into the
+    # shared injector also opts its instruction into the one optional block,
+    # avoiding a duplicate placeholder in every prompt template.
+    if "inject_user_files_context" in cfg.callbacks.before_agent:
+        instruction = f"{instruction}\n\n{{user_files_context?}}"
     leftover = _PLACEHOLDER_RE.findall(instruction)
     if leftover:
         raise ValueError(

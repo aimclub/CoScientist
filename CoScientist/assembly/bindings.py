@@ -894,6 +894,11 @@ def _inject_dataset_context():
     return inject_dataset_context
 
 
+def _inject_user_files_context():
+    from CoScientist.agents.callbacks import inject_user_files_context
+    return inject_user_files_context
+
+
 def _inject_report_language():
     from CoScientist.agents.callbacks import inject_report_language
     return inject_report_language
@@ -1043,6 +1048,8 @@ _cb("inject_research_context", "before_agent", factory=_inject_research_context)
 # Tell the agent about the dataset archive the user attached in the web UI; it
 # decides itself which calls need the link.
 _cb("inject_dataset_context", "before_agent", factory=lambda ctx: _inject_dataset_context())
+# Render locally uploaded .txt/.md content before user_links scans all context.
+_cb("inject_user_files_context", "before_agent", factory=lambda ctx: _inject_user_files_context())
 # Report language the user picked for this session: inject the whole block
 # (headings, substitution rule, glossary), not a bare language name.
 _cb("inject_report_language", "before_agent", factory=lambda ctx: _inject_report_language())

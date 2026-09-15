@@ -195,6 +195,7 @@
       clearChat();
       // Drop the previous session's attachment; the snapshot brings the new one.
       applyDatasetUrl('');
+      applyUserTextFiles([]);
       applyReportLanguage('');
       connect();
     }
@@ -284,6 +285,7 @@
 
       // The attachment belongs to the session the snapshot describes.
       applyDatasetUrl(snapshot.dataset_url);
+      applyUserTextFiles(snapshot.user_text_files);
       // A session that already has a language keeps it. A fresh one adopts the
       // interface language AND records it, so flipping the interface toggle
       // later does not silently rewrite a report language already in use.

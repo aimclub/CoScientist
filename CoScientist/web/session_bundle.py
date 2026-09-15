@@ -15,6 +15,7 @@ Bundle contents
     agent_events.json               — WebRuntime.agent_events log (chat + tool activity)
     metrics.json                    — WebRuntime.metrics (cost snapshot)
     dataset_url.json                — attached dataset URL
+    user_text_files.json            — attached .txt/.md prompt context
     report_language.json            — report language chosen for the session
     settings_snapshot.json          — settings at export time (read-only, informational)
     graphs/execution.json           — execution graph snapshot
@@ -41,6 +42,7 @@ from typing import Any, Dict, Optional
 from uuid import uuid4
 
 from CoScientist.agents.callbacks.report_language import REPORT_LANGUAGES
+from CoScientist.agents.callbacks.tool_callbacks import USER_TEXT_FILES_STATE_KEY
 
 logger = logging.getLogger("CoScientist.web.session_bundle")
 
@@ -53,6 +55,7 @@ _ADK_SESSION = "adk_session.json"
 _AGENT_EVENTS = "agent_events.json"
 _METRICS = "metrics.json"
 _DATASET_URL = "dataset_url.json"
+_USER_TEXT_FILES = "user_text_files.json"
 _REPORT_LANGUAGE = "report_language.json"
 _SETTINGS = "settings_snapshot.json"
 _GRAPH_EXECUTION = "graphs/execution.json"
@@ -120,6 +123,7 @@ async def export_session(
 
     # 5. Dataset URL
     dataset_url = runtime.dataset_urls.get(key, "")
+    user_text_files = runtime.user_text_files.get(key, [])
     report_language = runtime.report_languages.get(key, "")
 
     # 6. Settings snapshot
@@ -228,6 +232,9 @@ async def export_session(
         if metrics is not None:
             zf.writestr(_METRICS, _json_bytes(metrics))
         zf.writestr(_DATASET_URL, _json_bytes({"dataset_url": dataset_url}))
+        zf.writestr(_USER_TEXT_FILES, _json_bytes({
+            "user_text_files": user_text_files,
+        }))
         # No BUNDLE_VERSION bump: an older bundle without this member reads
         # back as {}, and older code ignores a zip entry it does not know.
         zf.writestr(_REPORT_LANGUAGE, _json_bytes({"report_language": report_language}))
@@ -299,7 +306,7 @@ async def import_session(
     Creates a *new* session (new session_id) under ``target_user_id``.
     Returns ``{"user": {...}, "session": {...}}`` on success.
     """
-    from CoScientist.web.app import APP_NAME
+    from CoScientist.web.app import APP_NAME, _validated_user_text_file
     from CoScientist.graph.session_scope import (
         GRAPH_SCOPE_SESSION_KEY,
         GRAPH_SCOPE_USER_KEY,
@@ -330,6 +337,7 @@ async def import_session(
     agent_events = _read_json(_AGENT_EVENTS) or []
     metrics = _read_json(_METRICS)
     dataset_url_data = _read_json(_DATASET_URL) or {}
+    user_text_files_data = _read_json(_USER_TEXT_FILES) or {}
     report_language_data = _read_json(_REPORT_LANGUAGE) or {}
     research_graph_data = _read_json(_GRAPH_RESEARCH)
     execution_graph_data = _read_json(_GRAPH_EXECUTION)
@@ -350,10 +358,26 @@ async def import_session(
     # Merge saved state (active_tasks, report_config, …)
     if adk_session_data and isinstance(adk_session_data.get("state"), dict):
         saved_state = dict(adk_session_data["state"])
+        # This field is user-controlled bundle content.  Restore it only after
+        # applying the same filename/size/UTF-8 checks as the upload endpoint.
+        saved_state.pop(USER_TEXT_FILES_STATE_KEY, None)
         # Override scope keys to match the new user/session
         saved_state[GRAPH_SCOPE_USER_KEY] = user_id
         saved_state[GRAPH_SCOPE_SESSION_KEY] = session_id
         initial_state.update(saved_state)
+
+    restored_user_text_files = []
+    raw_user_text_files = user_text_files_data.get("user_text_files") or []
+    if isinstance(raw_user_text_files, list) and raw_user_text_files:
+        item = raw_user_text_files[0]
+        if isinstance(item, dict) and isinstance(item.get("content"), str):
+            try:
+                restored_user_text_files = [_validated_user_text_file(
+                    item.get("filename"), item["content"].encode("utf-8")
+                )]
+            except (ValueError, UnicodeError) as exc:
+                logger.warning("Ignoring invalid bundled text attachment: %s", exc)
+    initial_state[USER_TEXT_FILES_STATE_KEY] = restored_user_text_files
 
     adk_session = await runtime.session_service.create_session(
         app_name=APP_NAME,
@@ -396,6 +420,8 @@ async def import_session(
     dataset_url = dataset_url_data.get("dataset_url", "")
     if dataset_url:
         runtime.dataset_urls[key] = dataset_url
+    if restored_user_text_files:
+        runtime.user_text_files[key] = restored_user_text_files
     report_language = report_language_data.get("report_language", "")
     # A bundle is a file the user can edit, so it does not get to bypass the
     # enum the socket enforces. An unknown value leaves the session with no

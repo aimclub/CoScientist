@@ -158,6 +158,16 @@ def test_no_unfilled_placeholders(config, system):
         assert "<<" not in instruction, f"{name}: unfilled placeholder in prompt"
 
 
+def test_user_text_context_is_shared_and_injected_before_link_registry(config, system):
+    for name, cfg in config.agents.items():
+        callbacks = cfg.callbacks.before_agent
+        if "user_links" not in callbacks:
+            continue
+        assert "inject_user_files_context" in callbacks
+        assert callbacks.index("inject_user_files_context") < callbacks.index("user_links")
+        assert "{user_files_context?}" in system.agent(name).instruction
+
+
 def test_pipeline_state_injections_are_optional(config, system):
     """ADK {state_key} injections that depend on an upstream agent having called
     a tool must use the optional `{key?}` form, or a degenerate run (empty web
