@@ -14,10 +14,10 @@ from fastapi import FastAPI
 from google.adk.a2a.executor.a2a_agent_executor import A2aAgentExecutor
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.artifacts import InMemoryArtifactService
-from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 
 from CoScientist.assembly.schema import AgentConfig
+from CoScientist.checkpoints.runner import CheckpointRunner as Runner
 
 
 # Substrings that mark a settings key as sensitive; matched case-insensitively.

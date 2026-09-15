@@ -55,6 +55,23 @@ upgrading. An unconfigured deployment will receive a closed control API, not an
 anonymous compatibility fallback. This change does not automatically modify
 any deployment secrets.
 
+## Restore during execution
+
+Restore returns **409** while any checkpoint-enabled Runner in this process
+is executing, even on a different A2A port. There is no maximum busy age:
+an invocation running for hours is still active. Restore imports shared
+process stores, so a timeout cannot safely establish that they are idle.
+
+Both the A2A factory and the CLI/web manager use `CheckpointRunner`. Custom
+hosts installing `CheckpointPlugin` must also use this Runner. Each invocation
+holds its own guard until the underlying ADK iterator has closed, including
+cleanup after completion, failure, cancellation or early stream closure.
+This also covers ADK error paths that skip `after_run_callback`. Finishing one
+invocation does not release another invocation's guard. Stream consumers must
+close an unfinished iterator (for example with `contextlib.aclosing`). A stuck
+invocation remains busy until it actually terminates; elapsed time is not a
+recovery mechanism.
+
 ## Notification delivery
 
 After a bundle is saved locally, capture enqueues the existing snapshot-ready
@@ -77,13 +94,15 @@ OTel export remains independently handled by `BatchSpanProcessor`.
 
 ```sh
 LLM__MAIN_MODEL=test-model uv run --frozen pytest \
-  tests/test_checkpoint_auth.py tests/test_snapshot_notifications.py \
+  tests/test_checkpoint_auth.py tests/test_checkpoint_busy.py \
+  tests/test_snapshot_notifications.py \
   tests/test_synapse_bridge.py tests/test_synapse_otel.py \
   tests/test_synapse_trace_context.py tests/test_synapse_remote_context.py \
   tests/test_synapse_a2a_boundary.py tests/test_synapse_native_a2a.py \
   tests/test_synapse_remote_a2a.py -q
 LLM__MAIN_MODEL=test-model uv run --frozen python tests/e2e_synapse_v1.py
 LLM__MAIN_MODEL=test-model uv run --frozen python tests/e2e_checkpoint_control.py
+LLM__MAIN_MODEL=test-model uv run --frozen python tests/e2e_checkpoint_busy.py
 ```
 
 The HTTP scenario uses scripted ADK agents, not a model. Test credentials are
