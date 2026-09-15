@@ -45,7 +45,7 @@
       },
     }
   </script>
-  <link rel="stylesheet" href="/static/css/main.css">
+  <link rel="stylesheet" href="/static/css/main.css?v=text-file-drop-2">
 </head>
 
 <body class="bg-background text-on-surface overflow-hidden">
@@ -143,8 +143,16 @@
   <main id="main-content" class="ml-64 p-8 flex gap-8 h-[calc(100vh-72px)] overflow-hidden">
 
     <!-- Central Chat Area -->
-    <section
+    <section id="chat-drop-zone"
+      ondragenter="onUserTextFileDragEnter(event)" ondragover="onUserTextFileDragOver(event)"
+      ondragleave="onUserTextFileDragLeave(event)" ondrop="onUserTextFileDrop(event)"
       class="flex-1 min-w-0 flex flex-col bg-surface-container-low rounded-xl relative border border-outline-variant/10 shadow-inner">
+      <div class="text-file-drop-overlay" aria-hidden="true">
+        <div class="rounded-xl bg-surface-container border border-primary/30 px-6 py-4 text-center shadow-xl">
+          <p class="text-sm font-semibold text-primary">Отпустите файлы здесь</p>
+          <p class="mt-1 text-xs text-on-surface-variant">.txt и .md · до 5 файлов · суммарно до 256 KiB</p>
+        </div>
+      </div>
       <div class="p-4 border-b border-outline-variant/10 flex justify-between items-center bg-surface-container-low/50">
         <div class="flex items-center gap-3">
           <span id="live-dot" class="w-2 h-2 bg-outline-variant/60 rounded-full"></span>
@@ -329,6 +337,7 @@
             <span class="material-symbols-outlined text-sm">send</span>
           </button>
         </form>
+        <p class="mt-2 text-[10px] text-outline-variant font-mono">Перетащите .txt/.md сюда</p>
       </div>
     </section>
 
@@ -3989,7 +3998,7 @@
   <script src="/static/js/state.js"></script>
   <script src="/static/js/i18n.js"></script>
   <script src="/static/js/activity_rail.js"></script>
-  <script src="/static/js/chat.js?v=multi-text-messages-3"></script>
+  <script src="/static/js/chat.js?v=text-file-drop-2"></script>
   <script src="/static/js/hitl.js"></script>
   <script src="/static/js/telemetry.js"></script>
   <script src="/static/js/sessions.js"></script>

@@ -600,7 +600,25 @@ def test_text_file_controls_are_present_without_replacing_dataset_link_ui():
     assert "userTextFiles.forEach" in chat_js
     assert 'type="file" multiple' in html
     assert 'onchange="uploadUserTextFiles(this.files)"' in html
-    assert '/static/js/chat.js?v=multi-text-messages-3' in html
+    assert '/static/js/chat.js?v=text-file-drop-2' in html
+    assert 'Перетащите .txt/.md сюда' in html
+    assert 'Отпустите файлы здесь' in html
+    assert '.txt и .md · до 5 файлов · суммарно до 256 KiB' in html
+    zone = html.split('<section id="chat-drop-zone"', 1)[1].split('</section>', 1)[0]
+    assert 'id="chat-feed"' in zone
+    assert 'id="chat-form"' in zone
+    assert '<aside' not in zone
+    assert 'class="text-file-drop-overlay"' in zone
+    css = (root / "static" / "css" / "main.css").read_text(encoding="utf-8")
+    assert '#chat-drop-zone.text-file-drop-active > .text-file-drop-overlay' in css
+    assert 'pointer-events: none;' in css
+    for event, handler in [
+        ('dragenter', 'onUserTextFileDragEnter'), ('dragover', 'onUserTextFileDragOver'),
+        ('dragleave', 'onUserTextFileDragLeave'), ('drop', 'onUserTextFileDrop'),
+    ]:
+        binding = f'on{event}="{handler}(event)"'
+        assert binding in zone.split('>', 1)[0]
+        assert html.count(binding) == 1
 
 
 def test_text_file_javascript_render_delete_and_sequential_picker():
@@ -623,6 +641,7 @@ const messages = [], calls = [];
 const addSystemMsg = text => messages.push(text);
 const addTelemetry = () => {};
 class FormData { append(key, file) { this.file = file; } }
+class File { constructor(name) { this.name = name; } }
 let stored = [
   {filename: 'b.md', size: 10},
   {filename: 'третий файл.txt', size: 20},
@@ -640,6 +659,7 @@ async function apiJson(url, options) {
     stored = stored.filter(item => item.filename !== filename);
   } else {
     if (options.body.file.name === 'bad.txt') throw new Error('Text file must be valid UTF-8.');
+    if (options.body.file.name.endsWith('.csv')) throw new Error('Only .txt and .md text files are supported.');
     stored.push({filename: options.body.file.name, size: 1});
   }
   return {user_text_files: stored.slice()};
@@ -668,6 +688,91 @@ async function apiJson(url, options) {
     'Не удалось прикрепить bad.txt: файл должен быть корректным UTF-8.',
     'Файл прикреплён: last.md',
   ]);
+  // Drag/drop calls the very same batch entry point as the unchanged picker.
+  const pickerPipeline = uploadUserTextFiles;
+  const batches = [];
+  uploadUserTextFiles = async files => {
+    batches.push(Array.from(files).map(f => f.name));
+    await pickerPipeline(files);
+  };
+  const classes = new Set();
+  const child = {};
+  const centralZone = {
+    classList: {add: c => classes.add(c), remove: c => classes.delete(c)},
+    contains: node => node === child,
+  };
+  function drag(files = [], types = ['Files'], excluded = false) {
+    return {
+      target: {closest: () => excluded}, currentTarget: centralZone,
+      dataTransfer: {types, files}, prevented: false,
+      preventDefault() { this.prevented = true; }
+    };
+  }
+  const over = drag();
+  const messagesBeforeDrag = messages.slice();
+  onUserTextFileDragEnter(over);
+  onUserTextFileDragOver(over);
+  assert.ok(over.prevented);
+  assert.equal(over.dataTransfer.dropEffect, 'copy');
+  assert.ok(classes.has('text-file-drop-active'));
+  onUserTextFileDragEnter(over); // moving from feed into a nested element
+  onUserTextFileDragLeave(over);
+  assert.ok(classes.has('text-file-drop-active'));
+  onUserTextFileDragLeave(over);
+  assert.equal(classes.size, 0);
+  onUserTextFileDragEnter(over);
+  onUserTextFileDragLeave({...over, relatedTarget: child}); // leave-before-enter order
+  assert.ok(classes.has('text-file-drop-active'));
+  onUserTextFileDragEnter(over);
+  onUserTextFileDragEnter(over);
+  onUserTextFileDragLeave({...over, relatedTarget: {}}); // outside central section
+  assert.equal(classes.size, 0);
+  assert.deepEqual(messages, messagesBeforeDrag, 'drag UI must not create chat messages');
+  const single = drag([new File('single.TXT')]);
+  onUserTextFileDragEnter(single);
+  await onUserTextFileDrop(single);
+  assert.ok(single.prevented);
+  assert.equal(classes.size, 0);
+  assert.deepEqual(batches.at(-1), ['single.TXT']);
+  assert.equal(messages.at(-1), 'Файл прикреплён: single.TXT');
+  const start = calls.length;
+  await onUserTextFileDrop(drag(['a.txt', 'invalid.csv', 'b.md'].map(n => new File(n))));
+  assert.deepEqual(calls.slice(start).map(c => c.name), ['a.txt', 'invalid.csv', 'b.md']);
+  assert.deepEqual(messages.slice(-3), [
+    'Файл прикреплён: a.txt',
+    'Не удалось прикрепить invalid.csv: поддерживаются только файлы .txt и .md.',
+    'Файл прикреплён: b.md',
+  ]);
+  const batchCount = batches.length;
+  for (const types of [['text/plain'], ['text/uri-list']]) {
+    const text = drag([], types);
+    onUserTextFileDragEnter(text);
+    assert.equal(classes.size, 0);
+    onUserTextFileDragOver(text);
+    assert.equal(classes.size, 0);
+    await onUserTextFileDrop(text);
+    assert.equal(text.prevented, false);
+    assert.equal(classes.size, 0);
+  }
+  const dataset = drag([new File('dataset.zip')], ['Files'], true);
+  onUserTextFileDragOver(dataset);
+  await onUserTextFileDrop(dataset);
+  assert.equal(dataset.prevented, false);
+  assert.equal(batches.length, batchCount);
+  const directory = drag([new File('folder.txt'), new File('missing.txt'), new File('real.md'), {}]);
+  directory.dataTransfer.items = [
+    {kind: 'file', webkitGetAsEntry: () => ({isDirectory: true})},
+    {kind: 'file', getAsFile: () => null},
+    {kind: 'file', getAsFile: () => directory.dataTransfer.files[2]},
+  ];
+  await onUserTextFileDrop(directory);
+  assert.ok(directory.prevented);
+  assert.deepEqual(batches.at(-1), ['real.md']);
+  await uploadUserTextFiles([new File('picker-after-drop.md')]);
+  assert.equal(messages.at(-1), 'Файл прикреплён: picker-after-drop.md');
+  assert.equal(input.value, '');
+  uploadUserTextFiles = pickerPipeline;
+  applyUserTextFiles(['b.md', 'a.txt', 'first.txt', 'last.md'].map(filename => ({filename, size: 1})));
   const errors = [
     ['Combined text files are too large (maximum 256 KiB).', 'общий размер текстовых файлов превышает 256 KiB.'],
     ['A session can have at most 5 text files.', 'к сессии можно прикрепить не более 5 текстовых файлов.'],

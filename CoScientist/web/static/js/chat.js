@@ -380,6 +380,61 @@
       document.getElementById('user-text-file-input').click();
     }
 
+    let textFileDragDepth = 0;
+
+    function isUserTextFileDrag(event) {
+      // The central chat section owns this drop zone; dataset controls are excluded.
+      return !event.target.closest('#attach-menu, #dataset-upload-widget') &&
+        Array.from(event.dataTransfer?.types || []).includes('Files');
+    }
+
+    function onUserTextFileDragOver(event) {
+      if (!isUserTextFileDrag(event)) return;
+      event.preventDefault();
+      event.dataTransfer.dropEffect = 'copy';
+      event.currentTarget.classList.add('text-file-drop-active');
+    }
+
+    function onUserTextFileDragEnter(event) {
+      // Count every file entry, including excluded children, to balance leaves.
+      if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
+      textFileDragDepth += 1;
+      onUserTextFileDragOver(event);
+    }
+
+    function onUserTextFileDragLeave(event) {
+      textFileDragDepth = Math.max(0, textFileDragDepth - 1);
+      // relatedTarget handles child transitions even when leave arrives first.
+      // The counter also covers browsers that omit relatedTarget for file drags.
+      if (event.relatedTarget) {
+        if (event.currentTarget.contains(event.relatedTarget)) return;
+        textFileDragDepth = 0;
+      }
+      if (!textFileDragDepth) event.currentTarget.classList.remove('text-file-drop-active');
+    }
+
+    async function onUserTextFileDrop(event) {
+      textFileDragDepth = 0;
+      event.currentTarget.classList.remove('text-file-drop-active');
+      if (!isUserTextFileDrag(event)) return;
+      event.preventDefault();
+      // Inspect entries only to skip directories, never traverse their contents.
+      // Keep FileList order and leave all file validation to the shared pipeline.
+      const items = Array.from(event.dataTransfer.items || []).filter(item => item.kind === 'file');
+      const files = Array.from(event.dataTransfer.files || []).filter((file, index) => {
+        if (!(file instanceof File) || !file.name) return false;
+        const item = items[index];
+        if (!item) return true;
+        try {
+          if (item.webkitGetAsEntry?.()?.isDirectory) return false;
+          return !!item.getAsFile();
+        } catch (_) {
+          return false;
+        }
+      });
+      await uploadUserTextFiles(files);
+    }
+
     async function uploadUserTextFiles(fileList) {
       // Copy the live FileList before resetting the picker or awaiting I/O.
       const files = Array.from(fileList || []);
