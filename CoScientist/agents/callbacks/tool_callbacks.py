@@ -443,11 +443,7 @@ USER_FILES_CONTEXT_STATE_KEY = "user_files_context"
 
 
 def inject_user_files_context(callback_context: CallbackContext):
-    """before_agent: render the session's user-attached text file.
-
-    The web layer currently keeps at most one record, represented as a list so
-    the state shape can grow later without changing the prompt contract.
-    """
+    """before_agent: render the session's ordered user-attached text files."""
     files = callback_context.state.get(USER_TEXT_FILES_STATE_KEY) or []
     blocks = []
     for item in files if isinstance(files, list) else []:
@@ -456,7 +452,11 @@ def inject_user_files_context(callback_context: CallbackContext):
         filename = str(item.get("filename") or "").strip()
         content = item.get("content")
         if filename and isinstance(content, str) and content.strip():
-            blocks.append(f"### {filename}\n{content}")
+            blocks.append(
+                f"--- BEGIN FILE: {filename} ---\n"
+                f"{content}\n"
+                f"--- END FILE: {filename} ---"
+            )
     callback_context.state[USER_FILES_CONTEXT_STATE_KEY] = (
         "## User-attached text files\n\n" + "\n\n".join(blocks)
     ) if blocks else ""

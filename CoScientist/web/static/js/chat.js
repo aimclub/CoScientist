@@ -380,33 +380,55 @@
       document.getElementById('user-text-file-input').click();
     }
 
-    async function uploadUserTextFile(file) {
-      const input = document.getElementById('user-text-file-input');
+    async function uploadUserTextFiles(fileList) {
+      // Copy the live FileList before resetting the picker or awaiting I/O.
+      const files = Array.from(fileList || []);
+      document.getElementById('user-text-file-input').value = '';
+      if (!files.length) return;
+      try {
+        const endpoint = sessionApi('/text-file');
+        for (const file of files) await uploadUserTextFile(file, endpoint);
+      } catch (error) {
+        addSystemMsg('Could not upload text files: ' + error.message);
+      }
+    }
+
+    function isCurrentTextFileSession(endpoint) {
+      return activeUser && activeSession && sessionApi('/text-file') === endpoint;
+    }
+
+    async function uploadUserTextFile(file, endpoint) {
       if (!file) return;
       try {
+        endpoint = endpoint || sessionApi('/text-file');
         const form = new FormData();
         form.append('file', file);
-        const data = await apiJson(sessionApi('/text-file'), {
-          method: 'POST', body: form
-        });
+        const data = await apiJson(endpoint, { method: 'POST', body: form });
+        if (!isCurrentTextFileSession(endpoint)) return;
         applyUserTextFiles(data.user_text_files);
         addSystemMsg('Text file attached: ' + file.name);
         addTelemetry('TEXT FILE :: attached');
       } catch (error) {
+        if (endpoint && !isCurrentTextFileSession(endpoint)) return;
         addSystemMsg('Text file rejected: ' + error.message);
         addTelemetry('TEXT FILE :: rejected');
-      } finally {
-        input.value = '';
       }
     }
 
-    async function removeUserTextFile() {
+    async function removeUserTextFile(index) {
+      const textFile = userTextFiles[index];
+      if (!textFile) return;
+      let endpoint;
       try {
-        const data = await apiJson(sessionApi('/text-file'), { method: 'DELETE' });
+        endpoint = sessionApi('/text-file');
+        const url = endpoint + '?filename=' + encodeURIComponent(textFile.filename);
+        const data = await apiJson(url, { method: 'DELETE' });
+        if (!isCurrentTextFileSession(endpoint)) return;
         applyUserTextFiles(data.user_text_files);
-        addSystemMsg('Text file detached.');
+        addSystemMsg('Text file detached: ' + textFile.filename);
         addTelemetry('TEXT FILE :: detached');
       } catch (error) {
+        if (endpoint && !isCurrentTextFileSession(endpoint)) return;
         addSystemMsg('Could not detach text file: ' + error.message);
       }
     }
@@ -425,8 +447,7 @@
             <span class="material-symbols-outlined text-sm">close</span>
           </button>
         </span>`);
-      const textFile = userTextFiles[0];
-      if (textFile) {
+      userTextFiles.forEach((textFile, index) => {
         const size = Number(textFile.size) || 0;
         const sizeLabel = size < 1024 ? `${size} B` : `${(size / 1024).toFixed(1)} KiB`;
         chips.push(`
@@ -435,12 +456,12 @@
           <span title="${escHtml(textFile.filename)}"
             class="font-mono text-[10px] text-on-surface-variant truncate max-w-[24rem]">${escHtml(textFile.filename)}</span>
           <span class="font-mono text-[9px] text-outline-variant">${sizeLabel}</span>
-          <button type="button" onclick="removeUserTextFile()" title="Detach text file"
+          <button type="button" onclick="removeUserTextFile(${index})" title="Detach text file"
             class="p-0.5 text-outline-variant hover:text-error transition-colors flex items-center">
             <span class="material-symbols-outlined text-sm">close</span>
           </button>
         </span>`);
-      }
+      });
       if (!chips.length) {
         row.innerHTML = '';
         row.classList.add('hidden');

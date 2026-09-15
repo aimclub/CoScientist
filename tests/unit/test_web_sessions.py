@@ -1,6 +1,10 @@
 import asyncio
+import io
 import importlib
 import json
+import zipfile
+import shutil
+import subprocess
 
 import pytest
 from fastapi.testclient import TestClient
@@ -471,6 +475,120 @@ def test_text_file_is_session_scoped_reconnects_as_metadata_and_detaches():
         assert adk_session.state[web_app.USER_TEXT_FILES_STATE_KEY] == []
 
 
+def test_text_files_append_in_order_snapshot_without_content_and_delete_one():
+    app = create_app()
+    runtime = app.state.runtime
+    with TestClient(app) as client:
+        user = _create_user(client, "Multiple text")
+        session = _create_session(client, user["id"], "Work")
+        endpoint = f"/api/users/{user['id']}/sessions/{session['id']}/text-file"
+        first = client.post(
+            endpoint, files={"file": ("a.txt", b"first", "text/plain")}
+        )
+        second = client.post(
+            endpoint, files={"file": ("b.md", b"second", "text/markdown")}
+        )
+        assert first.status_code == second.status_code == 201
+        expected = [
+            {"filename": "a.txt", "size": 5},
+            {"filename": "b.md", "size": 6},
+        ]
+        assert second.json()["user_text_files"] == expected
+        key = (user["id"], session["id"])
+        assert [item["content"] for item in runtime.user_text_files[key]] == [
+            "first", "second"
+        ]
+
+        with client.websocket_connect(
+            f"/ws?user_id={user['id']}&session_id={session['id']}"
+        ) as websocket:
+            websocket.receive_json()
+            snapshot = websocket.receive_json()
+            assert snapshot["user_text_files"] == expected
+            assert all("content" not in item for item in snapshot["user_text_files"])
+
+        removed = client.delete(endpoint, params={"filename": "A.TXT"})
+        assert removed.status_code == 200
+        assert removed.json()["user_text_files"] == [expected[1]]
+        assert [item["filename"] for item in runtime.user_text_files[key]] == ["b.md"]
+        adk_session = runtime.session_service.sessions[APP_NAME][key[0]][key[1]]
+        assert [item["filename"] for item in adk_session.state[
+            web_app.USER_TEXT_FILES_STATE_KEY
+        ]] == ["b.md"]
+
+
+def test_text_file_duplicate_count_and_aggregate_rejections_preserve_state():
+    app = create_app()
+    runtime = app.state.runtime
+    with TestClient(app) as client:
+        user = _create_user(client, "Text limits")
+        session = _create_session(client, user["id"], "Limits")
+        endpoint = f"/api/users/{user['id']}/sessions/{session['id']}/text-file"
+        key = (user["id"], session["id"])
+
+        assert client.post(
+            endpoint, files={"file": ("Example.md", b"ok", "text/markdown")}
+        ).status_code == 201
+        before = list(runtime.user_text_files[key])
+        duplicate = client.post(
+            endpoint, files={"file": ("EXAMPLE.MD", b"other", "text/markdown")}
+        )
+        assert duplicate.status_code == 400
+        assert "already attached" in duplicate.json()["detail"]
+        assert runtime.user_text_files[key] == before
+
+        for index in range(2, 6):
+            assert client.post(
+                endpoint,
+                files={"file": (f"file{index}.txt", b"x", "text/plain")},
+            ).status_code == 201
+        before = list(runtime.user_text_files[key])
+        sixth = client.post(
+            endpoint, files={"file": ("sixth.txt", b"x", "text/plain")}
+        )
+        assert sixth.status_code == 400
+        assert "at most 5" in sixth.json()["detail"]
+        assert runtime.user_text_files[key] == before
+
+        other = _create_session(client, user["id"], "Aggregate")
+        aggregate_endpoint = (
+            f"/api/users/{user['id']}/sessions/{other['id']}/text-file"
+        )
+        assert client.post(
+            aggregate_endpoint,
+            files={"file": ("large.txt", b"x" * (200 * 1024), "text/plain")},
+        ).status_code == 201
+        aggregate_key = (user["id"], other["id"])
+        before = list(runtime.user_text_files[aggregate_key])
+        aggregate = client.post(
+            aggregate_endpoint,
+            files={"file": ("more.md", b"y" * (57 * 1024), "text/markdown")},
+        )
+        assert aggregate.status_code == 400
+        assert "combined" in aggregate.json()["detail"].lower()
+        assert runtime.user_text_files[aggregate_key] == before
+
+
+def test_invalid_utf8_does_not_damage_existing_text_files():
+    app = create_app()
+    runtime = app.state.runtime
+    with TestClient(app) as client:
+        user = _create_user(client, "Atomic text")
+        session = _create_session(client, user["id"], "Atomic")
+        endpoint = f"/api/users/{user['id']}/sessions/{session['id']}/text-file"
+        client.post(endpoint, files={"file": ("good.txt", b"good", "text/plain")})
+        key = (user["id"], session["id"])
+        before = list(runtime.user_text_files[key])
+
+        rejected = client.post(
+            endpoint, files={"file": ("bad.md", b"\xff\xfe", "text/markdown")}
+        )
+        assert rejected.status_code == 400
+        assert runtime.user_text_files[key] == before
+        adk_session = runtime.session_service.sessions[APP_NAME][key[0]][key[1]]
+        assert adk_session.state[web_app.USER_TEXT_FILES_STATE_KEY] == before
+
+
 def test_text_file_controls_are_present_without_replacing_dataset_link_ui():
     root = web_app.WEB_DIR
     html = (root / "templates" / "index.html").read_text(encoding="utf-8")
@@ -479,9 +597,102 @@ def test_text_file_controls_are_present_without_replacing_dataset_link_ui():
     assert 'accept=".txt,.md,text/plain,text/markdown"' in html
     assert "uploadUserTextFile" in chat_js
     assert "removeUserTextFile" in chat_js
+    assert "userTextFiles.forEach" in chat_js
+    assert 'type="file" multiple' in html
+    assert 'onchange="uploadUserTextFiles(this.files)"' in html
+    assert '/static/js/chat.js?v=multi-text-picker-2' in html
 
 
-def test_text_file_survives_session_export_and_import(monkeypatch):
+def test_text_file_javascript_render_delete_and_sequential_picker():
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("Node.js is required to execute frontend regression checks")
+    source = (web_app.WEB_DIR / "static/js/chat.js").read_text(encoding="utf-8")
+    # Execute the production attachment functions with a small DOM/API fixture.
+    source = source.split("    function applyUserTextFiles", 1)[1]
+    source = "function applyUserTextFiles" + source.split("    function clearChat", 1)[0]
+    script = r'''
+const assert = require('node:assert/strict');
+let userTextFiles = [], datasetUrl = '', activeUser = {}, activeSession = {};
+const row = {innerHTML: '', classList: {add() {}, remove() {}}};
+const input = {value: 'selected'};
+const document = {getElementById: id => id === 'attachment-chips' ? row : input};
+const escHtml = text => String(text);
+const sessionApi = path => '/api/users/u/sessions/s' + path;
+const messages = [], calls = [];
+const addSystemMsg = text => messages.push(text);
+const addTelemetry = () => {};
+class FormData { append(key, file) { this.file = file; } }
+let stored = [
+  {filename: 'b.md', size: 10},
+  {filename: 'третий файл.txt', size: 20},
+  {filename: 'a.txt', size: 30}
+];
+let inFlight = false;
+async function apiJson(url, options) {
+  assert.equal(inFlight, false, 'uploads must be sequential');
+  inFlight = true;
+  await Promise.resolve();
+  inFlight = false;
+  calls.push({url, method: options.method, name: options.body?.file.name});
+  if (options.method === 'DELETE') {
+    const filename = new URL(url, 'http://localhost').searchParams.get('filename');
+    stored = stored.filter(item => item.filename !== filename);
+  } else {
+    if (options.body.file.name === 'bad.txt') throw new Error('Text file must be valid UTF-8.');
+    stored.push({filename: options.body.file.name, size: 1});
+  }
+  return {user_text_files: stored.slice()};
+}
+''' + source + r'''
+(async () => {
+  applyUserTextFiles(stored.slice());
+  assert.equal((row.innerHTML.match(/title="Detach text file"/g) || []).length, 3);
+  assert.ok(row.innerHTML.indexOf('b.md') < row.innerHTML.indexOf('третий файл.txt'));
+  assert.ok(row.innerHTML.indexOf('третий файл.txt') < row.innerHTML.indexOf('a.txt'));
+  assert.ok(row.innerHTML.includes('removeUserTextFile(1)'));
+  await removeUserTextFile(1);
+  assert.equal(calls[0].url, sessionApi('/text-file') + '?filename=' + encodeURIComponent('третий файл.txt'));
+  assert.deepEqual(userTextFiles.map(f => f.filename), ['b.md', 'a.txt']);
+  applyUserTextFiles([]);
+  applyUserTextFiles(stored.slice()); // reconnect applies snapshot metadata
+  assert.equal((row.innerHTML.match(/title="Detach text file"/g) || []).length, 2);
+  assert.ok(!row.innerHTML.includes('третий файл.txt'));
+  await uploadUserTextFiles([{name: 'first.txt'}, {name: 'bad.txt'}, {name: 'last.md'}]);
+  assert.deepEqual(calls.slice(1).map(c => c.name), ['first.txt', 'bad.txt', 'last.md']);
+  assert.deepEqual(userTextFiles.map(f => f.filename), ['b.md', 'a.txt', 'first.txt', 'last.md']);
+  assert.equal(input.value, '');
+  assert.ok(messages.some(text => text.includes('Text file must be valid UTF-8.')));
+})().catch(error => { console.error(error); process.exitCode = 1; });
+'''
+    result = subprocess.run(
+        [node, "-"], input=script, text=True, encoding="utf-8",
+        capture_output=True, timeout=15,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_cyrillic_text_file_delete_survives_reconnect():
+    app = create_app()
+    with TestClient(app) as client:
+        user = _create_user(client, "Picker regression")
+        session = _create_session(client, user["id"], "Files")
+        endpoint = f"/api/users/{user['id']}/sessions/{session['id']}/text-file"
+        names = ["b.md", "третий файл.txt", "a.txt"]
+        for name in names:
+            assert client.post(endpoint, files={"file": (name, b"body")}).status_code == 201
+        response = client.delete(endpoint, params={"filename": names[1]})
+        assert response.status_code == 200
+        expected = [{"filename": name, "size": 4} for name in (names[0], names[2])]
+        assert response.json()["user_text_files"] == expected
+        with client.websocket_connect(
+            f"/ws?user_id={user['id']}&session_id={session['id']}"
+        ) as websocket:
+            websocket.receive_json()
+            assert websocket.receive_json()["user_text_files"] == expected
+
+
+def test_multiple_text_files_survive_session_export_and_import(monkeypatch):
     bundle = importlib.import_module("CoScientist.web.session_bundle")
     monkeypatch.setattr(bundle, "_restore_graph_files", lambda *args: None)
     monkeypatch.setattr(bundle, "_restore_mcp_builds", lambda *args: None)
@@ -493,6 +704,10 @@ def test_text_file_survives_session_export_and_import(monkeypatch):
         client.post(
             f"/api/users/{user['id']}/sessions/{session['id']}/text-file",
             files={"file": ("portable.md", b"# Portable", "text/markdown")},
+        )
+        client.post(
+            f"/api/users/{user['id']}/sessions/{session['id']}/text-file",
+            files={"file": ("notes.txt", b"Notes", "text/plain")},
         )
         exported = client.post(
             f"/api/users/{user['id']}/sessions/{session['id']}/export"
@@ -508,10 +723,47 @@ def test_text_file_survives_session_export_and_import(monkeypatch):
         imported_user = imported.json()["user"]
         imported_session = imported.json()["session"]
         key = (imported_user["id"], imported_session["id"])
-        assert runtime.user_text_files[key][0]["filename"] == "portable.md"
-        assert runtime.user_text_files[key][0]["content"] == "# Portable"
+        assert [item["filename"] for item in runtime.user_text_files[key]] == [
+            "portable.md", "notes.txt"
+        ]
+        assert [item["content"] for item in runtime.user_text_files[key]] == [
+            "# Portable", "Notes"
+        ]
         adk_session = runtime.session_service.sessions[APP_NAME][key[0]][key[1]]
-        assert adk_session.state[web_app.USER_TEXT_FILES_STATE_KEY][0]["content"] == "# Portable"
+        assert [item["filename"] for item in adk_session.state[
+            web_app.USER_TEXT_FILES_STATE_KEY
+        ]] == ["portable.md", "notes.txt"]
+
+
+def test_old_bundle_without_user_text_files_still_imports(monkeypatch):
+    bundle = importlib.import_module("CoScientist.web.session_bundle")
+    monkeypatch.setattr(bundle, "_restore_graph_files", lambda *args: None)
+    monkeypatch.setattr(bundle, "_restore_mcp_builds", lambda *args: None)
+    app = create_app()
+    runtime = app.state.runtime
+    with TestClient(app) as client:
+        user = _create_user(client, "Old bundle source")
+        session = _create_session(client, user["id"], "Old bundle")
+        exported = client.post(
+            f"/api/users/{user['id']}/sessions/{session['id']}/export"
+        )
+        old_buf = io.BytesIO()
+        with zipfile.ZipFile(io.BytesIO(exported.content), "r") as source:
+            with zipfile.ZipFile(old_buf, "w", zipfile.ZIP_DEFLATED) as target:
+                for info in source.infolist():
+                    if info.filename != "user_text_files.json":
+                        target.writestr(info, source.read(info.filename))
+
+        imported = client.post(
+            f"/api/users/{user['id']}/import-session",
+            content=old_buf.getvalue(),
+            headers={"Content-Type": "application/zip"},
+        )
+        assert imported.status_code == 201
+        imported_user = imported.json()["user"]
+        imported_session = imported.json()["session"]
+        key = (imported_user["id"], imported_session["id"])
+        assert key not in runtime.user_text_files
 
 
 def test_report_language_is_validated_stored_and_broadcast_per_session():

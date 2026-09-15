@@ -304,9 +304,9 @@
                 Text file (.txt/.md)
               </button>
             </div>
-            <input id="user-text-file-input" type="file"
+            <input id="user-text-file-input" type="file" multiple
               accept=".txt,.md,text/plain,text/markdown" class="hidden"
-              onchange="uploadUserTextFile(this.files[0])">
+              onchange="uploadUserTextFiles(this.files)">
           </div>
           <!-- Report language for THIS session. Separate from the interface
                language toggle (lang-btn-en / lang-btn-ru) in the sidebar. -->
@@ -3989,7 +3989,7 @@
   <script src="/static/js/state.js"></script>
   <script src="/static/js/i18n.js"></script>
   <script src="/static/js/activity_rail.js"></script>
-  <script src="/static/js/chat.js"></script>
+  <script src="/static/js/chat.js?v=multi-text-picker-2"></script>
   <script src="/static/js/hitl.js"></script>
   <script src="/static/js/telemetry.js"></script>
   <script src="/static/js/sessions.js"></script>

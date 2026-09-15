@@ -86,6 +86,8 @@ TOOL_ACTIVITY_TRIM_SLACK = 200
 MAX_TOOL_FULL_VALUES = 300
 DATASET_URL_MAX_LENGTH = 2048
 USER_TEXT_FILE_MAX_BYTES = 256 * 1024
+USER_TEXT_FILES_MAX_BYTES = 256 * 1024
+USER_TEXT_FILES_MAX_COUNT = 5
 USER_TEXT_FILE_EXTENSIONS = (".txt", ".md")
 # Graph stores the Settings modal can wipe. The derived ``knowledge`` view is
 # absent on purpose: it is a projection of ``execution`` plus ``memory``.
@@ -139,6 +141,25 @@ def _user_text_file_metadata(files: Any) -> list[dict[str, Any]]:
         {"filename": item["filename"], "size": item["size"]}
         for item in files if isinstance(item, dict)
     ] if isinstance(files, list) else []
+
+
+def _validate_user_text_file_collection(
+    files: list[dict[str, Any]],
+) -> None:
+    """Validate count, aggregate size, and unambiguous filenames atomically."""
+    if len(files) > USER_TEXT_FILES_MAX_COUNT:
+        raise ValueError(
+            f"A session can have at most {USER_TEXT_FILES_MAX_COUNT} text files."
+        )
+    names = [str(item.get("filename") or "").casefold() for item in files]
+    if len(names) != len(set(names)):
+        raise ValueError("A text file with this filename is already attached.")
+    total_size = sum(int(item.get("size") or 0) for item in files)
+    if total_size > USER_TEXT_FILES_MAX_BYTES:
+        raise ValueError(
+            "Combined text files are too large "
+            f"(maximum {USER_TEXT_FILES_MAX_BYTES // 1024} KiB)."
+        )
 
 
 def _validated_report_language(raw: Any) -> str:
@@ -323,7 +344,7 @@ class WebRuntime:
         # here as well as in ADK state so a reconnecting tab and a session whose
         # manager has not been built yet both see the same link.
         self.dataset_urls: dict[SessionKey, str] = {}
-        # One small local .txt/.md attachment per session.  Content stays on the
+        # Small local .txt/.md attachments per session. Content stays on the
         # server; snapshots expose only metadata needed to render the chip.
         self.user_text_files: dict[SessionKey, list[dict[str, Any]]] = {}
         # Report language chosen for a session from the chat composer. Holds
@@ -1294,7 +1315,13 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         key = (user_id, session_id)
-        files = await runtime.apply_user_text_files(key, [record])
+        async with runtime.control_lock(key):
+            files = [*runtime.user_text_files.get(key, []), record]
+            try:
+                _validate_user_text_file_collection(files)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            files = await runtime.apply_user_text_files(key, files)
         metadata = _user_text_file_metadata(files)
         await runtime.send(key, {
             "type": "user_text_files",
@@ -1303,19 +1330,42 @@ def create_app() -> FastAPI:
         return JSONResponse({"user_text_files": metadata}, status_code=201)
 
     @app.delete("/api/users/{user_id}/sessions/{session_id}/text-file")
-    async def delete_user_text_file(user_id: str, session_id: str):
-        """Detach the session's local text attachment from runtime and ADK."""
+    async def delete_user_text_file(
+        user_id: str,
+        session_id: str,
+        filename: str = "",
+    ):
+        """Detach one local text attachment from runtime and ADK."""
         try:
             runtime.registry.require_session(user_id, session_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         key = (user_id, session_id)
-        await runtime.apply_user_text_files(key, [])
+        async with runtime.control_lock(key):
+            current = runtime.user_text_files.get(key, [])
+            # Preserve the original single-file DELETE contract for existing
+            # clients. Multiple attachments require the unambiguous filename.
+            target = filename or (
+                str(current[0].get("filename") or "") if len(current) == 1 else ""
+            )
+            if not target and current:
+                raise HTTPException(
+                    status_code=400,
+                    detail="filename is required when multiple text files are attached.",
+                )
+            remaining = [
+                item for item in current
+                if str(item.get("filename") or "").casefold() != target.casefold()
+            ]
+            if target and len(remaining) == len(current):
+                raise HTTPException(status_code=404, detail="Text file is not attached.")
+            await runtime.apply_user_text_files(key, remaining)
+        metadata = _user_text_file_metadata(remaining)
         await runtime.send(key, {
             "type": "user_text_files",
-            "user_text_files": [],
+            "user_text_files": metadata,
         })
-        return JSONResponse({"user_text_files": []})
+        return JSONResponse({"user_text_files": metadata})
 
     # --- Session export / import / save / restore ---
     @app.post("/api/users/{user_id}/sessions/{session_id}/export")

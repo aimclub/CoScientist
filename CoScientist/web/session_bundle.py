@@ -306,7 +306,11 @@ async def import_session(
     Creates a *new* session (new session_id) under ``target_user_id``.
     Returns ``{"user": {...}, "session": {...}}`` on success.
     """
-    from CoScientist.web.app import APP_NAME, _validated_user_text_file
+    from CoScientist.web.app import (
+        APP_NAME,
+        _validated_user_text_file,
+        _validate_user_text_file_collection,
+    )
     from CoScientist.graph.session_scope import (
         GRAPH_SCOPE_SESSION_KEY,
         GRAPH_SCOPE_USER_KEY,
@@ -369,14 +373,17 @@ async def import_session(
     restored_user_text_files = []
     raw_user_text_files = user_text_files_data.get("user_text_files") or []
     if isinstance(raw_user_text_files, list) and raw_user_text_files:
-        item = raw_user_text_files[0]
-        if isinstance(item, dict) and isinstance(item.get("content"), str):
-            try:
-                restored_user_text_files = [_validated_user_text_file(
+        try:
+            for item in raw_user_text_files:
+                if not isinstance(item, dict) or not isinstance(item.get("content"), str):
+                    raise ValueError("Malformed bundled text attachment.")
+                restored_user_text_files.append(_validated_user_text_file(
                     item.get("filename"), item["content"].encode("utf-8")
-                )]
-            except (ValueError, UnicodeError) as exc:
-                logger.warning("Ignoring invalid bundled text attachment: %s", exc)
+                ))
+            _validate_user_text_file_collection(restored_user_text_files)
+        except (ValueError, UnicodeError) as exc:
+            logger.warning("Ignoring invalid bundled text attachments: %s", exc)
+            restored_user_text_files = []
     initial_state[USER_TEXT_FILES_STATE_KEY] = restored_user_text_files
 
     adk_session = await runtime.session_service.create_session(
