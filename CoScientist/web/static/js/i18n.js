@@ -46,6 +46,8 @@ const i18n = {
   'rail.standby': { en: 'Standby — awaiting tool invocation', ru: 'Ожидание вызова инструментов…' },
   'rail.noTools': { en: 'No tool calls yet', ru: 'Инструменты ещё не вызывались' },
   'rail.toggle': { en: 'Show/hide agent activity', ru: 'Показать/скрыть активность агентов' },
+  'experiments.filterActive': { en: 'Active only', ru: 'Только с вызовами' },
+  'experiments.filterAll': { en: 'All agents', ru: 'Все агенты' },
 
   // ── Settings modal (rendered by modals/settings.js) ───────────────────────
   'settings.title': { en: 'Settings', ru: 'Настройки' },

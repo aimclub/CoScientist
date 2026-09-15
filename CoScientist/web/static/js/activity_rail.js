@@ -215,7 +215,9 @@
       if (!name) return;
       const entry = activityAgent(name);
       entry.lastSeen = timestamp ? new Date(timestamp).getTime() : Date.now();
-      if (!activityPinned) activitySelected = name;
+      if (!activityPinned && (entry.calls > 0 || activityBusy(entry) > 0)) {
+        activitySelected = name;
+      }
       renderActivityRail();
     }
 
@@ -243,7 +245,9 @@
         const next = activityAgent(String(transferred));
         next.transferred = true;
         next.lastSeen = entry.lastSeen;
-        if (!activityPinned) activitySelected = next.name;
+        if (!activityPinned && (next.calls > 0 || activityBusy(next) > 0)) {
+          activitySelected = next.name;
+        }
         renderActivityRail();
         return;
       }
@@ -445,9 +449,24 @@
       if (!enabled || activityAgents.size === 0) return;
 
       const now = Date.now();
-      const agents = [...activityAgents.values()].sort((a, b) => a.lastSeen - b.lastSeen);
-      if (activitySelected && !activityAgents.has(activitySelected)) activitySelected = null;
-      if (!activitySelected && agents.length) activitySelected = agents[agents.length - 1].name;
+      // Filter out structural pipelines or idle agents that have no tool calls and are not running
+      const agents = [...activityAgents.values()]
+        .filter(entry => {
+          if (/Pipeline$/i.test(entry.name) && entry.calls === 0 && activityBusy(entry) === 0) return false;
+          return entry.calls > 0 || activityBusy(entry) > 0;
+        })
+        .sort((a, b) => a.lastSeen - b.lastSeen);
+
+      rail.classList.toggle('hidden', !enabled || agents.length === 0);
+      if (!enabled || agents.length === 0) return;
+
+      if (activitySelected && !agents.some(a => a.name === activitySelected)) {
+        activitySelected = null;
+      }
+      if (!activitySelected && agents.length) {
+        const withCalls = agents.filter(a => a.calls > 0);
+        activitySelected = withCalls.length ? withCalls[withCalls.length - 1].name : agents[agents.length - 1].name;
+      }
 
       const countEl = document.getElementById('activity-agents-count');
       if (countEl) countEl.textContent = agents.length;

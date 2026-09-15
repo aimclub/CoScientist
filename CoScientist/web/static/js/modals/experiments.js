@@ -31,6 +31,7 @@
     const tvOpenCards = new Set();     // uids whose bodies are unfolded
     const tvExpandedBlocks = new Set();
     let tvExpandAll = false;
+    let tvFilterActiveOnly = localStorage.getItem('coscientist.tv_active_only') !== 'false';
 
     function resetExperimentViewer() {
       toolCallRecords = [];
@@ -99,6 +100,10 @@
 
     const STATIC_PARENT_MAP = new Map([
       ['PlannerAgent', 'OrchestratorAgent'],
+      ['Planner', 'OrchestratorAgent'],
+      ['PlanningPipeline', 'OrchestratorAgent'],
+      ['PlanningPipelineAgent', 'OrchestratorAgent'],
+      ['ResearchPipeline', 'OrchestratorAgent'],
       ['HypothesesAgent', 'OrchestratorAgent'],
       ['ResearchAgent', 'OrchestratorAgent'],
       ['TaskExecutorAgent', 'OrchestratorAgent'],
@@ -620,6 +625,17 @@
         </div>`;
     }
 
+    function agentBranchHasCalls(name, visited = new Set()) {
+      if (!name || visited.has(name)) return false;
+      visited.add(name);
+      const node = agentNodes.get(name);
+      if (!node) return false;
+      if (node.calls && node.calls.length > 0) return true;
+      if (node.status === 'running') return true;
+      const children = agentOrder.filter(n => agentParent.get(n) === name && !visited.has(n));
+      return children.some(child => agentBranchHasCalls(child, visited));
+    }
+
     // One branch of the call tree: the agent's own tool calls, each child
     // branch nested and indented directly under the `delegates` card that
     // spawned it. Two agents delegated to in parallel therefore stay next to
@@ -627,12 +643,13 @@
     // last call, where neither could be told apart.
     function renderAgentNode(name, visited = new Set()) {
       if (!name || visited.has(name)) return '';
+      if (tvFilterActiveOnly && !agentBranchHasCalls(name)) return '';
       visited.add(name);
 
       const node = agentNodes.get(name);
       if (!node) return '';
       const calls = node.calls;
-      const children = agentOrder.filter(n => agentParent.get(n) === name && !visited.has(n));
+      const children = agentOrder.filter(n => agentParent.get(n) === name && !visited.has(n) && (!tvFilterActiveOnly || agentBranchHasCalls(n)));
       // A child whose delegation card is gone — trimmed out of the log, or
       // never seen because the feed joined the run late — still belongs to
       // this branch: it goes at the tail rather than disappearing.
@@ -673,14 +690,16 @@
           ${nestBranches(tailChildren)}
         </div>`;
 
+      const cleanName = escHtml(name.replace(/Agent$/, ''));
+
       return `
         <div class="rounded-lg border border-outline-variant/15 bg-surface-container-low/40">
           <button type="button" onclick="toggleAgentNode('${escHtml(name)}')"
             class="w-full flex items-center gap-2 px-2.5 py-2 text-left hover:bg-surface-variant/20 transition-colors">
             <span class="material-symbols-outlined text-[14px] text-outline-variant shrink-0">${collapsed ? 'chevron_right' : 'expand_more'}</span>
             <span class="material-symbols-outlined text-[14px] text-primary shrink-0">${agentIcon(name)}</span>
-            <span class="text-[11px] font-bold uppercase tracking-wider text-on-surface shrink-0">${escHtml(name)}</span>
-            ${calls.length ? `<span class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-primary/10 text-primary shrink-0">${calls.length} call${calls.length === 1 ? '' : 's'}</span>` : (node.agentClass ? `<span class="text-[8px] font-mono uppercase px-1.5 py-0.5 rounded bg-outline-variant/10 text-outline-variant shrink-0">${escHtml(node.agentClass.replace('Agent', ''))}</span>` : '')}
+            <span class="text-[11px] font-bold uppercase tracking-wider text-on-surface shrink-0">${cleanName}</span>
+            ${calls.length ? `<span class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-primary/10 text-primary shrink-0">${calls.length} call${calls.length === 1 ? '' : 's'}</span>` : `<span class="text-[8px] font-mono uppercase px-1.5 py-0.5 rounded bg-outline-variant/10 text-outline-variant/60 shrink-0">0 calls</span>`}
             <span class="flex-1"></span>
             <span class="flex items-center gap-1.5 text-[9px] font-mono shrink-0">${pills}</span>
             <span class="shrink-0 text-[9px] font-mono text-outline-variant/60">${safeTimeStr(lastActive)}</span>
@@ -689,11 +708,33 @@
         </div>`;
     }
 
+    function toggleTvFilterActive() {
+      tvFilterActiveOnly = !tvFilterActiveOnly;
+      localStorage.setItem('coscientist.tv_active_only', tvFilterActiveOnly ? 'true' : 'false');
+      updateTvFilterBtn();
+      renderExperimentFeed();
+    }
+
+    function updateTvFilterBtn() {
+      const btn = document.getElementById('experiment-filter-active');
+      const label = document.getElementById('experiment-filter-active-label');
+      if (!btn) return;
+      if (tvFilterActiveOnly) {
+        btn.className = "text-[9px] font-bold uppercase tracking-wider text-primary bg-primary/15 border border-primary/30 px-2 py-1 rounded transition-colors flex items-center gap-1 hover:bg-primary/25 cursor-pointer shadow-sm";
+        if (label) label.textContent = (typeof t === 'function' ? t('experiments.filterActive') : null) || 'Active only';
+      } else {
+        btn.className = "text-[9px] font-bold uppercase tracking-wider text-outline-variant bg-surface-container-high/60 border border-outline-variant/20 px-2 py-1 rounded transition-colors flex items-center gap-1 hover:text-on-surface hover:bg-surface-container-high cursor-pointer";
+        if (label) label.textContent = (typeof t === 'function' ? t('experiments.filterAll') : null) || 'All agents';
+      }
+    }
+
     function renderExperimentFeed() {
       const modal = document.getElementById('experiment-modal');
       if (modal && modal.classList.contains('hidden')) return;
       const feed = document.getElementById('experiment-feed');
       if (!feed) return;
+
+      updateTvFilterBtn();
 
       const counter = document.getElementById('experiment-event-count');
       if (counter) {
@@ -706,12 +747,16 @@
       const expandBtn = document.getElementById('experiment-expand-all');
       if (expandBtn) expandBtn.textContent = tvExpandAll ? 'Collapse all' : 'Expand all';
 
-      if (toolCallRecords.length === 0 && agentNodes.size === 0) {
+      const roots = agentOrder.filter(name => !agentParent.has(name));
+      const visibleRoots = roots.filter(name => !tvFilterActiveOnly || agentBranchHasCalls(name));
+
+      if (toolCallRecords.length === 0 && (visibleRoots.length === 0 || agentNodes.size === 0)) {
+        const hasHidden = tvFilterActiveOnly && agentNodes.size > 0;
         feed.innerHTML = `
           <div class="flex flex-col items-center justify-center h-full opacity-40 py-16">
             <span class="material-symbols-outlined text-4xl text-primary/30 mb-3">science</span>
-            <p class="text-sm text-outline-variant font-medium">No tool activity yet</p>
-            <p class="text-[10px] text-outline-variant/50 mt-1">Tool calls and results from agents will appear here in real time</p>
+            <p class="text-sm text-outline-variant font-medium">${hasHidden ? 'No active tool calls' : 'No tool activity yet'}</p>
+            <p class="text-[10px] text-outline-variant/50 mt-1">${hasHidden ? 'Idle agents without tool calls are hidden. Click "Active only" to view all.' : 'Tool calls and results from agents will appear here in real time'}</p>
           </div>`;
         return;
       }
@@ -720,8 +765,7 @@
       // every event must not yank the feed away from a card being read.
       const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
       const keepTop = feed.scrollTop;
-      const roots = agentOrder.filter(name => !agentParent.has(name));
-      feed.innerHTML = roots.map(name => renderAgentNode(name)).join('');
+      feed.innerHTML = visibleRoots.map(name => renderAgentNode(name)).join('');
       initTvToggles(feed);
       feed.scrollTop = atBottom ? feed.scrollHeight : keepTop;
     }
@@ -734,6 +778,7 @@
     window.toggleToolCard = toggleToolCard;
     window.toggleAgentNode = toggleAgentNode;
     window.toggleExperimentExpandAll = toggleExperimentExpandAll;
+    window.toggleTvFilterActive = toggleTvFilterActive;
     window.toggleTvBlock = toggleTvBlock;
     window.addExperimentAgentEvent = addExperimentAgentEvent;
     window.addExperimentToolCall = addExperimentToolCall;
