@@ -612,7 +612,7 @@ agents:
     # dynamic_tools surfaces the task's selected MCP servers (filtered_tools /
     # deployed_mcps) as native tools, resolved per turn — the same servers
     # FEDOT.MAS used to receive, but the agent calls them itself.
-    tools: [dynamic_tools, sleep, task_tracker, graph, research_graph]
+    tools: [dynamic_tools, read_result, sleep, task_tracker, graph, research_graph]
     output_key: fedot_results
     callbacks:
       # Abstain → recommend CoderAgent when the tool-prep pipeline found no tool

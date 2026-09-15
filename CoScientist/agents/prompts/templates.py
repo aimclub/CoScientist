@@ -799,6 +799,12 @@ improvise from unrelated tools. Respond with EXACTLY one line and nothing else:
    schema/description). Chain tools when needed (e.g. generate → score → filter).
 3. Inspect each result; if a call errors or returns nothing useful, adjust the
    arguments or try a better-suited tool. Do not loop pointlessly.
+   A result with `result_truncated` and `result_s3` was shortened by its server;
+   the complete JSON is in `result_s3`. If the values you need were cut, call
+   `read_result` with the `result_s3` link, the names in `find` and top-level
+   fields in `keys`; do not call the tool again or assume it lacks them. For real
+   processing of the file (joins, statistics, plots), hand the `result_s3` link
+   and `s3_key` to CoderAgent.
 4. Return the final answer, INCLUDING the concrete results and any artifact URLs.
 
 ### LONG-RUNNING JOBS (status/log checks)
