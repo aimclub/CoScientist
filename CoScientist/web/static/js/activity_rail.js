@@ -155,6 +155,47 @@
 
     const KNOWN_AGENTS = new Set(Object.keys(AGENT_ICONS));
 
+    const INTERNAL_AGENTS = new Set([
+      'ResearchPipeline',
+      'PlanningPipeline',
+      'PlanningPipelineAgent',
+      'ToolPipeline',
+      'ToolPipelineAgent',
+      'ToolPreparer',
+      'ToolPreparerAgent',
+      'ParallelToolSearcher',
+      'ParallelToolSearcherAgent',
+      'LocalToolsExtractor',
+      'LocalToolsExtractorAgent',
+      'ToolRetriever',
+      'ToolRetrieverAgent',
+      'ToolReranker',
+      'ToolWebSearcher',
+      'ToolWebSearcherAgent',
+      'FullSetToolReranker',
+      'WebToolsDeployer',
+      'WebToolsDeployerAgent',
+      'ExecutorSwitch',
+      'ExecutorSwitchAgent',
+      'InitAgent',
+      'TZAgent',
+      'system',
+      'user',
+      'unknown',
+    ]);
+
+    function isInternalAgent(name) {
+      if (!name) return true;
+      const n = String(name).trim();
+      if (INTERNAL_AGENTS.has(n)) return true;
+      const stripped = n.replace(/Agent$/, '');
+      if (INTERNAL_AGENTS.has(stripped)) return true;
+      if (/Pipeline|SwitchAgent$|PreparerAgent$|ExtractorAgent$|SearcherAgent$|DeployerAgent$/i.test(n)) return true;
+      return false;
+    }
+    window.isInternalAgent = isInternalAgent;
+    window.INTERNAL_AGENTS = INTERNAL_AGENTS;
+
     function agentIcon(name) {
       if (AGENT_ICONS[name]) return AGENT_ICONS[name];
       if (/tool/i.test(name)) return 'handyman';
@@ -212,7 +253,7 @@
     }
 
     function activityTouchAgent(name, timestamp = null) {
-      if (!name) return;
+      if (!name || isInternalAgent(name)) return;
       const entry = activityAgent(name);
       entry.lastSeen = timestamp ? new Date(timestamp).getTime() : Date.now();
       if (!activityPinned && (entry.calls > 0 || activityBusy(entry) > 0)) {
@@ -232,7 +273,7 @@
 
     function activityRecordCall(author, tc, timestamp = null) {
       const name = tc && tc.name;
-      if (!name) return;
+      if (!name || isInternalAgent(author)) return;
       const entry = activityAgent(author);
       entry.lastSeen = timestamp ? new Date(timestamp).getTime() : Date.now();
 
@@ -242,13 +283,15 @@
         ? (tc.args && (tc.args.agent_name || tc.args.agentName))
         : (KNOWN_AGENTS.has(name) || /Agent$/.test(name) ? name : null));
       if (transferred) {
-        const next = activityAgent(String(transferred));
-        next.transferred = true;
-        next.lastSeen = entry.lastSeen;
-        if (!activityPinned && (next.calls > 0 || activityBusy(next) > 0)) {
-          activitySelected = next.name;
+        if (!isInternalAgent(String(transferred))) {
+          const next = activityAgent(String(transferred));
+          next.transferred = true;
+          next.lastSeen = entry.lastSeen;
+          if (!activityPinned && (next.calls > 0 || activityBusy(next) > 0)) {
+            activitySelected = next.name;
+          }
+          renderActivityRail();
         }
-        renderActivityRail();
         return;
       }
 
@@ -267,7 +310,7 @@
 
     function activityRecordResponse(author, tr, timestamp = null) {
       const name = tr && tr.name;
-      if (!name || name === 'transfer_to_agent') return;
+      if (!name || name === 'transfer_to_agent' || isInternalAgent(author)) return;
       const isDelegation = tr.is_delegation || KNOWN_AGENTS.has(name) || /Agent$/.test(name);
       if (isDelegation) {
         activityCloseAgent(name);
@@ -293,6 +336,7 @@
       const author = data.author || 'system';
 
       if (data.phase === 'agent_start' || data.phase === 'agent_end') {
+        if (isInternalAgent(author)) return;
         activityTouchAgent(author, data.timestamp);
         if (data.phase === 'agent_end') {
           activityCloseAgent(author);
@@ -449,12 +493,9 @@
       if (!enabled || activityAgents.size === 0) return;
 
       const now = Date.now();
-      // Filter out structural pipelines or idle agents that have no tool calls and are not running
+      // Filter out internal pipelines or idle agents that have no tool calls and are not running
       const agents = [...activityAgents.values()]
-        .filter(entry => {
-          if (/Pipeline$/i.test(entry.name) && entry.calls === 0 && activityBusy(entry) === 0) return false;
-          return entry.calls > 0 || activityBusy(entry) > 0;
-        })
+        .filter(entry => !isInternalAgent(entry.name) && (entry.calls > 0 || activityBusy(entry) > 0))
         .sort((a, b) => a.lastSeen - b.lastSeen);
 
       rail.classList.toggle('hidden', !enabled || agents.length === 0);

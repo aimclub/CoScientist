@@ -301,6 +301,10 @@ class WebRuntime:
     """Process-local users, ADK sessions, managers, sockets, and event logs."""
 
     def __init__(self) -> None:
+        # Identifies this server process. A tab whose remembered session was
+        # opened under a different boot id is looking at a previous run, and
+        # starts fresh instead of reopening it.
+        self.boot_id = uuid4().hex
         self.session_service = InMemorySessionService()
         self.registry = LocalSessionRegistry()
         self.managers: dict[SessionKey, CoScientistManager] = {}
@@ -1105,6 +1109,7 @@ def create_app() -> FastAPI:
         return JSONResponse({
             "users": runtime.registry.list_users(),
             "defaultUsername": default_username,
+            "serverBootId": runtime.boot_id,
         })
 
     @app.post("/api/users")
@@ -1122,6 +1127,10 @@ def create_app() -> FastAPI:
             sessions = runtime.registry.list_sessions(user_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        from CoScientist.web.session_store import has_events
+        for session in sessions:
+            key = (user_id, session["id"])
+            session["empty"] = not runtime.agent_events.get(key) and not has_events(*key)
         return JSONResponse({"sessions": sessions})
 
     @app.post("/api/users/{user_id}/sessions")
@@ -1765,9 +1774,24 @@ def create_app() -> FastAPI:
         from CoScientist.assembly.schema import get_config
         cfg = get_config()
         hierarchy = cfg.agent_hierarchy_map()
+        INTERNAL_NAMES = {
+            "ResearchPipeline", "PlanningPipelineAgent", "PlanningPipeline",
+            "ToolPipelineAgent", "ToolPreparerAgent", "ParallelToolSearcherAgent",
+            "LocalToolsExtractorAgent", "ToolRetrieverAgent", "ToolReranker",
+            "ToolWebSearcherAgent", "FullSetToolReranker", "WebToolsDeployerAgent",
+            "ExecutorSwitchAgent", "InitAgent", "TZAgent",
+        }
         agents_list = []
         for name in cfg.build_order():
             ac = cfg.agent(name)
+            is_internal = (
+                ac.cls in ("sequential", "parallel")
+                or ac.cls.startswith("custom:executor_switch")
+                or ac.cls.startswith("custom:web_tools_deployer")
+                or name in INTERNAL_NAMES
+                or name.endswith("Pipeline")
+                or name.endswith("PipelineAgent")
+            )
             agents_list.append({
                 "name": ac.name,
                 "class": ac.cls,
@@ -1778,11 +1802,13 @@ def create_app() -> FastAPI:
                 "subordinates": list(ac.subordinates),
                 "children": list(ac.children),
                 "is_root": bool(ac.root),
+                "is_internal": is_internal,
             })
         return JSONResponse({
             "agents": agents_list,
             "hierarchy": hierarchy,
             "delegatable_names": list(cfg.delegatable_names()),
+            "internal_agents": list(INTERNAL_NAMES | {a["name"] for a in agents_list if a["is_internal"]}),
         })
 
     # --- Events log ---
@@ -2025,7 +2051,7 @@ def _cancel_pending_hitl(
 # ---------------------------------------------------------------------------
 async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
     """Run user query through the agent pipeline, streaming events.
-    
+
     Handles ADK RequestInput HITL: when the workflow pauses (interrupt event),
     this sends the HITL request to the browser, waits for the response, then
     resumes the workflow by calling run_async with a FunctionResponse message.
@@ -2233,17 +2259,17 @@ async def _run_chat_invocation(
                 if has_request_input_function_call(event):
                     hitl_interrupt_event = event
                     interrupt_ids = get_request_input_interrupt_ids(event)
-                    
+
                     # Extract the message and schema from the function call args
                     hitl_message = ""
                     hitl_schema = None
                     for part in event.content.parts:
-                        if (part.function_call 
+                        if (part.function_call
                             and part.function_call.name == REQUEST_INPUT_FUNCTION_CALL_NAME):
                             args = part.function_call.args or {}
                             hitl_message = args.get("message", "")
                             hitl_schema = args.get("responseSchema") or args.get("response_schema")
-                    
+
                     # Send HITL request to browser
                     hitl_payload = {
                         "type": "hitl_request",
@@ -2284,7 +2310,7 @@ async def _run_chat_invocation(
             # If there was a HITL interrupt, wait for the browser response
             if hitl_interrupt_event:
                 interrupt_ids = get_request_input_interrupt_ids(hitl_interrupt_event)
-                
+
                 wait_event = pending_wait_event or asyncio.Event()
                 for iid in interrupt_ids:
                     runtime.pending_hitl.setdefault(iid, {
@@ -2292,9 +2318,9 @@ async def _run_chat_invocation(
                         "response": None,
                         "session_key": key,
                     })
-                
+
                 print(f"[HITL] Waiting for browser response for interrupts: {interrupt_ids}")
-                
+
                 # Wait for ALL interrupt responses (with timeout)
                 try:
                     await asyncio.wait_for(wait_event.wait(), timeout=600)
@@ -2328,14 +2354,14 @@ async def _run_chat_invocation(
                     role="user",
                     parts=response_parts,
                 )
-                
+
                 await runtime.send(key, runtime.status_payload(
                     key,
                     "processing",
                     "Resuming workflow after HITL response...",
                     version=run_status_version,
                 ))
-                
+
                 # Continue the while loop to call run_async again with the FR message
                 continue
             else:
@@ -2382,11 +2408,11 @@ async def _run_chat_invocation(
 
 def _handle_hitl_response(runtime: WebRuntime, key: SessionKey, data: dict):
     """Resolve a pending HITL request from the browser.
-    
+
     Routes responses to either:
     1. WebHITLHandler (for SessionAgent's custom HITL, e.g. PlannerAgent)
     2. _pending_hitl dict (for ADK RequestInput workflow interrupts)
-    
+
     The browser sends back:
         {
             "type": "hitl_response",
@@ -2423,7 +2449,7 @@ def _handle_hitl_response(runtime: WebRuntime, key: SessionKey, data: dict):
             "Ignoring RequestInput response from the wrong session"
         )
         return
-    
+
     # Store the response data
     response = {
         "approved": data.get("approved", False),
@@ -2432,7 +2458,7 @@ def _handle_hitl_response(runtime: WebRuntime, key: SessionKey, data: dict):
         "free_input": data.get("free_input"),
     }
     info["response"] = response
-    
+
     # Check if all interrupt IDs sharing this wait_event have responses
     wait_event = info["event"]
     for pending in runtime.pending_hitl.values():

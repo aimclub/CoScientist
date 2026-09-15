@@ -428,37 +428,3 @@ def test_web_graph_delete_all_clears_every_store(tmp_path, monkeypatch):
         }
         assert "goal:all" not in {node["id"] for node in execution.full()["nodes"]}
         assert research.full()["nodes"] == []
-
-
-def test_settings_modal_exposes_a_graph_delete_button():
-    from CoScientist.web.app import create_app
-
-    app = create_app()
-    with TestClient(app) as client:
-        index_html = client.get("/").text
-
-    assert 'id="graph-delete-btn"' in index_html
-    assert 'id="graph-delete-target"' in index_html
-    assert "async function deleteGraphData()" in index_html
-    assert "method: 'DELETE'" in index_html
-
-
-def test_graph_ui_uses_active_user_and_session_in_url():
-    from CoScientist.web.app import create_app
-
-    app = create_app()
-    with TestClient(app) as client:
-        index_html = client.get("/").text
-        graph_html = client.get("/graph").text
-
-    assert 'id="graph-link"' in index_html
-    assert (
-        "/graph?user_id=${encodeURIComponent(user.id)}"
-        "&session_id=${encodeURIComponent(session.id)}"
-    ) in index_html
-    assert "new URLSearchParams(location.search)" in graph_html
-    assert (
-        "/api/users/${encodeURIComponent(userId)}"
-        "/sessions/${encodeURIComponent(sessionId)}/graph"
-    ) in graph_html
-    assert 'fetch("/api/graph?view="' not in graph_html

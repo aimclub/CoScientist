@@ -98,6 +98,30 @@
       'ContextInitSessionAgent', 'ResultAggregatorAgent', 'FedotAgent'
     ].forEach(name => KNOWN_AGENTS.add(name));
 
+    const INTERNAL_AGENTS = (typeof window.INTERNAL_AGENTS !== 'undefined')
+      ? window.INTERNAL_AGENTS
+      : new Set([
+        'ResearchPipeline', 'PlanningPipeline', 'PlanningPipelineAgent',
+        'ToolPipeline', 'ToolPipelineAgent', 'ToolPreparer', 'ToolPreparerAgent',
+        'ParallelToolSearcher', 'ParallelToolSearcherAgent', 'LocalToolsExtractor',
+        'LocalToolsExtractorAgent', 'ToolRetriever', 'ToolRetrieverAgent',
+        'ToolReranker', 'ToolWebSearcher', 'ToolWebSearcherAgent',
+        'FullSetToolReranker', 'WebToolsDeployer', 'WebToolsDeployerAgent',
+        'ExecutorSwitch', 'ExecutorSwitchAgent', 'InitAgent', 'TZAgent',
+        'system', 'user', 'unknown',
+      ]);
+
+    function isInternalAgent(name) {
+      if (!name) return true;
+      if (typeof window.isInternalAgent === 'function') return window.isInternalAgent(name);
+      const n = String(name).trim();
+      if (INTERNAL_AGENTS.has(n)) return true;
+      const stripped = n.replace(/Agent$/, '');
+      if (INTERNAL_AGENTS.has(stripped)) return true;
+      if (/Pipeline|SwitchAgent$|PreparerAgent$|ExtractorAgent$|SearcherAgent$|DeployerAgent$/i.test(n)) return true;
+      return false;
+    }
+
     const STATIC_PARENT_MAP = new Map([
       ['PlannerAgent', 'OrchestratorAgent'],
       ['Planner', 'OrchestratorAgent'],
@@ -113,7 +137,7 @@
       ['CoderAgent', 'TaskExecutorAgent'],
       ['DatasetCollectorAgent', 'CoderAgent'],
       ['ToolPreparerAgent', 'ToolPipelineAgent'],
-      ['ExperimentAgent', 'ToolPipelineAgent'],
+      ['ExperimentAgent', 'TaskExecutorAgent'],
       ['ParallelToolSearcherAgent', 'ToolPreparerAgent'],
       ['FullSetToolReranker', 'ToolPreparerAgent'],
       ['WebToolsDeployerAgent', 'ToolPreparerAgent'],
@@ -124,6 +148,7 @@
       ['ContextInitAgent', 'OrchestratorAgent'],
       ['ContextInitSessionAgent', 'OrchestratorAgent'],
       ['ResultAggregatorAgent', 'OrchestratorAgent'],
+      ['ExecutorSwitchAgent', 'TaskExecutorAgent'],
     ]);
 
     async function loadAgentHierarchy() {
@@ -137,7 +162,11 @@
           }
         }
         if (data && Array.isArray(data.agents)) {
-          data.agents.forEach(a => KNOWN_AGENTS.add(a.name));
+          data.agents.forEach(a => {
+            if (!a.is_internal && !isInternalAgent(a.name)) {
+              KNOWN_AGENTS.add(a.name);
+            }
+          });
         }
       } catch {
         // retain static defaults
@@ -145,16 +174,26 @@
     }
     loadAgentHierarchy();
 
+    function resolveNonInternalParent(name) {
+      let curr = name;
+      const visited = new Set();
+      while (curr && isInternalAgent(curr) && !visited.has(curr)) {
+        visited.add(curr);
+        curr = STATIC_PARENT_MAP.get(curr) || null;
+      }
+      return (curr && !isInternalAgent(curr)) ? curr : null;
+    }
+
     function resolveAndLinkParent(child, parentHint = null, spawnUid = null) {
-      if (!child) return;
+      if (!child || isInternalAgent(child)) return;
       agentNode(child);
       if (spawnUid && !agentSpawnCall.has(child)) {
         agentSpawnCall.set(child, spawnUid);
       }
       if (agentParent.has(child)) return;
 
-      const parent = parentHint || STATIC_PARENT_MAP.get(child);
-      if (parent && parent !== child) {
+      const parent = resolveNonInternalParent(parentHint) || resolveNonInternalParent(STATIC_PARENT_MAP.get(child));
+      if (parent && parent !== child && !isInternalAgent(parent)) {
         agentParent.set(child, parent);
         agentNode(parent);
         resolveAndLinkParent(parent);
@@ -176,6 +215,7 @@
     }
 
     function addExperimentAgentEvent(author, data) {
+      if (isInternalAgent(author)) return;
       const node = agentNode(author);
       if (data.agent_class) node.agentClass = data.agent_class;
       resolveAndLinkParent(author, data.parent);
@@ -187,8 +227,12 @@
     }
 
     function addExperimentToolCall(author, tc) {
+      if (isInternalAgent(author)) return;
       const at = tc.timestamp ? new Date(tc.timestamp) : new Date();
       const target = delegationTarget(tc);
+      if (target && isInternalAgent(target)) {
+        return;
+      }
 
       resolveAndLinkParent(author, tc.parent);
 
@@ -239,6 +283,7 @@
     }
 
     function addExperimentToolResponse(author, tr) {
+      if (isInternalAgent(author)) return;
       let rec = matchToolCall(author, tr);
       if (!rec) {
         // A result whose call this tab never saw (feed cleared mid-run, or the
@@ -642,14 +687,14 @@
     // their own hand-off rows instead of both piling up after the parent's
     // last call, where neither could be told apart.
     function renderAgentNode(name, visited = new Set()) {
-      if (!name || visited.has(name)) return '';
+      if (!name || isInternalAgent(name) || visited.has(name)) return '';
       if (tvFilterActiveOnly && !agentBranchHasCalls(name)) return '';
       visited.add(name);
 
       const node = agentNodes.get(name);
       if (!node) return '';
       const calls = node.calls;
-      const children = agentOrder.filter(n => agentParent.get(n) === name && !visited.has(n) && (!tvFilterActiveOnly || agentBranchHasCalls(n)));
+      const children = agentOrder.filter(n => agentParent.get(n) === name && !visited.has(n) && !isInternalAgent(n) && (!tvFilterActiveOnly || agentBranchHasCalls(n)));
       // A child whose delegation card is gone — trimmed out of the log, or
       // never seen because the feed joined the run late — still belongs to
       // this branch: it goes at the tail rather than disappearing.
@@ -747,8 +792,8 @@
       const expandBtn = document.getElementById('experiment-expand-all');
       if (expandBtn) expandBtn.textContent = tvExpandAll ? 'Collapse all' : 'Expand all';
 
-      const roots = agentOrder.filter(name => !agentParent.has(name));
-      const visibleRoots = roots.filter(name => !tvFilterActiveOnly || agentBranchHasCalls(name));
+      const roots = agentOrder.filter(name => !agentParent.has(name) && !isInternalAgent(name));
+      const visibleRoots = roots.filter(name => !isInternalAgent(name) && (!tvFilterActiveOnly || agentBranchHasCalls(name)));
 
       if (toolCallRecords.length === 0 && (visibleRoots.length === 0 || agentNodes.size === 0)) {
         const hasHidden = tvFilterActiveOnly && agentNodes.size > 0;

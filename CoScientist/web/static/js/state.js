@@ -17,6 +17,8 @@ let activeSandboxWatchUrl = null;
 const USER_STORAGE_KEY = 'coscientist.user_id';
 const SESSION_STORAGE_KEY = 'coscientist.session_id';
 const NICK_STORAGE_KEY = 'coscientist.nickname';
+const BOOT_STORAGE_KEY = 'coscientist.server_boot_id';
+let serverBootId = null;
 const SIDE_NAV_KEY = 'coscientist.side_nav';
 const LANG_STORAGE_KEY = 'coscientist.lang';
 
