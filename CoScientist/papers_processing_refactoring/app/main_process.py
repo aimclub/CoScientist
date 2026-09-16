@@ -136,7 +136,8 @@ def process_single_article(article, app_settings, services):
                 HtmlCleaningStep(),
                 ImageFilteringStep(),
                 ImageCaptioningStep(),
-                PaperSummarisatonStep(),
+                # PaperSummarisatonStep(),  # Disabled: summaries are no longer generated.
+                MetadataExtractionStep(),
                 ChunkingStep(),
                 EmbeddingStep(),
                 PublishStep()
@@ -208,4 +209,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    

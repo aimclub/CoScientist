@@ -1,11 +1,17 @@
 import base64
 from io import BytesIO
-from typing import Dict, List
+from typing import Any, Callable, Dict, List
 from urllib.parse import urlparse
+import logging
+import time
 
 from langchain_core.messages import HumanMessage
 from PIL import Image
 from pydantic import BaseModel, Field, model_validator
+
+from .openalex import UNKNOWN_PUBLICATION_YEAR
+
+logger = logging.getLogger(__name__)
 
 
 class ExpandedSummary(BaseModel):
@@ -16,8 +22,8 @@ class ExpandedSummary(BaseModel):
     )
     publication_year: int = Field(
         description=(
-            "Year of publication of the paper. If the publication year is not explicitly specified, use the default "
-            "value - 9999."
+            f"Year of publication of the paper. If the publication year is not explicitly specified, use the default "
+            f"value - {UNKNOWN_PUBLICATION_YEAR}."
         )
     )
     authors: str = Field(
@@ -31,6 +37,23 @@ class ExpandedSummary(BaseModel):
             "Source where the paper was published. If the source is not explicitly specified, use the default "
             "value - 'UNDEFINED'"
         )
+    )
+
+
+class PaperMetadata(BaseModel):
+    """Bibliographic metadata extracted from a paper."""
+
+    paper_title: str = Field(
+        description="Full paper title, or 'NO TITLE' when it is not explicitly specified."
+    )
+    publication_year: int = Field(
+        description=f"Publication year, or {UNKNOWN_PUBLICATION_YEAR} when it is not explicitly specified."
+    )
+    authors: str = Field(
+        description="Comma-separated authors, or 'NO AUTHORS' when they are not explicitly specified."
+    )
+    source: str = Field(
+        description="Journal, conference, or publisher, or 'UNDEFINED' when it is not explicitly specified."
     )
 
 
@@ -200,3 +223,50 @@ class OpenAlexClassification(BaseModel):
         self.primary_field = field
         
         return self
+
+
+def invoke_llm_with_retry(
+    llm: Any,
+    input_data: Any,
+    *,
+    operation: str,
+    max_attempts: int = 3,
+    initial_delay: float = 1.0,
+    response_validator: Callable[[Any], bool] | None = None,
+) -> Any:
+    """Invoke and validate an LLM response with exponential backoff."""
+    if max_attempts < 1:
+        raise ValueError("max_attempts must be at least 1")
+
+    for attempt in range(1, max_attempts + 1):
+        try:
+            response = llm.invoke(input_data)
+            if response is None:
+                raise ValueError("LLM returned None")
+            if response_validator is not None and not response_validator(response):
+                raise ValueError(
+                    f"LLM returned an invalid response of type {type(response).__name__}"
+                )
+            return response
+        except Exception as e:
+            if attempt == max_attempts:
+                logger.exception(
+                    "LLM operation '%s' failed after %d attempts",
+                    operation,
+                    max_attempts,
+                )
+                raise RuntimeError(
+                    f"Failed to invoke or validate LLM response after "
+                    f"{max_attempts} attempts: {e}"
+                ) from e
+
+            delay = initial_delay * (2 ** (attempt - 1))
+            logger.warning(
+                "LLM operation '%s' failed on attempt %d/%d; retrying in %.1f seconds",
+                operation,
+                attempt,
+                max_attempts,
+                delay,
+                exc_info=True,
+            )
+            time.sleep(delay)

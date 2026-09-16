@@ -113,6 +113,24 @@ async def register_mcp_server(
     return server
 
 
+async def unregister_mcp_server(server_id: str, *, manager=None) -> None:
+    """Remove a server and its indexed tools from the rag_tools registry.
+
+    Raises when the registry cannot be reached, so the caller can keep the
+    record of the registration and try again.
+    """
+    if not server_id:
+        raise ValueError("unregister_mcp_server: server_id is required")
+    own_manager = manager is None
+    if own_manager:
+        manager = await _default_manager()
+    try:
+        await manager.remove_server(server_id)
+    finally:
+        if own_manager:
+            await manager.close()
+
+
 def resolve_into_state(
     state: Dict[str, Any],
     server_or_url: Any,

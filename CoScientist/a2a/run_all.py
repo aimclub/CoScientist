@@ -24,6 +24,11 @@ for _agent_cfg in get_config().a2a_agents():
     for _name, _value in _agent_cfg.a2a.env.items():
         os.environ.setdefault(_name, _value)
 
+# Served over A2A (see a2a/serve.py): attach the non-blocking, long-running HITL
+# tools so a human question becomes an `input-required` task for the caller
+# instead of blocking on a console this process does not have.
+os.environ.setdefault("COSCIENTIST_A2A_MODE", "1")
+
 import uvicorn
 
 from CoScientist.a2a.config import AGENT_PORTS

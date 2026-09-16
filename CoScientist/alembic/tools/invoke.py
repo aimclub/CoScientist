@@ -434,7 +434,9 @@ def _invoke_tool_function_sync(tool_name: str, args: dict | None = None) -> dict
 # ══════════════════════════════════════════════════════════════════════════════
 def check_server() -> dict:
     """Compile + import server.py under the server venv (imports are light by
-    construction: fastmcp + stdlib only). Returns {passed, error}.
+    construction: fastmcp + stdlib, plus a lazy boto3 inside
+    helpers/s3_transfer.py that is never imported at module level). Returns
+    {passed, error}.
 
     Guards against a *shimmed* server: if fastmcp is absent from the venv, an LLM
     fallback (or a stray local ``fastmcp.py``) can make ``server.py`` import via a

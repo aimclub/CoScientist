@@ -78,7 +78,7 @@ def build_for_mode():
     """Build an AgentSystem configured for the current start mode from settings.
 
     Reads ``settings.web.start_mode``:
-      * ``"planner"`` — PlanningPipelineAgent is root (sequential: PlannerAgent →
+      * ``"init"`` / ``"planner"`` — PlanningPipelineAgent is root (sequential: PlannerAgent →
         OrchestratorAgent).
       * ``"orchestrator"`` — OrchestratorAgent is root, with PlannerAgent
         added to its subordinates so it can be invoked on demand.
@@ -94,7 +94,7 @@ def build_for_mode():
     from CoScientist.config import get_settings
     start_mode = get_settings().web.start_mode
 
-    if start_mode in ("planner"):
+    if start_mode in ("init", "planner"):
         raw_config = load_config()
         patched = copy.deepcopy(raw_config)
         pipeline_agent_name = "PlanningPipelineAgent" if "PlanningPipelineAgent" in patched.agents else "InitAgent"
@@ -169,7 +169,7 @@ def build_for_mode():
 
     if start_mode != "orchestrator":
         raise ValueError(
-            f"Unknown start_mode {start_mode!r}; expected 'planner', 'orchestrator', or 'orchestrator_planner'"
+            f"Unknown start_mode {start_mode!r}; expected 'init'/'planner', 'orchestrator', or 'orchestrator_planner'"
         )
 
     # Load a fresh config and patch it for orchestrator-as-root mode.

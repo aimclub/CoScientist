@@ -20,14 +20,22 @@ plugin is inert, so CLI/A2A runs pay nothing for it.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import posixpath
+import re
 from datetime import datetime
-from typing import Any, Awaitable, Callable, Optional
+from pathlib import Path
+from typing import Any, Awaitable, Callable, Dict, Optional
 
 from google.adk.plugins.base_plugin import BasePlugin
 
-from CoScientist.graph.session_scope import SessionKey, session_key
+from CoScientist.graph.session_scope import (
+    DEFAULT_SESSION_KEY,
+    SessionKey,
+    session_key,
+)
 
 logger = logging.getLogger("CoScientist.logging.agent_output")
 
@@ -85,6 +93,93 @@ def _caller(tool_context: Any) -> str:
     return getattr(tool_context, "agent_name", None) or "system"
 
 
+# A sandbox-relative file reference in agent prose (e.g. ``results/fig.png``).
+# The lookbehind rejects URLs (``http://…``) and absolute paths: every path
+# component in them starts right after a "/", ":" or word character.
+_WORKSPACE_PATH_RE = re.compile(
+    r"(?<![\w/:@.])((?:\./)?(?:[\w.+-]+/)*[\w.+-]+\.[A-Za-z0-9]{1,8})(?![\w/.-])"
+)
+
+
+def _session_id_for(tool_context: Any) -> Optional[str]:
+    """The public session id for a context, or None when unscoped."""
+    try:
+        key = session_key(tool_context)
+        if key != DEFAULT_SESSION_KEY:
+            return key[1]
+    except Exception:  # noqa: BLE001 - context shapes vary across ADK paths
+        pass
+    return None
+
+
+def _workspace_dir_for(tool_context: Any) -> Optional[Path]:
+    """The session's local sandbox dir, or None when unknown or remote.
+
+    Reuses the CoderToolset's own workspace-id resolution (the state-pinned id
+    shared by every CoderAgent call in the session), so the dir found here is
+    the dir the coder wrote to. Remote code-exec keeps files on the server —
+    nothing to upload from this host, so the rewrite stays off there.
+    """
+    try:
+        from CoScientist.tools.coder_tools.coder_tools import _CFG, CoderToolset
+
+        if _CFG.url:
+            return None
+        ws_id = CoderToolset._workspace_id(tool_context)
+        ws_dir = Path(_CFG.workspace_root) / ws_id
+        return ws_dir if ws_dir.is_dir() else None
+    except Exception:  # noqa: BLE001 - no resolvable workspace, no rewrite
+        return None
+
+
+def _rewrite_workspace_paths(text: str, tool_context: Any) -> str:
+    """Replace sandbox-relative paths in ``text`` with presigned S3 URLs.
+
+    Only a path that resolves to an existing file inside the session's local
+    workspace is rewritten (uploaded under
+    ``sessions/<session_id>/workspace/<relpath>`` — the key keeps the file
+    extension, so the frontend still previews images). The text passes through
+    unchanged when S3 is off, the workspace is remote, or the path is not on
+    disk.
+    """
+    try:
+        from CoScientist.config import get_settings
+
+        if not get_settings().s3.use_s3:
+            return text
+    except Exception:  # noqa: BLE001
+        return text
+    ws_dir = _workspace_dir_for(tool_context)
+    if ws_dir is None:
+        return text
+
+    from CoScientist.reporting.s3_upload import upload_and_presign
+
+    session = _session_id_for(tool_context) or ws_dir.name
+    ws_root = ws_dir.resolve()
+    cache: Dict[str, Optional[str]] = {}
+
+    def _replace(match: re.Match) -> str:
+        rel = match.group(1)
+        if rel not in cache:
+            clean = rel[2:] if rel.startswith("./") else rel
+            url: Optional[str] = None
+            try:
+                candidate = (ws_root / clean).resolve()
+                candidate.relative_to(ws_root)  # reject ../ escapes
+                if candidate.is_file():
+                    key_prefix = posixpath.join(
+                        "sessions", session, "workspace", posixpath.dirname(clean)
+                    )
+                    url = upload_and_presign(candidate, key_prefix)
+            except Exception:  # noqa: BLE001 - one bad path must not stop the rest
+                url = None
+            cache[rel] = url
+        return cache[rel] or match.group(0)
+
+    return _WORKSPACE_PATH_RE.sub(_replace, text)
+
+
 class AgentOutputPlugin(BasePlugin):
     """Report the final answer of every agent flagged ``report_output``."""
 
@@ -114,6 +209,11 @@ class AgentOutputPlugin(BasePlugin):
         text = _as_text(result)
         if not text.strip():
             return None  # nothing was answered; an empty bubble helps nobody
+        try:
+            # boto3 uploads block; run the rewrite off the event loop.
+            text = await asyncio.to_thread(_rewrite_workspace_paths, text, tool_context)
+        except Exception:  # noqa: BLE001 - a rewrite must not break reporting
+            logger.warning("Workspace path rewrite failed", exc_info=True)
         await self._dispatch(tool_context, {
             "agent": agent,
             "caller": _caller(tool_context),

@@ -221,6 +221,52 @@ def test_runtime_rejects_new_runs_after_shutdown_begins():
     asyncio.run(scenario())
 
 
+def test_sandbox_links_reach_only_the_owning_tab_as_they_happen():
+    """The sandbox call runs for as long as the job does, so the console links
+    have to be pushed when the container comes up — not when the tool returns."""
+    from CoScientist.tools.coder_tools import sandbox_tools
+
+    class Socket:
+        def __init__(self):
+            self.messages = []
+
+        async def send_json(self, payload):
+            self.messages.append(payload)
+
+    async def scenario():
+        runtime = web_app.WebRuntime()
+        web_app._wire_sandbox_links(runtime)
+        try:
+            owner, other = ("user_a", "session_a"), ("user_b", "session_b")
+            owner_socket, other_socket = Socket(), Socket()
+            runtime.attach_socket(owner, owner_socket)
+            runtime.attach_socket(other, other_socket)
+
+            info = {"sandbox_id": "s1", "watch_url": "http://box/live",
+                    "vscode_url": "http://box/code", "reused": False}
+            await sandbox_tools._start_sink(owner, info)
+
+            assert len(owner_socket.messages) == 1
+            event = owner_socket.messages[0]
+            assert event["type"] == "agent_event"
+            assert "http://box/live" in event["content"]
+            assert "http://box/code" in event["content"]
+            assert not other_socket.messages          # session isolation
+
+            # A reconnecting tab must still find the links in its history.
+            assert runtime.agent_events[owner] == [event]
+
+            # A follow-up task reuses the container; don't repost the links.
+            await sandbox_tools._start_sink(owner, {**info, "reused": True})
+            assert len(owner_socket.messages) == 1
+
+            # A genuinely new sandbox is announced again.
+            await sandbox_tools._start_sink(owner, {**info, "sandbox_id": "s2"})
+            assert len(owner_socket.messages) == 2
+        finally:
+            sandbox_tools.set_sandbox_start_sink(None)
+
+    asyncio.run(scenario())
 
 
 def test_key_agent_output_reaches_the_owning_tab_and_its_history():
