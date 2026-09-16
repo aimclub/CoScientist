@@ -27,8 +27,12 @@ logger = logging.getLogger(__name__)
 
 _SOURCE = "ExperimentModule"
 _VM_IDS_KEY = "experiment_graph_vm_ids"  # state-level: survives replans
+_TOOL_IDS_KEY = "experiment_graph_tool_ids"  # tool key -> Tool node id
 _RUNTIME_KEY = "experiment_runtime"
 _MAX_GENERATED_DATA = 5
+#: A task naming forty tools would bury the plan's own shape under its
+#: inventory. The VM keeps the full list in ``mcp_servers`` either way.
+_MAX_TOOLS_PER_TASK = 8
 _TEXT_LIMIT = 800
 _HID_RE = re.compile(r"H\d+", re.IGNORECASE)
 
@@ -167,7 +171,32 @@ def _vm_attrs(task: dict[str, Any], plan_id: str) -> dict[str, Any]:
                 "tools": [t for t in tools_list if t],
             })
 
-    return {
+    # The rest of the design, so the graph carries the method a human approved
+    # rather than a name and a route. Anything the plan left unset stays out:
+    # an attribute whose value is "" reads as "measured and empty".
+    criteria = "; ".join(
+        _clean(
+            f"{c.get('criterion_id')}: {c.get('description')}"
+            + (f" [{c['metric']} {c['operator']} {c['target']}]"
+               if c.get("metric") and c.get("operator") and c.get("target") is not None
+               else ""),
+            240,
+        )
+        for c in (task.get("success_criteria") or [])
+        if isinstance(c, dict) and c.get("description")
+    )
+    baselines = ", ".join(
+        _clean(f"{b.get('name')} ({b.get('kind')})", 120)
+        for b in (design.get("baselines") or [])
+        if isinstance(b, dict) and b.get("name")
+    )
+    analysis = ", ".join(
+        _clean(f"{a.get('name')} [{a.get('role')}]", 120)
+        for a in (design.get("analysis_artifacts") or [])
+        if isinstance(a, dict) and a.get("name")
+    )
+    duration = task.get("est_duration_min")
+    attrs = {
         "method_type": "computational",
         "inputs": inputs,
         "outputs": _clean(outputs),
@@ -178,6 +207,81 @@ def _vm_attrs(task: dict[str, Any], plan_id: str) -> dict[str, Any]:
         "route": str(task.get("route") or ""),
         "mcp_servers": mcp_servers,
     }
+    optional = {
+        "name": _clean(task.get("name"), 200),
+        "cost": f"≈{duration} min" if isinstance(duration, int) and duration > 0 else "",
+        "limitations": "; ".join(_clean(w, 200) for w in (task.get("warnings") or []) if w),
+        "success_criteria": _clean(criteria, 900),
+        "baselines": _clean(baselines, 400),
+        "analysis_artifacts": _clean(analysis, 400),
+        "dataset_ref": _clean(dataset.get("ref"), 240),
+        "operation_ref": _clean(design.get("operation_ref"), 80),
+        "depends_on": ", ".join(str(d) for d in (task.get("depends_on") or []) if d),
+        "repo_url": _clean(task.get("repo_url"), 240),
+    }
+    attrs.update({k: v for k, v in optional.items() if v})
+    if task.get("optional"):
+        attrs["optional"] = True
+    return attrs
+
+
+def _planned_tools(task: dict[str, Any]) -> list[dict[str, str]]:
+    """The concrete tools this task's method will run, as Tool node drafts.
+
+    A plan that names its tools only inside a VM attribute leaves the graph
+    unable to answer "what does this method actually run?" — the very question
+    the feasibility layer exists for. So each named tool becomes a Tool node the
+    VM ``uses``. A build task has no tool yet: the repo it will turn into one is
+    recorded as ``being_created`` instead, which is what the status is for.
+    """
+    route = str(task.get("route") or "")
+    if route == "alembic_build":
+        repo = _clean(task.get("repo_url"), 240)
+        if not repo:
+            return []
+        return [{
+            "key": f"repo:{repo}",
+            "name": _clean(repo.rstrip("/").rsplit("/", 1)[-1] or repo, 120),
+            "location": repo,
+            "status": "being_created",
+            "requirements": "built into an MCP server by the Alembic pipeline",
+        }]
+
+    rows: list[dict[str, str]] = []
+    for server in task.get("mcp_servers") or []:
+        if not isinstance(server, dict):
+            continue
+        server_name = _clean(server.get("name") or server.get("server_id"), 120)
+        url = _clean(server.get("url"), 240)
+        tools = [t for t in (server.get("tools") or []) if isinstance(t, (dict, str))]
+        required = [
+            t for t in tools
+            if not isinstance(t, dict) or t.get("required_for_task", True)
+        ]
+        for tool in (required or tools):
+            name = _clean(tool.get("name") if isinstance(tool, dict) else tool, 120)
+            if not name:
+                continue
+            rows.append({
+                "key": f"{server_name}:{name}",
+                "name": name,
+                "location": url or server_name,
+                "status": "available",
+                "requirements": (
+                    _clean(tool.get("description"), 240) if isinstance(tool, dict) else ""
+                ),
+                "server": server_name,
+            })
+            if len(rows) >= _MAX_TOOLS_PER_TASK:
+                return rows
+    return rows
+
+
+def _tool_ids(state: MutableMapping[str, Any]) -> dict[str, str]:
+    raw = state.get(_TOOL_IDS_KEY)
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items() if k and v}
 
 
 def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
@@ -185,8 +289,9 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
 
     Each plan task → one ``VerificationMethod`` node plus ``tested_by`` edges
     from every hypothesis the task's design covers (only for hypothesis ids that
-    actually exist as graph nodes). Formulated hypotheses with no covering task
-    are postponed; a postponed hypothesis a task now lists is revived to
+    actually exist as graph nodes), and one ``Tool`` node per tool the task
+    names, joined by ``VM —uses→ Tool``. Formulated hypotheses with no covering
+    task are postponed; a postponed hypothesis a task now lists is revived to
     formulated. Re-approval / replan updates the existing VM (attrs merge)
     instead of creating a duplicate; VMs whose tasks disappeared from the plan
     are marked ``failed`` (reason=replanned) when still non-terminal.
@@ -201,11 +306,14 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
             return
         plan_id = str(runtime.get("plan_id") or plan.get("plan_id") or "")
         vm_ids = _vm_ids(state)
+        tool_ids = _tool_ids(state)
         graph_nodes = _graph_nodes(store)
 
         nodes: list[dict[str, Any]] = []
         edges: list[dict[str, Any]] = []
         ref_to_task: dict[str, str] = {}
+        ref_to_tool: dict[str, str] = {}
+        tool_refs: dict[str, str] = {}
         for index, task in enumerate(tasks):
             task_id = str(task.get("id") or "").strip()
             if not task_id:
@@ -215,13 +323,38 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
             if existing_vm and existing_vm in graph_nodes:
                 # id-only draft = attrs merge on the existing node (no duplicate).
                 nodes.append({"id": existing_vm, "attrs": attrs})
-                continue
-            ref = f"vm{index}"
-            ref_to_task[ref] = task_id
-            nodes.append({"type": "VerificationMethod", "ref": ref, "attrs": attrs})
-            for hid in _task_hypothesis_ids(task.get("design") or {}):
-                if graph_nodes.get(hid, {}).get("type") == "Hypothesis":
-                    edges.append({"type": "tested_by", "from": hid, "to": f"#{ref}"})
+                vm_ref = existing_vm
+            else:
+                ref = f"vm{index}"
+                ref_to_task[ref] = task_id
+                nodes.append({"type": "VerificationMethod", "ref": ref, "attrs": attrs})
+                vm_ref = f"#{ref}"
+                for hid in _task_hypothesis_ids(task.get("design") or {}):
+                    if graph_nodes.get(hid, {}).get("type") == "Hypothesis":
+                        edges.append({"type": "tested_by", "from": hid, "to": f"#{ref}"})
+            for tool in _planned_tools(task):
+                key = tool["key"]
+                known = tool_ids.get(key)
+                if known and known in graph_nodes:
+                    target = known
+                elif key in tool_refs:
+                    target = f"#{tool_refs[key]}"
+                else:
+                    tool_ref = f"tool{len(tool_refs)}"
+                    tool_refs[key] = tool_ref
+                    ref_to_tool[tool_ref] = key
+                    nodes.append({
+                        "type": "Tool", "ref": tool_ref, "status": tool["status"],
+                        "attrs": {
+                            "name": tool["name"],
+                            "tool_type": "computational",
+                            "location": tool["location"],
+                            **({"requirements": tool["requirements"]}
+                               if tool.get("requirements") else {}),
+                        },
+                    })
+                    target = f"#{tool_ref}"
+                edges.append({"type": "uses", "from": vm_ref, "to": target})
 
         result = store.commit(
             source=_SOURCE, nodes=nodes, edges=edges, enforce_permissions=False,
@@ -240,10 +373,16 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
                   level=logging.WARNING)
             return
         for echo in committed.get("nodes") or []:
-            task_id = ref_to_task.get(str(echo.get("ref") or ""))
-            if task_id and echo.get("id"):
+            ref = str(echo.get("ref") or "")
+            if not echo.get("id"):
+                continue
+            if task_id := ref_to_task.get(ref):
                 vm_ids[task_id] = str(echo["id"])
+            elif tool_key := ref_to_tool.get(ref):
+                tool_ids[tool_key] = str(echo["id"])
         state[_VM_IDS_KEY] = vm_ids
+        if tool_ids:
+            state[_TOOL_IDS_KEY] = tool_ids
 
         # Tasks dropped by a replan: mark their still-live VMs as failed.
         current = {str(t.get("id") or "") for t in tasks}
@@ -259,8 +398,8 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
         audit(
             logger,
             f"EXPERIMENT_GRAPH_PLAN_PUBLISHED plan_id={plan_id} "
-            f"vms={len(vm_ids)} edges={len(edges)} stale={len(stale)} "
-            f"postponed={postponed} revived={revived}",
+            f"vms={len(vm_ids)} tools={len(tool_ids)} edges={len(edges)} "
+            f"stale={len(stale)} postponed={postponed} revived={revived}",
         )
     except Exception as exc:  # noqa: BLE001 — best-effort by contract
         audit(logger, f"EXPERIMENT_GRAPH_PLAN_PUBLISH_FAILED error={exc}",

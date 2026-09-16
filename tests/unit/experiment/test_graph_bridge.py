@@ -5,7 +5,7 @@ from types import SimpleNamespace
 
 from CoScientist.graph.research.store import ResearchGraphStore
 
-from .helpers import _approved_state, _plan, _task
+from .helpers import NOW, _approved_state, _plan, _task
 
 
 def _seeded_store(
@@ -266,3 +266,179 @@ def test_publish_result_schedules_background_judgment(tmp_path, monkeypatch):
         "artifacts": [{"name": "out.csv", "bucket": "b", "s3_key": "k/out.csv"}],
     })
     assert called == [store]
+
+
+# ── the plan as a record, not as a name and a route ──────────────────────────
+# A VerificationMethod used to carry the task id, the route and a blob of MCP
+# servers. Everything else a human approved — the success criteria, the
+# baselines, the analysis artifacts, what the task waits on, how long it takes —
+# lived only in the plan JSON on the session state, so opening the method in the
+# graph told a reader nothing about the method. And the tools the plan names,
+# which are the feasibility layer's whole subject, were a string inside an
+# attribute rather than nodes the method uses.
+
+
+def test_the_method_carries_the_design_the_human_approved(tmp_path):
+    from CoScientist.experiments.runtime.graph_bridge import publish_plan_to_graph
+
+    store = _seeded_store(tmp_path)
+    state = _approved_state(_plan(_task("EXP-1", hypothesis_ref="H1")))
+
+    publish_plan_to_graph(store, state)
+
+    attrs = next(n for n in store.full()["nodes"]
+                 if n["type"] == "VerificationMethod")["attrs"]
+    assert attrs["name"] == "Chemical computation EXP-1"
+    assert attrs["cost"] == "≈1 min"
+    assert "EXP-1-C1: The MCP execution completes." in attrs["success_criteria"]
+    assert attrs["baselines"] == "no-tool control (method)"
+    assert attrs["analysis_artifacts"] == "metrics_table.json [metrics_table]"
+    # Nothing the plan left unset is invented: an empty warning list stays out
+    # rather than becoming an attribute that reads as "checked, none".
+    assert "limitations" not in attrs
+    assert "optional" not in attrs
+
+
+def test_a_task_that_waits_and_may_be_skipped_says_so(tmp_path):
+    from CoScientist.experiments.runtime.graph_bridge import publish_plan_to_graph
+
+    store = _seeded_store(tmp_path)
+    second = _task("EXP-2", hypothesis_ref="H1", depends_on=["EXP-1"], optional=True)
+    second["warnings"] = ["the upstream artifact may be empty"]
+    state = _approved_state(_plan(_task("EXP-1", hypothesis_ref="H1"), second))
+
+    publish_plan_to_graph(store, state)
+
+    attrs = next(n for n in store.full()["nodes"]
+                 if n["type"] == "VerificationMethod"
+                 and n["attrs"]["task_id"] == "EXP-2")["attrs"]
+    assert attrs["depends_on"] == "EXP-1"
+    assert attrs["optional"] is True
+    assert attrs["limitations"] == "the upstream artifact may be empty"
+
+
+def test_the_tools_the_plan_names_become_tools_the_method_uses(tmp_path):
+    from CoScientist.experiments.runtime.graph_bridge import publish_plan_to_graph
+
+    store = _seeded_store(tmp_path)
+    state = _approved_state(_plan(_task("EXP-1", hypothesis_ref="H1")))
+
+    publish_plan_to_graph(store, state)
+
+    by_type = _nodes_by_type(store)
+    assert len(by_type.get("Tool", [])) == 1
+    tool_id = by_type["Tool"][0]
+    tool = next(n for n in store.full()["nodes"] if n["id"] == tool_id)
+    assert tool["attrs"]["name"] == "estimate_property"
+    assert tool["attrs"]["location"] == "http://127.0.0.1:8000/mcp"
+    assert tool["attrs"]["tool_type"] == "computational"
+    assert tool["status"] == "available"
+    vm_id = by_type["VerificationMethod"][0]
+    assert any(e["type"] == "uses" and e["from"] == vm_id and e["to"] == tool_id
+               for e in store.full()["edges"])
+    assert state["experiment_graph_tool_ids"] == {"chem-ready:estimate_property": tool_id}
+
+
+def test_two_tasks_on_the_same_tool_share_one_tool_node(tmp_path):
+    from CoScientist.experiments.runtime.graph_bridge import publish_plan_to_graph
+
+    store = _seeded_store(tmp_path)
+    state = _approved_state(
+        _plan(_task("EXP-1", hypothesis_ref="H1"), _task("EXP-2", hypothesis_ref="H1")))
+
+    publish_plan_to_graph(store, state)
+
+    by_type = _nodes_by_type(store)
+    assert len(by_type["Tool"]) == 1
+    uses = [e for e in store.full()["edges"] if e["type"] == "uses"]
+    assert len(uses) == 2
+    assert {e["to"] for e in uses} == set(by_type["Tool"])
+
+
+def test_republishing_the_plan_does_not_duplicate_its_tools(tmp_path):
+    from CoScientist.experiments.runtime.graph_bridge import publish_plan_to_graph
+
+    store = _seeded_store(tmp_path)
+    state = _approved_state(_plan(_task("EXP-1", hypothesis_ref="H1")))
+
+    publish_plan_to_graph(store, state)
+    publish_plan_to_graph(store, state)
+
+    by_type = _nodes_by_type(store)
+    assert len(by_type["Tool"]) == 1
+    assert len(by_type["VerificationMethod"]) == 1
+    assert len([e for e in store.full()["edges"] if e["type"] == "uses"]) == 1
+
+
+def test_a_build_task_records_the_repo_as_a_tool_being_created(tmp_path):
+    """There is no tool yet — the repo the pipeline will turn into one is the
+    honest record, and ``being_created`` is the status that says so."""
+    from CoScientist.experiments.runtime.graph_bridge import publish_plan_to_graph
+
+    from CoScientist.experiments.runtime import approve_plan, initialize_runtime
+
+    store = _seeded_store(tmp_path)
+    raw = _task("EXP-1", route="alembic_build", hypothesis_ref="H1")
+    raw["repo_url"] = "https://github.com/example/solver"
+    raw["post_build_route"] = "react_tools"
+    # Built by hand: the deterministic critic refuses alembic_build under the
+    # default profile, and the route it refuses is the one under test here.
+    state: dict = {}
+    initialize_runtime(state, _plan(raw), critique={
+        "schema_version": "plan-critique/0.1", "critique_id": "CRIT-build",
+        "plan_id": "PLAN-acceptance", "verdict": "approve", "issues": [],
+        "checked_at": NOW,
+    })
+    approve_plan(state)
+
+    publish_plan_to_graph(store, state)
+
+    tool = next(n for n in store.full()["nodes"] if n["type"] == "Tool")
+    assert tool["status"] == "being_created"
+    assert tool["attrs"]["name"] == "solver"
+    assert tool["attrs"]["location"] == "https://github.com/example/solver"
+
+
+def test_a_route_with_no_mcp_tools_adds_none(tmp_path):
+    from CoScientist.experiments.runtime.graph_bridge import publish_plan_to_graph
+
+    store = _seeded_store(tmp_path)
+    state = _approved_state(_plan(_task("EXP-1", route="coder", hypothesis_ref="H1")))
+
+    publish_plan_to_graph(store, state)
+
+    assert _nodes_by_type(store).get("Tool") is None
+    assert not [e for e in store.full()["edges"] if e["type"] == "uses"]
+
+
+def test_the_evidence_says_what_it_was_measured_on(tmp_path):
+    """The research graph requires it of computational evidence, and a reader
+    needs it: the summary is the claim, this is what backs it."""
+    from CoScientist.experiments.runtime.graph_bridge import (
+        publish_plan_to_graph,
+        publish_result_to_graph,
+    )
+
+    store = _seeded_store(tmp_path)
+    state = _approved_state(_plan(_task("EXP-1", hypothesis_ref="H1")))
+    publish_plan_to_graph(store, state)
+    publish_result_to_graph(store, state, "EXP-1", {
+        "result_id": "RES-9", "status": "success", "route_used": "fedot_mas",
+        "summary": "The property was computed.",
+        "artifacts": [{"name": "m.json", "bucket": "b", "s3_key": "k/m.json"}],
+    })
+
+    evidence = next(n for n in store.full()["nodes"] if n["type"] == "Evidence")
+    measured_on = evidence["attrs"]["measured_on"]
+    assert "dataset ready_mcp_inputs" in measured_on
+    assert "route fedot_mas against chem-ready (http://127.0.0.1:8000/mcp)" in measured_on
+    assert "artifact s3://b/k/m.json" in measured_on
+
+
+def test_evidence_from_a_run_that_names_nothing_says_so(tmp_path):
+    """Never invent a measurement target to satisfy a required field."""
+    from CoScientist.experiments.runtime.graph_bridge import _measured_on
+
+    assert _measured_on("EXP-7", None, {}, "") == (
+        "experiment task EXP-7: the run record names no dataset, route or artifact"
+    )

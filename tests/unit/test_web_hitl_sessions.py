@@ -120,3 +120,44 @@ def test_cancelled_hitl_is_removed_and_not_redelivered_on_reconnect():
         assert reconnect_socket.messages == []
 
     asyncio.run(scenario())
+
+
+def test_the_structured_experiment_plan_reaches_the_browser():
+    """The plan card is drawn from ``context.experiment_plan``.
+
+    The handler forwards the request context verbatim minus ``_session``, so
+    this pins that the plan is not stripped on the way out — the browser falls
+    back to the Markdown blob when it is missing, which is the view this
+    replaced.
+    """
+    async def scenario():
+        handler = WebHITLHandler()
+        key = ("user_a", "session_a")
+        socket = _Socket()
+        await handler.attach_websocket(socket, key)
+
+        plan = {"kind": "experiment_plan", "revision": 2, "task_count": 3,
+                "matrix": [{"task_id": "EXP-1"}], "tasks": [{"id": "EXP-1"}]}
+        task = asyncio.create_task(handler.handle_request(HITLRequest(
+            agent_name="ExperimentPlannerAgent",
+            action_type=HITLAction.APPROVE,
+            message="Review and explicitly approve the experiment plan.",
+            context={
+                "output": "# Experiment plan · revision 2",
+                "experiment_review_kind": "plan",
+                "experiment_plan": plan,
+                "_session": {"user_id": key[0], "session_id": key[1]},
+            },
+        )))
+        await asyncio.sleep(0)
+
+        context = socket.messages[0]["context"]
+        assert context["experiment_plan"] == plan
+        assert context["output"].startswith("# Experiment plan")
+        assert "_session" not in context
+
+        handler.resolve_request(socket.messages[0]["request_id"],
+                                {"action": "approve", "approved": True}, key)
+        await task
+
+    asyncio.run(scenario())

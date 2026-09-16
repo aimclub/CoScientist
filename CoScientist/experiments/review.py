@@ -14,7 +14,12 @@ from google.genai import types
 
 from CoScientist.config import get_settings
 from CoScientist.experiments.critique import PlanValidationError, validate_and_critique_plan
+from CoScientist.experiments.plan_view import plan_to_view
 from CoScientist.experiments.runtime import approve_plan, initialize_runtime, mark_result_review
+from CoScientist.experiments.runtime.execution_bridge import (
+    close_plan_record,
+    record_plan_proposed,
+)
 from CoScientist.experiments.runtime.shared import audit
 from CoScientist.experiments.runtime.state_machine import REPLAN_ROUNDS_KEY
 from CoScientist.experiments.schemas import ExperimentPlan
@@ -366,9 +371,28 @@ def render_experiment_results(state: Any) -> str:
 # gate had nothing to match on, and the whole experiment was planned and run
 # again. Measured 2026-09-02: two full re-runs of the same three tasks in one
 # 41-minute run, 19:50:46 phase=completed -> 19:50:59 gate sees NoneType.
+def _plan_outcome(response: HITLResponse) -> str:
+    """How the human left this round of the plan, in the record's vocabulary."""
+    if response.approved:
+        return "approved"
+    if response.timed_out or response.stop_review_loop:
+        return "paused"
+    if response.action == HITLAction.EDIT:
+        return "revision_requested"
+    return "rejected"
+
+
+def _clip(text: Any, limit: int = 400) -> str | None:
+    out = " ".join(str(text or "").split())
+    if not out:
+        return None
+    return out if len(out) <= limit else out[: limit - 1] + "…"
+
+
 _REVIEW_OWNED_STATE_KEYS = (
     "experiment_runtime",
     "experiment_plan",
+    "experiment_plan_view",
     "experiment_plan_critique",
     "experiment_plan_validation_errors",
     "experiment_plan_review_paused",
@@ -445,13 +469,20 @@ class ExperimentReviewSessionAgent(SessionAgent):
     def _hitl(
         self, *, message: str, kind: str, plan_id: Any, output: str,
         user_id: str, session_id: str, timeout_seconds: float,
+        plan_view: dict[str, Any] | None = None,
     ) -> HITLRequest:
+        context: dict[str, Any] = {
+            "output": output, "experiment_review_kind": kind, "experiment_plan_id": plan_id,
+            "_session": {"user_id": user_id, "session_id": session_id},
+        }
+        if plan_view:
+            # The structured plan next to the rendered one: the web UI draws the
+            # design matrix and the task cards from this, while ``output`` stays
+            # the console's (and any other client's) copy of the same plan.
+            context["experiment_plan"] = plan_view
         return HITLRequest(
             agent_name=self.name, action_type=HITLAction.APPROVE, message=message,
-            context={
-                "output": output, "experiment_review_kind": kind, "experiment_plan_id": plan_id,
-                "_session": {"user_id": user_id, "session_id": session_id},
-            },
+            context=context,
             invoked_via="internal_loop", timeout_seconds=timeout_seconds,
         )
 
@@ -573,9 +604,18 @@ class ExperimentReviewSessionAgent(SessionAgent):
         state["experiment_plan_revision_count"] = 0
         state["experiment_inventory_blocker_hits"] = 0
         initialize_runtime(state, plan, critique=critique_json)
+
+        # One structured plan, three readers: the web review card, the call
+        # graph's record of this round, and anything later that wants the plan
+        # without re-deriving it from the runtime.
+        view = plan_to_view(plan, critique_json)
+        state["experiment_plan_view"] = view
+        record_id = record_plan_proposed(ctx, self.name, view)
+
         if _headless_auto_approve():
             approve_plan(state)
             _publish_approved_plan_to_graph(ctx, state)
+            close_plan_record(ctx, record_id, "approved", reason="headless auto-approve")
             _audit(f"EXPERIMENT_REVIEW_APPROVED kind=plan mode=headless_auto plan_id={plan.plan_id} phase=execution")
             _audit("EXPERIMENT_DESIGN_MATRIX\n" + render_experiment_plan(plan))
             return _auto_approve_response()
@@ -584,12 +624,16 @@ class ExperimentReviewSessionAgent(SessionAgent):
             message="Review and explicitly approve the experiment plan.", kind="plan",
             plan_id=plan.plan_id, output=render_experiment_plan(plan),
             user_id=user_id, session_id=session_id, timeout_seconds=cfg.plan_review_timeout_s,
+            plan_view=view,
         ))
         if response.approved:
             approve_plan(state)
             _publish_approved_plan_to_graph(ctx, state)
             _audit(f"EXPERIMENT_REVIEW_APPROVED kind=plan mode=human plan_id={plan.plan_id} phase=execution")
             _audit("EXPERIMENT_DESIGN_MATRIX\n" + render_experiment_plan(plan))
+        view["status"] = _plan_outcome(response)
+        close_plan_record(ctx, record_id, view["status"],
+                          reason=_clip(response.instructions))
         return response
 
     async def _review_result(self, ctx: InvocationContext, _output_text: Any) -> HITLResponse:
