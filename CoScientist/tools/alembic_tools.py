@@ -14,6 +14,7 @@ find and continue an earlier build via ``list_mcp_builds``.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -26,7 +27,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from dotenv import load_dotenv
 from google.adk.tools import ToolContext
@@ -60,7 +61,8 @@ _LOCK = threading.Lock()
 _META_FIELDS = ("job_id", "repo_url", "status", "started_at", "finished_at",
                 "log_file", "workdir", "pid", "mcp_url", "image", "container",
                 "error", "registered", "registration_error", "image_id",
-                "server_id", "served_at", "image_deleted")
+                "server_id", "served_at", "image_deleted", "origin", "tool_counts", "hub",
+                "hints", "task_spec")
 
 
 def _meta_path(job_id: str) -> Path:
@@ -95,6 +97,28 @@ _URL_RE = re.compile(r"url\s*:\s*(http://\S+/mcp)")
 _IMAGE_RE = re.compile(r"^\s*image\s*:\s*(\S+)", re.M)
 _CONTAINER_RE = re.compile(r"^\s*container\s*:\s*(\S+)", re.M)
 _STAGE_RE = re.compile(r"STAGE (\d) — (\S+)")
+# start_chain prints this banner only once the served container stayed up.
+_SERVE_BANNER = "MCP server up."
+
+
+def _repo_exists(repo_url: str, timeout: int = 20) -> Tuple[bool, str]:
+    """Is ``repo_url`` a reachable git repository? (checked with git ls-remote)"""
+    try:
+        proc = subprocess.run(
+            ["git", "ls-remote", "--exit-code", "-h", repo_url],
+            capture_output=True, text=True, timeout=timeout,
+            env={**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "true"},
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"git ls-remote timed out after {timeout}s"
+    except Exception as exc:  # noqa: BLE001
+        return False, f"{type(exc).__name__}: {exc}"
+    if proc.returncode == 0:
+        return True, "ok"
+    lines = [l.strip() for l in (proc.stderr or proc.stdout or "").splitlines() if l.strip()]
+    named = [l for l in lines if l.lower().startswith(("fatal:", "remote:", "error:"))]
+    picked = (named or lines or [f"git exited {proc.returncode}"])[0]
+    return False, picked[:200]
 
 
 def _validator_counts(text: str) -> Optional[Dict[str, Any]]:
@@ -138,13 +162,13 @@ def _finalize(rec: Dict[str, Any], returncode: int) -> None:
     rec["returncode"] = returncode
     rec["finished_at"] = time.time()
     if returncode == 0:
-        url = _URL_RE.search(text)
-        image = _IMAGE_RE.search(text)
-        container = _CONTAINER_RE.search(text)
         rec["status"] = "done"
-        rec["mcp_url"] = url.group(1) if url else None
-        rec["image"] = image.group(1) if image else None
-        rec["container"] = container.group(1) if container else None
+        # The last serve summary is this build's; an earlier line can echo a
+        # repository file that happens to look like one.
+        for key, pattern in (("mcp_url", _URL_RE), ("image", _IMAGE_RE),
+                             ("container", _CONTAINER_RE)):
+            found = pattern.findall(text)
+            rec[key] = found[-1] if found else None
     else:
         rec["status"] = "failed"
 
@@ -172,6 +196,12 @@ def _runner(rec: Dict[str, Any]) -> None:
     # start_chain tags the committed image alembic-tool:<job_id> as well, so this
     # build stays reachable after a newer build of the repo moves alembic-tool:<repo>.
     env["ALEMBIC_JOB_ID"] = rec["job_id"]
+    # What the operator asked for beyond the repository: a soft steer for the
+    # explorer, and a task spec that pins the tools the build must produce.
+    # start_chain passes both through to the build container.
+    for key, var in (("hints", "ALEMBIC_HINTS"), ("task_spec", "ALEMBIC_TASKS")):
+        if rec.get(key):
+            env[var] = rec[key]
     try:
         with open(log_path, "w", encoding="utf-8") as log:
             proc = subprocess.Popen(
@@ -218,6 +248,23 @@ def _runner(rec: Dict[str, Any]) -> None:
     except Exception as exc:  # noqa: BLE001 — the build itself succeeded
         logger.warning("catalogue registration thread failed: %s", exc)
     _write_job_meta(rec)  # the registration outcome has to outlive this process
+    if rec.get("status") == "done":
+        _auto_upload(rec)
+
+
+def _auto_upload(rec: Dict[str, Any]) -> None:
+    """Upload a finished build to the MCP hub when the auto-upload setting is on."""
+    try:
+        from CoScientist.tools import alembic_hub
+
+        if not alembic_hub.auto_upload_enabled():
+            return
+        result = alembic_hub.upload_build(rec["job_id"], keep_better=True)
+    except Exception as exc:  # noqa: BLE001 - the build itself succeeded
+        logger.warning("auto-upload of %s to the MCP hub failed: %s", rec.get("job_id"), exc)
+        return
+    if not result.get("ok") and not result.get("skipped"):
+        logger.warning("auto-upload of %s to the MCP hub failed: %s", rec["job_id"], result.get("error"))
 
 
 def _snapshot(rec: Dict[str, Any], with_log_tail: bool = True) -> Dict[str, Any]:
@@ -240,9 +287,16 @@ def _snapshot(rec: Dict[str, Any], with_log_tail: bool = True) -> Dict[str, Any]
     stages = _STAGE_RE.findall(text)
     if stages:
         out["stage"] = f"{stages[-1][0]}/5 {stages[-1][1]}"
-    counts = _validator_counts(text)
+    # A server taken from a tool image has no build log; its counts came from the image.
+    counts = _validator_counts(text) or rec.get("tool_counts")
     if counts:
         out["tool_counts"] = counts
+    if rec.get("origin"):
+        out["origin"] = rec["origin"]
+    if rec.get("hub"):
+        out["hub"] = rec["hub"]
+    if rec.get("origin") == "hub" and rec["status"] == "running":
+        out["stage"] = "pulling from the MCP hub"
     if rec["status"] == "running":
         if with_log_tail:
             out["log_tail"] = "\n".join(text.splitlines()[-_LOG_TAIL_LINES:])
@@ -271,9 +325,366 @@ def _snapshot(rec: Dict[str, Any], with_log_tail: bool = True) -> Dict[str, Any]
     return out
 
 
+def _claim(rec: Dict[str, Any], scope: Optional[list]) -> None:
+    """Record that a session built or reused this build, so its server is
+    attached to that session's executor (live_build_servers). Call under _LOCK."""
+    if scope and scope not in rec.setdefault("scopes", []):
+        rec["scopes"].append(scope)
+
+
+_RESTARTED_NOTE = ("The server of this build was stopped: started it again from the "
+                   "build's image. Use the mcp_url below.")
+
+# A container that stays up can still be loading its libraries: the address is
+# handed out only once the server answers MCP.
+_SERVE_READY_TIMEOUT = float(os.getenv("ALEMBIC_SERVE_READY_TIMEOUT", "60"))
+_SERVE_READY_POLL = 2.0
+
+
+def _wait_until_answering(mcp_url: str) -> Optional[list]:
+    """The tools a just-started server lists, polled until it answers or
+    _SERVE_READY_TIMEOUT passes (then None). Runs an event loop, so call it
+    from a worker thread."""
+    deadline = time.monotonic() + _SERVE_READY_TIMEOUT
+    while True:
+        tools = asyncio.run(_served_tools(mcp_url))
+        if tools is not None or time.monotonic() >= deadline:
+            return tools
+        time.sleep(_SERVE_READY_POLL)
+
+
+def _mark_unserved(out: Dict[str, Any], served: Dict[str, Any], job_id: str) -> None:
+    """Take the address out of a result whose server cannot be called now."""
+    out.pop("mcp_url", None)
+    out.pop("tools", None)
+    out["server_running"] = False
+    if served.get("answering") is False:
+        out["note"] = (f"The server of this build was started again but does not answer MCP "
+                       f"after {int(_SERVE_READY_TIMEOUT)} s. Call check_mcp_build('{job_id}') "
+                       "again in a minute.")
+    else:
+        out["note"] = ("The build finished, but its server is stopped and did not start "
+                       f"again: {served.get('error')}. Call build_mcp_server with "
+                       "force_rebuild=true to build it anew.")
+
+
+def _await_answer(rec: Dict[str, Any], url: str) -> bool:
+    """Wait until the server at ``url`` answers MCP and keep its tools on ``rec``."""
+    tools = _wait_until_answering(url)
+    with _LOCK:
+        rec["serve_pending"] = tools is None
+        if tools:
+            rec["tools"] = tools
+    return tools is not None
+
+
+def _ensure_served(rec: Dict[str, Any]) -> Dict[str, Any]:
+    """Start a finished build's server again when it is down and wait until it answers.
+
+    Returns {"ok": True, "started": bool}, {"ok": False, "error": ...} when it does
+    not start, or {"ok": False, "answering": False}. Runs docker: call it outside _LOCK.
+    """
+    container = rec.get("container")
+    if rec.get("status") != "done" or not container:
+        return {"ok": True, "started": False}
+    if _container_state(container)["running"]:
+        # serve_pending: started earlier for an agent and not answering yet.
+        if not rec.get("serve_pending"):
+            return {"ok": True, "started": False}
+        url = rec["mcp_url"]
+    else:
+        started = start_build_server(rec["job_id"])
+        if not started.get("ok"):
+            logger.warning("could not serve %s again: %s", rec["job_id"], started.get("error"))
+            return {"ok": False, "error": started.get("error")}
+        url = started["mcp_url"]
+    if not _await_answer(rec, url):
+        logger.warning("%s was started but does not answer MCP at %s", rec["job_id"], url)
+        return {"ok": False, "answering": False}
+    return {"ok": True, "started": True}
+
+
+def _adopt(job: Dict[str, Any], scope: Optional[list],
+           note: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Put a build found on the host into this process's registry.
+
+    Returns (record, snapshot with ``note``), the pair build_mcp_server
+    publishes. A build already in ``_JOBS`` only takes the current address.
+    """
+    with _LOCK:
+        rec = _JOBS.get(job["job_id"])
+        if rec is None:
+            rec = {k: job[k] for k in (
+                "job_id", "repo_url", "status", "started_at", "finished_at", "log_file",
+                "workdir", "mcp_url", "image", "container", "image_id", "server_id",
+                "registered", "registration_error", "origin", "tool_counts")
+                if job.get(k) is not None}
+            rec.setdefault("started_at", time.time())
+            rec.setdefault("log_file", str(LOG_DIR / f"{job['job_id']}.log"))
+            _evict_finished_jobs()
+            _JOBS[rec["job_id"]] = rec
+        else:
+            rec.update({k: job[k] for k in ("mcp_url", "container", "image_id") if job.get(k)})
+        _claim(rec, scope)
+        snap = _snapshot(rec)
+    snap["note"] = note
+    return rec, snap
+
+
+# What the builds page reads from a tool image: the reports and the generated
+# code. The venvs (hundreds of MB) stay behind, and so does pipeline.log, the
+# agents' output.
+_IMAGE_ARTIFACTS = ("reports", "output/tools", "output/helpers", "output/tests",
+                    "output/server.py", "output/setup.sh")
+
+
+def _import_image_artifacts(job_id: str, container: str, repo: str
+                            ) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+    """Copy the alembic artifacts of ``container``'s image into a workdir of its own.
+
+    A server built outside the builds tool (start_chain by hand, later an image
+    from the hub) keeps its reports and generated tools only inside the image,
+    and the builds page reads them from a build's workdir. Returns (workdir,
+    validation counts); (None, None) when the image has none.
+    """
+    workdir = LOG_DIR / job_id / "workdir"
+    base = workdir / repo
+    copied = False
+    for rel in _IMAGE_ARTIFACTS:
+        dest = base / rel
+        if dest.exists():  # docker cp into an existing folder nests the source in it
+            copied = True
+            continue
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        r = _docker("cp", f"{container}:/work/.alembic/{repo}/{rel}", str(dest), timeout=300)
+        copied = copied or r.returncode == 0
+    if not copied:
+        shutil.rmtree(LOG_DIR / job_id, ignore_errors=True)
+        return None, None
+    try:
+        counts = json.loads((base / "reports" / "validation.json").read_text(encoding="utf-8"))["counts"]
+    except (OSError, ValueError, KeyError, TypeError):
+        counts = None
+    return str(workdir), counts
+
+
+def _reuse_from_host(repo_url: str, scope: Optional[list]
+                     ) -> Optional[Tuple[Dict[str, Any], Dict[str, Any]]]:
+    """A server for ``repo_url`` this host can provide without the pipeline.
+
+    In order: a finished build whose container still runs; a finished build
+    whose own image is still here, started again with start_build_server; a
+    running alembic server for the repository with no build record (started
+    with start_chain.py by hand). None when there is nothing to reuse.
+    """
+    inv = docker_inventory()
+    builds = web_list_builds()
+    done = [b for b in builds if b.get("repo_url") == repo_url and b.get("status") == "done"]
+    for build in done:
+        name = build.get("container")
+        port = _container_state(name).get("port") \
+            if name and inv["containers"].get(name, {}).get("running") else None
+        if port:
+            job = {**_job(build["job_id"])[1], "container": name, "mcp_url": _advertised_url(port)}
+            return _adopt(job, scope, (
+                f"This repository was already built ({build['job_id']}) and its server "
+                f"{name} is still running: reusing it. Pass force_rebuild=true to rebuild."))
+    for build in done:
+        if not job_image(_job(build["job_id"])[1], inv):
+            continue
+        started = start_build_server(build["job_id"])
+        if started.get("ok"):
+            rec, snap = _adopt({**_job(build["job_id"])[1], **started}, scope, (
+                f"This repository was already built ({build['job_id']}) and its image is "
+                "still here, but the server was down: started it again from that image "
+                "without rerunning the pipeline. Pass force_rebuild=true to rebuild."))
+            if not _await_answer(rec, started["mcp_url"]):
+                _mark_unserved(snap, {"answering": False}, build["job_id"])
+            return rec, snap
+        logger.warning("could not serve %s again: %s", build["job_id"], started.get("error"))
+    claimed = {b.get("container") for b in builds}
+    own = re.compile(rf"alembic-serve-{re.escape(_repo_name(repo_url))}-[0-9a-f]+$")
+    for name, container in inv["containers"].items():
+        if not (container["running"] and own.match(name)) or name in claimed:
+            continue
+        port = _container_state(name).get("port")
+        if port:
+            job_id = f"{_repo_name(repo_url)}-external-{name.rsplit('-', 1)[-1]}"
+            imported = _import_image_artifacts(job_id, name, _repo_name(repo_url))
+            return _record_external(job_id, name, repo_url, port, container["image_id"],
+                                    imported, scope, "reused")
+    return None
+
+
+def _web_flag(name: str, default: bool) -> bool:
+    """A boolean web setting; ``default`` when the settings cannot be loaded."""
+    try:
+        from CoScientist.config import get_settings
+
+        return bool(getattr(get_settings().web, name))
+    except Exception:  # noqa: BLE001 - settings unavailable outside the app
+        return default
+
+
+def _agent_may_build() -> bool:
+    """Whether an agent may start a conversion (tens of minutes) by itself.
+    Reuse and hub pulls are not affected; the builds page always converts."""
+    return _web_flag("alembic_agent_build_enabled", False)
+
+
+def _pull_from_hub(repo_url: str, scope: Optional[list]) -> Optional[Dict[str, Any]]:
+    """Start pulling a server converted from ``repo_url`` from the MCP hub; its snapshot, or None.
+
+    None when the hub search setting is off, no hub is configured, the hub has
+    no such server, or Docker Hub does not answer: the build goes ahead then.
+    """
+    try:
+        from CoScientist.tools import alembic_hub
+
+        if not alembic_hub.search_enabled():
+            return None
+        found = alembic_hub.find_for_repo(repo_url)
+        if found is None:
+            return None
+        snap = alembic_hub.start_pull(found["name"], "latest", scope=scope, repo_url=repo_url)
+    except Exception as exc:  # noqa: BLE001 - a hub problem must not block a build
+        logger.warning("MCP hub lookup for %s failed: %s", repo_url, exc)
+        return None
+    return snap if snap.get("status") == "running" else None
+
+
+def _record_external(job_id: str, name: str, repo_url: str, port: str,
+                     image_id: Optional[str], imported: Tuple[Optional[str], Optional[Dict[str, Any]]],
+                     scope: Optional[list], verb: str) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Register a running server started outside the builds tool as a build of its own.
+
+    Kept on disk like any build, so it outlives this process, and its page has a
+    history line saying where it came from. Returns what _adopt returns.
+    """
+    workdir, counts = imported
+    job = {"job_id": job_id, "repo_url": repo_url, "status": "done",
+           "finished_at": time.time(), "mcp_url": _advertised_url(port),
+           "container": name, "image_id": image_id,
+           "origin": "image" if workdir else "unknown",
+           "workdir": workdir, "tool_counts": counts}
+    rec, snap = _adopt(job, scope, (
+        f"Found a running MCP server for this repository ({name}) that was "
+        "started outside this tool: reusing it. Pass force_rebuild=true to rebuild."))
+    if counts:
+        summary = (f"alembic artifacts copied from its image, {counts.get('tools_passed')} of "
+                   f"{counts.get('tools_total')} tools passed validation")
+    elif workdir:
+        summary = "alembic artifacts copied from its image, without a validation report"
+    else:
+        summary = "its image carries no alembic artifacts"
+    with _LOCK:
+        current = dict(rec)
+    _write_job_meta(current)
+    _log_event(current, f"{verb} {name}, a running server started outside the builds "
+                        f"tool; {summary}")
+    return rec, snap
+
+
+# Serve containers carry start_chain's project label, and their name carries the
+# repository: alembic-serve-<repo>-<hex>.
+_PROJECT_LABEL = "project=coscientist"
+_SERVE_NAME_RE = re.compile(r"^alembic-serve-(.+)-([0-9a-f]+)$")
+_DISCOVERY_INTERVAL = 15.0
+_last_discovery = 0.0
+
+
+def _plan_repo_url(workdir: Optional[str], repo: str) -> Optional[str]:
+    """The repository named in the plan among a server's copied artifacts."""
+    if not workdir:
+        return None
+    try:
+        plan = json.loads((Path(workdir) / repo / "reports" / "plan.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    return plan.get("repo_url") if isinstance(plan, dict) else None
+
+
+def adopt_unclaimed_servers() -> list:
+    """Record every running alembic server no build knows; returns their job ids.
+
+    The repository comes from the image's alembic.repo_url label, else from the
+    plan among its artifacts; a server with neither is skipped. The builds list
+    polls, so a pass runs at most once per _DISCOVERY_INTERVAL seconds.
+    """
+    global _last_discovery
+    with _LOCK:
+        now = time.monotonic()
+        if now - _last_discovery < _DISCOVERY_INTERVAL:
+            return []
+        _last_discovery = now
+    r = _docker("ps", "--filter", f"label={_PROJECT_LABEL}", "--filter", "name=alembic-serve-",
+                "--format", '{{.Names}}|{{.Label "alembic.repo_url"}}', timeout=30)
+    if r.returncode != 0:
+        return []
+    builds = web_list_builds()
+    claimed = {b.get("container") for b in builds}
+    known_images = None
+    added = []
+    for line in r.stdout.splitlines():
+        name, _, labelled = line.strip().partition("|")
+        match = _SERVE_NAME_RE.match(name)
+        if not match or name in claimed:
+            continue
+        state = _container_state(name)
+        if not state.get("port"):
+            continue
+        # A new container of a known build (a Start that replaced one): its
+        # record catches up within seconds, so it gets no second record.
+        if known_images is None:
+            inv = docker_inventory()
+            known_images = {job_image(b, inv) for b in builds} - {None}
+        if state.get("image_id") in known_images:
+            continue
+        repo, suffix = match.groups()
+        job_id = f"{repo}-external-{suffix}"
+        imported = _import_image_artifacts(job_id, name, repo)
+        repo_url = labelled or _plan_repo_url(imported[0], repo)
+        if not repo_url:
+            shutil.rmtree(LOG_DIR / job_id, ignore_errors=True)
+            logger.info("left %s out of the builds list: nothing names its repository", name)
+            continue
+        rec, _ = _record_external(job_id, name, repo_url, state["port"], state.get("image_id"),
+                                  imported, None, "found")
+        added.append(rec["job_id"])
+    return added
+
+
+_TASK_SPEC_MAX_CHARS = 100_000
+
+
+def resolve_task_spec(value: Optional[str]) -> Optional[str]:
+    """A task spec as text: a local file or an http(s) link is read here, since
+    the build container, often on another daemon, cannot reach this host's paths."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    if value.lower().startswith(("http://", "https://")):
+        import requests
+
+        resp = requests.get(value, timeout=30)
+        resp.raise_for_status()
+        text = resp.text
+    else:
+        try:
+            path = Path(value).expanduser()
+            text = path.read_text(encoding="utf-8") if path.is_file() else value
+        except OSError:
+            text = value
+    if len(text) > _TASK_SPEC_MAX_CHARS:
+        raise ValueError(f"the task spec is over {_TASK_SPEC_MAX_CHARS} characters")
+    return text
+
+
 async def build_mcp_server(
     repo_url: str,
     force_rebuild: bool = False,
+    hints: Optional[str] = None,
+    task_spec: Optional[str] = None,
     tool_context: Optional[ToolContext] = None,
 ) -> Dict[str, Any]:
     """Start an Alembic build: turn a GitHub repository into a served MCP tool
@@ -285,34 +696,105 @@ async def build_mcp_server(
     Args:
         repo_url: GitHub repository URL, e.g. "https://github.com/whitead/synspace".
         force_rebuild: Start a fresh build even if this repo already has a
-            finished (or running) build in this process.
+            build or a running server on this host.
+        hints: Free text saying what kind of tool is needed, to steer the
+            explorer. It forces no tool name or signature; leave it unset to let
+            the explorer propose tools on its own.
+        task_spec: For an operator who already knows the exact tools the server
+            must expose: their spec as JSON/YAML text, or a path or link to it.
+            Those tools are then required, and the build fails without them.
 
     Returns:
-        status "running" with the job_id to check later; or the existing job for
-        this repo (already running/done) unless force_rebuild is set.
+        status "running" with the job_id to check later; or, unless force_rebuild
+        is set, an existing build of this repo, a server already on this host, or
+        a server being pulled from the MCP hub (also "running", checked the same way).
     """
     repo_url = (repo_url or "").strip()
     if not re.match(r"^(https?://|git@)\S+/\S+", repo_url):
         return {"status": "error",
                 "error": f"repo_url does not look like a git repository URL: {repo_url!r}"}
 
+    # A guessed repository would fail only at the clone step, minutes into the build.
+    ok, why = _repo_exists(repo_url)
+    if not ok:
+        return {
+            "status": "error",
+            "repo_url": repo_url,
+            "error": f"repository is not reachable: {why}",
+            "note": ("Nothing was built. Find the real repository of this "
+                     "paper/library (search the web or the paper's text for its "
+                     "code link) and call build_mcp_server again with the URL "
+                     "you verified."),
+        }
+
+    from CoScientist.graph.session_scope import session_key
+
+    try:
+        task_spec = resolve_task_spec(task_spec)
+    except Exception as exc:  # noqa: BLE001 - nothing is built on a spec we cannot read
+        return {"status": "error", "repo_url": repo_url,
+                "error": f"the task spec could not be read: {type(exc).__name__}: {exc}"}
+    hints = (hints or "").strip() or None
+
+    scope = list(session_key(tool_context)) if tool_context is not None else None
+    reuse = None
+    done = None
     with _LOCK:
         if not force_rebuild:
             # Prefer a live build; else the most recent finished one.
             same = [r for r in _JOBS.values() if r["repo_url"] == repo_url]
             for rec in reversed(same):
                 if rec["status"] == "running":
+                    _claim(rec, scope)
                     snap = _snapshot(rec, with_log_tail=False)
-                    snap["note"] = ("A build for this repository is already running — "
+                    snap["note"] = ("A build for this repository is already running: "
                                     f"reusing it. Track it with check_mcp_build('{rec['job_id']}').")
                     return snap
-            for rec in reversed(same):
-                if rec["status"] == "done":
-                    snap = _snapshot(rec)
-                    snap["note"] = ("This repository was already built in this process — "
-                                    "reusing the result. Pass force_rebuild=true to rebuild.")
-                    return snap
+            done = next((r for r in reversed(same) if r["status"] == "done"), None)
+    if done is not None:
+        # A server that is down and does not start leaves the build unusable:
+        # the host cascade below and then a new build take over.
+        served = await asyncio.to_thread(_ensure_served, done)
+        if served["ok"] or served.get("answering") is False:
+            with _LOCK:
+                _claim(done, scope)
+                snap = _snapshot(done)
+            if not served["ok"]:
+                # Started and still loading: a new build would only take longer.
+                _mark_unserved(snap, served, done["job_id"])
+                return snap
+            snap["note"] = ("This repository was already built in this process: "
+                            "reusing the result. Pass force_rebuild=true to rebuild.")
+            if served["started"]:
+                snap["note"] += " " + _RESTARTED_NOTE
+            reuse = (done, snap)
+    if reuse is None and not force_rebuild:
+        # Nothing in this process's memory, e.g. after a restart. An earlier
+        # build may still serve, or its image can be served again in seconds.
+        reuse = await asyncio.to_thread(_reuse_from_host, repo_url, scope)
+    if reuse is None and not force_rebuild:
+        pulled = await asyncio.to_thread(_pull_from_hub, repo_url, scope)
+        if pulled is not None:
+            return pulled
+    if reuse is not None:
+        # A reused server must reach the session the same way a fresh one does,
+        # or the executor cannot call it: publish it into `deployed_mcps`.
+        await _publish_to_catalogue(reuse[0], reuse[1], tool_context)
+        return reuse[1]
 
+    # tool_context is the mark of an agent call; the builds page passes none.
+    if tool_context is not None and not _agent_may_build():
+        return {
+            "status": "error",
+            "repo_url": repo_url,
+            "error": "converting a repository is turned off for agents in the settings "
+                     "(Alembic MCP: agent may convert repositories)",
+            "note": ("No server for this repository runs on this host, and the MCP hub has "
+                     "none either. Say so in your answer and go on with the tools you have; "
+                     "an operator can convert the repository on the MCP builder page."),
+        }
+
+    with _LOCK:
         job_id = f"{_repo_name(repo_url)}-{secrets.token_hex(3)}"
         rec: Dict[str, Any] = {
             "job_id": job_id,
@@ -321,6 +803,10 @@ async def build_mcp_server(
             "started_at": time.time(),
             "log_file": str(LOG_DIR / f"{job_id}.log"),
             "workdir": str(LOG_DIR / job_id / "workdir"),
+            "scopes": [scope] if scope else [],
+            "origin": "builder",
+            "hints": hints,
+            "task_spec": task_spec,
         }
         _evict_finished_jobs()
         _JOBS[job_id] = rec
@@ -351,15 +837,32 @@ async def check_mcp_build(
     Returns:
         status "running" with the current pipeline stage and a log tail;
         "done" with the served MCP endpoint (mcp_url), image and container;
-        or "failed" with the error tail of the build log.
+        or "failed" with the error tail of the build log. A finished build
+        whose server was stopped has its server started again first; when
+        that fails, the result has no mcp_url and server_running is false.
     """
+    from CoScientist.graph.session_scope import session_key
+
+    # A long-lived process keeps builds across chats, and McpBuilderAgent reaches
+    # a known one through list_mcp_builds + check_mcp_build, never through
+    # build_mcp_server. Claim it here too, or its server is not attached to this
+    # session's executor and the task falls through to CoderAgent.
+    scope = list(session_key(tool_context)) if tool_context is not None else None
     with _LOCK:
         rec = _JOBS.get(job_id)
         if rec is None:
             return {"status": "error",
                     "error": f"unknown job_id {job_id!r} — use list_mcp_builds() "
                              "to see the builds known to this process."}
+    served = await asyncio.to_thread(_ensure_served, rec)
+    with _LOCK:
+        _claim(rec, scope)
         out = _snapshot(rec)
+    if served.get("started"):
+        out["note"] = _RESTARTED_NOTE
+    elif not served["ok"]:
+        # An address of a server that cannot be called is a dead end for the executor.
+        _mark_unserved(out, served, job_id)
     # Outside the lock: publishing talks to the registry over the network.
     await _publish_to_catalogue(rec, out, tool_context)
     return out
@@ -392,6 +895,8 @@ async def _register_in_catalogue(rec: Dict[str, Any]) -> None:
             "served on a loopback address, so it was kept out of the shared "
             "catalogue; set A2A_HOST in .env to a host other machines can reach"
         )
+        logger.info("catalogue registration skipped for %s: loopback address %s",
+                    _repo_name(rec["repo_url"]), rec["mcp_url"])
         return
 
     from CoScientist.tools.registry_bridge import register_mcp_server
@@ -424,6 +929,37 @@ async def _register_in_catalogue(rec: Dict[str, Any]) -> None:
         )
 
 
+_TOOL_LIST_TIMEOUT = 20
+
+
+async def _served_tools(mcp_url: str) -> Optional[list]:
+    """Names and one-line descriptions of the tools a served MCP server lists.
+
+    The build result carries them so that the agents downstream call the tools
+    by their real names. Without them the caller guessed a name ("sample_space"
+    for synspace's chemical_space) and the call went nowhere. None when the
+    server does not answer in time, so a server with no tools is told apart.
+    """
+    from mcp import ClientSession
+    from mcp.client.streamable_http import streamablehttp_client
+
+    async def _list():
+        async with streamablehttp_client(mcp_url) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                return (await session.list_tools()).tools
+
+    try:
+        listed = await asyncio.wait_for(_list(), _TOOL_LIST_TIMEOUT)
+    except Exception as exc:  # noqa: BLE001 - the build result stands without the list
+        # Debug only: _wait_until_answering expects refusals while a server loads.
+        logger.debug("could not list the tools of %s: %s", mcp_url, exc)
+        return None
+    return [{"name": tool.name,
+             "description": ((tool.description or "").strip().splitlines() or [""])[0][:160]}
+            for tool in listed]
+
+
 async def _publish_to_catalogue(
     rec: Dict[str, Any], out: Dict[str, Any], tool_context: Optional[ToolContext]
 ) -> None:
@@ -441,6 +977,15 @@ async def _publish_to_catalogue(
     out["registered"] = rec.get("registered", False)
     if rec.get("registration_error"):
         out["registration_error"] = rec["registration_error"]
+    tools = rec.get("tools")
+    if not tools:
+        tools = await _served_tools(out["mcp_url"])
+        if tools is None:
+            logger.warning("could not list the tools of %s", out["mcp_url"])
+    if tools:
+        with _LOCK:
+            rec["tools"] = tools
+        out["tools"] = tools
 
     if tool_context is not None:
         from CoScientist.tools.registry_bridge import resolve_into_state
@@ -462,10 +1007,38 @@ async def list_mcp_builds(tool_context: Optional[ToolContext] = None) -> Dict[st
 
     Returns:
         builds: one summary per job (job_id, repo_url, status, stage/mcp_url).
+        A finished build also has server_running; when it is false,
+        check_mcp_build(job_id) starts the server again.
     """
     with _LOCK:
-        return {"builds": [_snapshot(rec, with_log_tail=False)
-                           for rec in _JOBS.values()]}
+        builds = [(rec.get("container") if rec["status"] == "done" else None,
+                   _snapshot(rec, with_log_tail=False)) for rec in _JOBS.values()]
+    for container, snap in builds:
+        if container:
+            state = await asyncio.to_thread(_container_state, container)
+            snap["server_running"] = state["running"]
+    return {"builds": [snap for _, snap in builds]}
+
+
+def live_build_servers(scope: Optional[Tuple[str, str]]) -> Dict[str, str]:
+    """{url: name} of the running servers of finished builds ``scope`` built or reused.
+
+    A fallback for ``deployed_mcps``, which the nested McpBuilderAgent invocation
+    does not always pass on to the agent that calls the tool.
+    """
+    if not scope:
+        return {}
+    scope = list(scope)
+    with _LOCK:
+        recs = [dict(r) for r in _JOBS.values() if scope in r.get("scopes", [])]
+    servers: Dict[str, str] = {}
+    for rec in recs:
+        url, container = rec.get("mcp_url"), rec.get("container")
+        if rec.get("status") != "done" or not url or not container:
+            continue
+        if _container_state(container)["running"]:
+            servers[url] = _repo_name(rec["repo_url"])
+    return servers
 
 
 ALEMBIC_TOOLS = [build_mcp_server, check_mcp_build, list_mcp_builds]
@@ -503,7 +1076,7 @@ def _recover_repo_url(text: str) -> Optional[str]:
 def _status_from_log(text: str) -> str:
     """Best-effort status for a build we only know from its on-disk log (started
     by another process, so not in this process's _JOBS)."""
-    if _URL_RE.search(text) or '"status": "complete"' in text:
+    if _SERVE_BANNER in text or '"status": "complete"' in text:
         return "done"
     for marker in ("pipeline failed", "Traceback (most recent call last)",
                    "failed to connect to the docker API", '"status": "failed"'):
@@ -639,9 +1212,13 @@ def web_build_snapshot(job_id: str) -> Optional[Dict[str, Any]]:
     stages = _STAGE_RE.findall(text)
     if stages:
         out["stage"] = f"{stages[-1][0]}/5 {stages[-1][1]}"
-    counts = _validator_counts(text)
+    counts = _validator_counts(text) or meta.get("tool_counts")
     if counts:
         out["tool_counts"] = counts
+    if meta.get("origin"):
+        out["origin"] = meta["origin"]
+    if meta.get("hub"):
+        out["hub"] = meta["hub"]
     return out
 
 
@@ -725,7 +1302,28 @@ def docker_inventory() -> Dict[str, Any]:
             if len(parts) == 3:
                 inv["containers"][parts[0].lstrip("/")] = {
                     "image_id": parts[1], "running": parts[2] == "true"}
+    # `docker images` leaves out an image that lost its last tag, which happens
+    # when a newer build of the repository takes alembic-tool:<repo>. A container
+    # made from it still runs or can start again, so the image is added by id;
+    # without it that server showed "no image" and no controls on the builds page.
+    missing = sorted({c["image_id"] for c in inv["containers"].values()} - set(inv["images"]))
+    if missing:
+        r = _docker("image", "inspect", "-f", "{{.Id}}|{{.Size}}", *missing, timeout=30)
+        for line in r.stdout.splitlines():
+            image_id, _, size = line.partition("|")
+            if image_id in missing and size.isdigit():
+                inv["images"][image_id] = _docker_size(int(size))
     return inv
+
+
+def _docker_size(size: int) -> str:
+    """Bytes the way `docker images` prints them (decimal units, three digits)."""
+    value = float(size)
+    for unit in ("B", "kB", "MB", "GB"):
+        if value < 1000:
+            return f"{value:.3g}{unit}"
+        value /= 1000
+    return f"{value:.3g}TB"
 
 
 def job_image(job: Dict[str, Any], inv: Dict[str, Any]) -> Optional[str]:
@@ -862,10 +1460,14 @@ def _refresh_registration(job: Dict[str, Any], mcp_url: str) -> Dict[str, Any]:
     }
 
 
-def _serve_new_container(job: Dict[str, Any], image_ref: str) -> tuple[Optional[str], str]:
+def _serve_new_container(job: Dict[str, Any], image_ref: str,
+                         port: Optional[str] = None) -> tuple[Optional[str], str]:
     """Serve the image in a new container through start_chain --serve-only, so
-    the port, env file, GPU flag and start check match a build's own serve."""
+    the port, env file, GPU flag and start check match a build's own serve.
+    ``port`` is the host port to publish on; by default a random one."""
     cmd = [sys.executable, str(START_CHAIN), job["repo_url"], "--serve-only", "--image", image_ref]
+    if port:
+        cmd += ["--port", str(port)]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, cwd=PROJECT_ROOT,
                            timeout=300, check=False)
@@ -892,6 +1494,53 @@ def _now_serving(job: Dict[str, Any], rec: Optional[Dict[str, Any]], name: str,
     return {"ok": True, **fields}
 
 
+def _s3_fingerprint(name: str, value: str) -> str:
+    """Same rule as start_chain.s3_fingerprint: keys are compared by SHA-256."""
+    if value and name.endswith(("ACCESS_KEY", "SECRET_KEY")):
+        return "sha256:" + hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
+    return value
+
+
+def _container_env(name: str) -> Dict[str, str]:
+    r = _docker("inspect", "-f", "{{json .Config.Env}}", name, timeout=30)
+    try:
+        return dict(item.split("=", 1) for item in json.loads(r.stdout) if "=" in item)
+    except (ValueError, TypeError):
+        return {}
+
+
+def _container_host_port(name: str) -> Optional[str]:
+    """The host port a (possibly stopped) container publishes its MCP port on."""
+    r = _docker("inspect", "-f", "{{json .HostConfig.PortBindings}}", name, timeout=30)
+    try:
+        return json.loads(r.stdout)["8000/tcp"][0]["HostPort"] or None
+    except (ValueError, KeyError, IndexError, TypeError):
+        return None
+
+
+def _expected_s3_settings(repo_url: str) -> Optional[Dict[str, str]]:
+    """The S3 settings start_chain would give a serve container now (--serve-env)."""
+    try:
+        r = subprocess.run([sys.executable, str(START_CHAIN), repo_url, "--serve-env"],
+                           capture_output=True, text=True, cwd=PROJECT_ROOT, timeout=60, check=False)
+        return json.loads(r.stdout.strip().splitlines()[-1])
+    except (OSError, subprocess.SubprocessError, ValueError, IndexError) as exc:
+        logger.warning("could not read the S3 settings start_chain would use: %s", exc)
+        return None
+
+
+def _s3_settings_changed(name: str, repo_url: str) -> list:
+    """Names of the S3 settings container ``name`` was created with that differ
+    from what a new serve container would get now. Empty when they match or
+    cannot be compared, so an unreadable setting never costs a container."""
+    expected = _expected_s3_settings(repo_url)
+    if not expected:
+        return []
+    current = _container_env(name)
+    return sorted(key for key, value in expected.items()
+                  if (_s3_fingerprint(key, current.get(key, "")) or "") != (value or ""))
+
+
 def start_build_server(job_id: str) -> Dict[str, Any]:
     """Start a finished build's MCP server and re-check its catalogue registration.
 
@@ -910,18 +1559,32 @@ def start_build_server(job_id: str) -> Dict[str, Any]:
     state = _container_state(name)
     if state["running"]:
         return {"ok": False, "error": f"{name} is already running"}
-    if state["exists"] and state.get("image_id") == image and _docker("start", name).returncode == 0:
+    own = state["exists"] and state.get("image_id") == image
+    # A container keeps the environment it was created with. After .env moves to
+    # another S3 (a local MinIO to the shared vault), docker start would bring back
+    # the old endpoint and keys, so such a container is replaced instead.
+    changed = _s3_settings_changed(name, job["repo_url"]) if own else []
+    verb = "started"
+    if own and not changed and _docker("start", name).returncode == 0:
         if not _stays_up(name):
             return {"ok": False, "error": _exited_error(name)}
     else:
+        port = None
+        if changed:
+            # The replacement takes its port, so the address and the catalogue row
+            # stay; removing it first frees that port.
+            port = _container_host_port(name)
+            _docker("rm", name)
+            verb = f"S3 settings changed ({', '.join(changed)}), so started a new container"
         own_tag = f"{_TOOL_IMAGE}:{job_id}"
-        new_name, error = _serve_new_container(job, own_tag if inv["tags"].get(own_tag) == image else image)
+        new_name, error = _serve_new_container(
+            job, own_tag if inv["tags"].get(own_tag) == image else image, port)
         if not new_name:
             return {"ok": False, "error": error}
-        if state["exists"]:
+        if state["exists"] and not changed:
             _docker("rm", name)  # the container this one replaces
         name = new_name
-    return _now_serving(job, rec, name, "started", container=name, image_id=image)
+    return _now_serving(job, rec, name, verb, container=name, image_id=image)
 
 
 def restart_build_server(job_id: str) -> Dict[str, Any]:
@@ -961,6 +1624,23 @@ def stop_build_server(job_id: str) -> Dict[str, Any]:
     _update_job(job, rec, fields)
     _log_event(job, f"stopped {name}" + (f"; {result['warning']}" if "warning" in result else ""))
     return {**result, **{k: v for k, v in fields.items() if k != "served_at"}}
+
+
+def remove_build_container(job_id: str) -> Dict[str, Any]:
+    """Stop and remove a build's container, keeping the image. Other builds on
+    the same image are untouched, and Start makes this one a new container."""
+    _, job = _job(job_id)
+    name = job.get("container")
+    if not _container_state(name)["exists"]:
+        return {"ok": False, "error": "this build has no container on this host"}
+    result = stop_build_server(job_id)
+    if not result["ok"]:
+        return result
+    r = _docker("rm", "-f", name)
+    if r.returncode != 0:
+        return {"ok": False, "error": f"docker rm failed: {(r.stderr or r.stdout).strip()[-500:]}"}
+    _log_event(job, f"removed container {name}; the image stays")
+    return {**result, "removed_container": name}
 
 
 def _builds_sharing(image: str, job_id: str, inv: Dict[str, Any]) -> list:
@@ -1126,7 +1806,7 @@ def import_jobs_snapshot(jobs: list) -> None:
 __all__ = ["ALEMBIC_TOOLS", "build_mcp_server", "check_mcp_build", "list_mcp_builds",
            "web_build_log_file", "web_build_snapshot", "web_build_workdir",
            "web_build_repo_url", "web_list_builds", "cancel_build", "parse_event_line",
-           "docker_inventory", "job_image", "start_build_server", "restart_build_server",
+           "adopt_unclaimed_servers", "docker_inventory", "job_image", "start_build_server", "restart_build_server",
            "stop_build_server", "delete_build_image", "non_runnable_builds",
            "clear_non_runnable_builds",
            "export_jobs_snapshot", "import_jobs_snapshot", "LOG_DIR"]

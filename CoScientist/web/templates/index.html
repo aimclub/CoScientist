@@ -3644,6 +3644,55 @@
           </div>
         </div>
 
+        <!-- ── Alembic MCP ──────────────────────────────────────── -->
+        <div class="space-y-4">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="material-symbols-outlined text-primary text-base">experiment</span>
+            <h4 class="text-[11px] font-bold text-on-surface uppercase tracking-widest font-headline">Alembic MCP</h4>
+          </div>
+          <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 p-4 space-y-4">
+            <!-- Let the agent convert a repository -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label data-i18n="settings.alembicAgentBuild.label" class="text-xs font-bold text-on-surface">Агент
+                  может конвертировать репозитории</label>
+                <p data-i18n="settings.alembicAgentBuild.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Разрешить агенту запускать конвертацию с нуля, она занимает десятки минут. Когда выключено,
+                  агент всё равно поднимает серверы, уже имеющиеся на этой машине, и скачивает их из хаба;
+                  на странице сборщика конвертация работает как обычно.</p>
+              </div>
+              <input id="alembic-agent-build-checkbox" type="checkbox"
+                class="w-5 h-5 accent-primary cursor-pointer" />
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- MCP hub: search before building -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label data-i18n="settings.alembicHubSearch.label" class="text-xs font-bold text-on-surface">Search
+                  the MCP Hub</label>
+                <p data-i18n="settings.alembicHubSearch.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Before converting a repository, pull its server from the MCP hub (the Docker Hub namespace
+                  in .env) when it is there.</p>
+              </div>
+              <input id="alembic-hub-search-checkbox" type="checkbox" checked
+                class="w-5 h-5 accent-primary cursor-pointer" />
+            </div>
+            <hr class="border-outline-variant/10" />
+            <!-- MCP hub: upload every build -->
+            <div class="flex items-center justify-between gap-4">
+              <div class="flex flex-col">
+                <label data-i18n="settings.alembicHubAutoUpload.label" class="text-xs font-bold text-on-surface">Upload
+                  Builds to the MCP Hub</label>
+                <p data-i18n="settings.alembicHubAutoUpload.desc" class="text-[10px] text-outline-variant mt-0.5 leading-relaxed">
+                  Push every successful build to the public MCP hub (needs DOCKERHUB_USERNAME and
+                  DOCKERHUB_TOKEN in .env).</p>
+              </div>
+              <input id="alembic-hub-auto-upload-checkbox" type="checkbox"
+                class="w-5 h-5 accent-primary cursor-pointer" />
+            </div>
+          </div>
+        </div>
+
         <!-- ── PlannerAgent ─────────────────────────────────────── -->
         <div class="space-y-4">
           <div class="flex items-center gap-2 mb-1">

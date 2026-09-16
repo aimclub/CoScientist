@@ -57,7 +57,7 @@ class DynamicMCPToolset(BaseToolset):
         # url -> McpToolset, cached so we don't reconnect every turn.
         self._by_url: Dict[str, McpToolset] = {}
 
-    async def _server_urls(self, state: dict) -> Dict[str, str]:
+    async def _server_urls(self, state: dict, scope=None) -> Dict[str, str]:
         """{url: name} for every MCP server selected for this task."""
         urls: Dict[str, str] = {}
 
@@ -65,6 +65,17 @@ class DynamicMCPToolset(BaseToolset):
         for s in (state.get("deployed_mcps") or []):
             if s.get("url"):
                 urls[s["url"]] = s.get("name", s["url"])
+
+        # Servers built by McpBuilderAgent in this process. That agent runs as a
+        # nested invocation, so the address it writes into session state does not
+        # always reach here, but the build record does. Only this session's builds.
+        try:
+            from CoScientist.tools.alembic_tools import live_build_servers
+
+            for url, name in live_build_servers(scope).items():
+                urls.setdefault(url, name)
+        except Exception as exc:  # noqa: BLE001 - never fatal for tool listing
+            logger.debug("alembic build registry unavailable: %s", exc)
 
         # Retrieved/filtered local tools reference a server_id -> resolve to a url.
         server_ids = {t["server_id"] for t in (state.get("filtered_tools") or []) if t.get("server_id")}
@@ -89,7 +100,10 @@ class DynamicMCPToolset(BaseToolset):
     async def get_tools(self, readonly_context: Optional[ReadonlyContext] = None) -> List[BaseTool]:
         state = dict(getattr(readonly_context, "state", {}) or {})
         try:
-            urls = await self._server_urls(state)
+            from CoScientist.graph.session_scope import session_key
+
+            scope = session_key(readonly_context) if readonly_context is not None else None
+            urls = await self._server_urls(state, scope)
         except Exception as exc:  # noqa: BLE001
             logger.warning("DynamicMCPToolset: %s", exc)
             return []
@@ -106,6 +120,8 @@ class DynamicMCPToolset(BaseToolset):
                 tools.extend(await ts.get_tools(readonly_context))
             except Exception as exc:  # noqa: BLE001 — skip a dead server, keep the rest
                 logger.warning("DynamicMCPToolset: %s unreachable: %s", url, exc)
+        logger.debug("DynamicMCPToolset: servers=%s tools=%s",
+                    list(urls), [getattr(t, "name", "?") for t in tools])
         return tools
 
     async def close(self) -> None:

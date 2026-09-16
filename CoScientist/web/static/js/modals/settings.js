@@ -41,6 +41,11 @@
             appSettings.taskExecutorAgent.keepScore = data.taskExecutorAgent.keepScore ?? 0.3;
             appSettings.taskExecutorAgent.abstainScore = data.taskExecutorAgent.abstainScore ?? 0.2;
           }
+          if (data.alembicHub) {
+            appSettings.alembicHub.searchEnabled = data.alembicHub.searchEnabled ?? true;
+            appSettings.alembicHub.autoUpload = data.alembicHub.autoUpload ?? false;
+            appSettings.alembicHub.agentBuildEnabled = data.alembicHub.agentBuildEnabled ?? false;
+          }
           if (data.coderAgent) {
             appSettings.coderAgent.sandboxUrl = data.coderAgent.sandboxUrl || 'http://localhost:8884';
             appSettings.coderAgent.workspaceId = data.coderAgent.workspaceId || '';
@@ -88,6 +93,9 @@
       document.getElementById('coder-sandbox-url').value = appSettings.coderAgent.sandboxUrl;
       document.getElementById('coder-workspace-id').value = appSettings.coderAgent.workspaceId;
       document.getElementById('coder-mode-select').value = appSettings.coderAgent.mode || 'local';
+      document.getElementById('alembic-hub-search-checkbox').checked = appSettings.alembicHub.searchEnabled;
+      document.getElementById('alembic-hub-auto-upload-checkbox').checked = appSettings.alembicHub.autoUpload;
+      document.getElementById('alembic-agent-build-checkbox').checked = appSettings.alembicHub.agentBuildEnabled;
       // A deletion result from an earlier visit says nothing about now.
       const graphDeleteStatus = document.getElementById('graph-delete-status');
       graphDeleteStatus.textContent = '';
@@ -250,6 +258,9 @@
       appSettings.coderAgent.sandboxUrl = document.getElementById('coder-sandbox-url').value.trim() || 'http://localhost:8884';
       appSettings.coderAgent.workspaceId = document.getElementById('coder-workspace-id').value.trim();
       appSettings.coderAgent.mode = document.getElementById('coder-mode-select').value;
+      appSettings.alembicHub.searchEnabled = document.getElementById('alembic-hub-search-checkbox').checked;
+      appSettings.alembicHub.autoUpload = document.getElementById('alembic-hub-auto-upload-checkbox').checked;
+      appSettings.alembicHub.agentBuildEnabled = document.getElementById('alembic-agent-build-checkbox').checked;
       if (!activeSandboxWatchUrl) {
         updateCoderSandboxButton(null);
       }

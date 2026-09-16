@@ -58,6 +58,11 @@ const appSettings = {
   hypothesesAgent: {
     maxActiveHypotheses: 1,
   },
+  alembicHub: {
+    searchEnabled: true,
+    autoUpload: false,
+    agentBuildEnabled: false,
+  },
   medicalAgent: {},
   experimentAgent: {},
 };
