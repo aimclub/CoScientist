@@ -47,6 +47,7 @@ def _no_host(monkeypatch, tmp_path):
     monkeypatch.setattr(alembic_tools, "_served_tools", _no_tools)
     monkeypatch.setattr(alembic_tools, "_import_image_artifacts",
                         lambda job_id, container, repo: (None, None))
+    monkeypatch.setattr(alembic_tools, "_pull_from_hub", lambda repo_url, scope: None)
     _host(monkeypatch)
 
 
@@ -349,6 +350,39 @@ def test_force_rebuild_ignores_what_the_host_has(monkeypatch):
 def _scoped_context(user, session):
     return types.SimpleNamespace(state={"graph_scope_user_id": user,
                                         "graph_scope_session_id": session})
+
+
+def test_the_build_is_told_what_kind_of_tool_is_wanted(monkeypatch, tmp_path):
+    """A hint steers the explorer; a task spec pins the tools the build must
+    produce. Both go on the record the runner passes to the pipeline as
+    environment; a spec given as a file travels as its content."""
+    spec = tmp_path / "tasks.yaml"
+    spec.write_text("- name: seqio_convert\n  description: convert\n", encoding="utf-8")
+    _host(monkeypatch)
+    env = {}
+
+    def runner(rec):
+        env.update({"hints": rec.get("hints"), "task_spec": rec.get("task_spec")})
+
+    monkeypatch.setattr(alembic_tools, "_runner", runner)
+
+    result = asyncio.run(build_mcp_server(
+        _REPO, hints="  something that samples analogues  ", task_spec=str(spec)))
+
+    assert result["status"] == "running"
+    assert env == {"hints": "something that samples analogues",
+                   "task_spec": "- name: seqio_convert\n  description: convert\n"}
+
+
+def test_a_task_spec_that_cannot_be_read_stops_the_build(monkeypatch):
+    _host(monkeypatch)
+    monkeypatch.setattr(alembic_tools, "_runner",
+                        lambda rec: pytest.fail("a build started on an unreadable spec"))
+    monkeypatch.setattr(alembic_tools, "_TASK_SPEC_MAX_CHARS", 10)
+
+    result = asyncio.run(build_mcp_server(_REPO, task_spec="x" * 50))
+
+    assert result["status"] == "error" and "task spec could not be read" in result["error"]
 
 
 def test_a_reused_build_is_attached_only_to_the_session_that_reused_it(monkeypatch):

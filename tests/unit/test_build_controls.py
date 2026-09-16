@@ -204,6 +204,32 @@ def test_a_catalogue_removal_that_failed_is_retried_by_the_next_stop(build, monk
     assert meta().get("registered") is False
 
 
+def test_removing_the_container_keeps_the_image_and_other_builds_containers(build, monkeypatch):
+    docker = _Docker(images={f"alembic-tool:{_JOB}": _OWN},
+                     containers={**_running(), "alembic-serve-gget-hub": {"image_id": _OWN, "running": True}})
+    meta = build(docker, registered=True, server_id="id-1")
+    seen = _catalogue(monkeypatch)
+
+    res = alembic_tools.remove_build_container(_JOB)
+
+    assert res["ok"] is True and res["removed_container"] == _SERVE
+    assert _SERVE not in docker.containers
+    assert docker.containers["alembic-serve-gget-hub"]["running"] is True
+    assert not any(call[0] == "rmi" for call in docker.calls)
+    assert seen["removed"] == ["id-1"]
+    assert meta().get("registered") is False
+
+
+def test_removing_a_missing_container_does_nothing(build, monkeypatch):
+    docker = _Docker(images={f"alembic-tool:{_JOB}": _OWN})
+    build(docker)
+
+    res = alembic_tools.remove_build_container(_JOB)
+
+    assert res["ok"] is False and "no container" in res["error"]
+    assert not any(call[0] in ("stop", "rm") for call in docker.calls)
+
+
 # ── start / restart ──────────────────────────────────────────────────────────
 
 
