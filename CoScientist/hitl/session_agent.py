@@ -118,9 +118,14 @@ class SessionAgent(LlmAgent):
         return output_text
 
     async def _feed_back(
-        self, ctx: InvocationContext, feedback_prompt: str
+        self, ctx: InvocationContext, feedback_prompt: str, author: str = "user"
     ) -> AsyncGenerator[Event, None]:
         """Hand review feedback to the agent as a user turn and let it re-run.
+
+        ``author`` is who the feedback comes from: the human by default, or the
+        critic. A non-user author reaches the model as ADK's
+        "For context: [<author>] said: ..." turn, so the critic's objection is
+        not mistaken for the user's own words.
 
         Yielding the event is what puts it in front of the model: the consumer
         (the Runner) appends everything we yield to the session before asking us
@@ -134,7 +139,7 @@ class SessionAgent(LlmAgent):
         """
         event = Event(
             invocation_id=ctx.invocation_id,
-            author="user",
+            author=author,
             branch=ctx.branch,
             content=types.Content(
                 role="user", parts=[types.Part(text=feedback_prompt)]
@@ -331,7 +336,9 @@ class SessionAgent(LlmAgent):
                     # The rejected output never reaches the chat — only the
                     # rewrite does, exactly as with a human rejection.
                     async for event in self._feed_back(
-                        ctx, self.critic_correction_prompt.format(feedback=feedback)
+                        ctx,
+                        self.critic_correction_prompt.format(feedback=feedback),
+                        author=self.critic_agent_name,
                     ):
                         yield event
                     continue
