@@ -215,6 +215,9 @@ research_graph*.html
 research_graph*.json
 run_evolution*.jsonl
 run_evolution*.html
+# scripts/preview_plan_card.py writes these next to the repo root.
+plan_card_preview*.html
+plan_card_preview*.json
 agent_events.jsonl
 e2e_case.jsonl
 benchmarks/**/repository_inventory.jsonl
