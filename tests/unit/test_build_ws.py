@@ -5,6 +5,12 @@ build's container. Docker and the MCP transport are faked.
 """
 
 import asyncio
+import json
+import os
+import subprocess
+import sys
+import io
+import types
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -253,6 +259,76 @@ def test_a_build_without_its_own_image_is_not_run_in_another_one(monkeypatch):
 
     assert cmd is None
     assert res["ok"] is False and "no image of its own" in res["error"]
+
+
+def test_the_debug_runner_calls_a_tool_kept_in_server_py(tmp_path):
+    """A server pulled from the hub can ship an alembic package too old for the
+    usual entry point, and keep its tools in server.py with no tools/<name>.py."""
+    out = tmp_path / "demo" / "output"
+    out.mkdir(parents=True)
+    (out / "server.py").write_text(
+        "from fastmcp import FastMCP\nmcp = FastMCP('demo')\n\n"
+        "@mcp.tool()\ndef add(a: int, b: int) -> int:\n    return a + b\n", encoding="utf-8")
+
+    proc = subprocess.run(
+        [sys.executable, "-c", build_api._INVOKE_SCRIPT, "https://github.com/o/demo", "add",
+         json.dumps({"a": 1, "b": 2}), build_api._DIRECT_INVOKE],
+        capture_output=True, text=True, cwd=tmp_path, timeout=60,
+        env={**os.environ, "ALEMBIC_WORKDIR": str(tmp_path)})
+
+    line = next(l for l in proc.stdout.splitlines() if l.startswith(build_api._INVOKE_MARK))
+    assert json.loads(line[len(build_api._INVOKE_MARK):]) == {"ok": True, "result": 3}
+
+
+# ── files a tool left in S3 ─────────────────────────────────────────────────
+
+
+class _S3Client:
+    def __init__(self, size=10, body=b"a,b\n1,2\n"):
+        self.size, self.body = size, body
+
+    def head_object(self, Bucket, Key):
+        return {"ContentLength": self.size, "ContentType": "text/csv"}
+
+    def get_object(self, Bucket, Key):
+        return {"Body": io.BytesIO(self.body)}
+
+
+def _http():
+    app = FastAPI()
+    app.include_router(build_api.router)
+    return TestClient(app)
+
+
+def _s3(monkeypatch, client, bucket="agent-vault"):
+    from CoScientist.config import get_settings
+    from CoScientist.reporting import s3_upload
+
+    monkeypatch.setattr(get_settings().s3, "bucket_name", bucket)
+    service = types.SimpleNamespace(create_s3_client=lambda: client, bucket_name=bucket)
+    monkeypatch.setattr(s3_upload, "_get_service", lambda: service)
+
+
+def test_a_file_a_tool_wrote_is_read_out_of_the_bucket(monkeypatch):
+    """The page views the file through the server: the tool's presigned link is
+    signed for the address the SERVER reaches S3 at, and it expires."""
+    _s3(monkeypatch, _S3Client())
+
+    r = _http().get("/api/s3/object", params={"key": "ephemeral/u/s/out.csv",
+                                              "bucket": "agent-vault"})
+
+    assert r.status_code == 200 and r.content == b"a,b\n1,2\n"
+    assert r.headers["content-type"].startswith("text/csv")
+    assert 'filename="out.csv"' in r.headers["content-disposition"]
+
+
+def test_another_bucket_and_an_oversized_file_are_refused(monkeypatch):
+    _s3(monkeypatch, _S3Client())
+    assert _http().get("/api/s3/object", params={"key": "k", "bucket": "someone-else"}).status_code == 403
+
+    _s3(monkeypatch, _S3Client(size=build_api._S3_VIEW_MAX_BYTES + 1))
+    too_big = _http().get("/api/s3/object", params={"key": "big.csv"})
+    assert too_big.status_code == 413 and "viewing limit" in too_big.json()["detail"]
 
 
 def test_a_runner_that_prints_no_result_is_reported(monkeypatch):
