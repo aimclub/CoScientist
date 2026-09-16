@@ -789,3 +789,35 @@ def test_call_hands_back_a_big_result_shortened_with_a_link_to_all_of_it(tmp_pat
     assert json.loads(stored[key]) == big
     assert result["result_s3"]["presigned_url"] == f"https://signed/{key}"
     assert 0 < len(result["values"]) < 1613
+
+
+def test_a_dataframe_comes_back_as_data_not_as_its_printed_form(tmp_path):
+    """json.dumps(default=str) turned a frame into its printed text, columns
+    elided with "...", so the caller got a wall of text instead of a table."""
+    import subprocess
+
+    (tmp_path / "tools").mkdir()
+    (tmp_path / "tools" / "gmt.py").write_text(
+        "import numpy as np, pandas as pd\n"
+        "def gmt():\n"
+        "    frame = pd.DataFrame([['IFI27', 'CA4', 1.5], ['CXCR1', None, np.nan]],\n"
+        "                         index=['endo-aerocyte', 'CD56dim-NK'],\n"
+        "                         columns=['g0', 'g1', 'score'])\n"
+        "    return {'gmt': frame, 'n': np.int64(2), 'genes': np.array(['A', 'B']), 'gap': np.float64('nan')}\n",
+        encoding="utf-8")
+
+    proc = subprocess.run([sys.executable, str(_REAL_RUN_FUNCTION), str(tmp_path), "gmt", "{}"],
+                          capture_output=True, text=True, check=False)
+
+    payload = proc.stdout.split("<<<ALEMBIC_RESULT>>>")[1].strip()
+    # NaN is not JSON: a strict reader (the browser) refuses the whole document.
+    result = json.loads(payload, parse_constant=_no_constants)["result"]
+    assert result["gmt"] == {"dtype": "DataFrame",
+                             "index": ["endo-aerocyte", "CD56dim-NK"],
+                             "columns": ["g0", "g1", "score"],
+                             "data": [["IFI27", "CA4", 1.5], ["CXCR1", None, None]]}
+    assert (result["n"], result["genes"], result["gap"]) == (2, ["A", "B"], None)
+
+
+def _no_constants(name):
+    raise AssertionError(f"{name} is not valid JSON")
