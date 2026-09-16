@@ -26,16 +26,6 @@
 
     const SETTINGS_SECTIONS = [
       {
-        id: 'interface', icon: 'palette',
-        groups: [{
-          fields: [
-            { id: 'language', type: 'language', scope: 'browser' },
-            { id: 'autoNaming', path: 'general.autoNamingEnabled', type: 'toggle', scope: 'instant', env: 'AUTO_NAMING__ENABLED' },
-            { id: 'showInternal', type: 'browserToggle', scope: 'browser', env: 'SHOW_INTERNAL__ENABLED' },
-          ],
-        }],
-      },
-      {
         id: 'research', icon: 'science',
         groups: [
           {
@@ -67,6 +57,16 @@
             ],
           },
         ],
+      },
+      {
+        id: 'interface', icon: 'palette',
+        groups: [{
+          fields: [
+            { id: 'language', type: 'language', scope: 'browser' },
+            { id: 'autoNaming', path: 'general.autoNamingEnabled', type: 'toggle', scope: 'instant', env: 'AUTO_NAMING__ENABLED' },
+            { id: 'showInternal', type: 'browserToggle', scope: 'browser', env: 'SHOW_INTERNAL__ENABLED' },
+          ],
+        }],
       },
       {
         id: 'approvals', icon: 'verified_user',
@@ -179,7 +179,7 @@
     let settingsSaved = null;      // last values confirmed by the server
     let settingsDraft = null;      // what the form currently shows
     let settingsDefaults = null;   // values the server was launched with
-    let settingsSection = 'interface';
+    let settingsSection = 'research';
     let settingsQuery = '';
     let settingsLoadFailed = false;
     let settingsStatus = null;     // { key, vars, kind } shown in the footer
