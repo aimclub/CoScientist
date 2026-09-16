@@ -1,10 +1,13 @@
 """Deterministic bridge: approved ExperimentPlan / TaskResults → research graph.
 
 After a plan is approved each task becomes a ``VerificationMethod`` node linked
-to the hypothesis it tests (``Hypothesis —tested_by→ VM``). Hypotheses with no
-covering task are postponed (``no_method_this_stage``), not dropped and not
-turned into extra EXP tasks. After ``record_result`` the outcome becomes
-``Evidence`` (+``GeneratedData`` for file artifacts) linked via
+to the hypothesis it tests (``Hypothesis —tested_by→ VM``) and to each tool the
+task names (``VM —uses→ Tool``), carrying the design the human approved rather
+than only a route. Hypotheses with no covering task are postponed
+(``no_method_this_stage``), not dropped and not turned into extra EXP tasks.
+The plan itself, and the round of review it went through, is recorded in the
+execution graph by ``execution_bridge``. After ``record_result`` the outcome
+becomes ``Evidence`` (+``GeneratedData`` for file artifacts) linked via
 ``VM —produces→ Evidence`` and ``Evidence —relates_to→ Hypothesis`` so the
 background validator can judge the active claim. Writes go through the same
 privileged code-path as ``init_research`` (``enforce_permissions=False``):
@@ -207,7 +210,7 @@ def _vm_attrs(task: dict[str, Any], plan_id: str) -> dict[str, Any]:
         "route": str(task.get("route") or ""),
         "mcp_servers": mcp_servers,
     }
-    optional = {
+    extra = {
         "name": _clean(task.get("name"), 200),
         "cost": f"≈{duration} min" if isinstance(duration, int) and duration > 0 else "",
         "limitations": "; ".join(_clean(w, 200) for w in (task.get("warnings") or []) if w),
@@ -219,7 +222,7 @@ def _vm_attrs(task: dict[str, Any], plan_id: str) -> dict[str, Any]:
         "depends_on": ", ".join(str(d) for d in (task.get("depends_on") or []) if d),
         "repo_url": _clean(task.get("repo_url"), 240),
     }
-    attrs.update({k: v for k, v in optional.items() if v})
+    attrs.update({k: v for k, v in extra.items() if v})
     if task.get("optional"):
         attrs["optional"] = True
     return attrs

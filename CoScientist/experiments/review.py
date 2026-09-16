@@ -353,24 +353,6 @@ def render_experiment_results(state: Any) -> str:
     return "\n".join(L)
 
 
-# State this reviewer owns and must hand back to whoever invoked the module.
-#
-# The module runs as an ADK AgentTool, and AgentTool gives it a FRESH in-memory
-# session seeded from a copy of the caller's state; the only thing that travels
-# back is ``event.actions.state_delta`` (agent_tool.py: "Forward state delta to
-# parent session"). This agent, like every SessionAgent, writes through
-# ``ctx.session.state`` — a plain dict, not the ADK ``State`` wrapper — so its
-# writes mutate the throwaway child session and are dropped when the tool
-# returns. Callbacks are unaffected: ``callback_context.state`` IS a ``State``,
-# so the planner context builder's writes DO travel back.
-#
-# That asymmetry is the re-planning loop. The builder's "new run" wipe
-# (experiment_runtime = None) reached the caller; the approval that followed it
-# — approve_plan, then mark_result_review's phase=completed — did not. The next
-# module hop was therefore seeded with experiment_runtime=None, the completion
-# gate had nothing to match on, and the whole experiment was planned and run
-# again. Measured 2026-09-02: two full re-runs of the same three tasks in one
-# 41-minute run, 19:50:46 phase=completed -> 19:50:59 gate sees NoneType.
 def _plan_outcome(response: HITLResponse) -> str:
     """How the human left this round of the plan, in the record's vocabulary."""
     if response.approved:
@@ -389,6 +371,24 @@ def _clip(text: Any, limit: int = 400) -> str | None:
     return out if len(out) <= limit else out[: limit - 1] + "…"
 
 
+# State this reviewer owns and must hand back to whoever invoked the module.
+#
+# The module runs as an ADK AgentTool, and AgentTool gives it a FRESH in-memory
+# session seeded from a copy of the caller's state; the only thing that travels
+# back is ``event.actions.state_delta`` (agent_tool.py: "Forward state delta to
+# parent session"). This agent, like every SessionAgent, writes through
+# ``ctx.session.state`` — a plain dict, not the ADK ``State`` wrapper — so its
+# writes mutate the throwaway child session and are dropped when the tool
+# returns. Callbacks are unaffected: ``callback_context.state`` IS a ``State``,
+# so the planner context builder's writes DO travel back.
+#
+# That asymmetry is the re-planning loop. The builder's "new run" wipe
+# (experiment_runtime = None) reached the caller; the approval that followed it
+# — approve_plan, then mark_result_review's phase=completed — did not. The next
+# module hop was therefore seeded with experiment_runtime=None, the completion
+# gate had nothing to match on, and the whole experiment was planned and run
+# again. Measured 2026-09-02: two full re-runs of the same three tasks in one
+# 41-minute run, 19:50:46 phase=completed -> 19:50:59 gate sees NoneType.
 _REVIEW_OWNED_STATE_KEYS = (
     "experiment_runtime",
     "experiment_plan",

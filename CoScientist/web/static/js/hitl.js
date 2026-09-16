@@ -604,7 +604,7 @@
           <span class="text-[11px] ml-1">${planText(h.statement)}</span></div>`).join('');
 
       appendMsgToFeed(`
-    <div id="hitl-controls-${escHtml(rid)}" class="my-6 relative msg-enter">
+    <div class="my-6 relative msg-enter">
       <div class="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 blur-2xl opacity-40"></div>
       <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
         <div class="flex items-center gap-3 mb-2">
@@ -635,7 +635,10 @@
         <div id="plan-tasks-${escHtml(rid)}" class="mt-1">${plan.tasks.map((task, i) => planTaskCard(rid, task, i)).join('')}</div>
         ${planSection(t('plan.risks'), planBullets(plan.risks))}
         ${planSection(t('plan.assumptions'), planBullets(plan.assumptions))}
-        <div class="mt-4 flex flex-col gap-2">
+        <!-- Only the answer is disabled once this review is over (timeout, or
+             the operator has answered): the plan stays readable and its task
+             cards stay foldable, which is the whole point of drawing it. -->
+        <div id="hitl-controls-${escHtml(rid)}" class="mt-4 flex flex-col gap-2">
           <textarea id="hitl-feedback-${escHtml(rid)}" rows="2" placeholder="${escHtml(t('plan.feedbackPlaceholder'))}"
             class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
           <div class="flex flex-wrap gap-3">
