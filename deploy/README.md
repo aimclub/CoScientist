@@ -122,6 +122,28 @@ At minimum set these in `~/.config/coscientist/.env`:
 
 Keys use the nested form `SECTION__FIELD` (double underscore).
 
+## Artifact links on a cluster
+
+The web UI rewrites S3 links in reports to local `/api/artifact/` links. Each
+request to that link mints a fresh presigned URL. The links then work for
+every user, and they do not expire. Use this checklist on a cluster.
+
+1. Set `S3__EXTERNAL_ENDPOINT_URL` in `~/.config/coscientist/.env` to the S3
+   address that the users' browsers can reach. Example:
+   `https://s3.example.org`. The server signs presigned URLs for this host.
+2. Add the MinIO host to `NO_PROXY` in `coscientist-web.service`. The unit
+   sets a global `HTTP_PROXY`. A presigned URL request must not go through
+   that proxy.
+3. Keep `S3__ENDPOINT_URL` on the internal address. The agents use it for
+   uploads and reads inside the cluster.
+4. Legacy reports carry plain unsigned URLs for `permanent/` objects. These
+   URLs need an anonymous download policy. Run
+   `mc anonymous set download <alias>/<bucket>/permanent` once. New reports
+   do not need this policy. The new endpoint mints a signed URL for each
+   click.
+
+Restart the service after a change to `.env` or to the unit file.
+
 ## OpenRouter proxy
 
 The VM egress blocks `openrouter.ai`. The institution runs a tunnel on the

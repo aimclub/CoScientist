@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from collections import defaultdict, OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -13,7 +14,13 @@ from uuid import uuid4
 from weakref import WeakKeyDictionary
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 
 from CoScientist.agents.callbacks.tool_callbacks import DATASET_URL_STATE_KEY
@@ -29,8 +36,11 @@ from CoScientist.config import ReportConfig
 from CoScientist.reporting import finalize_report
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.config import get_settings
+from CoScientist.paper_parser.s3_connection import s3_service
 from CoScientist.tools.coder_tools.coder_tools import coder_toolset
+from CoScientist.tools.vault_client import call_vault_sync, vault_url
 from CoScientist.agents.common import sync_proxy_session
+from CoScientist.utils.report_links import remint_report_urls
 from CoScientist.utils.text import strip_thinking
 
 from google.adk.events.event import Event
@@ -85,6 +95,34 @@ DATASET_URL_MAX_LENGTH = 2048
 # Graph stores the Settings modal can wipe. The derived ``knowledge`` view is
 # absent on purpose: it is a projection of ``execution`` plus ``memory``.
 GRAPH_DELETE_TARGETS = ("execution", "research", "memory")
+# Freshly minted artifact download URLs, so a burst of clicks on one report
+# does not mint on every request. The URLs are minted for one hour; the cache
+# lets go of them ten minutes earlier.
+ARTIFACT_URL_CACHE_TTL_SECONDS = 50 * 60
+_ARTIFACT_URL_CACHE: dict[tuple[str, str], tuple[str, float]] = {}
+_ARTIFACT_URL_CACHE_MAX = 1000
+
+
+def _mint_artifact_url(bucket: str, key: str) -> str | None:
+    """Mint a fresh download URL for one object. Runs in a worker thread.
+
+    Vault objects (``ephemeral/`` and ``permanent/`` keys in the vault bucket)
+    go through the vault so its key rules and external signing endpoint apply.
+    Every other bucket is signed directly with the shared credentials.
+    """
+    vault_bucket = os.getenv("S3__BUCKET_NAME", "")
+    if (
+        bucket == vault_bucket
+        and key.startswith(("ephemeral/", "permanent/"))
+        and vault_url()
+    ):
+        payload = call_vault_sync("get_download_link", s3_key=key)
+        if payload is None:
+            return None
+        return payload.get("presigned_url") or payload.get("url")
+    return s3_service.generate_presigned_url(
+        key, "get_object", expiration=3600, bucket_name=bucket
+    )
 
 
 def _validated_dataset_url(raw: Any) -> str:
@@ -1016,6 +1054,40 @@ def create_app() -> FastAPI:
                 "Download cancel proxy failed: %s", exc
             )
             return JSONResponse({"status": "cancelled", "detail": str(exc)}, status_code=200)
+
+    # --- Artifact delivery (report links) ---
+    @app.get("/api/artifact/{bucket}/{key:path}")
+    async def get_artifact(bucket: str, key: str):
+        """Redirect the browser to a fresh download URL for one S3 object.
+
+        Report markdown carries these local links instead of raw presigned
+        URLs (see ``utils/report_links.py``), so a link in an old report still
+        works and the internal S3 endpoint never reaches the browser.
+        """
+        if not bucket or not key or ".." in key.split("/"):
+            raise HTTPException(status_code=404, detail="Invalid artifact reference.")
+        cache_key = (bucket, key)
+        now = time.monotonic()
+        cached = _ARTIFACT_URL_CACHE.get(cache_key)
+        if cached is not None and cached[1] > now:
+            return RedirectResponse(cached[0], status_code=302)
+        try:
+            url = await asyncio.to_thread(_mint_artifact_url, bucket, key)
+        except Exception as exc:
+            logging.getLogger("CoScientist.web").warning(
+                "Artifact minting failed for %s/%s: %s", bucket, key, exc
+            )
+            raise HTTPException(
+                status_code=502, detail="Artifact storage is unreachable."
+            ) from exc
+        if not url:
+            raise HTTPException(
+                status_code=404, detail="Artifact not found or no longer available."
+            )
+        if len(_ARTIFACT_URL_CACHE) >= _ARTIFACT_URL_CACHE_MAX:
+            _ARTIFACT_URL_CACHE.clear()
+        _ARTIFACT_URL_CACHE[cache_key] = (url, now + ARTIFACT_URL_CACHE_TTL_SECONDS)
+        return RedirectResponse(url, status_code=302)
 
     # --- Local users and sessions (process lifetime only) ---
     @app.get("/api/users")
@@ -2147,7 +2219,7 @@ async def _run_chat_invocation(
         runtime.registry.touch_session(user_id, session_id, status="idle")
         payload = {
             "type": "final_response",
-            "content": result.markdown,
+            "content": remint_report_urls(result.markdown),
             "timestamp": datetime.now().isoformat(),
         }
         if result.report_dir:
