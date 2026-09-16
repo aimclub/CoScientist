@@ -178,13 +178,16 @@ def test_execution_tree_drops_the_roster_and_measures_depth():
     ids = {n["id"] for n in tree["nodes"]}
     assert "agent:NeverCalled" not in ids, "an agent nothing called is roster"
     assert "system:root" not in ids, "the hub carries no information"
+    # The calls are on the agent now, not beside it.
+    assert not (ids & {"tool:a", "tool:b"})
+    agent = next(n for n in tree["nodes"] if n["id"] == "goal:i1::agent:Research")
+    assert [c["tool"] for c in agent["calls"]] == ["search", "extract"]
 
     level = {n["id"]: n["level"] for n in tree["nodes"]}
     assert level["goal:i1"] == 0
     assert level["goal:i1::agent:Research"] == 1
-    assert level["tool:a"] == level["tool:b"] == 2
     # The answer ends the request, to the right of everything it did.
-    assert level["result:i1"] > level["tool:a"]
+    assert level["result:i1"] > level["goal:i1::agent:Research"]
 
 
 def test_nodes_are_placed_by_when_they_ran_and_who_ran_them():
@@ -210,7 +213,7 @@ def test_nodes_are_placed_by_when_they_ran_and_who_ran_them():
 
     # Reading left to right reads forward in time.
     order = sorted(placed.values(), key=lambda n: n["x"])
-    assert [n["id"] for n in order] == ["goal:i1", "a:One", "t:1", "t:2", "a:Two", "t:3"]
+    assert [n["id"] for n in order] == ["goal:i1", "a:One", "a:Two"]
     # And no two cards in one lane can sit on top of each other.
     from CoScientist.graph.projection import _CARD_WIDTH
     # Only cards sharing a lane AND a sub-row can collide.
@@ -221,9 +224,9 @@ def test_nodes_are_placed_by_when_they_ran_and_who_ran_them():
         xs.sort()
         assert all(b - a >= _CARD_WIDTH for a, b in zip(xs, xs[1:]))
 
-    # Calls sit in the row of the agent that made them, not at their depth.
-    assert placed["t:1"]["row"] == placed["t:2"]["row"] == placed["a:One"]["row"]
-    assert placed["t:3"]["row"] == placed["a:Two"]["row"]
+    # Each agent keeps its own calls, and keeps its own lane.
+    assert [c["tool"] for c in placed["a:One"]["calls"]] == ["first", "second"]
+    assert [c["tool"] for c in placed["a:Two"]["calls"]] == ["third"]
     assert placed["a:One"]["row"] != placed["a:Two"]["row"]
     assert placed["goal:i1"]["row"] == 0
 
@@ -295,8 +298,12 @@ def test_a_request_keeps_only_its_own_calls():
 
     tree = execution_tree(_two_requests_sharing_agents(), "one")
     present = {n["id"] for n in tree["nodes"]}
-    assert {"goal:1", "t:1", "t:2"} <= present
-    assert not present & {"goal:2", "t:3", "t:4", "res:2"}
+    assert "goal:1" in present
+    assert not present & {"goal:2", "res:2"}
+
+    # The calls came with their agents; only this request's calls did.
+    calls = {c["id"] for n in tree["nodes"] for c in (n.get("calls") or [])}
+    assert calls == {"t:1", "t:2"}
 
 
 def test_an_agent_that_did_nothing_here_stays_out():
@@ -310,3 +317,159 @@ def test_an_agent_that_did_nothing_here_stays_out():
                           "type": "delegated_to"})
 
     assert "a:Idle" not in {n["id"] for n in execution_tree(full, "two")["nodes"]}
+
+
+def test_a_call_keeps_everything_a_reader_needs_when_it_moves():
+    """Folding must not cost the call its detail — that is the whole panel."""
+    from CoScientist.graph.projection import execution_tree
+
+    full = {"nodes": [
+        {"id": "goal:1", "kind": "goal", "turn_id": "one", "label": "ask", "t_start": 10.0},
+        {"id": "a:One", "kind": "agent_call", "turn_id": "one",
+         "executor_agent": "One", "t_start": 11.0},
+        {"id": "t:1", "kind": "tool_call", "turn_id": "one", "label": "search",
+         "status": "failed", "input": "aspirin", "output": "boom",
+         "t_start": 12.0, "t_end": 14.5},
+    ], "edges": [
+        {"src": "goal:1", "dst": "a:One", "type": "caused_by"},
+        {"src": "a:One", "dst": "t:1", "type": "caused_by"},
+    ]}
+
+    agent = next(n for n in execution_tree(full, "one")["nodes"] if n["id"] == "a:One")
+    call, = agent["calls"]
+
+    assert call == {"id": "t:1", "tool": "search", "status": "failed",
+                    "input": "aspirin", "output": "boom",
+                    "t_start": 12.0, "t_end": 14.5, "duration": 2.5}
+
+
+def test_an_agent_reached_only_by_its_own_calls_survives():
+    """It did work in this request, so it is history, not roster.
+
+    The roster prune drops an agent nothing called. Reading that before the
+    calls moved onto it dropped the agent AND took its calls with it.
+    """
+    from CoScientist.graph.projection import execution_tree
+
+    full = {"nodes": [
+        {"id": "goal:1", "kind": "goal", "turn_id": "one", "label": "ask", "t_start": 10.0},
+        {"id": "a:Orphan", "kind": "agent", "turn_id": "one",
+         "executor_agent": "Orphan", "t_start": 11.0},
+        {"id": "t:1", "kind": "tool_call", "turn_id": "one", "label": "search",
+         "t_start": 12.0},
+    ], "edges": [
+        {"src": "a:Orphan", "dst": "t:1", "type": "caused_by"},
+    ]}
+
+    nodes = {n["id"]: n for n in execution_tree(full, "one")["nodes"]}
+    assert "a:Orphan" in nodes
+    assert [c["tool"] for c in nodes["a:Orphan"]["calls"]] == ["search"]
+
+
+def test_an_agent_is_timed_by_what_it_did_in_this_request():
+    """A shared agent node carries the last time it ran ANYWHERE.
+
+    Drawn on that clock the agent drifted away from the request it was in —
+    days away, in a session used over a week — the layout stopped carrying any
+    time at all, and the card showed an hour from another day.
+    """
+    from CoScientist.graph.projection import execution_tree
+
+    later = 9_000.0          # when the agent was last touched, in a later request
+    full = {"nodes": [
+        {"id": "goal:1", "kind": "goal", "turn_id": "one", "label": "ask", "t_start": 100.0},
+        {"id": "a:Orch", "kind": "agent", "turn_id": "one",
+         "executor_agent": "Orch", "t_start": later},
+        {"id": "a:Sub", "kind": "agent", "turn_id": "one",
+         "executor_agent": "Sub", "t_start": later},
+        {"id": "t:1", "kind": "tool_call", "turn_id": "one", "label": "search",
+         "t_start": 130.0, "t_end": 140.0},
+    ], "edges": [
+        {"src": "goal:1", "dst": "a:Orch", "type": "caused_by"},
+        {"src": "a:Orch", "dst": "a:Sub", "type": "delegated_to"},
+        {"src": "a:Sub", "dst": "t:1", "type": "caused_by"},
+    ]}
+
+    nodes = {n["id"]: n for n in execution_tree(full, "one")["nodes"]}
+
+    # The one that made the call is timed by the call.
+    assert nodes["a:Sub"]["t_start"] == 130.0
+    assert nodes["a:Sub"]["t_end"] == 140.0
+    # The one that only delegated spans what it delegated to.
+    assert nodes["a:Orch"]["t_start"] == 130.0
+    assert nodes["a:Orch"]["t_end"] == 140.0
+    # And nothing is left sitting in another request's week.
+    assert all(n["t_start"] < later for n in nodes.values() if n.get("t_start"))
+
+
+def test_an_agent_with_nothing_measurable_falls_back_to_the_request():
+    """Better at the request's own start than days away from it."""
+    from CoScientist.graph.projection import execution_tree
+
+    full = {"nodes": [
+        {"id": "goal:1", "kind": "goal", "turn_id": "one", "label": "ask", "t_start": 100.0},
+        {"id": "a:Quiet", "kind": "agent", "turn_id": "one",
+         "executor_agent": "Quiet", "t_start": 9_000.0},
+    ], "edges": [
+        {"src": "goal:1", "dst": "a:Quiet", "type": "caused_by"},
+    ]}
+
+    agent = next(n for n in execution_tree(full, "one")["nodes"] if n["id"] == "a:Quiet")
+    assert agent["t_start"] == 100.0
+
+
+def _aggregator_over_two_requests():
+    """The shape the plugin writes for a lifecycle stage.
+
+    ResultAggregatorAgent is wired into the run, not delegated to, so nothing
+    points at it — and it is one node for the whole session, so its calls come
+    from every request it ever closed.
+    """
+    return {"nodes": [
+        {"id": "goal:1", "kind": "goal", "turn_id": "one", "label": "first", "t_start": 100.0},
+        {"id": "a:Orch", "kind": "agent", "turn_id": "one",
+         "executor_agent": "Orch", "t_start": 9_000.0},
+        {"id": "goal:2", "kind": "goal", "turn_id": "two", "label": "second", "t_start": 500.0},
+
+        # One node, no inbound edge, calls from both requests.
+        {"id": "a:Agg", "kind": "agent", "executor_agent": "ResultAggregator",
+         "t_start": 9_000.0},
+        {"id": "t:1", "kind": "tool_call", "turn_id": "one", "label": "collect",
+         "t_start": 120.0, "t_end": 130.0},
+        {"id": "t:2", "kind": "tool_call", "turn_id": "two", "label": "collect",
+         "t_start": 520.0, "t_end": 530.0},
+    ], "edges": [
+        {"src": "goal:1", "dst": "a:Orch", "type": "caused_by"},
+        {"src": "a:Agg", "dst": "t:1", "type": "caused_by"},
+        {"src": "a:Agg", "dst": "t:2", "type": "caused_by"},
+    ]}
+
+
+def test_a_lifecycle_stage_is_joined_to_the_request_it_ran_in():
+    """Nothing delegates to it, so without this it floats beside the trace."""
+    from CoScientist.graph.projection import execution_tree
+
+    tree = execution_tree(_aggregator_over_two_requests(), "one")
+    ids = {n["id"] for n in tree["nodes"]}
+    touched = {end for e in tree["edges"] for end in (e["src"], e["dst"])}
+
+    assert "a:Agg" in ids
+    assert ids - touched == set(), "every node hangs off something"
+    joined = [e for e in tree["edges"] if e["dst"] == "a:Agg"]
+    assert joined and joined[0]["src"] == "goal:1"
+    # Marked as "this also ran", not as a call the request made.
+    assert joined[0].get("synthetic") is True
+
+
+def test_a_shared_stage_shows_only_this_request_s_calls():
+    """One node for the whole session must not pour every request into one card."""
+    from CoScientist.graph.projection import execution_tree
+
+    full = _aggregator_over_two_requests()
+    first = next(n for n in execution_tree(full, "one")["nodes"] if n["id"] == "a:Agg")
+    second = next(n for n in execution_tree(full, "two")["nodes"] if n["id"] == "a:Agg")
+
+    assert [c["id"] for c in first["calls"]] == ["t:1"]
+    assert [c["id"] for c in second["calls"]] == ["t:2"]
+    # And each is timed by the request it is drawn in.
+    assert first["t_start"] == 120.0 and second["t_start"] == 520.0

@@ -318,12 +318,20 @@ def execution_tree(full: Dict[str, Any],
     edges = [e for e in edges
              if e.get("src") in nodes and e.get("dst") in nodes]
 
-    # An agent that nothing called is roster, not history.
+    # Calls move onto their agent BEFORE the roster prune below, so that an
+    # agent which did work in this request is visibly not roster.
+    edges = _fold_calls_into_agents(nodes, edges)
+
+    # An agent that nothing called, and that did nothing, is roster not history.
     called = {e["dst"] for e in edges}
     for node_id, node in list(nodes.items()):
-        if node.get("kind") in ("agent", "agent_call") and node_id not in called:
+        if (node.get("kind") in ("agent", "agent_call")
+                and node_id not in called and not node.get("calls")):
             nodes.pop(node_id)
     edges = [e for e in edges if e["src"] in nodes and e["dst"] in nodes]
+
+    edges = _attach_loose_agents_to_the_request(nodes, edges)
+    _retime_agents_to_this_request(nodes, edges)
 
     children: Dict[str, List[str]] = {}
     for edge in edges:
@@ -364,6 +372,157 @@ def execution_tree(full: Dict[str, Any],
 
 
 _AGENTS = ("agent", "agent_call")
+
+
+def _attach_loose_agents_to_the_request(
+        nodes: Dict[str, Dict[str, Any]],
+        edges: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Join an agent nothing delegated to onto the request it worked in.
+
+    The lifecycle stages around the orchestrator — the one that seeds the
+    context, the one that assembles the report at the end — are not delegated
+    to by anybody: they are wired into the run itself. So no edge names them,
+    and they were drawn floating beside the trace, connected to nothing, with
+    no place in the order of events.
+
+    They did work in this request, which is why they are here at all, so they
+    hang off the request itself. The edge is marked synthetic: it says "this
+    also ran", not "the request called it".
+    """
+    goals = sorted((n for n in nodes.values() if n.get("kind") == "goal"),
+                   key=lambda n: n.get("t_start") or 0.0)
+    if not goals:
+        return edges
+
+    root = goals[0]["id"]
+    reached = {e["dst"] for e in edges}
+    added = [
+        {"src": root, "dst": node_id, "type": "ran_in", "synthetic": True}
+        for node_id, node in nodes.items()
+        if node.get("kind") in _AGENTS and node_id not in reached and node_id != root
+    ]
+    return edges + added
+
+
+def _retime_agents_to_this_request(nodes: Dict[str, Dict[str, Any]],
+                                   edges: List[Dict[str, Any]]) -> None:
+    """Time an agent by what it did HERE, not by when it was last touched.
+
+    An agent node is written once per session and rewritten on every later use,
+    so its stored clock is the last time the agent ran anywhere — the same
+    value in every request, and days away from the request being drawn. Laid
+    out on that clock the agents all sorted after everything, x stopped
+    carrying any time at all, and the card showed an hour from another day.
+
+    What the agent did in THIS request is on it: its calls. An agent that only
+    delegated has none of its own, so it takes the span of the agents it
+    delegated to, and one that did nothing measurable falls back to the request
+    itself. Times are only ever narrowed to the request, never invented.
+    """
+    goal_start = min((n.get("t_start") for n in nodes.values()
+                      if n.get("kind") == "goal" and n.get("t_start") is not None),
+                     default=None)
+
+    window: Dict[str, tuple] = {}
+    for node_id, node in nodes.items():
+        if node.get("kind") not in _AGENTS:
+            continue
+        stamps = [c["t_start"] for c in (node.get("calls") or [])
+                  if c.get("t_start") is not None]
+        ends = [c["t_end"] for c in (node.get("calls") or [])
+                if c.get("t_end") is not None]
+        if stamps:
+            window[node_id] = (min(stamps), max(ends or stamps))
+
+    # An agent that only delegated spans the agents it delegated to. Repeat
+    # until nothing changes: a chain of delegations resolves from the bottom.
+    delegations = [(e["src"], e["dst"]) for e in edges
+                   if e.get("type") == "delegated_to"]
+    growing = True
+    while growing:
+        growing = False
+        for parent, child in delegations:
+            if child not in window or parent not in nodes:
+                continue
+            if nodes[parent].get("kind") not in _AGENTS:
+                continue
+            child_span = window[child]
+            current = window.get(parent)
+            merged = (child_span if current is None
+                      else (min(current[0], child_span[0]),
+                            max(current[1], child_span[1])))
+            if merged != current:
+                window[parent] = merged
+                growing = True
+
+    for node_id, node in nodes.items():
+        if node.get("kind") not in _AGENTS:
+            continue
+        start, end = window.get(node_id, (goal_start, None))
+        if start is not None:
+            node["t_start"] = start
+        node["t_end"] = end if end is not None else node.get("t_end")
+        if node["t_end"] is not None and node.get("t_start") is not None \
+                and node["t_end"] < node["t_start"]:
+            node["t_end"] = None
+
+
+def _fold_calls_into_agents(nodes: Dict[str, Dict[str, Any]],
+                            edges: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Move every tool call onto the agent that made it, and drop its node.
+
+    A single agent turn can be twenty calls. Drawn as nodes they are most of
+    the picture, they push the agents that actually structure the run off to
+    the margins, and the shape a reader is trying to follow — who was asked
+    what, and who answered — is the part that gets lost.
+
+    The calls are not lost with them: each lands in its agent's ``calls``, in
+    the order it ran and with everything the node carried, so the panel can
+    list them under that agent. Returns the surviving edges.
+    """
+    owner = {e["dst"]: e["src"] for e in edges}
+
+    def agent_above(node_id: str) -> Optional[str]:
+        """The nearest agent up the chain of callers, if any."""
+        seen, current = set(), owner.get(node_id)
+        while current and current not in seen:
+            seen.add(current)
+            parent = nodes.get(current)
+            if parent is None:
+                return None
+            if parent.get("kind") in _AGENTS:
+                return current
+            current = owner.get(current)
+        return None
+
+    folded = []
+    for node_id, node in list(nodes.items()):
+        if node.get("kind") != "tool_call":
+            continue
+        host = nodes.get(agent_above(node_id) or "")
+        if host is not None:
+            started, ended = node.get("t_start"), node.get("t_end")
+            host.setdefault("calls", []).append({
+                "id": node_id,
+                "tool": node.get("label") or node_id,
+                "status": node.get("status", ""),
+                "input": node.get("input"),
+                "output": node.get("output"),
+                "t_start": started,
+                "t_end": ended,
+                "duration": (round(ended - started, 2)
+                             if started is not None and ended is not None else None),
+            })
+        folded.append(node_id)
+        nodes.pop(node_id, None)
+
+    for node in nodes.values():
+        if node.get("calls"):
+            node["calls"].sort(key=lambda c: c.get("t_start") or 0.0)
+
+    dropped = set(folded)
+    return [e for e in edges if e["src"] not in dropped and e["dst"] not in dropped]
+
 
 
 def _scope_to_turn(every, all_edges, resolve, chosen):
@@ -417,8 +576,10 @@ def _scope_to_turn(every, all_edges, resolve, chosen):
 #: A card is this wide on screen, and two of them in one lane need this much
 #: clear space between their left edges or they overlap. Getting this wrong is
 #: what made consecutive calls sit on top of each other: time alone decided x,
-#: and a busy second put several 190-pixel cards inside forty pixels.
-_CARD_WIDTH, _CARD_GAP = 190, 26
+#: and a busy second put several cards inside forty pixels. Now that a request
+#: is a handful of agents rather than a hundred calls, there is room for a wide
+#: card and nothing left to crowd it.
+_CARD_WIDTH, _CARD_GAP = 320, 40
 _LANE_PITCH = _CARD_WIDTH + _CARD_GAP
 
 #: How far the clock moves a node, and the most a single idle stretch may
@@ -426,7 +587,7 @@ _LANE_PITCH = _CARD_WIDTH + _CARD_GAP
 #: the whole picture and the calls either side of it are a smudge, so long
 #: waits compress and the order is what survives.
 _MAX_STEP, _PIXELS_PER_SECOND = 420, 8.0
-_ROW_HEIGHT = 210
+_ROW_HEIGHT = 150
 #: Distance between two sub-rows inside one agent's band.
 _SUB_ROW_HEIGHT = 68
 

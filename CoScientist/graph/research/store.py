@@ -114,29 +114,35 @@ def _short(value: Any, n: int = 200) -> str:
 # types become the thing they stand for, statuses become what happened, and
 # attribute keys become field names rather than identifiers.
 
+#: The reader of this graph is a scientist, and the one we build it for reads
+#: Russian. The statuses below are translated for the same reason: a card
+#: saying "Гипотеза · being tested" is harder to read than either language on
+#: its own. Both tables are display-only — nothing matches on these strings.
 _KIND_WORDS = {
-    "ResearchQuestion": "Question", "Hypothesis": "Hypothesis",
-    "VerificationMethod": "Method", "ConfirmationCriteria": "Acceptance criteria",
-    "Evidence": "Evidence", "Conclusion": "Conclusion", "Constraint": "Constraint",
-    "Tool": "Tool", "Resource": "Budget", "EmpiricalBase": "Data",
-    "CodeArtifact": "Code", "GeneratedData": "Generated data", "Report": "Report",
-    "Publication": "Publication", "Spec": "Specification",
-    "CostModel": "Cost", "EfficiencyMetric": "Efficiency",
-    "EfficiencyJustification": "Efficiency rationale",
+    "ResearchQuestion": "Вопрос", "Hypothesis": "Гипотеза",
+    "VerificationMethod": "Метод проверки",
+    "ConfirmationCriteria": "Критерий подтверждения",
+    "Evidence": "Свидетельство", "Conclusion": "Вывод", "Constraint": "Ограничение",
+    "Tool": "Инструмент", "Resource": "Бюджет", "EmpiricalBase": "Источник данных",
+    "CodeArtifact": "Код", "GeneratedData": "Полученные данные", "Report": "Отчёт",
+    "Publication": "Публикация", "Spec": "Спецификация",
+    "CostModel": "Стоимость", "EfficiencyMetric": "Эффективность",
+    "EfficiencyJustification": "Обоснование эффективности",
 }
 
 _STATUS_WORDS = {
-    "open": "open", "decomposed": "broken down", "closed": "closed",
-    "formulated": "proposed", "under_verification": "being tested",
-    "confirmed": "confirmed", "refuted": "refuted",
-    "inconclusive": "tested — not settled", "postponed": "set aside",
-    "obtained": "collected", "validated": "validated", "rejected": "rejected",
-    "planned": "planned", "running": "running", "done": "done", "failed": "failed",
-    "not_met": "not met yet", "met": "met",
-    "available": "available", "exhausted": "used up",
-    "needs_adaptation": "needs adaptation", "being_created": "being built",
-    "creation_failed": "could not be built",
-    "draft": "draft", "approved": "approved", "created": "recorded", "active": "active",
+    "open": "открыт", "decomposed": "разбит на части", "closed": "закрыт",
+    "formulated": "предложена", "under_verification": "проверяется",
+    "confirmed": "подтверждена", "refuted": "опровергнута",
+    "inconclusive": "проверена — без ответа", "postponed": "отложена",
+    "obtained": "получено", "validated": "проверено", "rejected": "отклонено",
+    "planned": "запланирован", "running": "выполняется", "done": "выполнен",
+    "failed": "не удался", "not_met": "ещё не выполнен", "met": "выполнен",
+    "available": "доступен", "exhausted": "исчерпан",
+    "needs_adaptation": "нужна доработка", "being_created": "создаётся",
+    "creation_failed": "создать не удалось",
+    "draft": "черновик", "approved": "утверждён", "created": "записан",
+    "active": "действует",
 }
 
 _FIELD_WORDS = {
@@ -173,41 +179,60 @@ def _headline(kind: str, attrs: Dict[str, Any]) -> str:
 
     if kind == "Resource":
         left, total = attrs.get("remaining"), attrs.get("limit")
-        unit = text("resource_type") or "budget"
-        if left is not None and total is not None:
+        unit = text("resource_type")
+        if unit and left is not None and total is not None:
             return f"{unit}: {left} of {total} left"
-        return unit
-    if kind == "EmpiricalBase":
+        if unit:
+            return unit
+    elif kind == "EmpiricalBase":
         size = text("volume")
-        base = text("name", "description", "base_type") or "dataset"
+        base = text("name", "description", "base_type")
         where = text("source_ref")
         # A node whose only content is `base_type` used to render as the bare
         # word "dataset", which tells a reader nothing about which dataset.
         detail = size or where
-        return f"{base} — {detail}" if detail else base
-    if kind == "ConfirmationCriteria":
-        stated = text("threshold", "content", "description")
+        if base:
+            return f"{base} — {detail}" if detail else base
+    elif kind == "ConfirmationCriteria":
+        # Agents name this field whatever the prompt made natural, so the list
+        # is wide on purpose; anything it misses still reaches the reader
+        # through the fallback below.
+        stated = text("threshold", "thresholds", "criteria", "content",
+                      "confirmation_criteria", "confirm_refute_rule",
+                      "success_metric", "rule", "description")
         extra = text("confirmations_needed", "reproducibility")
         if stated and extra:
             return f"{stated}; {extra}"
-        return stated or extra or "acceptance criteria"
-    if kind == "Evidence":
+        if stated or extra:
+            return stated or extra
+    elif kind == "Evidence":
         found = text("content", "description", "finding", "summary")
         if found:
             return found
         metric, value = text("metric"), text("value")
-        return f"{metric}: {value}" if metric and value else "measurement"
-    if kind == "Tool":
-        return text("name", "description") or "tool"
-    if kind == "VerificationMethod":
-        return text("description", "procedure", "method_type") or "method"
-    if kind == "Conclusion":
-        return text("synthesis", "content", "description") or "conclusion"
+        if metric and value:
+            return f"{metric}: {value}"
+    elif kind == "Tool":
+        named = text("name", "description")
+        if named:
+            return named
+    elif kind == "VerificationMethod":
+        described = text("description", "procedure", "method_type")
+        if described:
+            return described
+    elif kind == "Conclusion":
+        drawn = text("synthesis", "content", "description")
+        if drawn:
+            return drawn
 
     said = text("formulation", "content", "synthesis", "name", "title",
                 "description", "rule", "threshold", "path")
     if said:
         return said
+    # Last resort, and better than a stock word: a node whose content sits
+    # under a key nobody anticipated still says what it says. The type name is
+    # already on the card, so a headline repeating it says nothing at all —
+    # which is how "Acceptance criteria" came to stand in for the criteria.
     readable = [f"{_FIELD_WORDS.get(k, k)}: {v}" for k, v in attrs.items()
                 if k not in _HIDDEN_FIELDS and v not in (None, "", [], {})]
     return "; ".join(readable)
@@ -218,7 +243,9 @@ def _headline(kind: str, attrs: Dict[str, Any]) -> str:
 _CONSUMED_BY_HEADLINE = {
     "Resource": {"resource_type", "remaining", "limit"},
     "EmpiricalBase": {"base_type", "volume", "name", "description"},
-    "ConfirmationCriteria": {"threshold", "content", "description"},
+    "ConfirmationCriteria": {"threshold", "thresholds", "criteria", "content",
+                             "confirmation_criteria", "confirm_refute_rule",
+                             "success_metric", "rule", "description"},
     "Tool": {"name", "description"},
     "Conclusion": {"synthesis", "content", "description"},
     "Evidence": {"content", "description", "finding", "summary"},
