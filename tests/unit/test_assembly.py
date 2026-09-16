@@ -40,6 +40,14 @@ def test_config_loads_and_has_one_root(config):
     assert set(order) == set(config.agents)
 
 
+def test_internal_agents_come_from_config(config):
+    internal = config.internal_agent_names()
+    # Plumbing is hidden; the synthesized run wrapper is too, though undeclared.
+    assert {"ToolPipelineAgent", "ExecutorSwitchAgent", "ResearchPipeline"} <= internal
+    # Agents the user reasons about stay visible.
+    assert not {"OrchestratorAgent", "PlannerAgent", "ExperimentAgent"} & internal
+
+
 def test_pipeline_stages_are_declared_agents_and_not_root(config):
     for stage in config.pipeline.stage_names():
         assert stage in config.agents, f"pipeline stage {stage!r} is not a declared agent"
@@ -96,6 +104,14 @@ def test_every_referenced_name_is_registered(config):
             REGISTRY.planner(agent.planner)
         if agent.cls.startswith("custom:"):
             REGISTRY.agent_class(agent.cls.split(":", 1)[1])
+
+
+def test_internal_tools_are_real_tool_names(config):
+    documented = {
+        doc.name for entry in REGISTRY.tools.values() for doc in entry.resolved_docs()
+    }
+    unknown = set(config.internal_tools) - documented
+    assert not unknown, f"internal_tools names no registered tool: {sorted(unknown)}"
 
 
 def test_unknown_agent_reference_rejected(config):

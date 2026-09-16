@@ -40,6 +40,8 @@
 #                 research summary, an execution report) — post it to the chat
 #                 as MY message instead of leaving it inside the caller's
 #                 function_response, where only a preview was ever visible
+#   internal:     I am plumbing (a composite wrapper, a tool-pipeline stage) —
+#                 the web UI hides me from the activity rail and agent tree
 #   a2a:          standalone A2A service: key (env prefix <KEY>_PORT and serve
 #                 argument), default port, advertised skill, pre-import env
 #
@@ -69,6 +71,29 @@ defaults:
 pipeline:
   pre: [ContextInitAgent]         # draft + confirm + seed the research frame
   post: [ResultAggregatorAgent]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Internal tools: they serve the system, not the task (bookkeeping, waiting on
+# a job). A Work Order allows them without declaring, and its card in the web
+# UI never lists them — even if the agent names them. Exact tool names as the
+# model calls them (not registry keys). The Work Order protocol and the HITL
+# tools are always exempt and need no entry here.
+# ─────────────────────────────────────────────────────────────────────────────
+internal_tools:
+  - sleep_tool
+  - update_task_status
+  # knowledge graph (graph / planner_graph)
+  - read_research_graph
+  - get_graph_history
+  # research graph (research_graph / research_graph_readonly)
+  - research_init
+  - research_set_focus
+  - research_commit
+  - research_context_slice
+  - research_overview
+  - research_provenance
+  - research_prior
+  - research_triggers
 
 agents:
   # ── Root orchestrator ───────────────────────────────────────────────────────
@@ -115,6 +140,7 @@ agents:
         description: Coordinate scientific research agents to solve complex tasks
         tags: [orchestration, science, multi-agent]
   PlanningPipelineAgent:
+    internal: true
     class: sequential
     root: false
     children:
@@ -363,6 +389,7 @@ agents:
         tags: [experiment, mcp, computation, ml, code]
 
   ToolPipelineAgent:
+    internal: true
     class: sequential
     description: >-
       runs computations by orchestrating EXISTING ready-to-use MCP
@@ -551,21 +578,25 @@ agents:
 
   # ── ToolPipelineAgent stages ───────────────────────────────────────────────
   ToolPreparerAgent:
+    internal: true
     class: sequential
     description: Agent to find and prepare relevant mcp servers for current task
     children: [ParallelToolSearcherAgent, FullSetToolReranker, WebToolsDeployerAgent]
 
   ParallelToolSearcherAgent:
+    internal: true
     class: parallel
     description: Runs multiple search agents in parallel to gather relevant MCP servers.
     children: [LocalToolsExtractorAgent, ToolWebSearcherAgent]
 
   LocalToolsExtractorAgent:
+    internal: true
     class: sequential
     description: Agent to extract relevant ready-to-use tools from local storage
     children: [ToolRetrieverAgent, ToolReranker]
 
   ToolRetrieverAgent:
+    internal: true
     class: llm
     description: Agent to retrieve relevant MCP servers from RAG database of MCP tools for given task.
     prompt: tool_retriever
@@ -573,6 +604,7 @@ agents:
     output_key: retrieved_tools
 
   ToolReranker:
+    internal: true
     class: llm
     description: Agent to rerank retrieved MCP servers from RAG database of MCP tools for given task.
     prompt: tool_reranker
@@ -587,6 +619,7 @@ agents:
       after_agent: [collect_reranked_tools]
 
   ToolWebSearcherAgent:
+    internal: true
     class: llm
     description: Agent to web-search relevant MCP servers from public web storages.
     prompt: tool_websearcher
@@ -594,6 +627,7 @@ agents:
     output_key: retrieved_web_tools
 
   FullSetToolReranker:
+    internal: true
     class: llm
     description: Agent to score found web MCP servers given already available local MCP servers for given task.
     prompt: tool_scoring
@@ -603,6 +637,7 @@ agents:
       after_agent: [collect_reranked_mcps]
 
   WebToolsDeployerAgent:
+    internal: true
     class: custom:web_tools_deployer
     description: Agent to deploy found web mcp servers
 
@@ -645,6 +680,7 @@ agents:
   # because AgentTool returns the LAST content event of the agent it wraps, so a
   # sibling standing down after the real executor ran would overwrite its answer.
   ExecutorSwitchAgent:
+    internal: true
     class: custom:executor_switch
     description: >-
       Runs the task's executor: the ReAct MCP executor normally, or the

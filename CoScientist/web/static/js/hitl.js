@@ -531,6 +531,17 @@ function woChip(text, cls = 'text-on-surface-variant border-outline-variant/20 b
   return `<span class="inline-block text-[10px] font-mono px-2 py-0.5 rounded border ${cls}">${escHtml(text)}</span>`;
 }
 
+// Internal tools the agent named: always rendered, shown only while the viewer
+// has "Show internal agents and tools" on (CSS on .wo-internal).
+const WO_INTERNAL_CHIP = 'wo-internal text-outline-variant border-dashed border-outline-variant/30 bg-transparent';
+
+function woToolChips(tools, internal) {
+  return [
+    ...(tools || []).map(tn => woChip(tn)),
+    ...(internal || []).map(tn => woChip(tn, WO_INTERNAL_CHIP)),
+  ].join(' ');
+}
+
 function woSection(labelKey, inner) {
   if (!inner) return '';
   return `
@@ -542,7 +553,7 @@ function woSection(labelKey, inner) {
 
 function woStepRow(step) {
   const status = step.status || 'pending';
-  const tools = (step.tools || []).map(tn => woChip(tn)).join(' ');
+  const tools = woToolChips(step.tools, step.internal_tools);
   return `
         <li data-wo-step="${escHtml(step.id)}" data-wo-status="${escHtml(status)}" class="flex flex-col gap-0.5">
           <div class="flex items-baseline gap-2">
@@ -572,7 +583,9 @@ function workOrderBody(order, rid, interactive) {
   const effects = (order.side_effects || []).map(e =>
     woChip((e.kind || e) + (e.detail ? ': ' + e.detail : ''), WO_TIER_STYLE.side_effect)).join(' ');
   const budget = Object.entries(order.budget || {}).map(([k, v]) => woChip(`${k} ≤ ${v}`)).join(' ');
-  const tools = (order.planned_tools || []).map(tn => woChip(tn)).join(' ');
+  const tools = woToolChips(order.planned_tools, order.internal_tools);
+  // Only internal tools: the whole section hides with them.
+  const toolsOnlyInternal = !(order.planned_tools || []).length;
   return `
         <div class="text-xs text-on-surface-variant leading-relaxed">
           ${woSection('workOrder.goal', `<p class="text-on-surface">${escHtml(order.goal || '')}</p>`)}
@@ -583,7 +596,7 @@ function workOrderBody(order, rid, interactive) {
     : '')}
           ${woSection('workOrder.steps', (order.steps || []).length
       ? `<ol data-wo-steps class="flex flex-col gap-1.5">${order.steps.map(woStepRow).join('')}</ol>` : '')}
-          ${woSection('workOrder.tools', tools ? `<div class="flex flex-wrap gap-1">${tools}</div>` : '')}
+          ${tools ? `<div class="${toolsOnlyInternal ? 'wo-internal' : ''}">${woSection('workOrder.tools', `<div class="flex flex-wrap gap-1">${tools}</div>`)}</div>` : ''}
           ${woSection('workOrder.sideEffects', effects ? `<div class="flex flex-wrap gap-1">${effects}</div>` : '')}
           ${woSection('workOrder.budget', budget ? `<div class="flex flex-wrap gap-1">${budget}</div>` : '')}
           ${woSection('workOrder.expected', order.expected_outcome ? `<p>${escHtml(order.expected_outcome)}</p>` : '')}

@@ -23,6 +23,7 @@ The YAML declares every agent of the system in one place. Per agent:
   critic:       an LLM critic reviews the agent's output once and it rewrites
                 on request (session agents only; bool or "${settings.path}")
   report_output: the agent's final answer is a deliverable — show it in the chat
+  internal:     plumbing agent (pipeline stage, composite wrapper) — hidden in the web UI
   output_key / output_schema / planner / options: passthrough constructor config
                 (an ``options`` value may be "${settings.path}" too)
   a2a:          how the agent is exposed as an A2A service (key, port, skill, env)
@@ -54,6 +55,10 @@ DEFAULT_CONFIG_PATH = CONFIG_DIR / "system.yaml"
 # honours it, so one deployment can run a differently-shaped CoScientist
 # without touching the default system.yaml.
 CONFIG_ENV_VAR = "COSCIENTIST_CONFIG"
+
+# Name of the SequentialAgent the assembler wraps around pipeline.pre + root +
+# pipeline.post. It is not declared in YAML, so it cannot carry `internal:`.
+PIPELINE_ROOT_NAME = "ResearchPipeline"
 
 
 def resolve_config_path(ref: Optional[str] = None) -> Path:
@@ -189,6 +194,10 @@ class AgentConfig(BaseModel):
     # summary): report it to the chat instead of leaving it buried in the
     # delegation's function_response. See logging/agent_output.py.
     report_output: bool = False
+    # Plumbing, not a participant the user reasons about (a composite wrapper,
+    # a tool-pipeline stage): the web UI hides it from the activity rail and
+    # the agent tree.
+    internal: bool = False
     include_contents: Optional[str] = "default"
     mode: Optional[str] = None
     output_key: Optional[str] = None
@@ -296,6 +305,10 @@ class SystemConfig(BaseModel):
 
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
     pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
+    # Tool names (as the model calls them) that serve the system rather than the
+    # task: a Work Order allows them without declaring, and the web card never
+    # shows them — even when the agent lists them anyway.
+    internal_tools: List[str] = Field(default_factory=list)
     agents: Dict[str, AgentConfig]
 
     @model_validator(mode="after")
@@ -397,6 +410,10 @@ class SystemConfig(BaseModel):
         children: Dict[str, List[str]] = {}
 
         for a in self.agents.values():
+            # A disabled agent is never attached, so it is nobody's parent at
+            # runtime (PlanningPipelineAgent would otherwise claim the root).
+            if not a.is_enabled():
+                continue
             direct_children = list(a.subordinates) + list(a.children)
             if direct_children:
                 children[a.name] = direct_children
@@ -429,6 +446,14 @@ class SystemConfig(BaseModel):
         return frozenset(
             a.name for a in self.agents.values()
             if a.report_output and a.is_enabled()
+        )
+
+    def internal_agent_names(self) -> frozenset:
+        """Agents the web UI hides: those marked ``internal`` plus the
+        synthesized pipeline wrapper, which has no config entry of its own."""
+        return frozenset(
+            {a.name for a in self.agents.values() if a.internal}
+            | {PIPELINE_ROOT_NAME}
         )
 
     def a2a_agents(self) -> List[AgentConfig]:

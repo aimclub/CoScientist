@@ -15,10 +15,10 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 from CoScientist.hitl.work_order import load_order, order_key, save_order, usage_key
-from CoScientist.hitl.work_order_risk import EXEMPT_TOOLS, ORIENTATION_TOOLS
+from CoScientist.hitl.work_order_risk import ORIENTATION_TOOLS, exempt_tools
 
 logger = logging.getLogger("CoScientist.hitl.work_order")
 
@@ -34,8 +34,11 @@ def _blocked(reason: str, tool_name: str, message: str, **extra) -> Dict[str, An
     }
 
 
-def make_work_order_guard(agent_name: str, handler: Any = None):
+def make_work_order_guard(
+    agent_name: str, handler: Any = None, internal_tools: Iterable[str] = ()
+):
     """before_tool callback enforcing ``agent_name``'s Work Order."""
+    exempt = exempt_tools(internal_tools)
 
     def _handler():
         if handler is not None:
@@ -84,7 +87,7 @@ def make_work_order_guard(agent_name: str, handler: Any = None):
             return None
         tool_name = str(getattr(actual_tool, "name", "") or actual_tool or "")
 
-        if tool_name in EXEMPT_TOOLS:
+        if tool_name in exempt:
             return None
 
         state = context.state

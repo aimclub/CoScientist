@@ -5,7 +5,8 @@ tool names, so a contract can only name tools the agent actually has).
 
 How a contract is confirmed depends on its risk tier (work_order_risk.py):
 
-  read         the human gets a notice card; the tool returns at once;
+  read         a declaration is reviewed like compute; an amendment that only
+               adds read tools is a notice card and returns at once;
   compute      a HITL request with a veto window — auto-approved when it runs out
                (a window of -1 disables auto-approval: it waits for the human);
   side_effect  a HITL request under the operator's global HITL timeout.
@@ -40,6 +41,7 @@ from CoScientist.hitl.work_order_risk import (
     TOOL_SIDE_EFFECTS,
     SideEffectKind,
     Tier,
+    exempt_tools,
     max_tier,
     tool_tier,
 )
@@ -71,12 +73,17 @@ class WorkOrderToolset:
         agent_name: str,
         valid_tool_names: Optional[Iterable[str]] = None,
         handler: Any = None,
+        internal_tools: Iterable[str] = (),
     ) -> None:
         self.agent_name = agent_name
+        # Allowed without declaring and kept apart from the contract's tools, so
+        # they neither raise its tier nor show on the card unless the viewer
+        # asks. The agent may still name them — that is no error.
+        self.exempt = exempt_tools(internal_tools)
         # None: the agent's tool surface is resolved at runtime — names can't be checked.
         self.valid_tool_names = (
             None if valid_tool_names is None
-            else set(valid_tool_names) - EXEMPT_TOOLS
+            else set(valid_tool_names) - self.exempt
         )
         self._handler_override = handler
 
@@ -111,13 +118,24 @@ class WorkOrderToolset:
             tools = item.get("tools") or []
             if isinstance(tools, str):
                 tools = [tools]
+            tools = [str(t) for t in tools]
             steps.append(WorkStep(
                 id=f"S{start + offset}",
                 title=str(item["title"]).strip(),
-                tools=[str(t) for t in tools],
+                tools=[t for t in tools if t not in self.exempt],
+                internal_tools=self._internal_named(tools),
                 expected_outcome=str(item.get("expected_outcome") or ""),
             ))
         return steps
+
+    def _internal_named(self, names: Iterable[str], into: Optional[List[str]] = None) -> List[str]:
+        """The internal tools among ``names``, appended to ``into`` without
+        repeats. Protocol tools are not listed: nobody needs to see those."""
+        found = list(into or [])
+        for name in names:
+            if name in self.exempt and name not in EXEMPT_TOOLS and name not in found:
+                found.append(name)
+        return found
 
     @staticmethod
     def _parse_assumptions(raw: Optional[List[Any]]) -> List[Assumption] | str:
@@ -155,16 +173,18 @@ class WorkOrderToolset:
     ) -> Optional[HITLResponse]:
         """Put the contract (or amendment) in front of the human by tier.
 
-        Returns None when nobody is asked (off, or a read-tier notice): the
-        caller treats that as approved.
+        Returns None when nobody is asked (off, or a read-tier amendment
+        notice): the caller treats that as approved.
         """
         session = session_context(tool_context)
         if not work_order_active():
             return None
-        if tier == Tier.READ and not force_blocking:
+        # A read-only amendment is just a notice; the contract itself always goes
+        # to the human (under the veto window) — otherwise the agent starts first.
+        if tier == Tier.READ and trigger != "work_order" and not force_blocking:
             try:
                 await self.handler.notify({
-                    "kind": "declared" if trigger == "work_order" else "amended",
+                    "kind": "amended",
                     "agent_name": self.agent_name,
                     "tier": tier.value,
                     "work_order": order.model_dump(mode="json"),
@@ -176,7 +196,7 @@ class WorkOrderToolset:
                 logger.exception("%s: work order notice failed", self.agent_name)
             return None
 
-        veto = tier == Tier.COMPUTE and not force_blocking
+        veto = tier in (Tier.READ, Tier.COMPUTE) and not force_blocking
         # A non-positive window reaches the handler as-is: no deadline, wait for the human.
         veto_seconds = get_settings().web.work_order_veto_seconds
         veto_timeout = float(veto_seconds) if veto_seconds > 0 else -1.0
@@ -255,10 +275,14 @@ class WorkOrderToolset:
         parsed_steps = self._parse_steps(steps)
         if isinstance(parsed_steps, str):
             return _error(parsed_steps)
+        named = [str(t) for t in planned_tools or []]
         tools: List[str] = []
-        for name in list(planned_tools or []) + [t for s in parsed_steps for t in s.tools]:
-            if name not in tools and name not in EXEMPT_TOOLS:
+        for name in named + [t for s in parsed_steps for t in s.tools]:
+            if name not in tools and name not in self.exempt:
                 tools.append(name)
+        internal = self._internal_named(
+            named + [t for s in parsed_steps for t in s.internal_tools]
+        )
         unknown = self._unknown_tools(tools)
         if unknown:
             return _error(
@@ -275,6 +299,7 @@ class WorkOrderToolset:
             assumptions=parsed_assumptions,
             steps=parsed_steps,
             planned_tools=tools,
+            internal_tools=internal,
             side_effects=effects,
             expected_outcome=str(expected_outcome or ""),
             fallback=str(fallback or ""),
@@ -369,9 +394,13 @@ class WorkOrderToolset:
             return _error(new_steps)
 
         new = old.model_copy(deep=True)
-        for name in list(add_tools or []) + [t for s in new_steps for t in s.tools]:
-            if name not in new.planned_tools and name not in EXEMPT_TOOLS:
+        named = [str(t) for t in add_tools or []]
+        for name in named + [t for s in new_steps for t in s.tools]:
+            if name not in new.planned_tools and name not in self.exempt:
                 new.planned_tools.append(name)
+        new.internal_tools = self._internal_named(
+            named + [t for s in new_steps for t in s.internal_tools], into=new.internal_tools
+        )
         unknown = self._unknown_tools(new.planned_tools)
         if unknown:
             return _error(
@@ -384,6 +413,15 @@ class WorkOrderToolset:
 
         diff = diff_work_orders(old, new)
         if not any(diff.values()):
+            if new.internal_tools != old.internal_tools:
+                # Nothing to review: internal tools were never blocked.
+                old.internal_tools = new.internal_tools
+                save_order(state, old)
+                return {
+                    "status": "approved",
+                    "revision": old.revision,
+                    "message": "No amendment needed: those tools are always allowed.",
+                }
             return _error("The amendment changes nothing. Name the tools or steps you need.")
 
         delta_tier = max_tier(
@@ -479,5 +517,6 @@ class WorkOrderToolset:
 def make_work_order_tools(
     agent_name: str,
     valid_tool_names: Optional[Iterable[str]] = None,
+    internal_tools: Iterable[str] = (),
 ) -> List[FunctionTool]:
-    return WorkOrderToolset(agent_name, valid_tool_names).tools()
+    return WorkOrderToolset(agent_name, valid_tool_names, internal_tools=internal_tools).tools()

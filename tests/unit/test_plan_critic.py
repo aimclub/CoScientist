@@ -237,6 +237,92 @@ def test_critic_round_budget_is_configurable(planner_runs):
     assert calls == ["p1", "p2", "p3"]
 
 
+def test_critic_review_is_reported_as_a_visible_delegation(planner_runs, monkeypatch):
+    """The critic is no ADK agent, so no callback reports it: without its own
+    records the web UI could not tell a run it approved from one it skipped."""
+    from CoScientist.logging import tool_activity
+
+    received = []
+
+    async def sink(key, payload):
+        received.append(payload)
+
+    monkeypatch.setattr(tool_activity, "_sink", sink)
+    monkeypatch.setattr(tool_activity, "session_key", lambda ctx: ("u", "s"))
+    planner_runs(["first plan", "second plan"])
+
+    async def critic(task, plan):
+        return "TASK-1 misses the deliverable." if "first plan" in plan else None
+
+    _run(_planner(critic, critic_max_rounds=2), _FakeContext("Find inhibitors"))
+
+    assert [(p["phase"], p["author"]) for p in received] == [
+        ("agent_start", "PlanCriticAgent"), ("call", "PlannerAgent"),
+        ("agent_end", "PlanCriticAgent"), ("result", "PlannerAgent"),
+    ] * 2
+    calls = [p for p in received if p["phase"] == "call"]
+    results = [p for p in received if p["phase"] == "result"]
+    assert all(p["is_delegation"] and p["target_agent"] == "PlanCriticAgent" for p in calls)
+    assert calls[0]["args"]["task"] == "Find inhibitors"
+    assert "first plan" in calls[0]["args"]["plan"]
+    # Each result pairs with its own call, not with the other round's.
+    assert [r["call_id"] for r in results] == [c["call_id"] for c in calls]
+    assert len({c["call_id"] for c in calls}) == 2
+    assert [r["result"]["verdict"] for r in results] == ["revise", "approve"]
+    assert results[0]["result"]["feedback"] == "TASK-1 misses the deliverable."
+
+
+def test_critic_verdict_is_announced_as_a_chat_message(planner_runs, monkeypatch):
+    """A delegation's result is only ever a preview in the tools panel — the
+    verdict itself must reach the user the way any other agent's deliverable
+    does, or an approval and a silent failure both look like nothing happened."""
+    from CoScientist.logging import agent_output
+
+    posted = []
+
+    async def sink(key, payload):
+        posted.append(payload)
+
+    monkeypatch.setattr(agent_output, "_sink", sink)
+    monkeypatch.setattr(agent_output, "session_key", lambda ctx: ("u", "s"))
+    planner_runs(["approved plan", "revised plan"])
+
+    calls = iter(["TASK-1 misses the deliverable.", None])
+
+    async def critic(task, plan):
+        return next(calls)
+
+    _run(_planner(critic, critic_max_rounds=2), _FakeContext("task"))
+
+    assert [p["agent"] for p in posted] == ["PlanCriticAgent", "PlanCriticAgent"]
+    assert all(p["caller"] == "PlannerAgent" for p in posted)
+    assert "TASK-1 misses the deliverable." in posted[0]["content"]
+    assert "round 1/2" in posted[0]["content"] or "1/2" in posted[0]["content"]
+    assert "Approved" in posted[1]["content"]
+
+
+def test_failed_critic_is_announced_too(planner_runs, monkeypatch):
+    """A timed-out/erroring critic must not look identical to a silent approval."""
+    from CoScientist.logging import agent_output
+
+    posted = []
+
+    async def sink(key, payload):
+        posted.append(payload)
+
+    monkeypatch.setattr(agent_output, "_sink", sink)
+    monkeypatch.setattr(agent_output, "session_key", lambda ctx: ("u", "s"))
+    planner_runs(["only plan"])
+
+    async def critic(task, plan):
+        raise RuntimeError("provider down")
+
+    _run(_planner(critic), _FakeContext("task"))
+
+    assert len(posted) == 1
+    assert "did not answer" in posted[0]["content"]
+
+
 # ── the re-registration guard ────────────────────────────────────────────────
 #
 # `create_plan` normalises what it is given (renumbers ids, merges adjacent

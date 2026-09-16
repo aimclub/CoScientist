@@ -35,6 +35,9 @@ class WorkStep(BaseModel):
     id: str
     title: str
     tools: List[str] = Field(default_factory=list)
+    # Internal tools the agent named for this step: allowed anyway, kept out of
+    # `tools` (and so out of the tier), shown only when the viewer asks for them.
+    internal_tools: List[str] = Field(default_factory=list)
     expected_outcome: str = ""
     status: StepStatus = "pending"
     note: str = ""
@@ -58,6 +61,8 @@ class WorkOrder(BaseModel):
     assumptions: List[Assumption] = Field(default_factory=list)
     steps: List[WorkStep] = Field(default_factory=list)
     planned_tools: List[str] = Field(default_factory=list)
+    # Internal tools the agent named anywhere in the order (see WorkStep).
+    internal_tools: List[str] = Field(default_factory=list)
     side_effects: List[SideEffect] = Field(default_factory=list)
     # tool name -> max calls; a tool absent from the budget is not capped.
     budget: Dict[str, int] = Field(default_factory=dict)

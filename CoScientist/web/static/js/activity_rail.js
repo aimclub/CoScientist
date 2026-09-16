@@ -130,6 +130,7 @@
       OrchestratorAgent: 'hub',
       InitAgent: 'flag',
       PlannerAgent: 'map',
+      PlanCriticAgent: 'rate_review',
       HypothesesAgent: 'lightbulb',
       ResearchAgent: 'travel_explore',
       TaskExecutorAgent: 'alt_route',
@@ -155,46 +156,57 @@
 
     const KNOWN_AGENTS = new Set(Object.keys(AGENT_ICONS));
 
-    const INTERNAL_AGENTS = new Set([
-      'ResearchPipeline',
-      'PlanningPipeline',
-      'PlanningPipelineAgent',
-      'ToolPipeline',
-      'ToolPipelineAgent',
-      'ToolPreparer',
-      'ToolPreparerAgent',
-      'ParallelToolSearcher',
-      'ParallelToolSearcherAgent',
-      'LocalToolsExtractor',
-      'LocalToolsExtractorAgent',
-      'ToolRetriever',
-      'ToolRetrieverAgent',
-      'ToolReranker',
-      'ToolWebSearcher',
-      'ToolWebSearcherAgent',
-      'FullSetToolReranker',
-      'WebToolsDeployer',
-      'WebToolsDeployerAgent',
-      'ExecutorSwitch',
-      'ExecutorSwitchAgent',
-      'InitAgent',
-      'TZAgent',
-      'system',
-      'user',
-      'unknown',
-    ]);
+    // Which agents are plumbing is declared in the system YAML (`internal:`)
+    // and served by /api/agents. Only the pseudo-authors that are not agents
+    // at all live here — they stay hidden even when internal agents are shown.
+    const PSEUDO_AUTHORS = new Set(['system', 'user', 'unknown']);
+    const INTERNAL_AGENTS = new Set(PSEUDO_AUTHORS);
 
     function isInternalAgent(name) {
       if (!name) return true;
       const n = String(name).trim();
-      if (INTERNAL_AGENTS.has(n)) return true;
-      const stripped = n.replace(/Agent$/, '');
-      if (INTERNAL_AGENTS.has(stripped)) return true;
-      if (/Pipeline|SwitchAgent$|PreparerAgent$|ExtractorAgent$|SearcherAgent$|DeployerAgent$/i.test(n)) return true;
-      return false;
+      if (PSEUDO_AUTHORS.has(n)) return true;
+      return !showInternal && INTERNAL_AGENTS.has(n);
     }
+
+    // The rail and the trace tree drop internal agents as events arrive, so
+    // flipping the switch replays the session from a fresh snapshot.
+    // remember=false applies the server default without recording a choice.
+    function setShowInternal(value, { remember = true } = {}) {
+      const next = !!value;
+      if (remember) {
+        // A choice equal to the default is no choice: keep following the env.
+        showInternalStored = next === !!appSettings.general.showInternal ? null : next;
+        try {
+          if (showInternalStored === null) localStorage.removeItem(SHOW_INTERNAL_KEY);
+          else localStorage.setItem(SHOW_INTERNAL_KEY, String(next));
+        } catch (_) { }
+      }
+      if (next === showInternal) return;
+      showInternal = next;
+      document.documentElement.classList.toggle('show-internal', showInternal);
+      if (typeof activateSession === 'function' && activeUser && activeSession) {
+        activateSession(activeUser, activeSession);
+      }
+    }
+    window.setShowInternal = setShowInternal;
     window.isInternalAgent = isInternalAgent;
     window.INTERNAL_AGENTS = INTERNAL_AGENTS;
+
+    async function loadInternalAgents() {
+      try {
+        const resp = await fetch('/api/agents');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        (data.internal_agents || []).forEach(name => INTERNAL_AGENTS.add(name));
+        // Events that arrived before the list did may have recorded internal
+        // agents; the render filter drops them now.
+        renderActivityRail();
+      } catch {
+        // keep the pseudo-authors only
+      }
+    }
+    loadInternalAgents();
 
     function agentIcon(name) {
       if (AGENT_ICONS[name]) return AGENT_ICONS[name];

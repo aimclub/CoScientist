@@ -46,6 +46,7 @@ from CoScientist.assembly.bindings import (
 from CoScientist.assembly.prompting import PromptContext
 from CoScientist.assembly.registry import REGISTRY, ToolEntry
 from CoScientist.assembly.schema import (
+    PIPELINE_ROOT_NAME,
     AgentConfig,
     SystemConfig,
     get_config,
@@ -87,7 +88,7 @@ class AgentSystem:
             from google.adk.agents.sequential_agent import SequentialAgent
 
             self._run_root = SequentialAgent(
-                name="ResearchPipeline",
+                name=PIPELINE_ROOT_NAME,
                 description=(
                     "Full research lifecycle: orchestrator run then report"
                     " synthesis."
@@ -176,7 +177,9 @@ def _work_order_tool_names(
     return names
 
 
-def _attach_work_order_callbacks(kwargs: dict, agent_name: str) -> None:
+def _attach_work_order_callbacks(
+    kwargs: dict, agent_name: str, internal_tools: List[str]
+) -> None:
     """Reset the contract and enforce it FIRST: on agent start, before anything
     reads the state; before a tool, so a call the contract blocks never reaches
     the other callbacks (a WebSearchLimiter would count it against the quota).
@@ -196,7 +199,7 @@ def _attach_work_order_callbacks(kwargs: dict, agent_name: str) -> None:
         [make_reset_work_order(agent_name)] + as_list(kwargs.get("before_agent_callback"))
     )
     kwargs["before_tool_callback"] = (
-        [make_work_order_guard(agent_name)] + as_list(kwargs.get("before_tool_callback"))
+        [make_work_order_guard(agent_name, internal_tools=internal_tools)] + as_list(kwargs.get("before_tool_callback"))
     )
 
 
@@ -255,7 +258,8 @@ def _build_llm_agent(
     if work_order_attached:
         from CoScientist.hitl.work_order_tools import make_work_order_tools
         tools.extend(make_work_order_tools(
-            cfg.name, _work_order_tool_names(cfg, system, tool_entries)
+            cfg.name, _work_order_tool_names(cfg, system, tool_entries),
+            internal_tools=system.internal_tools,
         ))
 
     if hitl_attached:
@@ -286,7 +290,7 @@ def _build_llm_agent(
 
     callbacks = _callback_kwargs(cfg, ctx)
     if work_order_attached:
-        _attach_work_order_callbacks(callbacks, cfg.name)
+        _attach_work_order_callbacks(callbacks, cfg.name, system.internal_tools)
 
     kwargs = dict(
         name=cfg.name,

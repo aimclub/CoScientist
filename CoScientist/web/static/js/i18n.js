@@ -55,8 +55,6 @@ const i18n = {
   'rail.standby': { en: 'Standby — awaiting tool invocation', ru: 'Ожидание вызова инструментов…' },
   'rail.noTools': { en: 'No tool calls yet', ru: 'Инструменты ещё не вызывались' },
   'rail.toggle': { en: 'Show/hide agent activity', ru: 'Показать/скрыть активность агентов' },
-  'experiments.filterActive': { en: 'Active only', ru: 'Только с вызовами' },
-  'experiments.filterAll': { en: 'All agents', ru: 'Все агенты' },
 
   // ── Settings modal (rendered by modals/settings.js) ───────────────────────
   'settings.title': { en: 'Settings', ru: 'Настройки' },
@@ -66,7 +64,7 @@ const i18n = {
     en: 'Shared by every user of this server and reset when it restarts. Permanent values live in .env.',
     ru: 'Настройки общие для всех пользователей сервера и сбрасываются при его перезапуске. Постоянные значения задаются в .env.'
   },
-  'settings.reset': { en: 'Reset to defaults', ru: 'Сбросить к умолчаниям' },
+  'settings.reset': { en: 'Reset to defaults', ru: 'По умолчанию' },
   'settings.resetHint': {
     en: 'Restore the values the server was started with (.env). Saved only after you press Save.',
     ru: 'Вернуть значения, с которыми запущен сервер (.env). Сохраняются только после нажатия «Сохранить».'
@@ -265,6 +263,11 @@ const i18n = {
     en: 'Title a new session after its first request.',
     ru: 'Придумывать название новой сессии по первому запросу.'
   },
+  'settings.f.showInternal.label': { en: 'Show internal agents and tools', ru: 'Показывать служебных агентов и инструменты' },
+  'settings.f.showInternal.desc': {
+    en: 'Pipeline stages, wrappers and system tools (marked internal in the system config) appear in the activity rail, the trace tree and Work Order cards. Useful for debugging.',
+    ru: 'Этапы пайплайна, обёртки и системные инструменты (помечены internal в конфиге системы) появляются в панели активности, дереве вызовов и карточках плана работы. Полезно для отладки.'
+  },
 
   // Fields — Research flow
   'settings.f.startMode.label': { en: 'How a session starts', ru: 'С чего начинается сессия' },
@@ -348,10 +351,10 @@ const i18n = {
     en: '-1 — wait for a human (no auto-approval)\nN > 0 — approve automatically after N seconds',
     ru: '-1 — ждать решения человека (без автоодобрения)\nN > 0 — одобрить автоматически через N секунд'
   },
-  'settings.f.workOrderVeto.label': { en: 'Computation plans without an answer', ru: 'Планы вычислений без ответа' },
+  'settings.f.workOrderVeto.label': { en: 'Search and computation plans without an answer', ru: 'Планы поиска и вычислений без ответа' },
   'settings.f.workOrderVeto.desc': {
-    en: 'Work plans that only run computations can start automatically after this time unless you pause them. Plans with external side effects follow the rule above.',
-    ru: 'Планы работы, в которых агент только выполняет вычисления, могут стартовать автоматически через это время, если вы не поставили их на паузу. Планы с внешними последствиями подчиняются правилу выше.'
+    en: 'Work plans in which the agent only searches, reads or runs computations can start automatically after this time unless you pause them. Plans with external side effects follow the rule above.',
+    ru: 'Планы работы, в которых агент только ищет, читает или выполняет вычисления, могут стартовать автоматически через это время, если вы не поставили их на паузу. Планы с внешними последствиями подчиняются правилу выше.'
   },
   'settings.f.workOrderVeto.envValues': {
     en: '-1 — wait for a human (no auto-start)\nN > 0 — start automatically after N seconds',

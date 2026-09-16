@@ -267,6 +267,8 @@ def _current_settings() -> dict:
             "useProxy": web.use_proxy,
             "opikEnabled": web.opik_enabled,
             "autoNamingEnabled": web.auto_naming_enabled,
+            # Read-only here: the browser stores its own choice over this default.
+            "showInternal": web.show_internal_enabled,
             "coscientistUsername": web.coscientist_username or "",
             "contextInitEnabled": settings.context_init.enabled,
             "knowledgeGraphEnabled": web.knowledge_graph_enabled,
@@ -1774,24 +1776,10 @@ def create_app() -> FastAPI:
         from CoScientist.assembly.schema import get_config
         cfg = get_config()
         hierarchy = cfg.agent_hierarchy_map()
-        INTERNAL_NAMES = {
-            "ResearchPipeline", "PlanningPipelineAgent", "PlanningPipeline",
-            "ToolPipelineAgent", "ToolPreparerAgent", "ParallelToolSearcherAgent",
-            "LocalToolsExtractorAgent", "ToolRetrieverAgent", "ToolReranker",
-            "ToolWebSearcherAgent", "FullSetToolReranker", "WebToolsDeployerAgent",
-            "ExecutorSwitchAgent", "InitAgent", "TZAgent",
-        }
+        internal_names = cfg.internal_agent_names()
         agents_list = []
         for name in cfg.build_order():
             ac = cfg.agent(name)
-            is_internal = (
-                ac.cls in ("sequential", "parallel")
-                or ac.cls.startswith("custom:executor_switch")
-                or ac.cls.startswith("custom:web_tools_deployer")
-                or name in INTERNAL_NAMES
-                or name.endswith("Pipeline")
-                or name.endswith("PipelineAgent")
-            )
             agents_list.append({
                 "name": ac.name,
                 "class": ac.cls,
@@ -1802,13 +1790,13 @@ def create_app() -> FastAPI:
                 "subordinates": list(ac.subordinates),
                 "children": list(ac.children),
                 "is_root": bool(ac.root),
-                "is_internal": is_internal,
+                "is_internal": name in internal_names,
             })
         return JSONResponse({
             "agents": agents_list,
             "hierarchy": hierarchy,
             "delegatable_names": list(cfg.delegatable_names()),
-            "internal_agents": list(INTERNAL_NAMES | {a["name"] for a in agents_list if a["is_internal"]}),
+            "internal_agents": sorted(internal_names),
         })
 
     # --- Events log ---

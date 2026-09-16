@@ -13,6 +13,7 @@ from CoScientist.hitl.work_order_tools import WorkOrderToolset
 
 AGENT = "DatasetCollectorAgent"
 TOOLS = ["tavily_search", "execute_bash", "read_file", "list_directory", "install_package"]
+INTERNAL = ["update_task_status", "sleep_tool"]
 
 
 class _Handler:
@@ -57,8 +58,8 @@ def env():
     handler = _Handler()
     return SimpleNamespace(
         ctx=ctx, handler=handler,
-        toolset=WorkOrderToolset(AGENT, TOOLS, handler),
-        guard=make_work_order_guard(AGENT, handler),
+        toolset=WorkOrderToolset(AGENT, TOOLS, handler, internal_tools=INTERNAL),
+        guard=make_work_order_guard(AGENT, handler, internal_tools=INTERNAL),
     )
 
 
@@ -81,7 +82,7 @@ def _declare(env, **overrides):
     return asyncio.run(env.toolset.declare_work_order(**args))
 
 
-def test_before_declaring_only_orientation_and_protocol_tools_pass(env):
+def test_before_declaring_only_orientation_protocol_and_internal_tools_pass(env):
     assert _call(env, "list_directory") is None
     assert _call(env, "update_task_status") is None
     assert _call(env, "request_approval") is None
@@ -152,3 +153,10 @@ def test_state_is_written_through_top_level_keys(env):
     assert usage_key(AGENT) in env.ctx.state.writes
     _call(env, "tavily_search")
     assert order_key(AGENT) in env.ctx.state.writes
+
+
+def test_internal_tools_pass_an_approved_order_without_being_declared(env):
+    _declare(env)
+    assert _call(env, "sleep_tool") is None
+    assert _call(env, "update_task_status") is None
+    assert env.ctx.state.get(usage_key(AGENT), {}).get("sleep_tool") is None

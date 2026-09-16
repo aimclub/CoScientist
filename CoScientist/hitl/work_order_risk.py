@@ -106,17 +106,22 @@ ORIENTATION_TOOLS = frozenset({
     "list_sandbox_files",
 })
 
-# Never blocked: the Work Order protocol itself, the human channel, task status
-# bookkeeping, and waiting between checks on a long job (no effect of its own).
+# Never blocked: the Work Order protocol itself and the human channel. Other
+# system tools (bookkeeping, waiting on a job) are listed in the system YAML as
+# `internal_tools` and join this set per agent — see exempt_tools().
 EXEMPT_TOOLS = frozenset({
-    "sleep_tool",
     "declare_work_order",
     "update_work_order",
     "update_work_step",
     "request_approval",
     "request_selection",
-    "update_task_status",
 })
+
+
+def exempt_tools(internal_tools: Iterable[str] = ()) -> frozenset:
+    """Tools a Work Order neither blocks nor shows: the protocol plus the
+    system's ``internal_tools``."""
+    return EXEMPT_TOOLS | frozenset(internal_tools)
 
 # Shell commands with an effect beyond the sandbox's scratch work. Order matters
 # only for which kind is reported when a command matches several.

@@ -51,10 +51,10 @@
       const rowClass = view === STATUS_VIEW.in_progress ? 'bg-primary/5 border-primary/60' : 'border-transparent';
       return `
         <li data-task-id="${escHtml(task.id || '')}" title="${escHtml(tooltip)}"
-          class="flex items-center gap-2 pl-1.5 pr-1 py-1 rounded-r border-l-2 ${rowClass}">
-          <span class="material-symbols-outlined text-[14px] shrink-0 ${view.iconClass}">${view.icon}</span>
-          <span class="text-[9px] font-mono text-outline-variant/70 w-4 text-right shrink-0">${idx + 1}</span>
-          <span class="text-[11px] leading-snug truncate ${view.textClass}">${escHtml(title)}</span>
+          class="flex items-start gap-2 pl-1.5 pr-1 py-1 rounded-r border-l-2 ${rowClass}">
+          <span class="material-symbols-outlined text-[14px] shrink-0 mt-px ${view.iconClass}">${view.icon}</span>
+          <span class="text-[9px] font-mono text-outline-variant/70 w-4 text-right shrink-0 mt-px">${idx + 1}</span>
+          <span class="text-[11px] leading-snug break-words min-w-0 flex-1 ${view.textClass}">${escHtml(title)}</span>
         </li>`;
     }).join('');
 

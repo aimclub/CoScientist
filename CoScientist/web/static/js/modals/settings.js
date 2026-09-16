@@ -31,6 +31,7 @@
           fields: [
             { id: 'language', type: 'language', scope: 'browser' },
             { id: 'autoNaming', path: 'general.autoNamingEnabled', type: 'toggle', scope: 'instant', env: 'AUTO_NAMING__ENABLED' },
+            { id: 'showInternal', type: 'browserToggle', scope: 'browser', env: 'SHOW_INTERNAL__ENABLED' },
           ],
         }],
       },
@@ -300,6 +301,7 @@
         if (!resp.ok) throw new Error('HTTP ' + resp.status);
         mergeServerSettings(await resp.json());
         settingsLoadFailed = false;
+        if (showInternalStored === null) setShowInternal(appSettings.general.showInternal, { remember: false });
       } catch (e) {
         settingsLoadFailed = true;
         console.warn('Failed to load settings from server:', e);
@@ -609,6 +611,13 @@
               </datalist>
             </div>`;
         }
+        case 'browserToggle':
+          return `
+            <label class="relative inline-flex items-center cursor-pointer">
+              <input id="sf-${field.id}" type="checkbox" data-browser-toggle="${field.id}" class="sr-only peer" ${showInternal ? 'checked' : ''} />
+              <span class="w-10 h-6 rounded-full bg-surface-variant border border-outline-variant/30 peer-checked:bg-primary peer-checked:border-primary transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-primary/50"></span>
+              <span class="absolute left-1 top-1 w-4 h-4 rounded-full bg-on-surface-variant peer-checked:bg-on-primary peer-checked:translate-x-4 transition-transform"></span>
+            </label>`;
         case 'language':
           return `
             <div role="radiogroup" class="inline-flex gap-0.5 p-0.5 rounded-md bg-surface-container-high border border-outline-variant/20">
@@ -765,6 +774,11 @@
       });
 
       body.addEventListener('change', (e) => {
+        // Browser-only switches apply at once, like the language: no draft, no Save.
+        if (e.target.dataset.browserToggle === 'showInternal') {
+          setShowInternal(e.target.checked);
+          return;
+        }
         const field = SETTINGS_FIELD_BY_ID[e.target.dataset.field];
         if (field && field.type === 'toggle') updateSettingDraft(field, e.target.checked, true);
       });

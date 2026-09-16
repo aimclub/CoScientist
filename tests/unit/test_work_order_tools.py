@@ -76,7 +76,7 @@ def test_switched_off_approves_without_asking_but_still_records_the_order(monkey
     assert load_order(ctx.state, AGENT).status == "approved"
 
 
-def test_read_tier_is_a_notice_not_a_question(hitl_on):
+def test_read_tier_declaration_still_asks_under_the_veto_window(hitl_on):
     handler = _Handler()
     ctx = _context()
     result = _declare(WorkOrderToolset(AGENT, TOOLS, handler), ctx,
@@ -84,9 +84,22 @@ def test_read_tier_is_a_notice_not_a_question(hitl_on):
                       planned_tools=["tavily_search"])
 
     assert result["status"] == "approved"
-    assert handler.requests == []
-    assert handler.notices[0]["kind"] == "declared"
-    assert handler.notices[0]["_session"] == {"user_id": "u1", "session_id": "s1"}
+    assert handler.notices == []
+    request = handler.requests[0]
+    assert request.trigger == "work_order"
+    assert request.timeout_seconds == 30
+    assert request.context["tier"] == "read"
+    assert request.context["_session"] == {"user_id": "u1", "session_id": "s1"}
+
+
+def test_read_tier_declaration_without_veto_window_waits_for_the_human(hitl_on, monkeypatch):
+    monkeypatch.setattr(hitl_on, "work_order_veto_seconds", -1)
+    handler = _Handler()
+    _declare(WorkOrderToolset(AGENT, TOOLS, handler), _context(),
+             steps=[{"title": "Search", "tools": ["tavily_search"]}],
+             planned_tools=["tavily_search"])
+
+    assert handler.requests[0].timeout_seconds == -1
 
 
 def test_compute_tier_gets_the_veto_window(hitl_on):
@@ -305,3 +318,40 @@ def test_empty_assumption_is_an_error(monkeypatch):
         result = _declare(toolset, _context(), assumptions=[bad])
         assert result["status"] == "error"
         assert "non-empty string" in result["message"]
+
+
+def test_internal_tools_may_be_named_but_stay_apart_from_the_contract(hitl_on):
+    handler = _Handler()
+    ctx = _context()
+    toolset = WorkOrderToolset(AGENT, TOOLS, handler, internal_tools=["sleep_tool"])
+    result = _declare(toolset, ctx,
+                      steps=[{"title": "Wait for the job", "tools": ["execute_bash", "sleep_tool"]}],
+                      planned_tools=["execute_bash", "sleep_tool"])
+
+    assert result["status"] == "approved"
+    card = handler.requests[0].context["work_order"]
+    assert card["planned_tools"] == ["execute_bash"]
+    assert card["steps"][0]["tools"] == ["execute_bash"]
+    # Kept separately, so the web card can show them on request.
+    assert card["internal_tools"] == ["sleep_tool"]
+    assert card["steps"][0]["internal_tools"] == ["sleep_tool"]
+    assert card["tier"] == "compute"
+    assert "sleep_tool" not in handler.requests[0].context["output"]
+
+
+def test_amending_only_internal_tools_needs_no_review(hitl_on):
+    handler = _Handler()
+    ctx = _context()
+    toolset = WorkOrderToolset(AGENT, TOOLS, handler, internal_tools=["sleep_tool"])
+    _declare(toolset, ctx)
+    asked = len(handler.requests)
+
+    result = asyncio.run(toolset.update_work_order(
+        reason="the job is slow", add_tools=["sleep_tool"], tool_context=ctx,
+    ))
+
+    assert result["status"] == "approved"
+    assert len(handler.requests) == asked
+    order = load_order(ctx.state, AGENT)
+    assert order.revision == 1
+    assert order.internal_tools == ["sleep_tool"]
