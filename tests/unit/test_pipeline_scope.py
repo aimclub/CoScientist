@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 from types import SimpleNamespace
 
 from CoScientist.assembly.schema import load_config, resolve_config_path
@@ -223,9 +224,15 @@ def test_callback_repeat_entry_is_noop(monkeypatch):
     assert ctx.state[STATE_KEY] is existing
 
 
+def _attach_console(monkeypatch) -> None:
+    """Pretend a console is attached: the handler answers headless runs itself."""
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+
+
 def test_console_select_by_option_number(monkeypatch):
     answers = iter(["2"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    _attach_console(monkeypatch)
     handler = ConsoleHITLHandler()
 
     async def run():
@@ -244,6 +251,7 @@ def test_console_select_by_option_number(monkeypatch):
 def test_console_form_collects_nonempty_fields(monkeypatch):
     answers = iter(["да", "", "yes"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    _attach_console(monkeypatch)
     handler = ConsoleHITLHandler()
     form = {
         "title": "t",

@@ -11,7 +11,15 @@ from google.adk.tools.base_toolset import BaseToolset
 from google.adk.agents.readonly_context import ReadonlyContext
 
 from fedotmas import MAS, HttpMCPServer
-from fedotmas.plugins import LangfusePlugin, LoggingPlugin, WebSearchLimitPlugin
+from fedotmas.plugins import LoggingPlugin, WebSearchLimitPlugin
+
+try:  # Tracing is optional telemetry, and newer than the pinned-by-nothing dep.
+    from fedotmas.plugins import LangfusePlugin
+except ImportError:  # pragma: no cover - depends on the installed FEDOT.MAS
+    # The dependency is tracked by git URL with no version, so an environment
+    # can easily predate this plugin. Losing traces is a nuisance; refusing to
+    # import is the whole application failing to start over telemetry.
+    LangfusePlugin = None
 
 from CoScientist.logging.metrics import UsageMetricsPlugin
 from CoScientist.tools.fedot_artifact_plugin import ArtifactCapturePlugin, merge_artifacts
@@ -223,7 +231,8 @@ class FedotMASToolset(BaseToolset):
                 plugins=[
                     LoggingPlugin(),
                     WebSearchLimitPlugin(max_calls_per_agent=web_search_limit),
-                    LangfusePlugin(trace_name="coscientist:fedot"),
+                    *([LangfusePlugin(trace_name="coscientist:fedot")]
+                      if LangfusePlugin is not None else []),
                     # Recovers a config the model answered with but ADK could not
                     # store — the single largest cause of FEDOT route failures here.
                     MetaJsonRecoveryPlugin(),

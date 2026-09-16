@@ -276,6 +276,54 @@ def _artifact_location(artifact: dict[str, Any]) -> str:
     return ""
 
 
+def _served_on(task: dict[str, Any] | None) -> str:
+    """The MCP servers the task was pointed at, named with their endpoint."""
+    names: list[str] = []
+    for server in ((task or {}).get("mcp_servers") or [])[:3]:
+        if not isinstance(server, dict):
+            continue
+        name = _clean(server.get("name") or server.get("server_id"), 80)
+        url = _clean(server.get("url"), 200)
+        label = f"{name} ({url})" if name and url else name or url
+        if label:
+            names.append(label)
+    return ", ".join(names)
+
+
+def _measured_on(
+    task_id: str,
+    task: dict[str, Any] | None,
+    task_result: dict[str, Any],
+    source_ref: str,
+) -> str:
+    """WHAT the run actually measured, named as exactly as the record allows.
+
+    The research graph requires this on computational Evidence, and it must not
+    be padded with the hypothesis' own words: only the dataset the task
+    declared, the route that really ran, the MCP servers it ran against and the
+    artifact that came back are named here.
+    """
+    design = (task or {}).get("design") or {}
+    dataset = design.get("dataset") if isinstance(design.get("dataset"), dict) else {}
+    parts: list[str] = []
+    if name := _clean(dataset.get("ref") or dataset.get("name"), 120):
+        parts.append(f"dataset {name}")
+    route = _clean(task_result.get("route_used") or (task or {}).get("route"), 60)
+    served = _served_on(task)
+    if route and served:
+        parts.append(f"route {route} against {served}")
+    elif route or served:
+        parts.append(f"route {route}" if route else served)
+    if source_ref:
+        parts.append(f"artifact {_clean(source_ref, 200)}")
+    if not parts:
+        # Never invent a measurement target: say plainly that the record names
+        # none, so nobody reads the task summary as provenance.
+        return (f"experiment task {_clean(task_id, 60)}: the run record names "
+                "no dataset, route or artifact")
+    return _clean("; ".join(parts), 400)
+
+
 def publish_result_to_graph(
     store: Any,
     state: MutableMapping[str, Any],
@@ -315,6 +363,7 @@ def publish_result_to_graph(
         nodes: list[dict[str, Any]] = []
         edges: list[dict[str, Any]] = []
         artifacts = [a for a in (task_result.get("artifacts") or []) if isinstance(a, dict)]
+        task = _task_by_id(state, task_id)
         if status in ("success", "partial"):
             source_ref = next(
                 (loc for a in artifacts if (loc := _artifact_location(a))), "",
@@ -325,13 +374,13 @@ def publish_result_to_graph(
                 "attrs": {
                     "subtype": "computational",
                     "content": _clean(task_result.get("summary")) or f"Task {task_id}: {status}",
+                    "measured_on": _measured_on(task_id, task, task_result, source_ref),
                     "source_ref": source_ref,
                     "task_id": str(task_id),
                     "result_id": str(task_result.get("result_id") or ""),
                 },
             })
             edges.append({"type": "produces", "from": vm_id, "to": "#e0"})
-            task = _task_by_id(state, task_id)
             for hid in _task_hypothesis_ids((task or {}).get("design") or {}):
                 if graph_nodes.get(hid, {}).get("type") == "Hypothesis":
                     edges.append({"type": "relates_to", "from": "#e0", "to": hid})

@@ -26,7 +26,12 @@ from google.adk.events.event_actions import EventActions
 from google.genai import types
 
 from CoScientist.context_init.commit import seed_frame
-from CoScientist.context_init.models import FrameOperation, ResearchFrame
+from CoScientist.context_init.models import (
+    BLOCK_I18N,
+    FIELD_I18N,
+    FrameOperation,
+    ResearchFrame,
+)
 from CoScientist.context_init.operations import (
     OPS_FORM_BLOCK,
     fill_operations_if_missing,
@@ -43,6 +48,21 @@ FRAME_STATE_KEY = "research_frame"
 _FORM_INTRO = ("Заполните рамку исследования. Пустые поля агент заполнит "
                "рабочими значениями. Рамка задаёт стратегию: литературный "
                "поиск, дорогой или дешёвый эксперимент.")
+_FORM_INTRO_EN = ("Fill in the research frame. The agent fills empty fields "
+                  "with working values. The frame sets the strategy: literature "
+                  "search, expensive or cheap experiment.")
+_HITL_MESSAGE = "Подтвердите рамку исследования перед запуском."
+_HITL_MESSAGE_EN = "Confirm the research frame before the run starts."
+_OPS_BLOCK_USAGE = ("слоты плана: одна обязательная задача на операцию; "
+                    "отчёт не входит")
+_OPS_BLOCK_USAGE_EN = ("Plan slots: one mandatory task per operation; the "
+                       "report is not one of them.")
+_OPS_FIELD_PLACEHOLDER = {
+    "en": ("Enter one deliverable the run must produce, or leave it empty so "
+           "the agent derives the slots from the ask."),
+    "ru": ("Укажите один результат, который должен дать запуск, или оставьте "
+           "поле пустым — агент выведет слоты из запроса."),
+}
 
 
 def coerce_frame(value: Any) -> ResearchFrame:
@@ -61,27 +81,51 @@ def frame_to_form(frame: ResearchFrame) -> Dict[str, Any]:
     frame = frame.normalized()
     blocks: List[Dict[str, Any]] = []
     for b in frame.blocks:
-        fields = [
-            {"name": f.name, "value": f.value, "status": f.status,
-             "open": is_open(f.status)}
-            for f in b.fields
-        ]
-        blocks.append({"title": b.title, "usage": b.usage, "fields": fields})
+        block_i18n = BLOCK_I18N.get(b.title, {})
+        fields = []
+        for f in b.fields:
+            field_i18n = FIELD_I18N.get(f.name, {})
+            fields.append({
+                "name": f.name, "value": f.value, "status": f.status,
+                "open": is_open(f.status),
+                "label": field_i18n.get("label", {"en": f.name, "ru": f.name}),
+                "placeholder": field_i18n.get("placeholder", {"en": "", "ru": ""}),
+            })
+        blocks.append({
+            "title": b.title, "usage": b.usage,
+            "title_i18n": block_i18n.get("title", {"en": b.title, "ru": b.title}),
+            "usage_i18n": block_i18n.get("usage", {"en": b.usage, "ru": b.usage}),
+            "fields": fields,
+        })
     ops_fields = [
         {"name": op.operation_id, "value": op.statement,
-         "status": "задано заказчиком", "open": False}
+         "status": "задано заказчиком", "open": False,
+         "label": {"en": op.operation_id, "ru": op.operation_id},
+         "placeholder": _OPS_FIELD_PLACEHOLDER}
         for op in frame.operations
     ]
     if not ops_fields:
         ops_fields = [{
             "name": "OP-1", "value": "", "status": "не задано", "open": True,
+            "label": {"en": "OP-1", "ru": "OP-1"},
+            "placeholder": _OPS_FIELD_PLACEHOLDER,
         }]
     blocks.append({
         "title": OPS_FORM_BLOCK,
-        "usage": "слоты плана: одна обязательная задача на операцию; отчёт не входит",
+        "usage": _OPS_BLOCK_USAGE,
+        "title_i18n": {"en": "Experiment operations", "ru": OPS_FORM_BLOCK},
+        "usage_i18n": {"en": _OPS_BLOCK_USAGE_EN, "ru": _OPS_BLOCK_USAGE},
         "fields": ops_fields,
     })
-    return {"title": "Рамка исследования", "intro": _FORM_INTRO, "blocks": blocks}
+    return {
+        "kind": "research_frame",
+        "title": "Рамка исследования",
+        "title_i18n": {"en": "Research frame", "ru": "Рамка исследования"},
+        "intro": _FORM_INTRO,
+        "intro_i18n": {"en": _FORM_INTRO_EN, "ru": _FORM_INTRO},
+        "message_i18n": {"en": _HITL_MESSAGE_EN, "ru": _HITL_MESSAGE},
+        "blocks": blocks,
+    }
 
 
 def apply_form_values(frame: ResearchFrame,
@@ -154,7 +198,7 @@ class ContextInitSessionAgent(SessionAgent):
         request = HITLRequest(
             agent_name=self.name,
             action_type=HITLAction.APPROVE,
-            message="Подтвердите рамку исследования перед запуском.",
+            message=_HITL_MESSAGE,
             form=frame_to_form(frame),
             context={"_session": {"user_id": user_id, "session_id": session_id}},
             invoked_via="internal_loop",

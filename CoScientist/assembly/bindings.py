@@ -28,6 +28,24 @@ def _websearch():
     return websearch_toolset_instance
 
 
+def _hypothesis_generate():
+    """Factory for the generate_via_moosechem FunctionTool.
+
+    Returns a list so the assembler's _flatten() works uniformly."""
+    from CoScientist.hypothesis_subsystem.generator_agent import generate_via_moosechem
+    from google.adk.tools import FunctionTool
+    return [FunctionTool(generate_via_moosechem)]
+
+
+def _hypothesis_critic_loop():
+    """Factory for the run_critic_loop FunctionTool.
+
+    Returns a list so the assembler's _flatten() works uniformly."""
+    from CoScientist.hypothesis_subsystem.generator_agent import run_critic_loop
+    from google.adk.tools import FunctionTool
+    return [FunctionTool(run_critic_loop)]
+
+
 def _paper_analysis():
     from CoScientist.tools import paper_analysis_toolset_instance
     return paper_analysis_toolset_instance
@@ -85,6 +103,11 @@ def _coder():
 def _alembic():
     from CoScientist.tools.alembic_tools import ALEMBIC_TOOLS
     return ALEMBIC_TOOLS
+
+def _verify():
+    from CoScientist.verify.tools import verify_toolset
+    return verify_toolset.get_tools(None)
+
 
 def _sandbox():
     """OpenHands sandbox tools — absent when no sandbox URL is configured."""
@@ -346,21 +369,6 @@ _GRAPH_DOCS = (
         signature="get_agents_info()",
         purpose="Structured info about all agents in the system.",
     ),
-    ToolDoc(
-        name="search_knowledge_memory",
-        signature="search_knowledge_memory(query)",
-        purpose="Search globally accumulated facts relevant to a query.",
-    ),
-    ToolDoc(
-        name="get_entity_neighbors",
-        signature="get_entity_neighbors(entity)",
-        purpose="Walk the graph: an entity's 1-hop facts (search then traverse).",
-    ),
-    ToolDoc(
-        name="get_knowledge_memory",
-        signature="get_knowledge_memory()",
-        purpose="Global knowledge memory shared across users and sessions.",
-    ),
 )
 
 REGISTRY.register_tool(ToolEntry(
@@ -467,6 +475,14 @@ _RESEARCH_ORCH_DOCS = _RESEARCH_WORKER_DOCS + (
                  "context star. Call once at the start; archives any active graph."),
     ),
     ToolDoc(
+        name="research_prior",
+        signature="research_prior(query, limit)",
+        purpose=("Search PAST researches (previous runs) related to a question: "
+                 "their hypotheses with verdicts, the methods/tools used and the "
+                 "conclusions. Consult BEFORE planning so settled work is reused "
+                 "instead of re-derived; each hit reports why it matched."),
+    ),
+    ToolDoc(
         name="research_triggers",
         signature="research_triggers()",
         purpose=("Evaluate the decision triggers (READY / BLOCKED / REFUTE / "
@@ -504,6 +520,59 @@ REGISTRY.register_tool(ToolEntry(
     optional=True,
     runtime_resolved=True,
     docs=(_RESEARCH_OVERVIEW_DOC, _RESEARCH_SLICE_DOC, _RESEARCH_PROVENANCE_DOC),
+))
+
+# ── Hypothesis subsystem internal tools ────────────────────────────────────────
+# The hypothesis subsystem's internal strategy tools. They are declared in
+# system.yaml so the assembler attaches them — keeping guard_unknown_tools'
+# whitelist populated and making the generator + critic loop visible to the
+# ADK runtime as regular tools.
+REGISTRY.register_tool(ToolEntry(
+    key="generate_via_moosechem",
+    factory=_hypothesis_generate,
+    docs=(
+        ToolDoc(
+            name="generate_via_moosechem",
+            signature="generate_via_moosechem(research_question, background_survey, domain_constraints, max_hypotheses, temperature)",
+            purpose="Generate hypotheses via the MooseChem MCP pipeline (PubMed+OpenAlex corpus → LLM generation → scoring).",
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="run_critic_loop",
+    factory=_hypothesis_critic_loop,
+    docs=(
+        ToolDoc(
+            name="run_critic_loop",
+            signature="run_critic_loop(hypotheses_json, research_question)",
+            purpose="Run the Critic review loop on generated hypotheses — evaluates each for rigor and falsifiability, refines or defers as needed.",
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="verify",
+    factory=_verify,
+    docs=(
+        ToolDoc(
+            name="validate_dataset",
+            signature="validate_dataset(path)",
+            purpose=(
+                "Deterministically check that a dataset file holds REAL, diverse "
+                "molecules (RDKit-valid SMILES + a fitness/SA column). Call it on "
+                "your training dataset BEFORE training — training is BLOCKED until a "
+                "real dataset validates; toy/placeholder data (integers, one "
+                "repeated molecule, a synthetic fallback) is rejected."),
+        ),
+        ToolDoc(
+            name="validate_training",
+            signature="validate_training(checkpoint_path, loss_log)",
+            purpose=(
+                "Deterministically check a training result: a real saved checkpoint "
+                "and a loss that actually decreased over >=1 epoch."),
+        ),
+    ),
 ))
 
 REGISTRY.register_tool(ToolEntry(
@@ -1253,12 +1322,14 @@ def _register_classes() -> None:
         WebToolsDeployerAgent,
     )
     from CoScientist.hitl.session_agent import SessionAgent
+    from CoScientist.hypothesis_subsystem import HypothesisSubsystemAgent
     from CoScientist.microfluidics.tz_agent import TZSessionAgent
     from CoScientist.context_init.agent import ContextInitSessionAgent
     from CoScientist.experiments.review import ExperimentReviewSessionAgent
 
     REGISTRY.register_agent_class("session", SessionAgent)
     REGISTRY.register_agent_class("web_tools_deployer", WebToolsDeployerAgent)
+    REGISTRY.register_agent_class("hypothesis_subsystem", HypothesisSubsystemAgent)
     # Runs ONE of its children: the normal executor, or the reranker fallback.
     REGISTRY.register_agent_class("executor_switch", ExecutorSwitchAgent)
     # Microfluidics ТЗ stage: the review loop shows the RENDERED ТЗ document.

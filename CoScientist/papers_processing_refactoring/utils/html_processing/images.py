@@ -6,11 +6,16 @@ from io import BytesIO
 from PIL import Image
 
 from ..general_utils import prompt_func
+from ..general_utils import invoke_llm_with_retry
 from ..prompts import cls_prompt, table_extraction_prompt, image_captioning_prompt
 from ...domain.entities import ImageInfo
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+def _has_non_empty_content(response) -> bool:
+    return isinstance(getattr(response, "content", None), str) and bool(response.content.strip())
 
 
 def pil_to_base64(image: Image.Image) -> str:
@@ -27,17 +32,27 @@ def pil_to_base64(image: Image.Image) -> str:
 def check_image_relevance(image_b64: str, llm) -> bool:
     try:
         query = [prompt_func({"text": cls_prompt, "image": [image_b64]})]
-        decision = llm.invoke(query).content.strip()
+        decision = invoke_llm_with_retry(
+            llm,
+            query,
+            operation="check image relevance",
+            response_validator=_has_non_empty_content,
+        ).content.strip()
         return decision != "False"
     except Exception as e:
         logger.error(f"Failed to check image relevance: {e}")
-        return e
+        return False
 
 
 def try_extract_table(image_b64: str, llm) -> str | None:
     try:
         table_query = [prompt_func({"text": table_extraction_prompt, "image": [image_b64]})]
-        res = llm.invoke(table_query)
+        res = invoke_llm_with_retry(
+            llm,
+            table_query,
+            operation="extract table from image",
+            response_validator=_has_non_empty_content,
+        ).content.strip()
 
         if res != "No table":
             pattern = r'<table\b[^>]*>.*?</table>'
@@ -61,7 +76,12 @@ def caption_image(
 
         image_b64 = pil_to_base64(pil_image)
         query = [prompt_func({"text": image_captioning_prompt, "image": [image_b64]})]
-        caption = llm.invoke(query).content.strip()
+        caption = invoke_llm_with_retry(
+            llm,
+            query,
+            operation=f"caption image {image_info.id}",
+            response_validator=_has_non_empty_content,
+        ).content.strip()
         image_info.caption = caption
         return image_info
     except Exception as e:

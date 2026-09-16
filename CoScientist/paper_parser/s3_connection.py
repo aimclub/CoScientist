@@ -8,6 +8,23 @@ from botocore.client import Config
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
 
+# Bounds for one S3 call. The defaults are 60 s to connect, 60 s to read, and up
+# to 5 attempts, so an endpoint that drops packets blocks the caller for about
+# 300 s. An MCP tool runs inside that call, and the ADK client gives up at 300 s.
+# The client then closes the stream, and the server logs a ClosedResourceError
+# for a response nobody waits for. Fail in seconds instead, so the tool returns
+# an error the agent can read.
+_CONNECT_TIMEOUT_SECONDS = 5
+_READ_TIMEOUT_SECONDS = 30
+_MAX_ATTEMPTS = 3
+
+_CLIENT_CONFIG = Config(
+    signature_version="s3v4",
+    connect_timeout=_CONNECT_TIMEOUT_SECONDS,
+    read_timeout=_READ_TIMEOUT_SECONDS,
+    retries={"max_attempts": _MAX_ATTEMPTS, "mode": "standard"},
+)
+
 
 class S3BucketService:
     """
@@ -55,7 +72,7 @@ class S3BucketService:
             endpoint_url=self.endpoint,
             aws_access_key_id=self.access_key,
             aws_secret_access_key=self.secret_key,
-            config=Config(signature_version="s3v4"),
+            config=_CLIENT_CONFIG,
         )
         return client
     

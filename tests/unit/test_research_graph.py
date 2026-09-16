@@ -431,7 +431,9 @@ def test_commit_keeps_one_hypothesis_active_and_postpones_the_rest(store, monkey
     statuses = {n["id"]: n["status"] for n in store.full()["nodes"]
                 if n["type"] == "Hypothesis"}
     assert statuses == {"H1": "postponed", "H2": "formulated", "H3": "postponed"}
-    assert any("may be verified at a time" in w for w in r.warnings)
+    # the warning names the cap and how to steer it, so the agent can act on it
+    assert any("may be verified at a time" in w and "attrs.selected" in w
+               for w in r.warnings), r.warnings
     # only the selected one is offered for verification; the backlog stays quiet
     assert [i["hypothesis"] for i in queries.ready_hypotheses(store)["items"]] == ["H2"]
     assert not queries.postponed_hypotheses(store)["rendered"]
@@ -472,7 +474,8 @@ def test_closable_and_missing_criteria(store):
                  status_updates=[{"id": "H1", "status": "under_verification"}])
     store.commit(source="ExperimentAgent",
                  nodes=[{"type": "Evidence", "ref": "e", "attrs": {"subtype": "computational",
-                         "content": "docking -9"}}],
+                         "content": "docking -9",
+                         "measured_on": "AutoDock Vina 1.2.5, 5R84 receptor"}}],
                  edges=[{"type": "supports", "from": "#e", "to": "H1"}])
     # CC not met yet → awaiting, not closable
     res = queries.closable_hypotheses(store)
@@ -582,6 +585,30 @@ def test_focus_autolink_relates_evidence_to_hypothesis(store):
                for e in edges)
     h1 = next(n for n in store.full()["nodes"] if n["id"] == "H1")
     assert h1["status"] == "under_verification"
+
+
+def test_autolink_resolves_focus_on_method_or_tool_to_hypothesis(store):
+    """Broadened auto-link: evidence recorded while focused on a hypothesis'
+    VerificationMethod (or Tool) still attaches to the HYPOTHESIS — the
+    orchestrator often focuses on the method it is verifying, not the hypothesis."""
+    _build_verifiable(store)  # H1 -tested_by-> VM1 ; H1 -requires-> T1
+    # focus on the METHOD
+    r = store.commit(source="ResearchAgent",
+                     nodes=[{"type": "Evidence", "ref": "e",
+                             "attrs": {"subtype": "literature", "content": "via method"}}],
+                     autolink_focus="VM1")
+    assert r.ok, r.errors
+    assert any(e["type"] == "relates_to" and e["from"] == "E1" and e["to"] == "H1"
+               for e in store.full()["edges"])
+    assert next(n for n in store.full()["nodes"] if n["id"] == "H1")["status"] == "under_verification"
+    # focus on the TOOL resolves to the same hypothesis
+    r2 = store.commit(source="ResearchAgent",
+                      nodes=[{"type": "Evidence", "ref": "e2",
+                              "attrs": {"subtype": "literature", "content": "via tool"}}],
+                      autolink_focus="T1")
+    assert r2.ok, r2.errors
+    assert any(e["type"] == "relates_to" and e["from"] == "E2" and e["to"] == "H1"
+               for e in store.full()["edges"])
 
 
 def test_validator_assigns_polarity_to_autolinked_evidence(store):
@@ -798,6 +825,151 @@ def test_validator_discards_result_if_research_changes_during_llm_call():
     assert not graph.committed
 
 
+def test_the_view_speaks_the_reader_s_language(tmp_path):
+    """A scientist reads the graph, so it must not answer in storage format."""
+    from CoScientist.graph.research.store import (
+        ResearchGraphStore, _fields, _headline,
+    )
+
+    # A budget is a sentence, not the record it is stored as, and what the
+    # sentence already says is not repeated underneath it.
+    budget = {"resource_type": "GPU-hours", "remaining": "50", "limit": "50"}
+    headline = _headline("Resource", budget)
+    assert headline == "GPU-hours: 50 of 50 left"
+    assert _fields(budget, headline, "Resource") == {}
+
+    store = ResearchGraphStore(directory=str(tmp_path), active_file="v.json")
+    store.commit(source="OrchestratorAgent", nodes=[
+        {"type": "ResearchQuestion", "attrs": {"formulation": "Does it work?"}},
+    ])
+    store.commit(source="HypothesesAgent", nodes=[
+        {"type": "Hypothesis", "attrs": {"formulation": "It works", "priority": "high"}},
+    ])
+
+    view = {n["kind"]: n for n in store.to_view()["nodes"]}
+
+    question = view["researchquestion"]
+    assert question["type_word"] == "Вопрос", "the reader of this graph reads Russian"
+    assert question["label"] == "Does it work?", "the id belongs in the panel"
+    assert not question["label"].startswith("Q1")
+
+    hypothesis = view["hypothesis"]
+    assert hypothesis["type_word"] == "Гипотеза"
+    assert hypothesis["status_word"] == "предложена", "`formulated` is not a word"
+    assert hypothesis["input"]["Priority"] == "high", "attrs need reader-facing names"
+
+
+def test_a_tested_branch_is_not_recorded_as_untried(tmp_path):
+    """The verdict for "we tested it and it did not settle" must be its own."""
+    from CoScientist.graph.research import queries
+    from CoScientist.graph.research.store import ResearchGraphStore
+
+    store = ResearchGraphStore(directory=str(tmp_path), active_file="v.json")
+    store.commit(source="OrchestratorAgent",
+                 nodes=[{"type": "ResearchQuestion", "attrs": {"formulation": "Q"}}])
+    store.commit(source="HypothesesAgent",
+                 nodes=[{"type": "Hypothesis",
+                         "attrs": {"formulation": "H", "selected": "true"}}])
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "under_verification",
+                                  "reason": "start"}])
+
+    # While a branch is open the study is open, whatever answer is being drafted.
+    assert "STUDY NOT FINISHED" in queries.study_open(store)["rendered"]
+
+    # Only the validator may reach a verdict, and it has one for this outcome.
+    denied = store.commit(source="OrchestratorAgent",
+                          status_updates=[{"id": "H1", "status": "inconclusive",
+                                           "reason": "no numbers"}])
+    assert not denied.ok
+
+    verdict = store.commit(source="ValidatorAgent",
+                           status_updates=[{"id": "H1", "status": "inconclusive",
+                                            "reason": "no quantitative results"}])
+    assert verdict.ok
+
+    node = next(n for n in store.to_view()["nodes"] if n["id"] == "H1")
+    assert node["status_word"] == "проверена — без ответа"
+    assert node["status"] != "postponed", "tested is not the same as never tried"
+
+
+def test_a_claim_cannot_outrun_the_bar_set_for_it(tmp_path):
+    """The three ways one recorded run reported a result its graph denied."""
+    from CoScientist.graph.research import queries
+    from CoScientist.graph.research.store import ResearchGraphStore
+
+    store = ResearchGraphStore(directory=str(tmp_path), active_file="v.json")
+    store.commit(source="OrchestratorAgent",
+                 nodes=[{"type": "ResearchQuestion", "attrs": {"formulation": "Q"}}])
+    store.commit(source="HypothesesAgent", nodes=[
+        {"type": "Hypothesis", "ref": "h",
+         "attrs": {"formulation": "hierarchical beats flat", "selected": "true"}},
+        {"type": "ConfirmationCriteria", "ref": "cc",
+         "attrs": {"threshold": "p < 0.05 in at least 2 of 3 environments"}},
+    ], edges=[{"type": "formulated_for", "from": "#cc", "to": "#h"}])
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "under_verification"}])
+
+    # 1. Work happening outside the record is visible while it is still fixable.
+    assert "WORK NOT IN THE RECORD" in queries.verdict_without_evidence(store)["rendered"]
+
+    # 2. Measured evidence must say what it was measured on. A run benchmarked a
+    #    local stand-in for a repository that 404'd and reported it as the real
+    #    comparison; the substitution appeared nowhere in the record.
+    refused = store.commit(source="CoderAgent", nodes=[
+        {"type": "Evidence", "attrs": {"subtype": "computational",
+                                       "content": "hierarchical wins, p=0.0006"}}])
+    assert not refused.ok
+    assert "measured_on" in refused.errors[0]
+
+    store.commit(source="CoderAgent", nodes=[
+        {"type": "Evidence", "ref": "e",
+         "attrs": {"subtype": "computational", "content": "hierarchical wins in 2 of 3",
+                   "measured_on": "local reimplementation; upstream repo 404"}}],
+        edges=[{"type": "supports", "from": "#e", "to": "H1"}])
+
+    # 3. Confirmation cannot outrun the criteria written for the hypothesis.
+    denied = store.commit(source="ValidatorAgent",
+                          status_updates=[{"id": "H1", "status": "confirmed",
+                                           "reason": "the benchmark says so"}])
+    assert not denied.ok
+    assert "CC1" in denied.errors[0]
+
+    # Marking the criterion met in the SAME commit is the shape the schema asks
+    # for, and the verdict may lead the list.
+    allowed = store.commit(source="ValidatorAgent", status_updates=[
+        {"id": "H1", "status": "confirmed", "reason": "criterion met"},
+        {"id": "CC1", "status": "met"},
+    ])
+    assert allowed.ok, allowed.errors
+
+
+def test_a_session_can_reach_every_study_it_holds(tmp_path):
+    """research_init archives; only the live study used to be reachable."""
+    from CoScientist.graph.research.store import ResearchGraphStore
+
+    store = ResearchGraphStore(directory=str(tmp_path),
+                               active_file="research_active.json")
+    store.commit(source="OrchestratorAgent", nodes=[
+        {"type": "ResearchQuestion", "attrs": {"formulation": "First question"}}])
+    store.reset(archive=True)
+    store.commit(source="OrchestratorAgent", nodes=[
+        {"type": "ResearchQuestion", "attrs": {"formulation": "Second question"}}])
+
+    studies = store.studies()
+    assert [s["live"] for s in studies] == [True, False], "the live study comes first"
+    assert studies[0]["label"] == "Second question"
+    assert studies[1]["label"] == "First question", "a study is known by its question"
+
+    # The default is the live study, and it lists the others beside it.
+    live = store.view_of()
+    assert live["study_id"] == "active"
+    assert len(live["studies"]) == 2
+
+    archived = store.view_of(studies[1]["study_id"])
+    labels = [n["label"] for n in archived["nodes"] if not n.get("overlay")]
+    assert labels == ["First question"]
+    assert len(archived["studies"]) == 2, "the picker stays populated"
 def test_tool_needs_adaptation_to_available_transition(store):
     _init(store)
     # T1 is available from _init; let's create a tool with needs_adaptation
@@ -830,7 +1002,12 @@ def test_orchestrator_can_commit_evidence(store):
     # OrchestratorAgent commits Evidence and links to H1
     r2 = store.commit(
         source="OrchestratorAgent",
-        nodes=[{"type": "Evidence", "ref": "e", "attrs": {"subtype": "computational", "content": "95% validity"}}],
+        # `measured_on` is required of computational evidence: what the number
+        # was actually measured on is the difference between a result and a claim.
+        nodes=[{"type": "Evidence", "ref": "e", "attrs": {
+            "subtype": "computational", "content": "95% validity",
+            "measured_on": "ZINC-250k held-out split",
+        }}],
         edges=[{"type": "supports", "from": "#e", "to": "H1"}],
     )
     assert r2.ok, r2.errors
@@ -838,3 +1015,168 @@ def test_orchestrator_can_commit_evidence(store):
     assert ev_node["status"] == "obtained"
     assert any(e["type"] == "supports" and e["to"] == "H1" for e in store.full()["edges"])
 
+
+
+def test_the_view_links_tool_calls_without_drawing_them(store):
+    """Provenance rides on the node; it is not a node of its own.
+
+    One Evidence can be the product of a dozen calls. Drawn as nodes they
+    outnumber the findings and bury what the reader came for, so the graph
+    shows the research record and the card carries the links into the log.
+    """
+    _init(store)
+    r = store.commit(
+        source="OrchestratorAgent",
+        nodes=[{"type": "Evidence", "ref": "e", "attrs": {
+            "subtype": "computational", "content": "95% validity",
+            "measured_on": "ZINC-250k held-out split",
+            "_provenance": [
+                {"tool": "execute_bash", "exec_id": "tool:1", "result": "ok"},
+                {"tool": "tavily_search", "exec_id": "tool:2", "result": "12 papers"},
+            ],
+        }}],
+    )
+    assert r.ok, r.errors
+
+    view = store.to_view()
+    assert not [n for n in view["nodes"] if n["kind"] == "toolcall"]
+    assert not [e for e in view["edges"] if e["type"] == "via"]
+
+    evidence = next(n for n in view["nodes"] if n["kind"] == "evidence")
+    assert [p["tool"] for p in evidence["provenance"]] == ["execute_bash", "tavily_search"]
+    # The panel needs the call id to link into the execution log.
+    assert [p["exec_id"] for p in evidence["provenance"]] == ["tool:1", "tool:2"]
+    # And the raw bookkeeping key never reaches the reader's field list.
+    assert "_provenance" not in (evidence["input"] or {})
+
+
+def test_the_graph_page_sends_a_tool_call_to_its_own_tab():
+    """Following a result back to the call must not cost you the graph.
+
+    The link also cannot name a node any more: calls are folded into the agent
+    that made them, so the page has to find the request holding the call.
+    """
+    from starlette.testclient import TestClient
+
+    from CoScientist.web.app import create_app
+
+    with TestClient(create_app()) as client:
+        page = client.get("/graph").text
+
+    assert 'window.open("/graph?"' in page and '"_blank"' in page
+    assert "openTurnHolding" in page, "a deep link must locate the request itself"
+    # And the canvas keeps the scientific record, not the engineering around it.
+    assert "RESEARCH_SHOWN" in page
+    for gone in ('id="legend"', 'id="tiles"', 'id="pbar"'):
+        assert gone not in page, gone
+
+
+def test_the_graph_page_only_wires_controls_it_still_has():
+    """A handler left behind on a removed control takes the whole page down.
+
+    `document.getElementById("prov").onchange = …` survived the removal of the
+    tool-call toggle. It throws on load, so everything after it — honouring
+    `?view=`, building the network, the first poll — never ran, and every link
+    into the page landed on the default view with nothing drawn.
+    """
+    import re
+
+    from starlette.testclient import TestClient
+
+    from CoScientist.web.app import create_app
+
+    with TestClient(create_app()) as client:
+        page = client.get("/graph").text
+
+    present = set(re.findall(r'id="([^"]+)"', page))
+    wired = set(re.findall(r'getElementById\("([^"]+)"\)', page))
+    assert not (wired - present), sorted(wired - present)
+
+
+def test_a_headline_never_stands_in_for_the_thing_it_should_say(store):
+    """The stock word won over content sitting under an unexpected key.
+
+    Agents name the field whatever the prompt made natural. When none of the
+    anticipated names matched, the card said "acceptance criteria" — which the
+    type name already says — while the criteria themselves sat under details.
+    """
+    from CoScientist.graph.research.store import _headline
+
+    invented = {"confirmation_criteria": "H1 подтверждается, если валидность ≥ 0.9"}
+    assert _headline("ConfirmationCriteria", invented).startswith("H1 подтверждается")
+
+    # Even a name nobody listed reaches the reader rather than a stock word.
+    unheard_of = {"acceptance_rule_v2": "два независимых прогона сходятся"}
+    said = _headline("ConfirmationCriteria", unheard_of)
+    assert "два независимых прогона" in said
+
+    # The same holds for the other types that had a stock word.
+    assert _headline("Tool", {"purpose": "docking"}) != "tool"
+    assert _headline("VerificationMethod", {"plan": "ретроспектива"}) != "method"
+    assert _headline("Conclusion", {"verdict": "подтверждено"}) != "conclusion"
+
+
+def test_what_the_headline_says_is_not_repeated_under_details(store):
+    """One sentence, once: the panel used to print it twice."""
+    from CoScientist.graph.research.store import _fields, _headline
+
+    attrs = {"confirmation_criteria": "валидность ≥ 0.9", "reproducibility": "2 прогона"}
+    headline = _headline("ConfirmationCriteria", attrs)
+    assert "confirmation_criteria" not in _fields(attrs, headline, "ConfirmationCriteria")
+
+
+def test_the_orchestrator_can_say_why_a_branch_was_left_untested(store):
+    """The triggers tell it to; the store used to refuse.
+
+    `study_open` ends with "commit attrs.not_tested_reason saying why the
+    verdict already obtained makes testing it unnecessary" — and the
+    orchestrator, the only agent that reads triggers, could not write that
+    field on a Hypothesis. So the study stayed open, and the run learned to
+    answer that closing it was somebody else's job and not critical anyway.
+    """
+    _init(store)
+    r = store.commit(source="HypothesesAgent", nodes=[
+        {"type": "Hypothesis", "attrs": {"formulation": "H one"}},
+        {"type": "Hypothesis", "attrs": {"formulation": "H two"}},
+    ])
+    assert r.ok, r.errors
+    backlog = r.committed["nodes"][1]["id"]
+
+    r2 = store.commit(
+        source="OrchestratorAgent",
+        nodes=[{"id": backlog, "attrs": {
+            "not_tested_reason": "H1 подтверждена; проверять эту ветку незачем"}}],
+    )
+    assert r2.ok, r2.errors
+    node = next(n for n in store.full()["nodes"] if n["id"] == backlog)
+    assert node["attrs"]["not_tested_reason"].startswith("H1 подтверждена")
+
+
+def test_that_grant_does_not_open_the_rest_of_the_hypothesis(store):
+    """One field, not the node: the formulation stays with the agent that owns it."""
+    _init(store)
+    r = store.commit(source="HypothesesAgent", nodes=[
+        {"type": "Hypothesis", "attrs": {"formulation": "H one"}}])
+    hid = r.committed["nodes"][0]["id"]
+
+    denied = store.commit(
+        source="OrchestratorAgent",
+        nodes=[{"id": hid, "attrs": {"formulation": "rewritten"}}])
+    assert not denied.ok
+    assert "not_tested_reason" in " ".join(denied.errors), denied.errors
+
+    # Nor smuggled in beside a field it may write.
+    mixed = store.commit(
+        source="OrchestratorAgent",
+        nodes=[{"id": hid, "attrs": {"not_tested_reason": "ok", "priority": "high"}}])
+    assert not mixed.ok
+
+
+def test_the_prompt_tells_the_agent_about_the_field_it_may_write():
+    """Prompt and enforcement come from one table, so neither can drift."""
+    from CoScientist.graph.research import schema
+
+    summary = schema.permitted_summary("OrchestratorAgent")
+    assert any("not_tested_reason" in line for line in summary["update_attrs"]), summary
+    validator = schema.permitted_summary("ValidatorAgent")
+    assert any("inconclusive_reason" in line for line in validator["update_attrs"])

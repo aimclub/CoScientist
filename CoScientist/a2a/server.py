@@ -126,14 +126,19 @@ def make_a2a_app(
     from CoScientist.logging.metrics import UsageMetricsPlugin
     from CoScientist.graph.emitter import GraphEmitterPlugin
     from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
+    from CoScientist.verify.gate_plugin import ArtifactGatePlugin
 
     runner = Runner(
         agent=agent,
         app_name=app_name,
         session_service=session_service or InMemorySessionService(),
         artifact_service=InMemoryArtifactService(),
-        # truncation MUST be last (ADK early-exits on first non-None after_tool).
+        # ArtifactGatePlugin first: refuse training on a fabricated dataset here
+        # too, so an agent served over A2A is held to the same standard as the
+        # in-process runner. Truncation MUST stay last (ADK early-exits on the
+        # first non-None after_tool).
         plugins=[
+            ArtifactGatePlugin(),
             EventLoggerPlugin(),
             UsageMetricsPlugin(),
             GraphEmitterPlugin(),

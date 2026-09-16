@@ -37,8 +37,10 @@ RUN bash /work/.alembic/${REPO_NAME}/output/setup.sh
 
 # 2. Build the isolated server venv with the MCP runtime (a wrapper-stage concern,
 #    not recorded in setup.sh) — server.py + serve.py import fastmcp from here.
+#    boto3 backs helpers/s3_transfer.py (lazy-imported there); this package list
+#    is duplicated in alembic/tools/venv.py's SERVER_PACKAGES — keep in sync.
 RUN uv venv /work/.alembic/${REPO_NAME}/output/.venv-server --python 3.11 \
- && uv pip install --python /work/.alembic/${REPO_NAME}/output/.venv-server/bin/python fastmcp mcp
+ && uv pip install --python /work/.alembic/${REPO_NAME}/output/.venv-server/bin/python fastmcp mcp boto3
 
 COPY docker/alembic/serve.py      /usr/local/bin/serve.py
 COPY docker/alembic/entrypoint.py /usr/local/bin/entrypoint.py
