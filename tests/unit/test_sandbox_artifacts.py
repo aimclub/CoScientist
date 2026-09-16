@@ -130,7 +130,12 @@ def test_a_checkpoint_lands_in_the_files_section(index_root, tmp_path, fake_down
 
     assert len(result["files"]) == 1
     assert "## Files" in result["blocks_markdown"]
-    assert "[download](files/" in result["blocks_markdown"]
+    # The object is already in S3, so the link points at the artifact route
+    # for the original object instead of a local path that is dead in the UI.
+    assert (
+        "[download](/api/artifact/agent-vault/ephemeral/u1/s1/results/model.pt)"
+        in result["blocks_markdown"]
+    )
     # The durable reference crosses into finalize's promotion input.
     sources = json.loads(
         (Path(result["report_dir"]) / collect.SOURCES_FILENAME).read_text()
@@ -212,3 +217,5 @@ def test_the_workspace_walk_collects_files_but_not_code(index_root, tmp_path):
 
     assert sorted(Path(f).name for f in result["files"]) == ["model.pt", "results.tar.gz"]
     assert "## Files" in result["blocks_markdown"]
+    # S3 is off in this test, so the link falls back to the local POSIX path.
+    assert "[download](files/model.pt)" in result["blocks_markdown"]

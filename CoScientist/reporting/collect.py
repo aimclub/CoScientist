@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from CoScientist.reporting.artifact_index import load as load_artifact_index
+from CoScientist.utils.report_links import artifact_link
 from CoScientist.utils.s3_refs import s3_uri
 
 from CoScientist.reporting.s3_upload import upload_and_presign
@@ -209,7 +210,7 @@ def _download(url: str, dest: Path, timeout: int = 30) -> bool:
 def _artifact_link(dest: Path, session_id: str, kind: str, fallback: str) -> str:
     """Presigned S3 URL for a collected artifact, else the local fallback path.
 
-    ``kind`` is ``figures`` or ``tables``; the object lands under
+    ``kind`` is ``figures``, ``tables`` or ``files``; the object lands under
     ``reports/<session_id>/<kind>/<name>``. With S3 off or on any upload
     failure the returned markdown is byte-identical to the local-path form.
     """
@@ -380,7 +381,13 @@ def collect_artifacts(
                         unresolved += 1
                     continue
             files.append(str(dest))
-            file_blocks.append(f"### {label} — [download]({_rel(dest, report_dir)})")
+            # The object already lives in S3: link it through the artifact
+            # route instead of re-uploading the copy we just downloaded.
+            if bucket and key:
+                link = artifact_link(bucket, key)
+            else:
+                link = _artifact_link(dest, session_id, "files", f"files/{name}")
+            file_blocks.append(f"### {label} — [download]({link})")
             _note_source(art, dest)
 
     # 2) Files the run itself LEFT in the sandbox workspace. Prune vendored trees
@@ -433,7 +440,8 @@ def collect_artifacts(
                     dest = files_dir / fname
                     _safe_copy(src, dest)
                     files.append(str(dest))
-                    file_blocks.append(f"### {stem} — [download](files/{fname})")
+                    link = _artifact_link(dest, session_id, "files", f"files/{fname}")
+                    file_blocks.append(f"### {stem} — [download]({link})")
                     ws_files += 1
 
     # 3) Persist the building blocks as section files (for reference / LaTeX tree).
@@ -496,8 +504,9 @@ def _safe_copy(src: Path, dest: Path) -> None:
 
 
 def _rel(path: Path, base: Path) -> str:
+    """POSIX separators: the result goes into markdown links."""
     try:
-        return str(path.relative_to(base))
+        return path.relative_to(base).as_posix()
     except ValueError:
         return path.name
 

@@ -55,9 +55,10 @@ def _configured_hosts() -> Set[str]:
 def _bucket_key_from_url(url: str, known_hosts: Set[str]) -> Optional[Tuple[str, str]]:
     """Extract (bucket, key) from an S3 URL, or None when it is not one.
 
-    A URL with an ``X-Amz-Signature`` query parameter is a presigned S3 URL.
-    A URL without a signature counts only when its host is one of the
-    configured S3 endpoints. Anything else is an ordinary web link.
+    A URL counts only when its host is one of the configured S3 endpoints.
+    A signature alone is not enough: a presigned URL for a foreign bucket
+    (an agent can quote one) would rewrite to a local link this S3 cannot
+    resolve. Anything else is an ordinary web link.
     """
     try:
         parsed = urlparse(url)
@@ -65,8 +66,7 @@ def _bucket_key_from_url(url: str, known_hosts: Set[str]) -> Optional[Tuple[str,
         return None
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         return None
-    signed = "X-Amz-Signature=" in parsed.query
-    if not signed and parsed.netloc not in known_hosts:
+    if parsed.netloc not in known_hosts:
         return None
     bucket, sep, key = parsed.path.lstrip("/").partition("/")
     if not sep or not bucket or not key:

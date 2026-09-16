@@ -41,11 +41,24 @@ def clean_s3_env(monkeypatch):
 
 # --- the rewrite ------------------------------------------------------------
 
-def test_a_presigned_url_in_a_markdown_link_is_rewritten():
+def test_a_presigned_url_in_a_markdown_link_is_rewritten(monkeypatch):
+    monkeypatch.setenv("S3__ENDPOINT_URL", "http://10.32.11.45:9000")
     report = f"**Generated molecules** — [download full CSV]({DEAD_URL})"
     assert remint_report_urls(report) == (
         f"**Generated molecules** — [download full CSV]({DEAD_LINK})"
     )
+
+
+def test_a_presigned_url_for_a_foreign_host_is_untouched(monkeypatch):
+    """An agent can quote a presigned URL that points at someone else's S3.
+    Rewriting it to /api/artifact/ would produce a link this S3 cannot
+    resolve, so the link stays as it is."""
+    monkeypatch.setenv("S3__ENDPOINT_URL", "http://10.32.11.45:9000")
+    report = (
+        "source: https://s3.eu-west-1.amazonaws.com/other-bucket/data.csv"
+        "?X-Amz-Signature=abc123&X-Amz-Expires=3600"
+    )
+    assert remint_report_urls(report) == report
 
 
 def test_a_plain_url_to_a_configured_endpoint_is_rewritten(monkeypatch):
@@ -100,7 +113,8 @@ def test_non_text_input_passes_through(value):
     assert remint_report_urls(value) == value
 
 
-def test_the_rewrite_is_idempotent():
+def test_the_rewrite_is_idempotent(monkeypatch):
+    monkeypatch.setenv("S3__ENDPOINT_URL", "http://10.32.11.45:9000")
     once = remint_report_urls(f"[csv]({DEAD_URL})")
     assert remint_report_urls(once) == once
 
