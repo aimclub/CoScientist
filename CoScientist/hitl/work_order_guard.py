@@ -5,8 +5,8 @@ being a promise the model may forget after the first surprising search result:
 
   * before a contract is declared only orientation reads go through;
   * after a rejection nothing does;
-  * afterwards a call must use a declared tool, stay within its budget, and
-    not produce a side effect the contract did not declare.
+  * afterwards a call must use a declared tool (calls are counted per tool,
+    but neither a budget nor undeclared side effects are enforced here).
 
 A blocked call is not a dead end: the message tells the agent to amend the
 contract (update_work_order), which puts the change in front of the human.
