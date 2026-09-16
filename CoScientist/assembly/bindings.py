@@ -26,6 +26,24 @@ def _websearch():
     return websearch_toolset_instance
 
 
+def _hypothesis_generate():
+    """Factory for the generate_via_moosechem FunctionTool.
+
+    Returns a list so the assembler's _flatten() works uniformly."""
+    from CoScientist.hypothesis_subsystem.generator_agent import generate_via_moosechem
+    from google.adk.tools import FunctionTool
+    return [FunctionTool(generate_via_moosechem)]
+
+
+def _hypothesis_critic_loop():
+    """Factory for the run_critic_loop FunctionTool.
+
+    Returns a list so the assembler's _flatten() works uniformly."""
+    from CoScientist.hypothesis_subsystem.generator_agent import run_critic_loop
+    from google.adk.tools import FunctionTool
+    return [FunctionTool(run_critic_loop)]
+
+
 def _paper_analysis():
     from CoScientist.tools import paper_analysis_toolset_instance
     return paper_analysis_toolset_instance
@@ -438,6 +456,35 @@ REGISTRY.register_tool(ToolEntry(
     optional=True,
     runtime_resolved=True,
     docs=(_RESEARCH_OVERVIEW_DOC, _RESEARCH_SLICE_DOC, _RESEARCH_PROVENANCE_DOC),
+))
+
+# ── Hypothesis subsystem internal tools ────────────────────────────────────────
+# The hypothesis subsystem's internal strategy tools. They are declared in
+# system.yaml so the assembler attaches them — keeping guard_unknown_tools'
+# whitelist populated and making the generator + critic loop visible to the
+# ADK runtime as regular tools.
+REGISTRY.register_tool(ToolEntry(
+    key="generate_via_moosechem",
+    factory=_hypothesis_generate,
+    docs=(
+        ToolDoc(
+            name="generate_via_moosechem",
+            signature="generate_via_moosechem(research_question, background_survey, domain_constraints, max_hypotheses, temperature)",
+            purpose="Generate hypotheses via the MooseChem MCP pipeline (PubMed+OpenAlex corpus → LLM generation → scoring).",
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="run_critic_loop",
+    factory=_hypothesis_critic_loop,
+    docs=(
+        ToolDoc(
+            name="run_critic_loop",
+            signature="run_critic_loop(hypotheses_json, research_question)",
+            purpose="Run the Critic review loop on generated hypotheses — evaluates each for rigor and falsifiability, refines or defers as needed.",
+        ),
+    ),
 ))
 
 REGISTRY.register_tool(ToolEntry(
@@ -1082,11 +1129,13 @@ def _register_classes() -> None:
         WebToolsDeployerAgent,
     )
     from CoScientist.hitl.session_agent import SessionAgent
+    from CoScientist.hypothesis_subsystem import HypothesisSubsystemAgent
     from CoScientist.microfluidics.tz_agent import TZSessionAgent
     from CoScientist.context_init.agent import ContextInitSessionAgent
 
     REGISTRY.register_agent_class("session", SessionAgent)
     REGISTRY.register_agent_class("web_tools_deployer", WebToolsDeployerAgent)
+    REGISTRY.register_agent_class("hypothesis_subsystem", HypothesisSubsystemAgent)
     # Runs ONE of its children: the normal executor, or the reranker fallback.
     REGISTRY.register_agent_class("executor_switch", ExecutorSwitchAgent)
     # Microfluidics ТЗ stage: the review loop shows the RENDERED ТЗ document.
