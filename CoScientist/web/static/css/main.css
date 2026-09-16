@@ -480,6 +480,25 @@
       background: rgba(0, 218, 243, 0.5);
     }
 
+    /* Plan tracker: a visible thin scrollbar, since a long plan must be scrolled */
+    #plan-tracker-list::-webkit-scrollbar {
+      width: 4px;
+    }
+
+    #plan-tracker-list::-webkit-scrollbar-thumb {
+      background: rgba(148, 163, 184, 0.25);
+      border-radius: 9999px;
+    }
+
+    #plan-tracker-list:hover::-webkit-scrollbar-thumb {
+      background: rgba(0, 218, 243, 0.5);
+    }
+
+    #plan-tracker-list {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
+    }
+
     .rail-chip-busy {
       box-shadow: 0 0 16px -2px rgba(0, 218, 243, 0.35), inset 0 0 8px rgba(0, 218, 243, 0.08);
     }
