@@ -138,6 +138,7 @@ def _build_manifest(
         "report": "report.md" if (report_dir / "report.md").exists() else None,
         "figures": listing("figures"),
         "tables": listing("tables"),
+        "files": listing("files"),
         "sections": listing("sections"),
         # Report-relative path -> the permanent/ key that outlives the run. A
         # file with no entry here exists only inside this folder.

@@ -283,6 +283,8 @@ async def run_sandbox_task(
         with filename, url, size and key — the summary text does NOT repeat
         these links, so pass them on from here), sandbox_id, watch_url (live
         console), vscode_url, and next_step when a follow-up call is needed.
+        Each upload also carries the durable bucket/s3_key pair, so the report
+        can still reach the file after the presigned url expires.
     """
     result = await sandbox.arun_sandbox_task(
         task,

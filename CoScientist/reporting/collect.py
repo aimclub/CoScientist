@@ -1,9 +1,10 @@
 """Deterministic artifact collection for the final report.
 
-Gathers every figure and data table a run produced — from captured artifacts in
-session state and from files left in the sandbox workspace — into the per-run
-report folder, and returns ready-to-embed markdown blocks. General on purpose:
-it knows nothing about any specific paper or task, only about *artifacts*.
+Gathers every artifact a run produced — figures, data tables and downloadable
+files, from captured artifacts in session state and from files left in the
+sandbox workspace — into the per-run report folder, and returns ready-to-embed
+markdown blocks. General on purpose: it knows nothing about any specific paper
+or task, only about *artifacts*.
 """
 from __future__ import annotations
 
@@ -24,10 +25,19 @@ logger = logging.getLogger(__name__)
 
 _IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".svg", ".gif", ".webp")
 _TABLE_EXTS = (".csv", ".tsv")
-# Source material a tool pulled in, not a result the run produced. The papers
-# search server uploads every PDF it downloads and returns a link to each one.
-# The report shows figures and tables, so these only add noise to it.
-_SOURCE_EXTS = (".pdf", ".doc", ".docx", ".zip", ".tar", ".gz")
+# Downloadable run outputs that are neither figures nor tables: archives,
+# checkpoints, a PDF the run produced. The workspace walk collects these into
+# the Files section. Indexed artifacts need no such list — a tool returned
+# them as results, so they are curated already.
+_FILE_EXTS = (".pdf", ".zip", ".tar", ".tar.gz", ".tgz", ".gz",
+              ".pt", ".pth", ".pkl", ".pickle", ".ckpt", ".onnx",
+              ".h5", ".hdf5", ".joblib", ".parquet")
+# Ingest material, never a deliverable: source documents a search or parse
+# step pulled in. Everything else the run uploaded lands in Files.
+_SOURCE_EXTS = (".doc", ".docx")
+# Key markers of bulk source material. The papers server uploads every PDF it
+# finds under one prefix; those are inputs to the run, not results of it.
+_SOURCE_KEY_MARKERS = ("papers_search_results",)
 _MAX_TABLE_ROWS = 15
 
 # Workspace scan guards: dependency/VCS/cache dirs that carry bundled example
@@ -72,6 +82,19 @@ def _url_filename(url: str, default_ext: str) -> str:
 def _looks_like(url_or_name: str, exts: tuple) -> bool:
     low = url_or_name.lower()
     return any(low.endswith(e) or f"{e}?" in low or f"{e}&" in low for e in exts)
+
+
+def _is_source_material(art: Dict[str, Any], url: str) -> bool:
+    """Ingest material a search or parse step pulled in, not a run output.
+
+    Matches on the extension (source documents) and on the key or URL (the
+    bulk prefix a search server uploads under). A PDF the run itself produced
+    matches neither and lands in Files like any other deliverable.
+    """
+    if _looks_like(url, _SOURCE_EXTS):
+        return True
+    key = str(art.get("s3_key") or "")
+    return any(marker in key or marker in url for marker in _SOURCE_KEY_MARKERS)
 
 
 _ARTIFACT_KEY_SUFFIXES = ("artifact", "presigned_url")
@@ -222,21 +245,24 @@ def collect_artifacts(
                        to upload is NOT in this set and is still walked, which is
                        the point of naming them instead of skipping the walk.
 
-    Returns a dict with ``report_dir``, ``figures``, ``tables``, and
+    Returns a dict with ``report_dir``, ``figures``, ``tables``, ``files``, and
     ``blocks_markdown`` (the concatenation the agent should embed).
     """
     state = state or {}
     report_dir = report_dir_for(session_id, reports_root)
     figures_dir = report_dir / "figures"
     tables_dir = report_dir / "tables"
+    files_dir = report_dir / "files"
     sections_dir = report_dir / "sections"
-    for d in (figures_dir, tables_dir, sections_dir):
+    for d in (figures_dir, tables_dir, files_dir, sections_dir):
         d.mkdir(parents=True, exist_ok=True)
 
     figure_blocks: List[str] = []
     table_blocks: List[str] = []
+    file_blocks: List[str] = []
     figures: List[str] = []
     tables: List[str] = []
+    files: List[str] = []
 
     # 1) Captured artifacts. The on-disk index comes first: it survives a restart,
     #    while session state does not. Session state is the fallback, and both are
@@ -299,7 +325,7 @@ def collect_artifacts(
                     unresolved += 1
                 continue
         seen_urls.add(url)
-        if _looks_like(url, _SOURCE_EXTS):
+        if _is_source_material(art, url):
             continue
         label = art.get("tool") or art.get("name") or "artifact"
         if _looks_like(url, _IMAGE_EXTS):
@@ -315,7 +341,7 @@ def collect_artifacts(
             figures.append(str(dest))
             figure_blocks.append(f"### {label}\n\n![{label}](figures/{name})")
             _note_source(art, dest)
-        else:  # default remote artifacts to tabular
+        elif _looks_like(url, _TABLE_EXTS):
             name = f"{label}_{_url_filename(url, '.csv')}"
             dest = tables_dir / name
             if not _download(url, dest):
@@ -329,6 +355,18 @@ def collect_artifacts(
             head = f"### {label} — [download]({_rel(dest, report_dir)})"
             table_blocks.append(f"{head}\n\n{md}" if md else head)
             _note_source(art, dest)
+        else:  # anything else the run produced is a downloadable file
+            name = f"{label}_{_url_filename(url, '.bin')}"
+            dest = files_dir / name
+            if not _download(url, dest):
+                retry = _fresh_url(art)
+                if not (retry and retry != url and _download(retry, dest)):
+                    if art.get("s3_key"):
+                        unresolved += 1
+                    continue
+            files.append(str(dest))
+            file_blocks.append(f"### {label} — [download]({_rel(dest, report_dir)})")
+            _note_source(art, dest)
 
     # 2) Files the run itself LEFT in the sandbox workspace. Prune vendored trees
     #    aggressively: a coder step may `git clone` a whole library (e.g. the RDKit
@@ -336,9 +374,9 @@ def collect_artifacts(
     #    images/CSVs are NOT run outputs — collecting them buries the real figures.
     workspace_dir = Path(workspace_root) / f"ws_{session_id}"
     already_synced = synced_files or set()
-    ws_figures = ws_tables = 0
+    ws_figures = ws_tables = ws_files = 0
     if workspace_dir.exists():
-        for root, dirs, files in os.walk(workspace_dir):
+        for root, dirs, files_on_disk in os.walk(workspace_dir):
             # Skip a cloned-repo subtree (a dir that contains .git) and any known
             # dependency/VCS/cache dir — modifying `dirs` in place prunes descent.
             if ".git" in dirs:
@@ -349,7 +387,7 @@ def collect_artifacts(
                 if d not in _WORKSPACE_SKIP_DIRS
                 and not d.endswith((".dist-info", ".egg-info"))
             ]
-            for fname in sorted(files):
+            for fname in sorted(files_on_disk):
                 src = Path(root) / fname
                 if _rel(src, workspace_dir) in already_synced:
                     continue  # the vault sync sent this one; it comes back above
@@ -372,6 +410,14 @@ def collect_artifacts(
                     head = f"### {stem} — [download](tables/{fname})"
                     table_blocks.append(f"{head}\n\n{md}" if md else head)
                     ws_tables += 1
+                elif _looks_like(fname, _FILE_EXTS):
+                    if ws_files >= _MAX_WORKSPACE_FILES:
+                        continue
+                    dest = files_dir / fname
+                    _safe_copy(src, dest)
+                    files.append(str(dest))
+                    file_blocks.append(f"### {stem} — [download](files/{fname})")
+                    ws_files += 1
 
     # 3) Persist the building blocks as section files (for reference / LaTeX tree).
     if figure_blocks:
@@ -381,6 +427,10 @@ def collect_artifacts(
     if table_blocks:
         (sections_dir / "tables.md").write_text(
             "## Data tables\n\n" + "\n\n".join(table_blocks) + "\n", encoding="utf-8"
+        )
+    if file_blocks:
+        (sections_dir / "files.md").write_text(
+            "## Files\n\n" + "\n\n".join(file_blocks) + "\n", encoding="utf-8"
         )
 
     # 4) Where each collected file came from. finalize_report reads this to
@@ -400,10 +450,12 @@ def collect_artifacts(
         blocks.append("## Figures\n\n" + "\n\n".join(figure_blocks))
     if table_blocks:
         blocks.append("## Data tables\n\n" + "\n\n".join(table_blocks))
+    if file_blocks:
+        blocks.append("## Files\n\n" + "\n\n".join(file_blocks))
 
     logger.info(
-        "collect: session=%s figures=%d tables=%d -> %s",
-        session_id, len(figures), len(tables), report_dir,
+        "collect: session=%s figures=%d tables=%d files=%d -> %s",
+        session_id, len(figures), len(tables), len(files), report_dir,
     )
     if unresolved:
         logger.warning(
@@ -414,6 +466,7 @@ def collect_artifacts(
         "report_dir": str(report_dir),
         "figures": figures,
         "tables": tables,
+        "files": files,
         "blocks_markdown": "\n\n".join(blocks),
     }
 

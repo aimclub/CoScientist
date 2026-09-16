@@ -3,9 +3,9 @@
 Two responsibilities, split by *when* they run relative to the aggregator LLM:
 
 * :func:`collect_artifacts` — runs when the aggregator agent calls the
-  ``format_results`` tool, mid-turn. It copies/downloads every figure and data
-  table produced by the run into the per-run report folder and hands the agent
-  ready-to-embed markdown blocks. It does NOT need the LLM's narrative.
+  ``format_results`` tool, mid-turn. It copies/downloads every figure, data
+  table and file the run produced into the per-run report folder and hands the
+  agent ready-to-embed markdown blocks. It does NOT need the LLM's narrative.
 
 * :func:`finalize_report` — runs in the manager driver AFTER the aggregator
   stage finishes, when the assembled narrative markdown exists. It writes
