@@ -5,6 +5,7 @@
   <title>CoScientist — Knowledge Graph</title>
   <!-- Vendored locally (CoScientist/web/static) so it works offline / behind a VPN. -->
   <script src="/static/vis-network.min.js"></script>
+  <script src="/static/js/i18n.js"></script>
   <style>
     html, body { margin: 0; height: 100%; background: #1e1e1e; color: #eee;
                  font-family: -apple-system, Segoe UI, Roboto, sans-serif; }
@@ -35,15 +36,15 @@
 <body>
   <div id="bar">
     <b>CoScientist Graph</b>
-    <span id="status">connecting…</span>
-    <label><input type="checkbox" id="auto" checked /> live (1.5s)</label>
-    <button id="refresh">refresh</button>
-    <label>view:
+    <span id="status" data-i18n="graph.connecting">connecting…</span>
+    <label><input type="checkbox" id="auto" checked /> <span data-i18n="graph.live">live (1.5s)</span></label>
+    <button id="refresh" data-i18n="graph.refresh">refresh</button>
+    <label><span data-i18n="graph.view">view:</span>
       <select id="view">
-        <option value="research">research graph (blackboard)</option>
-        <option value="execution">execution (log)</option>
-        <option value="knowledge">knowledge (this session)</option>
-        <option value="memory">knowledge memory (global)</option>
+        <option value="research" data-i18n="graph.view.research">research graph (blackboard)</option>
+        <option value="execution" data-i18n="graph.view.execution">execution (log)</option>
+        <option value="knowledge" data-i18n="graph.view.knowledge">knowledge (this session)</option>
+        <option value="memory" data-i18n="graph.view.memory">knowledge memory (global)</option>
       </select>
     </label>
     <div class="legend" id="legend"></div>
@@ -152,27 +153,29 @@
       });
     }
 
-    const EX_LEGEND =
-      '<span><b>status:</b></span>'
-      + '<span><i class="dot" style="background:#f1c40f"></i>running</span>'
-      + '<span><i class="dot" style="background:#2ecc71"></i>success</span>'
-      + '<span><i class="dot" style="background:#e74c3c"></i>failed</span>'
-      + '<span style="margin-left:8px"><b>type:</b></span>'
-      + '<span>⬡ system</span><span>● agent</span><span>◆ goal</span>'
-      + '<span>▭ tool</span><span>★ result</span>';
-    const R_LEGEND =
-      '<span><b>status:</b></span>'
-      + '<span><i class="dot" style="background:#2ecc71"></i>confirmed / validated / done</span>'
-      + '<span><i class="dot" style="background:#f39c12"></i>in&nbsp;progress</span>'
-      + '<span><i class="dot" style="background:#e74c3c"></i>refuted / failed</span>'
-      + '<span><i class="dot" style="background:#3498db"></i>open / formulated / planned</span>'
-      + '<span><i class="dot" style="background:#e67e22"></i>needs&nbsp;tool / being&nbsp;built</span>'
-      + '<span><i class="dot" style="background:#7f8c8d"></i>postponed / exhausted</span>'
-      + '<span style="margin-left:6px"><b>edge:</b></span>'
-      + '<span><i class="dot" style="background:#2ecc71"></i>supports</span>'
-      + '<span><i class="dot" style="background:#e74c3c"></i>refutes</span>'
-      + '<span style="margin-left:6px"><b>type:</b> ❓question 💡hypothesis 🔬evidence ⚙️method 🎯criteria 🔧tool</span>';
-    function updateLegend(){ document.getElementById("legend").innerHTML = isResearch() ? R_LEGEND : EX_LEGEND; }
+    function exLegend() {
+      return '<span><b>' + t('graph.legend.status') + '</b></span>'
+        + '<span><i class="dot" style="background:#f1c40f"></i>' + t('graph.legend.running') + '</span>'
+        + '<span><i class="dot" style="background:#2ecc71"></i>' + t('graph.legend.success') + '</span>'
+        + '<span><i class="dot" style="background:#e74c3c"></i>' + t('graph.legend.failed') + '</span>'
+        + '<span style="margin-left:8px"><b>' + t('graph.legend.type') + '</b></span>'
+        + '<span>⬡ ' + t('graph.legend.system') + '</span><span>● ' + t('graph.legend.agent') + '</span><span>◆ ' + t('graph.legend.goal') + '</span>'
+        + '<span>▭ ' + t('graph.legend.tool') + '</span><span>★ ' + t('graph.legend.result') + '</span>';
+    }
+    function rLegend() {
+      return '<span><b>' + t('graph.legend.status') + '</b></span>'
+        + '<span><i class="dot" style="background:#2ecc71"></i>' + t('graph.legend.confirmed') + '</span>'
+        + '<span><i class="dot" style="background:#f39c12"></i>' + t('graph.legend.inProgress') + '</span>'
+        + '<span><i class="dot" style="background:#e74c3c"></i>' + t('graph.legend.refuted') + '</span>'
+        + '<span><i class="dot" style="background:#3498db"></i>' + t('graph.legend.open') + '</span>'
+        + '<span><i class="dot" style="background:#e67e22"></i>' + t('graph.legend.needsTool') + '</span>'
+        + '<span><i class="dot" style="background:#7f8c8d"></i>' + t('graph.legend.postponed') + '</span>'
+        + '<span style="margin-left:6px"><b>' + t('graph.legend.edge') + '</b></span>'
+        + '<span><i class="dot" style="background:#2ecc71"></i>' + t('graph.legend.supports') + '</span>'
+        + '<span><i class="dot" style="background:#e74c3c"></i>' + t('graph.legend.refutes') + '</span>'
+        + '<span style="margin-left:6px"><b>' + t('graph.legend.type') + '</b> ' + t('graph.legend.rTypes') + '</span>';
+    }
+    function updateLegend(){ document.getElementById("legend").innerHTML = isResearch() ? rLegend() : exLegend(); }
 
     // ── polling ────────────────────────────────────────────────────────────────
     const seenEdges = new Set();
@@ -183,7 +186,7 @@
         const userId = params.get("user_id") || "";
         const sessionId = params.get("session_id") || "";
         if (!userId || !sessionId) {
-          throw new Error("Open the graph from an active CoScientist session.");
+          throw new Error(t('graph.noSession'));
         }
         const url = `/api/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/graph?view=${encodeURIComponent(document.getElementById("view").value)}`;
         const r = await fetch(url, { cache: "no-store" });
@@ -229,9 +232,9 @@
           }
         });
         document.getElementById("status").textContent =
-          (g.nodes || []).length + " nodes · " + (g.edges || []).length + " edges";
+          t('graph.status', { nodes: (g.nodes || []).length, edges: (g.edges || []).length });
       } catch (err) {
-        document.getElementById("status").textContent = "error: " + err;
+        document.getElementById("status").textContent = t('graph.error', { error: err });
       }
     }
 
@@ -246,8 +249,8 @@
         + `<h3>${R_ICON[n.kind] || "•"} ${esc(n.id)}</h3>`
         + `<div class="sub">${esc(n.kind || "")}</div>`
         + `<div><span class="badge" style="background:${rColor(n)}">${esc(n.status || "")}</span></div>`
-        + (n.executor_agent ? `<div class="attr" style="margin-top:8px"><span class="k">source:</span> ${esc(n.executor_agent)}</div>` : "")
-        + (rows ? `<div class="k" style="margin-top:10px">attributes:</div>${rows}` : "");
+        + (n.executor_agent ? `<div class="attr" style="margin-top:8px"><span class="k">${t('graph.detail.source')}</span> ${esc(n.executor_agent)}</div>` : "")
+        + (rows ? `<div class="k" style="margin-top:10px">${t('graph.detail.attributes')}</div>${rows}` : "");
       document.getElementById("detail").style.display = "block";
     }
     function showDetail(n) {
@@ -256,15 +259,15 @@
       const row = (k, v) => (v || v === 0) ? `<div><span class="k">${k}:</span> ${esc(v)}</div>` : "";
       const block = (k, v) => v ? `<div class="k" style="margin-top:10px">${k}:</div><pre>${esc(v)}</pre>` : "";
       const dur = (n.t_start && n.t_end) ? (n.t_end - n.t_start).toFixed(2) + "s" : "";
-      const promptLabel = n.kind === "agent_call" ? "prompt the agent was called with"
-                        : (n.kind === "tool_call" ? "tool args" : "input");
+      const promptLabel = n.kind === "agent_call" ? t('graph.detail.agentPrompt')
+                        : (n.kind === "tool_call" ? t('graph.detail.toolArgs') : t('graph.detail.input'));
       document.getElementById("detail").innerHTML =
         `<span class="close" onclick="closeDetail()">✕</span>`
         + `<h3>${esc(labelOf(n))}</h3>`
         + `<div><span class="badge" style="background:${colorOf(n)}">${esc(n.status || "")}</span></div>`
-        + row("kind", n.kind) + row("agent", n.executor_agent) + row("duration", dur) + row("id", n.id)
+        + row(t('graph.detail.kind'), n.kind) + row(t('graph.detail.agent'), n.executor_agent) + row(t('graph.detail.duration'), dur) + row("id", n.id)
         + block(promptLabel, typeof n.input === "object" ? JSON.stringify(n.input, null, 2) : n.input)
-        + block("output", n.output);
+        + block(t('graph.detail.output'), n.output);
       document.getElementById("detail").style.display = "block";
     }
     function closeDetail() { selectedId = null; document.getElementById("detail").style.display = "none"; }

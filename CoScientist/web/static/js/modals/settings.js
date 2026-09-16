@@ -142,11 +142,11 @@
     // Deleting a graph rewrites files on the server, so the confirmation names
     // exactly what goes — in particular that the knowledge memory is shared by
     // every session, not just the one currently open.
-    const GRAPH_DELETE_LABELS = {
-      execution: "this session's execution graph",
-      research: "this session's research graph",
-      memory: 'the GLOBAL knowledge memory (shared by every session)',
-      all: "this session's execution and research graphs AND the GLOBAL knowledge memory",
+    const GRAPH_DELETE_LABEL_KEYS = {
+      execution: 'settings.deleteGraph.targetExecution',
+      research: 'settings.deleteGraph.targetResearch',
+      memory: 'settings.deleteGraph.targetMemory',
+      all: 'settings.deleteGraph.targetAll',
     };
 
     function describeGraphDeletion(deleted) {
@@ -163,10 +163,10 @@
       const target = document.getElementById('graph-delete-target').value;
       const button = document.getElementById('graph-delete-btn');
       const status = document.getElementById('graph-delete-status');
-      if (!confirm(`Delete ${GRAPH_DELETE_LABELS[target]}?\n\nThis cannot be undone from the UI.`)) return;
+      if (!confirm(t('settings.deleteGraph.confirm', { target: t(GRAPH_DELETE_LABEL_KEYS[target]) }))) return;
 
       status.classList.remove('hidden');
-      status.textContent = 'Deleting...';
+      status.textContent = t('settings.deleteGraph.deleting');
       status.className = 'text-[10px] font-mono mt-1.5 text-primary/70 animate-pulse';
       button.disabled = true;
       try {
@@ -177,11 +177,11 @@
         if (!response.ok) {
           throw new Error(data.detail || describeGraphDeletion(data.deleted) || `HTTP ${response.status}`);
         }
-        status.textContent = `Deleted ${describeGraphDeletion(data.deleted) || 'nothing'}.`;
+        status.textContent = t('settings.deleteGraph.deleted', { details: describeGraphDeletion(data.deleted) || t('settings.deleteGraph.nothing') });
         status.className = 'text-[10px] font-mono mt-1.5 text-secondary';
         addTelemetry(`GRAPHS :: deleted ${target}`);
       } catch (error) {
-        status.textContent = 'Error deleting graphs: ' + (error.message || error);
+        status.textContent = t('settings.deleteGraph.error', { error: (error.message || error) });
         status.className = 'text-[10px] font-mono mt-1.5 text-error';
       } finally {
         button.disabled = false;
@@ -255,7 +255,7 @@
       }
 
       const status = document.getElementById('settings-status');
-      status.textContent = 'Saving...';
+      status.textContent = t('settings.saving');
       status.className = 'text-[10px] font-mono text-primary/70 animate-pulse';
       status.classList.remove('hidden');
 
@@ -267,14 +267,14 @@
         });
         if (resp.ok) {
           addTelemetry('SETTINGS :: saved dynamically');
-          status.textContent = 'Settings saved.';
+          status.textContent = t('settings.saved');
           status.className = 'text-[10px] font-mono text-secondary';
           setTimeout(() => { status.classList.add('hidden'); closeSettings(); }, 800);
         } else {
           throw new Error('HTTP ' + resp.status);
         }
       } catch (e) {
-        status.textContent = 'Error saving settings: ' + e.message;
+        status.textContent = t('settings.saveError', { error: e.message });
         status.className = 'text-[10px] font-mono text-error';
       }
     }

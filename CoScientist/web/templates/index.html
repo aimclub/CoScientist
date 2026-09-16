@@ -300,13 +300,6 @@
               </button>
             </div>
           </div>
-          <!-- Report language for THIS session. Separate from the interface
-               language toggle (lang-btn-en / lang-btn-ru) in the sidebar. -->
-          <select id="report-lang-select" onchange="onReportLanguageChange()" title="Report language / Язык отчёта"
-            class="shrink-0 bg-surface-container-highest border border-outline-variant/20 text-on-surface-variant text-[10px] font-mono rounded-md px-2 py-1 focus:border-primary/40 focus:ring-0 cursor-pointer">
-            <option value="ru" data-i18n="composer.reportLang.ru">Отчёт: RU</option>
-            <option value="en" data-i18n="composer.reportLang.en">Отчёт: EN</option>
-          </select>
           <textarea id="chat-input" rows="3" wrap="soft" spellcheck="false" autocomplete="off"
             class="bg-transparent border-none focus:ring-0 text-sm flex-1 py-1.5 text-on-surface placeholder:text-outline-variant/50 font-medium no-scrollbar"
             placeholder="Send system command…  (Enter — send, Shift+Enter — new line)"
@@ -683,13 +676,19 @@
             <p data-i18n="settings.subtitle"
               class="text-[9px] text-outline-variant/70 font-mono uppercase tracking-wider">System Configuration</p>
           </div>
-          <!-- Language toggle -->
-          <div
-            class="flex items-center gap-1 ml-4 bg-surface-container-high rounded-md border border-outline-variant/20 p-0.5">
-            <button id="lang-btn-en" onclick="applyLanguage('en')"
-              class="px-2 py-1 text-[10px] font-bold uppercase tracking-wider rounded transition-all text-on-surface-variant hover:text-on-surface">EN</button>
-            <button id="lang-btn-ru" onclick="applyLanguage('ru')"
-              class="px-2 py-1 text-[10px] font-bold uppercase tracking-wider rounded transition-all text-on-surface-variant hover:text-on-surface">RU</button>
+          <!-- Language: one control for both the interface and the report.
+               Locked while a run is active (see applyRunStatus). -->
+          <div class="flex items-center gap-2 ml-4">
+            <label data-i18n="settings.language.label"
+              class="text-[9px] font-bold text-outline-variant uppercase tracking-widest">Language (interface and
+              report)</label>
+            <div
+              class="flex items-center gap-1 bg-surface-container-high rounded-md border border-outline-variant/20 p-0.5">
+              <button id="lang-btn-en" onclick="applyLanguage('en')"
+                class="px-2 py-1 text-[10px] font-bold uppercase tracking-wider rounded transition-all text-on-surface-variant hover:text-on-surface disabled:opacity-40 disabled:cursor-not-allowed">EN</button>
+              <button id="lang-btn-ru" onclick="applyLanguage('ru')"
+                class="px-2 py-1 text-[10px] font-bold uppercase tracking-wider rounded transition-all text-on-surface-variant hover:text-on-surface disabled:opacity-40 disabled:cursor-not-allowed">RU</button>
+            </div>
           </div>
         </div>
         <button onclick="closeSettings()"

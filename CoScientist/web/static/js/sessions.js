@@ -5,7 +5,7 @@
       const options = knownUsers.map(user =>
         `<option value="${escHtml(user.id)}" ${activeUser && activeUser.id === user.id ? 'selected' : ''}>${escHtml(user.nickname)}</option>`
       ).join('');
-      document.getElementById('user-select').innerHTML = options || '<option value="">No local users</option>';
+      document.getElementById('user-select').innerHTML = options || `<option value="">${t('identity.noUsers')}</option>`;
       document.getElementById('identity-user-select').innerHTML = options;
       document.getElementById('existing-user-block').classList.toggle('hidden', knownUsers.length === 0);
     }
@@ -13,7 +13,7 @@
     function populateSessionSelector() {
       document.getElementById('session-select').innerHTML = knownSessions.map(session =>
         `<option value="${escHtml(session.id)}" ${activeSession && activeSession.id === session.id ? 'selected' : ''}>${escHtml(session.title)}</option>`
-      ).join('') || '<option value="">No sessions</option>';
+      ).join('') || `<option value="">${t('identity.noSessions')}</option>`;
     }
 
     function openIdentityModal() {
@@ -62,7 +62,7 @@
     async function registerLocalUser() {
       const nicknameInput = document.getElementById('nickname-input');
       const nickname = nicknameInput.value.trim();
-      if (!nickname) return showIdentityError(new Error('Enter a Nick.'));
+      if (!nickname) return showIdentityError(new Error(t('identity.enterNick')));
       try {
         const data = await apiJson('/api/users', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -100,7 +100,7 @@
       if (!activeUser) return openIdentityModal();
       let title = 'New session';
       if (!appSettings.general.autoNamingEnabled) {
-        const inputTitle = prompt('Session title:', 'New session');
+        const inputTitle = prompt(t('sessions.titlePrompt'), 'New session');
         if (inputTitle === null) return;
         title = inputTitle.trim() || 'New session';
       }
@@ -111,12 +111,12 @@
         });
         knownSessions.unshift(data.session);
         await activateSession(activeUser, data.session);
-      } catch (error) { addSystemMsg('Could not create session: ' + error.message); }
+      } catch (error) { addSystemMsg(t('sessions.createError', { error: error.message })); }
     }
 
     async function renameCurrentSession() {
       if (!activeUser || !activeSession) return;
-      const title = prompt('New session title:', activeSession.title);
+      const title = prompt(t('sessions.renamePrompt'), activeSession.title);
       if (!title || title.trim() === activeSession.title) return;
       try {
         const data = await apiJson(sessionApi(), {
@@ -126,7 +126,7 @@
         activeSession = data.session;
         knownSessions = knownSessions.map(item => item.id === activeSession.id ? activeSession : item);
         populateSessionSelector();
-      } catch (error) { addSystemMsg('Could not rename session: ' + error.message); }
+      } catch (error) { addSystemMsg(t('sessions.renameError', { error: error.message })); }
     }
 
     /**
@@ -228,7 +228,7 @@
         }
         await ensureUserSession(savedUser, localStorage.getItem(SESSION_STORAGE_KEY));
       } catch (error) {
-        addSystemMsg('Failed to initialize local sessions: ' + error.message);
+        addSystemMsg(t('sessions.initError', { error: error.message }));
         openIdentityModal();
       }
     }
@@ -240,9 +240,14 @@
         if (Number.isFinite(parsedVersion)) runStatusVersion = parsedVersion;
       }
       const processing = status === 'processing';
+      runActive = processing;
       document.getElementById('status-badge').textContent =
-        'Status: ' + (processing ? 'Processing' : 'Idle');
+        t(processing ? 'topbar.processing' : 'topbar.idle');
       document.getElementById('send-btn').disabled = processing;
+      // The language also drives the report, and the server rejects a mid-run
+      // change. Lock the toggle for the lifetime of the run.
+      document.getElementById('lang-btn-en').disabled = processing;
+      document.getElementById('lang-btn-ru').disabled = processing;
       document.getElementById('stop-btn').classList.toggle('hidden', !processing);
       if (processing) {
         showTyping();
@@ -273,7 +278,7 @@
       activityReset();
       StatusIndicator.reset();
       eventCount = 0;
-      document.getElementById('event-count').textContent = 'Events: 0';
+      renderEventCount();
       feed.innerHTML = '';
 
       // Cost is cumulative per session, so the snapshot carries the current
@@ -324,12 +329,12 @@
         } else if (message.type === 'tool_activity') {
           applyToolActivity(message, true);
         } else if (message.type === 'error') {
-          addSystemMsg('Error: ' + message.message, message.timestamp);
+          addSystemMsg(t('common.errorPrefix', { error: message.message }), message.timestamp);
         }
       }
       if (!messages.length) clearChat();
       eventCount = messages.length;
-      document.getElementById('event-count').textContent = 'Events: ' + eventCount;
+      renderEventCount();
 
       applyRunStatus(snapshot.status, snapshot.run_status_version);
       StatusIndicator.feed({ type: 'status', status: snapshot.status });
@@ -340,9 +345,9 @@
     // === Session Export / Import / Save / Restore ===
 
     async function exportCurrentSession() {
-      if (!activeUser || !activeSession) return addSystemMsg('No active session to export.');
+      if (!activeUser || !activeSession) return addSystemMsg(t('sessions.noActiveExport'));
       try {
-        addSystemMsg('📥 Exporting session…');
+        addSystemMsg(t('sessions.exporting'));
         const resp = await fetch(`/api/users/${encodeURIComponent(activeUser.id)}/sessions/${encodeURIComponent(activeSession.id)}/export`, { method: 'POST' });
         if (!resp.ok) {
           const errMsg = await fetchErrorMessage(resp);
@@ -363,17 +368,17 @@
         a.download = filename;
         a.click();
         URL.revokeObjectURL(a.href);
-        addSystemMsg('✅ Session exported: ' + filename);
-      } catch (err) { addSystemMsg('❌ Export failed: ' + err.message); }
+        addSystemMsg(t('sessions.exported', { filename: filename }));
+      } catch (err) { addSystemMsg(t('sessions.exportFailed', { error: err.message })); }
     }
 
     async function saveCurrentSession() {
-      if (!activeUser || !activeSession) return addSystemMsg('No active session to save.');
+      if (!activeUser || !activeSession) return addSystemMsg(t('sessions.noActiveSave'));
       try {
-        addSystemMsg('💾 Saving session to disk…');
+        addSystemMsg(t('sessions.saving'));
         const data = await apiJson(`/api/users/${encodeURIComponent(activeUser.id)}/sessions/${encodeURIComponent(activeSession.id)}/save`, { method: 'POST' });
-        addSystemMsg('✅ Session saved: ' + data.filename);
-      } catch (err) { addSystemMsg('❌ Save failed: ' + err.message); }
+        addSystemMsg(t('sessions.saved', { filename: data.filename }));
+      } catch (err) { addSystemMsg(t('sessions.saveFailed', { error: err.message })); }
     }
 
     function triggerImportSession() {
@@ -387,7 +392,7 @@
       if (!file) return;
       if (!activeUser) return openIdentityModal();
       try {
-        addSystemMsg('📤 Importing session from ' + file.name + '…');
+        addSystemMsg(t('sessions.importing', { filename: file.name }));
         // Step 1: preview the bundle for MCP builds
         const previewForm = new FormData();
         previewForm.append('file', file);
@@ -425,10 +430,10 @@
         }
         knownSessions.unshift(importedSession);
         await activateSession(activeUser, importedSession);
-        let msg = '✅ Session imported: ' + importedSession.title;
-        if (rebuildMcp) msg += ' (MCP rebuilds launched)';
+        let msg = t('sessions.imported', { title: importedSession.title });
+        if (rebuildMcp) msg += t('sessions.mcpRebuilds');
         addSystemMsg(msg);
-      } catch (err) { addSystemMsg('❌ Import failed: ' + err.message); }
+      } catch (err) { addSystemMsg(t('sessions.importFailed', { error: err.message })); }
     }
 
     function openSavedSessionsModal() {
@@ -476,12 +481,12 @@
 
     async function loadSavedSessionsList() {
       const container = document.getElementById('saved-sessions-list');
-      container.innerHTML = '<p class="text-[10px] text-outline-variant italic">Loading…</p>';
+      container.innerHTML = `<p class="text-[10px] text-outline-variant italic">${t('common.loading')}</p>`;
       try {
         const data = await apiJson('/api/saved-sessions');
         const sessions = data.sessions || [];
         if (!sessions.length) {
-          container.innerHTML = '<p class="text-[10px] text-outline-variant italic">No saved sessions found.</p>';
+          container.innerHTML = `<p class="text-[10px] text-outline-variant italic">${t('saved.empty')}</p>`;
           return;
         }
         container.innerHTML = sessions.map(s => {
@@ -490,23 +495,23 @@
           return `<div class="flex items-center justify-between bg-surface-container-high rounded-lg px-4 py-3 border border-outline-variant/10">
             <div class="flex-1 min-w-0">
               <p class="text-xs font-bold text-on-surface truncate">${escHtml(s.title)}</p>
-              <p class="text-[10px] text-outline-variant">${date} · ${sizeKb} KB${s.original_nickname ? ' · by ' + escHtml(s.original_nickname) : ''}</p>
+              <p class="text-[10px] text-outline-variant">${date} · ${sizeKb} KB${s.original_nickname ? t('sessions.savedBy', { nick: escHtml(s.original_nickname) }) : ''}</p>
             </div>
             <div class="flex gap-2 ml-3 shrink-0">
-              <button onclick="restoreSavedSession('${escHtml(s.filename)}')" title="Restore"
+              <button onclick="restoreSavedSession('${escHtml(s.filename)}')" title="${t('saved.restore')}"
                 class="px-3 py-1.5 bg-primary text-on-primary rounded text-[10px] font-bold uppercase hover:brightness-110">
-                Restore</button>
-              <button onclick="downloadSavedSession('${escHtml(s.filename)}')" title="Download"
+                ${t('saved.restore')}</button>
+              <button onclick="downloadSavedSession('${escHtml(s.filename)}')" title="${t('saved.download')}"
                 class="px-3 py-1.5 bg-surface-container border border-outline-variant/20 text-on-surface rounded text-[10px] font-bold uppercase hover:bg-surface-variant/40">
                 <span class="material-symbols-outlined text-sm">download</span></button>
-              <button onclick="deleteSavedSession('${escHtml(s.filename)}')" title="Delete"
+              <button onclick="deleteSavedSession('${escHtml(s.filename)}')" title="${t('saved.delete')}"
                 class="px-3 py-1.5 bg-surface-container border border-error/30 text-error rounded text-[10px] font-bold uppercase hover:bg-error/10">
                 <span class="material-symbols-outlined text-sm">delete</span></button>
             </div>
           </div>`;
         }).join('');
       } catch (err) {
-        container.innerHTML = `<p class="text-[10px] text-error">Failed to load saved sessions: ${escHtml(err.message)}</p>`;
+        container.innerHTML = `<p class="text-[10px] text-error">${escHtml(t('sessions.loadFailed', { error: err.message }))}</p>`;
       }
     }
 
@@ -530,7 +535,7 @@
           }
         } catch (_) { /* preview is best-effort */ }
         // Step 2: actual restore
-        addSystemMsg('📂 Restoring session from ' + filename + '…');
+        addSystemMsg(t('sessions.restoring', { filename: filename }));
         const resp = await fetch('/api/restore-session', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -551,10 +556,10 @@
         knownSessions.unshift(restoredSession);
         await activateSession(activeUser, restoredSession);
         closeSavedSessionsModal();
-        let msg = '✅ Session restored: ' + restoredSession.title;
-        if (rebuildMcp) msg += ' (MCP rebuilds launched)';
+        let msg = t('sessions.restored', { title: restoredSession.title });
+        if (rebuildMcp) msg += t('sessions.mcpRebuilds');
         addSystemMsg(msg);
-      } catch (err) { addSystemMsg('❌ Restore failed: ' + err.message); }
+      } catch (err) { addSystemMsg(t('sessions.restoreFailed', { error: err.message })); }
     }
 
     async function downloadSavedSession(filename) {
@@ -579,11 +584,11 @@
         a.download = dlFilename;
         a.click();
         URL.revokeObjectURL(a.href);
-      } catch (err) { addSystemMsg('❌ Download failed: ' + err.message); }
+      } catch (err) { addSystemMsg(t('sessions.downloadFailed', { error: err.message })); }
     }
 
     async function deleteSavedSession(filename) {
-      if (!confirm('Delete saved session "' + filename + '"?')) return;
+      if (!confirm(t('sessions.deleteConfirm', { filename: filename }))) return;
       try {
         const resp = await fetch(`/api/saved-sessions/${encodeURIComponent(filename)}`, { method: 'DELETE' });
         if (!resp.ok) {
@@ -591,6 +596,6 @@
           throw new Error(errMsg);
         }
         loadSavedSessionsList();
-        addSystemMsg('🗑 Saved session deleted: ' + filename);
-      } catch (err) { addSystemMsg('❌ Delete failed: ' + err.message); }
+        addSystemMsg(t('sessions.deleted', { filename: filename }));
+      } catch (err) { addSystemMsg(t('sessions.deleteFailed', { error: err.message })); }
     }

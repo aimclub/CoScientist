@@ -290,9 +290,10 @@ class WebRuntime:
         # here as well as in ADK state so a reconnecting tab and a session whose
         # manager has not been built yet both see the same link.
         self.dataset_urls: dict[SessionKey, str] = {}
-        # Report language chosen for a session from the chat composer. Holds
-        # ONLY explicit choices — an absent key means the browser has not spoken
-        # yet, which is what lets the UI default follow its interface language.
+        # Report language chosen for a session from the settings language
+        # toggle. Holds ONLY explicit choices — an absent key means the browser
+        # has not spoken yet, which is what lets the UI default follow its
+        # interface language.
         self.report_languages: dict[SessionKey, str] = {}
         self.pending_hitl: dict[str, dict[str, Any]] = {}
         self.hitl_handler = WebHITLHandler()
@@ -1771,6 +1772,19 @@ def create_app() -> FastAPI:
                         await runtime.send_socket(ws, {
                             "type": "report_language_rejected",
                             "message": str(exc),
+                        }, key)
+                        continue
+                    current_run = runtime.active_runs.get(key)
+                    if current_run is not None and not current_run.done():
+                        # A run reads the language when it starts. A mid-run
+                        # change would split the report between languages.
+                        await runtime.send_socket(ws, {
+                            "type": "report_language_rejected",
+                            "message": (
+                                "A run is in progress. "
+                                "Wait for it to finish before changing the language."
+                            ),
+                            "reason": "run_active",
                         }, key)
                         continue
                     await runtime.apply_report_language(key, lang)

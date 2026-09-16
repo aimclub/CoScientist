@@ -25,25 +25,25 @@
     function datasetUrlError(raw) {
       // Mirrors the server-side check, so a typo is caught before it travels.
       const url = String(raw || '').trim();
-      if (!url) return 'Enter a link to a .zip archive.';
+      if (!url) return t('dataset.errEmpty');
       let parsed;
       try {
         parsed = new URL(url);
       } catch (error) {
-        return 'That is not a valid URL.';
+        return t('dataset.errInvalid');
       }
       if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-        return 'The link must be an http(s) URL.';
+        return t('dataset.errProtocol');
       }
       if (!parsed.pathname.toLowerCase().endsWith('.zip')) {
-        return 'The link must point to a .zip archive.';
+        return t('dataset.errNotZip');
       }
       return '';
     }
 
     function sendDatasetUrl(url) {
       if (!ws || ws.readyState !== 1) {
-        showDatasetError('Not connected — reconnect and try again.');
+        showDatasetError(t('dataset.notConnected'));
         return false;
       }
       ws.send(JSON.stringify({ type: 'set_dataset_url', dataset_url: url }));
@@ -92,13 +92,13 @@
 
       if (textEl) {
         if (total > 0) {
-          textEl.textContent = `Uploading: ${formatDatasetSize(done)} / ${formatDatasetSize(total)}`;
+          textEl.textContent = `${t('dataset.uploading')}: ${formatDatasetSize(done)} / ${formatDatasetSize(total)}`;
         } else if (done > 0) {
-          textEl.textContent = `Uploading: ${formatDatasetSize(done)}`;
+          textEl.textContent = `${t('dataset.uploading')}: ${formatDatasetSize(done)}`;
         } else if (d.filename) {
-          textEl.textContent = `Uploading: ${d.filename}`;
+          textEl.textContent = `${t('dataset.uploading')}: ${d.filename}`;
         } else {
-          textEl.textContent = `Uploading dataset to sandbox...`;
+          textEl.textContent = t('dataset.uploadingSandbox');
         }
       }
 

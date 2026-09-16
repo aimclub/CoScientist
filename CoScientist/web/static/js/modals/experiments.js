@@ -292,7 +292,7 @@
 
     function tvRenderNested(parsed, depth) {
       const note = parsed.truncated
-        ? `<div style="padding-left:${depth * 16}px" class="tv-empty">… truncated (server preview cap)</div>`
+        ? `<div style="padding-left:${depth * 16}px" class="tv-empty">${t('experiments.truncated')}</div>`
         : '';
       return tvRender(parsed.value, depth) + note;
     }
@@ -301,7 +301,7 @@
       depth = depth || 0;
       const pad = depth ? ` style="padding-left:${depth * 16}px"` : '';
       if (Array.isArray(value)) {
-        if (value.length === 0) return `<div${pad} class="tv-empty">(empty list)</div>`;
+        if (value.length === 0) return `<div${pad} class="tv-empty">${t('experiments.emptyList')}</div>`;
         return value.map(item => {
           const parsed = typeof item === 'string' ? tvTryParseJsonString(item) : null;
           if (parsed) {
@@ -313,7 +313,7 @@
       }
       if (tvIsPlainObject(value)) {
         const keys = Object.keys(value);
-        if (keys.length === 0) return `<div${pad} class="tv-empty">(empty)</div>`;
+        if (keys.length === 0) return `<div${pad} class="tv-empty">${t('experiments.emptyValue')}</div>`;
         return keys.map(k => {
           const v = value[k];
           const parsed = typeof v === 'string' ? tvTryParseJsonString(v) : null;
@@ -379,10 +379,10 @@
         const parsed = tvTryParseJsonString(value);
         if (parsed) return tvRenderNested(parsed, 0);
         const trimmed = value.trim();
-        return trimmed ? `<div class="tv-text">${escHtml(value)}</div>` : '<div class="tv-empty">(empty)</div>';
+        return trimmed ? `<div class="tv-text">${escHtml(value)}</div>` : `<div class="tv-empty">${t('experiments.emptyValue')}</div>`;
       }
       if (value === null || value === undefined || (tvIsPlainObject(value) && Object.keys(value).length === 0)) {
-        return '<div class="tv-empty">(none)</div>';
+        return `<div class="tv-empty">${t('experiments.noValue')}</div>`;
       }
       return tvRender(value, 0);
     }
@@ -430,7 +430,7 @@
 
       if (rec && rec.callId && truncated && !el.classList.contains('tv-expanded')) {
         btn.disabled = true;
-        btn.textContent = 'Loading…';
+        btn.textContent = t('common.loading');
         try {
           const data = await apiJson(sessionApi('/tool-activity/' + encodeURIComponent(rec.callId)));
           const full = Object.prototype.hasOwnProperty.call(data, field) ? data[field] : null;
@@ -444,7 +444,7 @@
           el.innerHTML = tvRenderAny(field === 'args' ? rec.args : rec.result);
         } catch (err) {
           btn.disabled = false;
-          btn.textContent = 'Retry — ' + (err.message || 'failed to load full result');
+          btn.textContent = t('experiments.retry', { error: (err.message || t('experiments.loadFailed')) });
           return;
         }
         btn.disabled = false;
@@ -452,7 +452,7 @@
 
       const expanded = el.classList.toggle('tv-expanded');
       if (expanded) tvExpandedBlocks.add(blockId); else tvExpandedBlocks.delete(blockId);
-      btn.textContent = expanded ? 'Show less' : 'Show more';
+      btn.textContent = expanded ? t('common.showLess') : t('common.showMore');
     }
 
     // Whether a block's toggle button is needed depends on its rendered
@@ -462,7 +462,7 @@
       root.querySelectorAll('.tv-collapsible').forEach(el => {
         const btn = root.querySelector(`[data-tv-toggle="${el.id}"]`);
         if (!btn) return;
-        if (el.classList.contains('tv-expanded')) btn.textContent = 'Show less';
+        if (el.classList.contains('tv-expanded')) btn.textContent = t('common.showLess');
         if (btn.dataset.needsFetch) return;
         btn.classList.toggle('hidden', el.scrollHeight <= TV_COLLAPSED_MAX_PX + 4);
       });
@@ -567,29 +567,29 @@
           <div class="flex justify-end">
             <button data-tv-toggle="${blockId}" data-uid="${rec.uid}" data-field="${field}"
               data-needs-fetch="${needsFetch ? '1' : ''}" onclick="toggleTvBlock(this)"
-              class="${needsFetch ? '' : 'hidden'} mt-1 text-[9px] font-bold text-outline-variant hover:text-primary uppercase tracking-wider">Show more</button>
+              class="${needsFetch ? '' : 'hidden'} mt-1 text-[9px] font-bold text-outline-variant hover:text-primary uppercase tracking-wider">${t('common.showMore')}</button>
           </div>
         </div>`;
     }
 
     function renderToolCardBody(rec) {
       const args = tvValueBlock(
-        rec, 'args', 'Arguments', rec.args,
-        rec.argsUnknown ? '(the call itself was not recorded)' : '(no arguments)',
+        rec, 'args', t('experiments.args'), rec.args,
+        rec.argsUnknown ? t('experiments.callNotRecorded') : t('experiments.noArgs'),
       );
       const output = rec.status === 'running'
         ? `<div>
-             <div class="text-[9px] font-bold text-outline-variant uppercase tracking-widest mb-1">Output</div>
+             <div class="text-[9px] font-bold text-outline-variant uppercase tracking-widest mb-1">${t('experiments.output')}</div>
              <div class="bg-surface-container-lowest/80 border border-outline-variant/10 rounded-md p-2.5 text-[11px]">
-               <span class="tv-empty">waiting for the result…</span>
+               <span class="tv-empty">${t('experiments.waiting')}</span>
              </div>
            </div>`
         : tvValueBlock(
           rec,
           rec.status === 'error' ? 'error' : 'result',
-          rec.status === 'error' ? 'Error' : 'Output',
+          rec.status === 'error' ? t('experiments.error') : t('experiments.output'),
           rec.result,
-          '(empty)',
+          t('experiments.emptyValue'),
         );
       return `<div class="px-2.5 pb-2.5 pt-2 space-y-2 border-t border-outline-variant/10">${args}${output}</div>`;
     }

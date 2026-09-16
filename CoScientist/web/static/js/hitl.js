@@ -22,13 +22,13 @@
       if (data.agent_name === 'PlannerAgent') {
         openRoadmapSidebarBtn = `
       <button onclick="openRoadmapEditor()" class="w-full mt-2 flex items-center justify-center gap-2 bg-surface-variant border border-outline-variant/20 text-on-surface py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-high transition-all">
-        <span class="material-symbols-outlined text-sm">map</span> Open Roadmap
+        <span class="material-symbols-outlined text-sm">map</span> ${t('hitl.openRoadmap')}
       </button>
     `;
         openRoadmapChatBtn = `
       <div class="mt-4 pl-11">
         <button onclick="openRoadmapEditor()" class="flex items-center justify-center gap-2 bg-surface-variant border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-wider hover:bg-surface-container-high transition-all">
-          <span class="material-symbols-outlined text-sm">map</span> Open Roadmap
+          <span class="material-symbols-outlined text-sm">map</span> ${t('hitl.openRoadmap')}
         </button>
       </div>
     `;
@@ -40,13 +40,13 @@
       // Show in sidebar. For question windows (options present) or input requests the sidebar is
       // informational only — answer directly in the chat card.
       const sidebarButtons = (hasOptions || isProvideInput) ? `
-        <p class="text-[10px] text-outline-variant leading-relaxed">Ответьте в карточке в чате.</p>` : `
+        <p class="text-[10px] text-outline-variant leading-relaxed">${t('hitl.sidebarHint')}</p>` : `
         <div class="flex gap-3">
           <button onclick="respondHITL('${data.request_id}', true)" class="flex-1 flex items-center justify-center gap-2 bg-primary text-on-primary py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-            <span class="material-symbols-outlined text-base">check_circle</span> Accept
+            <span class="material-symbols-outlined text-base">check_circle</span> ${t('hitl.accept')}
           </button>
           <button onclick="respondHITL('${data.request_id}', false)" class="flex-1 flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
-            <span class="material-symbols-outlined text-base">close</span> Reject
+            <span class="material-symbols-outlined text-base">close</span> ${t('hitl.reject')}
           </button>
         </div>`;
       panel.classList.remove('hidden');
@@ -58,7 +58,7 @@
           <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
             <span class="material-symbols-outlined text-on-primary text-sm">ads_click</span>
           </div>
-          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">HITL Required</h3>
+          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${t('hitl.required')}</h3>
         </div>
         <p class="text-xs text-on-surface-variant leading-relaxed">${escHtml(data.message)}</p>
         ${sidebarButtons}
@@ -70,7 +70,7 @@
       const proposedOutput = (data.context && data.context.output) ? String(data.context.output) : '';
       const outputBlock = proposedOutput ? `
         <div class="mt-3 pl-11">
-          <p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">Proposed output</p>
+          <p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${t('hitl.proposedOutput')}</p>
           <pre class="font-mono text-[11px] leading-relaxed text-on-surface-variant whitespace-pre-wrap bg-surface-container-high p-3 rounded-lg border border-outline-variant/10 max-h-96 overflow-auto">${escHtml(proposedOutput)}</pre>
         </div>` : '';
       appendMsgToFeed(`
@@ -81,44 +81,44 @@
           <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
             <span class="material-symbols-outlined text-on-primary text-sm">ads_click</span>
           </div>
-          <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">Human-In-The-Loop Required</h3>
+          <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${t('hitl.requiredLong')}</h3>
         </div>
         <p class="text-sm text-on-surface-variant leading-relaxed pl-11">${escHtml(data.message)}</p>
         <p class="text-[10px] text-outline-variant font-mono mt-2 pl-11">CTX: ${data.request_id.slice(0, 8)} · ${escHtml(data.agent_name || '')}</p>
         ${outputBlock}
         ${isProvideInput ? `
         <div id="hitl-controls-${data.request_id}" class="mt-4 pl-11 flex flex-col gap-2">
-          <textarea id="hitl-feedback-${data.request_id}" rows="2" placeholder="Введите инструкции для агента..."
+          <textarea id="hitl-feedback-${data.request_id}" rows="2" placeholder="${t('hitl.placeholderInput')}"
             class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
           <div class="flex">
             <button onclick="respondHITLInput('${data.request_id}')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-              <span class="material-symbols-outlined text-base">send</span> Отправить
+              <span class="material-symbols-outlined text-base">send</span> ${t('hitl.send')}
             </button>
           </div>
         </div>` : hasOptions ? `
         <div id="hitl-controls-${data.request_id}" class="mt-4 pl-11 flex flex-col gap-2">
-          <textarea id="hitl-feedback-${data.request_id}" rows="2" placeholder="Ваш ответ на вопрос — затем «Ответить»"
+          <textarea id="hitl-feedback-${data.request_id}" rows="2" placeholder="${t('hitl.placeholderAnswer')}"
             class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
           <div class="flex flex-wrap gap-2">
             <button onclick="respondHITLEdit('${data.request_id}')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-              <span class="material-symbols-outlined text-base">reply</span> Ответить
+              <span class="material-symbols-outlined text-base">reply</span> ${t('hitl.reply')}
             </button>
             ${data.options.map(o => `
             <button onclick="respondHITLOption('${data.request_id}', '${escJs(o)}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">${escHtml(o)}</button>`).join('')}
           </div>
         </div>` : `
         <div id="hitl-controls-${data.request_id}" class="mt-4 pl-11 flex flex-col gap-2">
-          <textarea id="hitl-feedback-${data.request_id}" rows="2" placeholder="Правки для агента — затем Revise"
+          <textarea id="hitl-feedback-${data.request_id}" rows="2" placeholder="${t('hitl.placeholderRevise')}"
             class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
           <div class="flex gap-3">
             <button onclick="respondHITL('${data.request_id}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-              <span class="material-symbols-outlined text-base">check_circle</span> Accept
+              <span class="material-symbols-outlined text-base">check_circle</span> ${t('hitl.accept')}
             </button>
             <button onclick="respondHITLEdit('${data.request_id}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
-              <span class="material-symbols-outlined text-base">edit_note</span> Revise
+              <span class="material-symbols-outlined text-base">edit_note</span> ${t('hitl.revise')}
             </button>
             <button onclick="respondHITL('${data.request_id}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
-              <span class="material-symbols-outlined text-base">close</span> Reject
+              <span class="material-symbols-outlined text-base">close</span> ${t('hitl.reject')}
             </button>
           </div>
         </div>`}
@@ -160,7 +160,7 @@
       });
       document.getElementById('hitl-panel').classList.add('hidden');
       disableHitlControls(requestId);
-      addSystemMsg('💬 HITL Input: ' + (feedback || '(empty)'));
+      addSystemMsg(t('hitl.inputSent', { feedback: feedback || t('hitl.empty') }));
 
       if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
         currentPlannerHitlRequest = null;
@@ -181,7 +181,7 @@
       });
       document.getElementById('hitl-panel').classList.add('hidden');
       disableHitlControls(requestId);
-      addSystemMsg(approved ? '✓ HITL Approved' : '✗ HITL Rejected' + (feedback ? ': ' + feedback : ''));
+      addSystemMsg((approved ? t('hitl.approved') : t('hitl.rejected')) + (feedback ? ': ' + feedback : ''));
 
       if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
         currentPlannerHitlRequest = null;
@@ -210,7 +210,7 @@
       const feedbackEl = document.getElementById('hitl-feedback-' + requestId);
       const feedback = feedbackEl ? feedbackEl.value.trim() : '';
       if (!feedback) {
-        addSystemMsg('Введите правки в поле выше, затем нажмите Revise.');
+        addSystemMsg(t('hitl.emptyEdits'));
         if (feedbackEl) feedbackEl.focus();
         return;
       }
@@ -224,7 +224,7 @@
       });
       document.getElementById('hitl-panel').classList.add('hidden');
       disableHitlControls(requestId);
-      addSystemMsg('✎ HITL Revision requested: ' + feedback);
+      addSystemMsg(t('hitl.revisionRequested', { feedback: feedback }));
 
       if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
         currentPlannerHitlRequest = null;
@@ -239,7 +239,7 @@
       const blocksHtml = form.blocks.map((b, bi) => {
         const fieldsHtml = (b.fields || []).map((f, fi) => {
           const openTag = f.open
-            ? '<span class="text-[9px] text-error uppercase tracking-wider">не задано</span>'
+            ? `<span class="text-[9px] text-error uppercase tracking-wider">${t('hitl.frame.notSet')}</span>`
             : `<span class="text-[9px] text-outline-variant uppercase tracking-wider">${escHtml(f.status || '')}</span>`;
           const val = f.open ? '' : String(f.value || '');
           return `
@@ -249,7 +249,7 @@
                 ${openTag}
               </div>
               <textarea id="frm-${rid}-${bi}-${fi}" data-block="${escJs(b.title)}" data-field="${escJs(f.name)}"
-                rows="2" placeholder="${escHtml(f.placeholder || 'Оставьте пустым, чтобы агент подставил рабочее значение')}"
+                rows="2" placeholder="${escHtml(f.placeholder || t('hitl.frame.placeholder'))}"
                 class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50">${escHtml(val)}</textarea>
             </div>`;
         }).join('');
@@ -264,8 +264,8 @@
       panel.classList.remove('hidden');
       panel.innerHTML = `
         <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-2">
-          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">Рамка исследования</h3>
-          <p class="text-[11px] text-on-surface-variant">Заполните форму в чате. Пустые поля агент заполнит сам.</p>
+          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${t('hitl.frame.title')}</h3>
+          <p class="text-[11px] text-on-surface-variant">${t('hitl.frame.sidebarHint')}</p>
         </div>`;
 
       feed.innerHTML += `
@@ -275,16 +275,16 @@
               <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
                 <span class="material-symbols-outlined text-on-primary text-sm">fact_check</span>
               </div>
-              <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${escHtml(form.title || 'Рамка исследования')}</h3>
+              <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${escHtml(form.title || t('hitl.frame.title'))}</h3>
             </div>
             <p class="text-xs text-on-surface-variant leading-relaxed">${escHtml(form.intro || data.message || '')}</p>
             ${blocksHtml}
             <div class="flex flex-wrap gap-3 mt-4">
               <button onclick="respondHITLForm('${rid}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-                <span class="material-symbols-outlined text-base">check_circle</span> Сохранить рамку
+                <span class="material-symbols-outlined text-base">check_circle</span> ${t('hitl.frame.save')}
               </button>
               <button onclick="respondHITLForm('${rid}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
-                <span class="material-symbols-outlined text-base">skip_next</span> Пропустить (агент решит)
+                <span class="material-symbols-outlined text-base">skip_next</span> ${t('hitl.frame.skip')}
               </button>
             </div>
           </div>
@@ -316,6 +316,6 @@
       document.getElementById('hitl-panel').classList.add('hidden');
       disableHitlControls(requestId);
       const n = formValues ? Object.values(formValues).reduce((s, o) => s + Object.keys(o).length, 0) : 0;
-      addSystemMsg(collect ? `✓ Рамка сохранена (${n} поле(й) заданы оператором)` : '→ Рамка пропущена — агент подставит значения');
+      addSystemMsg(collect ? t('hitl.frame.saved', { count: n }) : t('hitl.frame.skipped'));
     }
 

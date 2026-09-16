@@ -59,33 +59,34 @@
 <body>
 <header>
   <h1 id="jobid">…</h1>
-  <span id="statusBadge" class="badge idle">connecting</span>
-  <a href="/builds">← all builds</a>
+  <span id="statusBadge" class="badge idle" data-i18n="build.connecting">connecting</span>
+  <a href="/builds" data-i18n="build.backAll">← all builds</a>
 </header>
 <main>
   <p class="repo" id="repo"></p>
 
   <section>
-    <h2>Pipeline</h2>
+    <h2 data-i18n="build.pipeline">Pipeline</h2>
     <div class="stages" id="stages"></div>
   </section>
 
   <section id="resultSection" style="display:none">
-    <h2>Result</h2>
+    <h2 data-i18n="build.result">Result</h2>
     <div class="result" id="result"></div>
   </section>
 
   <section id="valSection" style="display:none">
-    <h2>Tool validation</h2>
+    <h2 data-i18n="build.validation">Tool validation</h2>
     <div class="tools" id="tools"></div>
   </section>
 
   <section>
-    <h2>Live log</h2>
+    <h2 data-i18n="build.liveLog">Live log</h2>
     <div id="log"></div>
   </section>
 </main>
 
+<script src="/static/js/i18n.js"></script>
 <script>
 const JOB_ID = decodeURIComponent(location.pathname.split('/builds/')[1] || '');
 document.getElementById('jobid').textContent = JOB_ID;
@@ -96,7 +97,7 @@ const stagesEl = document.getElementById('stages');
 function renderStages() {
   stagesEl.innerHTML = STAGES.map(s => {
     const st = stageState[s] || 'idle';
-    const label = ({idle:'pending', running:'running…', done:'done', failed:'failed'})[st];
+    const label = ({idle: t('build.stage.pending'), running: t('build.stage.running'), done: t('build.stage.done'), failed: t('build.stage.failed')})[st];
     return '<div class="stage ' + st + '"><div class="name"><span class="dot"></span>' + s + '</div>'
       + '<div class="st muted">' + label + '</div></div>';
   }).join('');
@@ -137,20 +138,20 @@ function escapeAttr(s){ return escapeHtml(s).replace(/"/g,'&quot;'); }
 function handleEvent(ev) {
   if (ev.type === 'pipeline') {
     if (ev.repo_url) document.getElementById('repo').textContent = ev.repo_url;
-    if (ev.status === 'start') setBadge('running', 'running');
-    if (ev.status === 'complete') { setBadge('done', 'done'); }
+    if (ev.status === 'start') setBadge(t('build.badge.running'), 'running');
+    if (ev.status === 'complete') { setBadge(t('build.badge.done'), 'done'); }
     appendLog('● pipeline ' + ev.status, true);
   } else if (ev.type === 'stage') {
     stageState[ev.stage] = ev.status === 'done' ? 'done' : (ev.status === 'failed' ? 'failed' : 'running');
     renderStages();
     let extra = '';
-    if (ev.resets) extra = ' (after ' + ev.resets + ' reset(s))';
+    if (ev.resets) extra = t('build.resets', { count: ev.resets });
     if (ev.counts) extra = ' ' + JSON.stringify(ev.counts);
     appendLog('● stage ' + ev.stage + ' → ' + ev.status + extra, true);
   } else if (ev.type === 'validation') {
     toolState[ev.tool] = { passed: ev.passed, status: ev.status, error: ev.error };
     renderTools();
-    appendLog('● tool ' + ev.tool + ' → ' + (ev.passed ? 'pass' : 'fail'), true);
+    appendLog('● tool ' + ev.tool + ' → ' + (ev.passed ? t('build.pass') : t('build.fail')), true);
   }
 }
 
@@ -165,35 +166,35 @@ function showResult(snap) {
       + (snap.image ? '<div class="k">image</div><div><code>' + escapeHtml(snap.image) + '</code></div>' : '')
       + (snap.container ? '<div class="k">container</div><div><code>' + escapeHtml(snap.container) + '</code></div>' : '')
       + '</div>'
-      + (!snap.mcp_url ? '<p class="muted">Build finished but no MCP URL was printed — check the log.</p>' : '');
+      + (!snap.mcp_url ? '<p class="muted">' + t('build.noUrl') + '</p>' : '');
   } else {
     box.className = 'result failed';
-    box.innerHTML = '<p class="fail" style="margin-top:0">Build failed.</p>'
-      + '<pre class="muted" style="white-space:pre-wrap">' + escapeHtml(snap.error || 'see log') + '</pre>';
+    box.innerHTML = '<p class="fail" style="margin-top:0">' + t('build.failed') + '</p>'
+      + '<pre class="muted" style="white-space:pre-wrap">' + escapeHtml(snap.error || t('build.seeLog')) + '</pre>';
   }
 }
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   const ws = new WebSocket(proto + '://' + location.host + '/builds/ws/' + encodeURIComponent(JOB_ID));
-  ws.onopen = () => setBadge('running', 'running');
+  ws.onopen = () => setBadge(t('build.badge.running'), 'running');
   ws.onmessage = (m) => {
     const msg = JSON.parse(m.data);
     if (msg.type === 'event') handleEvent(msg.event);
     else if (msg.type === 'log') appendLog(msg.line, false);
     else if (msg.type === 'status') {
-      setBadge(msg.status, msg.status === 'done' ? 'done' : 'failed');
+      setBadge(t('build.badge.' + msg.status, msg.status), msg.status === 'done' ? 'done' : 'failed');
       // mark unfinished stages
       for (const s of STAGES) if (stageState[s] === 'running') stageState[s] = msg.status === 'done' ? 'done' : 'failed';
       renderStages();
       showResult(msg);
     } else if (msg.type === 'error') {
       appendLog('[error] ' + msg.message, false);
-      setBadge('unknown', 'failed');
+      setBadge(t('build.badge.unknown'), 'failed');
     }
   };
-  ws.onclose = () => { if (badgeEl.classList.contains('running')) setBadge('disconnected', 'idle'); };
-  ws.onerror = () => setBadge('error', 'failed');
+  ws.onclose = () => { if (badgeEl.classList.contains('running')) setBadge(t('build.badge.disconnected'), 'idle'); };
+  ws.onerror = () => setBadge(t('build.badge.error'), 'failed');
 }
 connect();
 </script>

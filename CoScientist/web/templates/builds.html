@@ -34,18 +34,19 @@
 </head>
 <body>
 <header>
-  <h1>MCP Builds</h1>
-  <a href="/">← chat</a>
+  <h1 data-i18n="agent.MCPBuilds.desc">MCP Builds</h1>
+  <a href="/" data-i18n="builds.backChat">← chat</a>
   <span style="flex:1"></span>
-  <button class="refresh" onclick="load()">Refresh</button>
+  <button class="refresh" onclick="load()" data-i18n="builds.refresh">Refresh</button>
 </header>
 <main>
-  <div id="content"><div class="empty">Loading…</div></div>
+  <div id="content"><div class="empty" data-i18n="builds.loading">Loading…</div></div>
 </main>
+<script src="/static/js/i18n.js"></script>
 <script>
 function badge(status) {
   const cls = ({running:'running', done:'done', failed:'failed', error:'error'})[status] || 'muted';
-  return '<span class="badge ' + cls + '">' + status + '</span>';
+  return '<span class="badge ' + cls + '">' + t('builds.status.' + status, status) + '</span>';
 }
 async function load() {
   const box = document.getElementById('content');
@@ -54,25 +55,24 @@ async function load() {
     const data = await r.json();
     const builds = data.builds || [];
     if (!builds.length) {
-      box.innerHTML = '<div class="empty">No builds yet. Ask the MCP Builder agent to build a repo, '
-        + 'e.g. “build an MCP server from https://github.com/whitead/synspace”.</div>';
+      box.innerHTML = '<div class="empty">' + t('builds.empty') + '</div>';
       return;
     }
     let rows = '';
     for (const b of builds) {
-      const stage = b.stage ? '<div class="muted">stage ' + b.stage + '</div>' : '';
+      const stage = b.stage ? '<div class="muted">' + t('builds.stage', { stage: b.stage }) + '</div>' : '';
       const extra = b.mcp_url ? '<div class="muted">' + b.mcp_url + '</div>'
-                  : (b.error ? '<div class="muted">error</div>' : '');
+                  : (b.error ? '<div class="muted">' + t('builds.errorLabel') + '</div>' : '');
       rows += '<tr>'
         + '<td><a class="job" href="/builds/' + encodeURIComponent(b.job_id) + '">' + b.job_id + '</a>' + stage + '</td>'
         + '<td class="repo">' + (b.repo_url || '—') + '</td>'
         + '<td>' + badge(b.status) + extra + '</td>'
         + '</tr>';
     }
-    box.innerHTML = '<table><thead><tr><th>Job</th><th>Repository</th><th>Status</th></tr></thead>'
+    box.innerHTML = '<table><thead><tr><th>' + t('builds.thJob') + '</th><th>' + t('builds.thRepo') + '</th><th>' + t('builds.thStatus') + '</th></tr></thead>'
       + '<tbody>' + rows + '</tbody></table>';
   } catch (e) {
-    box.innerHTML = '<div class="empty">Failed to load builds: ' + e + '</div>';
+    box.innerHTML = '<div class="empty">' + t('builds.loadFailed', { error: e }) + '</div>';
   }
 }
 load();

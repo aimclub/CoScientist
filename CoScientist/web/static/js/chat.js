@@ -21,7 +21,7 @@
       appendMsgToFeed(`
     <div class="flex flex-col gap-2 max-w-2xl msg-enter">
       <div class="flex items-center gap-2">
-        <span class="text-[10px] font-mono text-primary/70 bg-primary/5 px-2 py-0.5 rounded uppercase">System</span>
+        <span class="text-[10px] font-mono text-primary/70 bg-primary/5 px-2 py-0.5 rounded uppercase">${t('chat.system')}</span>
         <span class="text-[10px] text-outline-variant font-mono">${ts(timestamp)}</span>
       </div>
       <div class="bg-surface-container-lowest p-3 rounded-lg border border-outline-variant/10">
@@ -80,19 +80,19 @@
       if (fullUrl) {
         activeSandboxWatchUrl = fullUrl;
         linkEl.href = fullUrl;
-        linkEl.title = 'Open Active CoderSandbox: ' + fullUrl;
+        linkEl.title = t('chat.sandboxOpenActive', { url: fullUrl });
         if (dotEl) {
           dotEl.className = 'w-2 h-2 rounded-full bg-secondary animate-pulse';
-          dotEl.title = 'Sandbox active: ' + fullUrl;
+          dotEl.title = t('chat.sandboxActive', { url: fullUrl });
         }
       } else {
         activeSandboxWatchUrl = null;
         const baseUrl = getBaseSandboxUrl();
         linkEl.href = baseUrl;
-        linkEl.title = 'Open CoderSandbox: ' + baseUrl;
+        linkEl.title = t('chat.sandboxOpen', { url: baseUrl });
         if (dotEl) {
           dotEl.className = 'w-2 h-2 rounded-full bg-outline-variant/40';
-          dotEl.title = 'Sandbox standby: ' + baseUrl;
+          dotEl.title = t('chat.sandboxStandby', { url: baseUrl });
         }
       }
     }
@@ -160,7 +160,7 @@
       const toggle = folded
         ? `<button onclick="toggleAgentOutput(this)"
              class="self-start text-[10px] font-mono uppercase tracking-widest text-primary/80 hover:text-primary transition-colors">
-             Show full output</button>`
+             ${t('chat.showFull')}</button>`
         : '';
       appendMsgToFeed(`
     <div class="flex items-start gap-4 max-w-3xl msg-enter">
@@ -170,7 +170,7 @@
       <div class="flex flex-col gap-1 min-w-0">
         <div class="flex items-center gap-2 flex-wrap">
           <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">${escHtml(agent || 'agent')}</span>
-          <span class="text-[9px] font-mono uppercase tracking-widest text-secondary bg-secondary/10 border border-secondary/20 px-1.5 py-0.5 rounded">Result</span>
+          <span class="text-[9px] font-mono uppercase tracking-widest text-secondary bg-secondary/10 border border-secondary/20 px-1.5 py-0.5 rounded">${t('chat.result')}</span>
           ${caller ? `<span class="text-[9px] font-mono text-outline-variant">→ ${escHtml(caller)}</span>` : ''}
           <span class="text-[10px] text-outline-variant">${ts(timestamp)}</span>
         </div>
@@ -189,7 +189,7 @@
       if (!box) return;
       const collapsed = box.classList.toggle('max-h-64');
       box.classList.toggle('overflow-hidden', collapsed);
-      button.textContent = collapsed ? 'Show full output' : 'Collapse';
+      button.textContent = collapsed ? t('chat.showFull') : t('chat.collapse');
       if (collapsed) box.scrollIntoView({ block: 'nearest' }); else scrollChat();
     }
 
@@ -202,7 +202,7 @@
       <div class="flex flex-col gap-1 items-end">
         <div class="flex items-center gap-2">
           <span class="text-[10px] text-outline-variant">${ts(timestamp)}</span>
-          <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">You</span>
+          <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">${t('chat.you')}</span>
         </div>
         <div class="bg-primary/5 p-4 rounded-xl rounded-tr-none border border-primary/20">
           <p class="text-sm text-on-surface leading-relaxed whitespace-pre-wrap break-words">${escHtml(text)}</p>
@@ -271,28 +271,15 @@
 
 
     function applyReportLanguage(lang) {
+      // Records the server-known value. The settings toggle is the visible
+      // control; the rejection handler reads this to put the UI back in sync.
       reportLanguage = String(lang || '');
-      const select = document.getElementById('report-lang-select');
-      // With no server-side choice, show the interface language as the default.
-      if (select) select.value = reportLanguage || currentLang;
     }
 
     function sendReportLanguage(lang) {
       if (!ws || ws.readyState !== 1) return false;
       ws.send(JSON.stringify({ type: 'set_report_language', report_language: lang }));
       return true;
-    }
-
-    function onReportLanguageChange() {
-      // Send only; the mirror is set when the server echoes, as with the dataset.
-      const select = document.getElementById('report-lang-select');
-      if (sendReportLanguage(select.value)) return;
-      // The socket is down, so the server never heard the pick. Put the select
-      // back to the language that is still in effect, or the report comes out
-      // in a language the UI no longer shows.
-      applyReportLanguage(reportLanguage);
-      addSystemMsg('Not connected — reconnect and try again.');
-      addTelemetry('REPORT LANG :: not sent, socket is down');
     }
 
     function toggleAttachMenu(show) {
@@ -325,7 +312,7 @@
       <span class="material-symbols-outlined text-primary text-sm">folder_zip</span>
       <a href="${escHtml(datasetUrl)}" target="_blank" title="${escHtml(datasetUrl)}"
         class="font-mono text-[10px] text-on-surface-variant truncate max-w-[24rem] hover:text-primary">${escHtml(datasetUrl)}</a>
-      <button type="button" onclick="clearDatasetLink()" title="Detach dataset"
+      <button type="button" onclick="clearDatasetLink()" title="${t('chat.detachDataset')}"
         class="p-0.5 text-outline-variant hover:text-error transition-colors flex items-center">
         <span class="material-symbols-outlined text-sm">close</span>
       </button>
