@@ -446,3 +446,35 @@ def test_a_composite_child_run_twice_is_two_stages(monkeypatch):
         assert ("agent:ReviewLoop@inv-l", "agent:CriticAgent@inv-l#2", "delegated_to") in graph.edges
 
     asyncio.run(scenario())
+
+
+def test_the_runs_answer_is_recorded_whole(monkeypatch):
+    """It was the most tightly cut thing in the graph, at 600 characters.
+
+    A tool result is allowed twenty thousand; the answer the reader actually
+    came for — the report — lost its findings a paragraph in.
+    """
+    async def scenario():
+        graphs = _install_graph_resolver(monkeypatch)
+        plugin = GraphMemoryPlugin()
+        invocation, _ = _contexts(
+            user_id="user-r", session_id="session-r", invocation_id="inv-r",
+        )
+        await plugin.on_user_message_callback(
+            invocation_context=invocation,
+            user_message=types.Content(role="user", parts=[types.Part(text="write it up")]),
+        )
+        answer = "Результаты. " + ("влияние УФ на токсичность фурокумаринов. " * 200)
+        await plugin.on_event_callback(
+            invocation_context=invocation, event=_final_event(answer),
+        )
+
+        graph = graphs[("user-r", "session-r")]
+        result = next(n for n in graph.full()["nodes"] if n["kind"] == "result")
+        assert len(answer) > 5000, "the fixture has to be longer than the old cap"
+        assert result["output"].startswith("Результаты.")
+        assert len(result["output"]) > 5000
+        # The card's label is still a label, not the whole report.
+        assert len(result["label"]) <= 260
+
+    asyncio.run(scenario())

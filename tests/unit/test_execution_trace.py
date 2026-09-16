@@ -662,3 +662,30 @@ def test_an_old_snapshot_borrows_task_and_report_for_its_agents():
     # The delegation node itself already says what it says.
     outer = {n["id"]: n for n in execution_tree(full, "outer")["nodes"]}["goal:outer::agent:Coder"]
     assert outer["input"] == "request: write it" and "io_source" not in outer
+
+
+def test_work_that_ran_before_any_request_is_not_lost():
+    """Stranding a call loses it from every view at once.
+
+    A node that starts before every goal used to resolve to a request nobody
+    can open. One stored session showed 35 of its 130 calls that way, and the
+    evidence linking to the other 95 led to a page with nothing on it.
+    """
+    from CoScientist.graph.projection import execution_tree
+
+    full = {"nodes": [
+        # The goal is stamped later than the work recorded under it.
+        {"id": "goal:1", "kind": "goal", "turn_id": "one", "label": "ask", "t_start": 500.0},
+        {"id": "a:One", "kind": "agent", "turn_id": "one",
+         "executor_agent": "One", "t_start": 100.0},
+        {"id": "t:early", "kind": "tool_call", "label": "search", "t_start": 110.0},
+    ], "edges": [
+        {"src": "goal:1", "dst": "a:One", "type": "caused_by"},
+        {"src": "a:One", "dst": "t:early", "type": "caused_by"},
+    ]}
+
+    tree = execution_tree(full)
+    assert [t["turn_id"] for t in tree["turns"]] == ["one"]
+    calls = [c["id"] for n in execution_tree(full, "one")["nodes"]
+             for c in (n.get("calls") or [])]
+    assert calls == ["t:early"]

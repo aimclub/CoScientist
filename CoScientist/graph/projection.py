@@ -198,6 +198,12 @@ def _turn_resolver(nodes: List[Dict[str, Any]]):
                 current = goal_turn
             else:
                 break
+        # Something that ran before every request still ran. Stranding it in a
+        # request nobody can open loses it from every view at once — one
+        # session showed 35 of its 130 calls that way, and the evidence linking
+        # to the other 95 led nowhere. The first request is where it goes.
+        if current is None and goals:
+            current = goals[0][1]
         return current or "untagged"
 
     return resolve

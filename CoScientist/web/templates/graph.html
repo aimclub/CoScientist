@@ -866,9 +866,16 @@
     // Jump from an Evidence's provenance to the exact tool call in the
     // execution log. The call is folded into its agent's card, so the agent is
     // what gets selected and the call is unfolded and lit inside it.
+    // Recorders have spelled a call's node id two ways — `tool:call_x` now,
+    // `goal:{invocation}::tool:call_x` before — and evidence recorded under
+    // one spelling is read against the other. The call id is the tail either
+    // way, so that is what is compared; an exact match still wins first.
+    const callKey = id => String(id == null ? "" : id).split("::").pop();
+    const sameCall = (a, b) => a === b || callKey(a) === callKey(b);
+
     function ownerOfCall(execId){
       for (const id in nodeData)
-        if ((nodeData[id].calls || []).some(c => c.id === execId)) return id;
+        if ((nodeData[id].calls || []).some(c => sameCall(c.id, execId))) return id;
       return null;
     }
 
@@ -885,13 +892,13 @@
     // The link names a call, not a node, and not the request it belongs to —
     // calls are folded into the agent that made them. So the requests are
     // searched for the one holding it, and that is the one the page opens on.
-    let wantedCall = null;
+    let wantedCall = null, revealTries = 0;
     async function openTurnHolding(execId){
       const q = new URLSearchParams(location.search);
       const base = `/api/users/${encodeURIComponent(q.get("user_id") || "")}`
                  + `/sessions/${encodeURIComponent(q.get("session_id") || "")}/graph?view=execution`;
       const holds = g => (g.nodes || []).some(
-        n => (n.calls || []).some(c => c.id === execId));
+        n => (n.calls || []).some(c => sameCall(c.id, execId)));
       try {
         const first = await (await fetch(base, { cache: "no-store" })).json();
         if (holds(first)) return first.turn_id;
@@ -910,8 +917,20 @@
     function revealWantedCall(){
       if (!wantedCall) return;
       const host = ownerOfCall(wantedCall);
-      if (!host) return;
-      const call = wantedCall; wantedCall = null;
+      if (!host) {
+        // Landing on the log with nothing selected looks like the link did
+        // nothing. Say which call could not be placed and stop trying.
+        if (++revealTries > 3) {
+          document.getElementById("status").textContent =
+            "вызов " + wantedCall + " не найден в этой сессии";
+          wantedCall = null;
+        }
+        return;
+      }
+      // The agent's own id, then the call as THIS graph spells it.
+      const call = (nodeData[host].calls || [])
+        .map(c => c.id).find(id => sameCall(id, wantedCall)) || wantedCall;
+      wantedCall = null;
       try { network.selectNodes([host]); network.focus(host, { scale: 1.0, animation: true }); } catch(e){}
       selectedId = host;
       focusCallId = call; focusPending = true; openCalls.add(call);

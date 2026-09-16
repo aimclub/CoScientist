@@ -577,7 +577,12 @@ class GraphMemoryPlugin(BasePlugin):
             graph.add_node(
                 id=rid, kind="result", turn_id=inv, label=_short(text, 200),
                 executor_agent=speaker, status="success",
-                parent_ids=[nid] if nid else [], output=_short(text, 600),
+                # The run's answer is the one thing a reader came for, and it
+                # was the most tightly cut of anything recorded — 600
+                # characters, where a tool result gets twenty thousand. A
+                # report lost its findings a paragraph in. The label stays
+                # short: that one is a card, not the text.
+                parent_ids=[nid] if nid else [], output=_short(text, _OUTPUT_LIMIT),
                 t_start=now, t_end=now,
             )
             if nid:
