@@ -98,29 +98,9 @@
       'ContextInitSessionAgent', 'ResultAggregatorAgent', 'FedotAgent'
     ].forEach(name => KNOWN_AGENTS.add(name));
 
-    const INTERNAL_AGENTS = (typeof window.INTERNAL_AGENTS !== 'undefined')
-      ? window.INTERNAL_AGENTS
-      : new Set([
-        'ResearchPipeline', 'PlanningPipeline', 'PlanningPipelineAgent',
-        'ToolPipeline', 'ToolPipelineAgent', 'ToolPreparer', 'ToolPreparerAgent',
-        'ParallelToolSearcher', 'ParallelToolSearcherAgent', 'LocalToolsExtractor',
-        'LocalToolsExtractorAgent', 'ToolRetriever', 'ToolRetrieverAgent',
-        'ToolReranker', 'ToolWebSearcher', 'ToolWebSearcherAgent',
-        'FullSetToolReranker', 'WebToolsDeployer', 'WebToolsDeployerAgent',
-        'ExecutorSwitch', 'ExecutorSwitchAgent', 'InitAgent', 'TZAgent',
-        'system', 'user', 'unknown',
-      ]);
-
-    function isInternalAgent(name) {
-      if (!name) return true;
-      if (typeof window.isInternalAgent === 'function') return window.isInternalAgent(name);
-      const n = String(name).trim();
-      if (INTERNAL_AGENTS.has(n)) return true;
-      const stripped = n.replace(/Agent$/, '');
-      if (INTERNAL_AGENTS.has(stripped)) return true;
-      if (/Pipeline|SwitchAgent$|PreparerAgent$|ExtractorAgent$|SearcherAgent$|DeployerAgent$/i.test(n)) return true;
-      return false;
-    }
+    // INTERNAL_AGENTS and isInternalAgent() come from activity_rail.js, which
+    // loads first. Redeclaring them here is a SyntaxError for the const, and
+    // a global function that shadows window.isInternalAgent and recurses.
 
     const STATIC_PARENT_MAP = new Map([
       ['PlannerAgent', 'OrchestratorAgent'],

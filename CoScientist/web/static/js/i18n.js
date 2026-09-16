@@ -567,8 +567,7 @@ const i18n = {
   // ── HITL request card (built at render time from agent_name / invoked_via / trigger) ──
   'hitl.title': { en: 'Human-In-The-Loop Required', ru: 'Требуется решение человека' },
   'hitl.titleShort': { en: 'HITL Required', ru: 'Нужно решение' },
-  'hitl.agentLabel': { en: 'Agent', ru: 'Агент' },
-  'hitl.viaLabel': { en: 'Invoked via', ru: 'Способ вызова' },
+  'hitl.viaLabel': { en: 'Invoked via', ru: 'Причина вызова' },
   'hitl.msg.beforeTool': {
     en: "Agent {agent} is about to execute tool {tool}. Approve execution?",
     ru: "Агент {agent} собирается выполнить инструмент {tool}. Разрешить выполнение?"
