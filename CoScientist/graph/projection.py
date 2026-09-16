@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlsplit
 
 _MAX_ITEMS = 12
 _LABEL = 200
@@ -544,6 +545,7 @@ def _number_stages(nodes: Dict[str, Dict[str, Any]]) -> None:
 
 
 _LINK = re.compile(r"(?:s3://|https?://)[^\s\"'<>()\[\]]+")
+_SERVICE_PATH = re.compile(r"(?i)/mcp/?$")
 _MAX_ARTIFACTS = 40
 
 
@@ -551,12 +553,16 @@ def _artifacts_of(agent: Dict[str, Any]) -> List[Dict[str, Any]]:
     """What the agent left behind: files its tools produced (the S3 references
     recorded on each call) and the files and links its report points at.
     Inputs are not artifacts, and links inside tool results are not either —
-    a search result is forty links and none of them is the agent's work."""
+    a search result is forty links and none of them is the agent's work. A
+    tool server address (http://host:7338/mcp) is not one either: an agent
+    that echoes the endpoint it called did not produce a file."""
     seen, out = set(), []
 
     def add(uri: str, tool: Optional[str]) -> None:
         uri = uri.rstrip(".,;:")
         if not uri or uri in seen or len(out) >= _MAX_ARTIFACTS:
+            return
+        if not uri.startswith("s3://") and _SERVICE_PATH.search(urlsplit(uri).path):
             return
         seen.add(uri)
         out.append({"uri": uri, "kind": "file" if uri.startswith("s3://") else "link",
