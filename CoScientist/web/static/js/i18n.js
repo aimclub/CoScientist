@@ -145,6 +145,23 @@
         ru: 'Автоматически генерировать названия сессий на основе первого запроса.'
       },
 
+      'settings.alembicAgentBuild.label': { en: 'Агент может конвертировать репозитории', ru: 'Агент может конвертировать репозитории' },
+      'settings.alembicAgentBuild.desc': {
+        en: 'Разрешить агенту запускать конвертацию с нуля, она занимает десятки минут. Когда выключено, агент всё равно поднимает серверы, уже имеющиеся на этой машине, и скачивает их из хаба; на странице сборщика конвертация работает как обычно.',
+        ru: 'Разрешить агенту запускать конвертацию с нуля, она занимает десятки минут. Когда выключено, агент всё равно поднимает серверы, уже имеющиеся на этой машине, и скачивает их из хаба; на странице сборщика конвертация работает как обычно.'
+      },
+
+      'settings.alembicHubSearch.label': { en: 'Search the MCP Hub', ru: 'Искать в MCP-хабе' },
+      'settings.alembicHubSearch.desc': {
+        en: 'Before converting a repository, pull its server from the MCP hub (the Docker Hub namespace in .env) when it is there.',
+        ru: 'Перед сборкой сервера по репозиторию скачивать его из MCP-хаба (namespace Docker Hub из .env), если он там есть.'
+      },
+      'settings.alembicHubAutoUpload.label': { en: 'Upload Builds to the MCP Hub', ru: 'Загружать сборки в MCP-хаб' },
+      'settings.alembicHubAutoUpload.desc': {
+        en: 'Push every successful build to the public MCP hub (needs DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in .env).',
+        ru: 'Отправлять каждую успешную сборку в публичный MCP-хаб (нужны DOCKERHUB_USERNAME и DOCKERHUB_TOKEN в .env).'
+      },
+
       'settings.defaultUsername.label': { en: 'Default Username', ru: 'Имя пользователя по умолчанию' },
       'settings.defaultUsername.desc': {
         en: 'Auto-selects user on startup (can also be set via COSCIENTIST_USERNAME in .env).',

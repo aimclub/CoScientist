@@ -213,6 +213,14 @@ def _apply_frontend_settings(frontend: dict) -> None:
     if "mode" in coder:
         web.coder_mode = str(coder["mode"])
 
+    hub = frontend.get("alembicHub", {})
+    if "searchEnabled" in hub:
+        web.alembic_hub_search_enabled = bool(hub["searchEnabled"])
+    if "autoUpload" in hub:
+        web.alembic_hub_auto_upload = bool(hub["autoUpload"])
+    if "agentBuildEnabled" in hub:
+        web.alembic_agent_build_enabled = bool(hub["agentBuildEnabled"])
+
 
 def _settings_payload() -> dict:
     """The frontend ``appSettings`` shape, read back off the config singleton.
@@ -258,6 +266,11 @@ def _settings_payload() -> dict:
             "sandboxUrl": web.sandbox_url,
             "workspaceId": web.coder_workspace_id or "",
             "mode": web.coder_mode,
+        },
+        "alembicHub": {
+            "searchEnabled": web.alembic_hub_search_enabled,
+            "autoUpload": web.alembic_hub_auto_upload,
+            "agentBuildEnabled": web.alembic_agent_build_enabled,
         },
     }
 
