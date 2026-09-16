@@ -689,3 +689,63 @@ def test_work_that_ran_before_any_request_is_not_lost():
     calls = [c["id"] for n in execution_tree(full, "one")["nodes"]
              for c in (n.get("calls") or [])]
     assert calls == ["t:early"]
+
+
+def _a_run_through_its_phases():
+    """A request that frames, searches, computes and then writes up."""
+    return {"nodes": [
+        {"id": "goal:1", "kind": "goal", "turn_id": "one", "label": "ask", "t_start": 0.0},
+        {"id": "a:Orch", "kind": "agent", "turn_id": "one",
+         "executor_agent": "OrchestratorAgent", "t_start": 1.0},
+        {"id": "a:Hyp", "kind": "agent", "turn_id": "one",
+         "executor_agent": "HypothesesAgent", "t_start": 2.0},
+        {"id": "a:Res", "kind": "agent", "turn_id": "one",
+         "executor_agent": "ResearchAgent", "t_start": 3.0},
+        {"id": "a:Coder", "kind": "agent", "turn_id": "one",
+         "executor_agent": "CoderAgent", "t_start": 4.0},
+        {"id": "a:Agg", "kind": "agent", "turn_id": "one",
+         "executor_agent": "ResultAggregatorAgent", "t_start": 5.0},
+    ], "edges": [
+        {"src": "goal:1", "dst": "a:Orch", "type": "caused_by"},
+        {"src": "a:Orch", "dst": "a:Hyp", "type": "delegated_to"},
+        {"src": "a:Orch", "dst": "a:Res", "type": "delegated_to"},
+        {"src": "a:Orch", "dst": "a:Coder", "type": "delegated_to"},
+        {"src": "a:Orch", "dst": "a:Agg", "type": "delegated_to"},
+    ]}
+
+
+def test_a_request_reads_as_the_stretches_it_went_through():
+    from CoScientist.graph.projection import execution_tree
+
+    bands = execution_tree(_a_run_through_its_phases(), "one")["phases"]
+
+    assert [b["phase"] for b in bands] == ["framing", "research", "experiment", "report"]
+    assert [b["label"] for b in bands] == [
+        "постановка", "поиск и данные", "эксперимент", "отчёт"]
+    # Bands run left to right and never overlap.
+    for earlier, later in zip(bands, bands[1:]):
+        assert earlier["x1"] <= later["x0"], (earlier, later)
+
+
+def test_the_orchestrator_does_not_get_a_band_of_its_own():
+    """It conducts every stretch; a band for it would cut the run into slivers."""
+    from CoScientist.graph.projection import execution_tree
+
+    bands = execution_tree(_a_run_through_its_phases(), "one")["phases"]
+
+    assert "orchestrator" not in {b["phase"] for b in bands}
+    # It ran first and introduced the framing, so that is the band it sits in.
+    assert bands[0]["agents"] == 2
+
+
+def test_a_run_of_agents_nobody_classified_gets_no_bands():
+    """Better nothing than a band that means whatever was left over."""
+    from CoScientist.graph.projection import execution_tree
+
+    full = {"nodes": [
+        {"id": "goal:1", "kind": "goal", "turn_id": "one", "label": "ask", "t_start": 0.0},
+        {"id": "a:X", "kind": "agent", "turn_id": "one", "executor_agent": "Mystery",
+         "t_start": 1.0},
+    ], "edges": [{"src": "goal:1", "dst": "a:X", "type": "caused_by"}]}
+
+    assert execution_tree(full, "one")["phases"] == []

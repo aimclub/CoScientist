@@ -400,7 +400,8 @@ def execution_tree(full: Dict[str, Any],
                      key=lambda n: (n.get("t_start") or 0.0, n["level"]))
     _place_in_time(ordered, edges)
     return {"run_id": full.get("run_id"), "nodes": ordered, "edges": edges,
-            "turns": catalogue, "turn_id": chosen}
+            "turns": catalogue, "turn_id": chosen,
+            "phases": _phases_of(ordered)}
 
 
 _AGENTS = ("agent", "agent_call")
@@ -615,6 +616,85 @@ def _borrow_io(nodes: Dict[str, Dict[str, Any]], every: List[Dict[str, Any]],
         if not node.get("output") and answer is not None and answer.get("output"):
             node["output"] = answer["output"]
             node["io_source"] = "request"
+
+
+#: What kind of work an agent does, so a request reads as the stretches it
+#: went through rather than as a row of names. The orchestrator is
+#: deliberately absent: it conducts every stretch and belongs to none, so a
+#: phase of its own would cut the picture into slivers.
+_PHASE_OF_AGENT = {
+    "ContextInitAgent": "framing",
+    "PlannerAgent": "framing",
+    "PlanningPipelineAgent": "framing",
+    "HypothesesAgent": "framing",
+
+    "ResearchAgent": "research",
+    "MedicalAgent": "research",
+    "DatasetCollectorAgent": "research",
+
+    "TaskExecutorAgent": "experiment",
+    "CoderAgent": "experiment",
+    "ExperimentAgent": "experiment",
+    "ExecutorSwitchAgent": "experiment",
+    "FedotAgent": "experiment",
+    "McpBuilderAgent": "experiment",
+    "ToolPipelineAgent": "experiment",
+    "ToolPreparerAgent": "experiment",
+
+    "ResultAggregatorAgent": "report",
+}
+
+#: Shown on the band, in the language the research graph already speaks.
+_PHASE_WORDS = {
+    "framing": "постановка",
+    "research": "поиск и данные",
+    "experiment": "эксперимент",
+    "report": "отчёт",
+}
+
+
+def _phases_of(ordered: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """The stretches a request went through, as bands along the time axis.
+
+    Read off the agents that did the work, in the order they were placed. An
+    agent with no phase of its own — the orchestrator, and anything not in the
+    table — takes the phase of the next agent that has one, since a conductor
+    is introducing what comes next; failing that, the one before.
+    Neighbouring agents of the same phase make one band.
+
+    Given as pixel spans rather than times because the canvas is already laid
+    out: a band that agreed with the clock but not with the cards would frame
+    the wrong ones.
+    """
+    agents = [n for n in ordered
+              if n.get("kind") in _AGENTS and n.get("x") is not None]
+    if not agents:
+        return []
+    agents.sort(key=lambda n: n["x"])
+
+    named = [_PHASE_OF_AGENT.get(str(n.get("executor_agent") or n.get("label") or ""))
+             for n in agents]
+    for i in range(len(named) - 2, -1, -1):
+        if named[i] is None:
+            named[i] = named[i + 1]
+    for i in range(1, len(named)):
+        if named[i] is None:
+            named[i] = named[i - 1]
+    if not any(named):
+        return []
+
+    bands: List[Dict[str, Any]] = []
+    for node, phase in zip(agents, named):
+        if phase is None:
+            continue
+        right = node["x"] + (node.get("card_width") or _CARD_WIDTH)
+        if bands and bands[-1]["phase"] == phase:
+            bands[-1]["x1"] = max(bands[-1]["x1"], right)
+            bands[-1]["agents"] += 1
+        else:
+            bands.append({"phase": phase, "label": _PHASE_WORDS.get(phase, phase),
+                          "x0": node["x"], "x1": right, "agents": 1})
+    return bands
 
 
 def _scope_to_turn(every, all_edges, resolve, chosen):

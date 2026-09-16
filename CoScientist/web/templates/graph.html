@@ -236,6 +236,22 @@
       return `rgba(${v[0]},${v[1]},${v[2]},${a})`; }
 
     // ── execution view styling ────────────────────────────────────────────────
+    // One tint per stretch of a run: enough to tell them apart behind the
+    // cards, never enough to compete with a node's own status colour.
+    const PHASE_FILL = {
+      framing:    "rgba(59,130,246,0.07)",
+      research:   "rgba(56,189,248,0.07)",
+      experiment: "rgba(249,115,22,0.07)",
+      report:     "rgba(34,197,94,0.07)",
+    };
+    const PHASE_EDGE = {
+      framing:    "rgba(59,130,246,0.40)",
+      research:   "rgba(56,189,248,0.40)",
+      experiment: "rgba(249,115,22,0.40)",
+      report:     "rgba(34,197,94,0.40)",
+    };
+    let lastPhases = [];
+
     const STATUS_COLOR = { running:"#f1c40f", success:"#22c55e", failed:"#ef4444", interrupted:"#e67e22", pruned:"#64748b" };
     // Identity fills the node; status rings it. Colouring agents by identity
     // alone made a stuck "running" agent look exactly like a finished one, so
@@ -366,6 +382,31 @@
         physics: { enabled: false },
         interaction: { hover: true, tooltipDelay: 120, navigationButtons: false },
       });
+      // The stretches the request went through, painted behind the cards.
+      // A band is not a node: it says nothing a card does not already say, it
+      // just says where one stretch ended and the next began, which is the
+      // thing you otherwise reconstruct by reading every name in order.
+      network.on("beforeDrawing", ctx => {
+        if (isResearch() || !lastPhases.length) return;
+        const ys = Object.values(nodeData)
+          .map(n => n.y).filter(v => typeof v === "number");
+        if (!ys.length) return;
+        const top = Math.min(...ys) - 90, bottom = Math.max(...ys) + 90;
+        ctx.save();
+        lastPhases.forEach(b => {
+          const pad = 20;
+          ctx.fillStyle = PHASE_FILL[b.phase] || "rgba(148,163,184,0.06)";
+          ctx.fillRect(b.x0 - pad, top, (b.x1 - b.x0) + pad * 2, bottom - top);
+          ctx.strokeStyle = PHASE_EDGE[b.phase] || "rgba(148,163,184,0.25)";
+          ctx.lineWidth = 1;
+          ctx.strokeRect(b.x0 - pad, top, (b.x1 - b.x0) + pad * 2, bottom - top);
+          ctx.fillStyle = PHASE_EDGE[b.phase] || "#94a3b8";
+          ctx.font = "600 22px -apple-system, Segoe UI, sans-serif";
+          ctx.textBaseline = "bottom";
+          ctx.fillText(b.label, b.x0 - pad + 12, top + 34);
+        });
+        ctx.restore();
+      });
       network.on("click", params => {
         if (!params.nodes.length) { closeDetail(); return; }
         selectedId = params.nodes[0];
@@ -421,6 +462,7 @@
         const r = await fetch(url, { cache: "no-store" });
         const g = await r.json(); lastGraph = g;
         const research = isResearch();
+        lastPhases = research ? [] : (g.phases || []);
         // The log is drawn one request at a time; the payload lists the rest.
         const turnWrap = document.getElementById("turnWrap"),
               turnSel = document.getElementById("turn"),
