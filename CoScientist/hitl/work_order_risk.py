@@ -9,13 +9,13 @@ A Work Order is confirmed by risk (see hitl/work_order_tools.py):
 
 Tiers are keyed by the REAL tool names the bindings attach. An unknown tool is
 treated as ``compute``: guessing "read" for a tool nobody classified would let it
-through without a human ever seeing it.
+through without a human ever seeing it. The system's ``internal_tools`` (see
+system.yaml) are never tiered: a Work Order leaves them out of its tools.
 """
 from __future__ import annotations
 
-import re
 from enum import Enum
-from typing import Any, Iterable, Optional, Tuple
+from typing import Any, Iterable
 
 
 class Tier(str, Enum):
@@ -56,18 +56,7 @@ TOOL_TIERS: dict[str, Tier] = {
     "analyze_medical_image": Tier.COMPUTE,
     # graphs / tasks
     "get_active_tasks": Tier.READ,
-    "update_task_status": Tier.READ,
-    "read_research_graph": Tier.READ,
-    "get_graph_history": Tier.READ,
     "get_agents_info": Tier.READ,
-    "research_context_slice": Tier.READ,
-    "research_overview": Tier.READ,
-    "research_provenance": Tier.READ,
-    "research_prior": Tier.READ,
-    "research_triggers": Tier.READ,
-    "research_init": Tier.COMPUTE,
-    "research_set_focus": Tier.COMPUTE,
-    "research_commit": Tier.COMPUTE,
     # sandbox / coder
     "read_file": Tier.READ,
     "list_directory": Tier.READ,
@@ -91,17 +80,11 @@ TOOL_SIDE_EFFECTS: dict[str, SideEffectKind] = {
 }
 
 # Reading the agent's own context — allowed before a Work Order is declared, so
-# the agent can orient itself and plan from what is already known.
+# the agent can orient itself and plan from what is already known. Graph reads
+# are not listed: they are internal tools and pass anyway.
 ORIENTATION_TOOLS = frozenset({
     "get_active_tasks",
-    "read_research_graph",
-    "get_graph_history",
     "get_agents_info",
-    "research_context_slice",
-    "research_overview",
-    "research_provenance",
-    "research_prior",
-    "research_triggers",
     "list_directory",
     "list_sandbox_files",
 })
@@ -123,43 +106,8 @@ def exempt_tools(internal_tools: Iterable[str] = ()) -> frozenset:
     system's ``internal_tools``."""
     return EXEMPT_TOOLS | frozenset(internal_tools)
 
-# Shell commands with an effect beyond the sandbox's scratch work. Order matters
-# only for which kind is reported when a command matches several.
-_BASH_PATTERNS: Tuple[Tuple[re.Pattern, SideEffectKind], ...] = (
-    (re.compile(r"\bgit\s+(?:push|commit)\b"), SideEffectKind.GIT_WRITE),
-    (re.compile(r"\b(?:pip3?|uv\s+pip|conda|mamba|apt(?:-get)?|npm)\s+install\b"),
-     SideEffectKind.PACKAGE_INSTALL),
-    (re.compile(r"\brm\s+-[a-zA-Z]*[rf]"), SideEffectKind.FILE_DELETE),
-    (re.compile(r"\b(?:wget|curl|huggingface-cli\s+download|aria2c)\b"),
-     SideEffectKind.NETWORK_DOWNLOAD),
-    (re.compile(r"\b(?:nohup|sbatch|setsid)\b|&\s*$"), SideEffectKind.LONG_JOB),
-)
-
-_BASH_ARG_KEYS = ("command", "cmd", "script")
-
-
 def tool_tier(tool_name: str) -> Tier:
     return TOOL_TIERS.get(tool_name, Tier.COMPUTE)
-
-
-def _bash_side_effect(args: Any) -> Optional[SideEffectKind]:
-    if not isinstance(args, dict):
-        return None
-    command = next((args[k] for k in _BASH_ARG_KEYS if isinstance(args.get(k), str)), "")
-    for pattern, kind in _BASH_PATTERNS:
-        if pattern.search(command):
-            return kind
-    return None
-
-
-def classify_call(tool_name: str, args: Any) -> Tuple[Tier, Optional[SideEffectKind]]:
-    """Tier and side effect of ONE concrete call (arguments considered)."""
-    kind = TOOL_SIDE_EFFECTS.get(tool_name)
-    if kind is None and tool_name == "execute_bash":
-        kind = _bash_side_effect(args)
-    if kind is not None:
-        return Tier.SIDE_EFFECT, kind
-    return tool_tier(tool_name), None
 
 
 def order_tier(planned_tools: Iterable[str], side_effect_kinds: Iterable[Any]) -> Tier:

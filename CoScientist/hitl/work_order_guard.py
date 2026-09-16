@@ -5,8 +5,7 @@ being a promise the model may forget after the first surprising search result:
 
   * before a contract is declared only orientation reads go through;
   * after a rejection nothing does;
-  * afterwards a call must use a declared tool (calls are counted per tool,
-    but neither a budget nor undeclared side effects are enforced here).
+  * afterwards a call must use a declared tool.
 
 A blocked call is not a dead end: the message tells the agent to amend the
 contract (update_work_order), which puts the change in front of the human.
@@ -17,7 +16,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Optional
 
-from CoScientist.hitl.work_order import load_order, order_key, save_order, usage_key
+from CoScientist.hitl.work_order import load_order, order_key, save_order
 from CoScientist.hitl.work_order_risk import ORIENTATION_TOOLS, exempt_tools
 
 logger = logging.getLogger("CoScientist.hitl.work_order")
@@ -109,24 +108,17 @@ def make_work_order_guard(
                 "and report why the task was not carried out.",
             )
 
-        block = None
-        usage = dict(state.get(usage_key(agent_name)) or {})
-        if tool_name not in order.planned_tools and tool_name not in ORIENTATION_TOOLS:
-            block = _blocked(
-                "undeclared_tool", tool_name,
-                f"BLOCKED: `{tool_name}` is not in your approved work order. If you "
-                f"really need it, call update_work_order(reason=..., "
-                f"add_tools=[\"{tool_name}\"]) — or continue with the planned tools.",
-            )
-
-        if block is not None:
-            logger.info("[%s] work order guard: %s %s", agent_name, block["reason"], tool_name)
-            await _record_deviation(context, order, block, actual_args)
-            return block
-
-        usage[tool_name] = usage.get(tool_name, 0) + 1
-        state[usage_key(agent_name)] = usage
-        return None
+        if tool_name in order.planned_tools or tool_name in ORIENTATION_TOOLS:
+            return None
+        block = _blocked(
+            "undeclared_tool", tool_name,
+            f"BLOCKED: `{tool_name}` is not in your approved work order. If you "
+            f"really need it, call update_work_order(reason=..., "
+            f"add_tools=[\"{tool_name}\"]) — or continue with the planned tools.",
+        )
+        logger.info("[%s] work order guard: %s %s", agent_name, block["reason"], tool_name)
+        await _record_deviation(context, order, block, actual_args)
+        return block
 
     return work_order_guard
 
@@ -145,8 +137,6 @@ def make_reset_work_order(agent_name: str):
         state = context.state
         if state.get(order_key(agent_name)) is not None:
             state[order_key(agent_name)] = None
-        if state.get(usage_key(agent_name)):
-            state[usage_key(agent_name)] = {}
         return None
 
     return reset_work_order

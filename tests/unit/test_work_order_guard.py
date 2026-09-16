@@ -7,7 +7,7 @@ import pytest
 
 from CoScientist.config import get_settings
 from CoScientist.hitl.models import HITLAction, HITLResponse
-from CoScientist.hitl.work_order import load_order, order_key, usage_key
+from CoScientist.hitl.work_order import load_order, order_key
 from CoScientist.hitl.work_order_guard import make_reset_work_order, make_work_order_guard
 from CoScientist.hitl.work_order_tools import WorkOrderToolset
 
@@ -93,11 +93,10 @@ def test_before_declaring_only_orientation_protocol_and_internal_tools_pass(env)
     assert "declare_work_order" in blocked["message"]
 
 
-def test_declared_tools_pass_and_are_counted(env):
+def test_declared_tools_pass(env):
     _declare(env)
     assert _call(env, "execute_bash", {"command": "python fetch.py"}) is None
     assert _call(env, "execute_bash", {"command": "wget https://x/y.gz"}) is None
-    assert env.ctx.state[usage_key(AGENT)] == {"execute_bash": 2}
 
 
 def test_undeclared_tool_is_blocked_with_an_amendment_hint_and_recorded(env):
@@ -115,7 +114,6 @@ def test_undeclared_tool_is_blocked_with_an_amendment_hint_and_recorded(env):
 def test_declared_tool_runs_commands_without_side_effect_blocks(env):
     _declare(env)
     assert _call(env, "execute_bash", {"command": "git push origin main"}) is None
-    assert env.ctx.state.get(usage_key(AGENT), {}).get("execute_bash") == 1
 
 
 def test_after_an_approved_amendment_the_call_goes_through(env):
@@ -141,7 +139,6 @@ def test_reset_starts_each_delegation_without_a_contract(env):
     reset(callback_context=env.ctx)
 
     assert env.ctx.state[order_key(AGENT)] is None
-    assert env.ctx.state[usage_key(AGENT)] == {}
     assert _call(env, "execute_bash", {"command": "ls"})["reason"] == "no_work_order"
 
 
@@ -149,8 +146,6 @@ def test_state_is_written_through_top_level_keys(env):
     """AgentTool forwards only state deltas; an in-place nested mutation is lost."""
     _declare(env)
     env.ctx.state.writes.clear()
-    _call(env, "execute_bash", {"command": "ls"})
-    assert usage_key(AGENT) in env.ctx.state.writes
     _call(env, "tavily_search")
     assert order_key(AGENT) in env.ctx.state.writes
 
@@ -159,4 +154,3 @@ def test_internal_tools_pass_an_approved_order_without_being_declared(env):
     _declare(env)
     assert _call(env, "sleep_tool") is None
     assert _call(env, "update_task_status") is None
-    assert env.ctx.state.get(usage_key(AGENT), {}).get("sleep_tool") is None

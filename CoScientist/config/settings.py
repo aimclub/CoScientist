@@ -308,7 +308,7 @@ class WebSettings(BaseModel):
     hitl_enabled: bool = _os.getenv("HITL__ENABLED", "false").lower() in ("true", "1", "yes")
     hitl_auto_approve_timeout: int = int(_os.getenv("HITL_AUTO_APPROVE_TIMEOUT", _os.getenv("HITL__AUTO_APPROVE_TIMEOUT", _os.getenv("HITL_TIMEOUT_SECONDS", "300"))))
     # Work Order: executor agents declare a contract (goal, assumptions, steps,
-    # tools, side effects, budget) before acting. Inert unless HITL is on.
+    # tools, side effects) before acting. Inert unless HITL is on.
     work_order_enabled: bool = _os.getenv("WORK_ORDER__ENABLED", "true").lower() in ("true", "1", "yes")
     # Veto window for compute-tier contracts: auto-approved after this many seconds.
     # -1 (default) disables auto-approval — the contract waits for the human.

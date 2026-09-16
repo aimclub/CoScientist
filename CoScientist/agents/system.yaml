@@ -331,7 +331,7 @@ agents:
       after_model: [expand_link_refs, guard_unknown_tools]
     # Every agent asks before acting on a decision; inert until HITL__ENABLED.
     hitl: true
-    # Declares a Work Order (queries, source criteria, budget) before searching.
+    # Declares a Work Order (queries, source criteria) before searching.
     work_order: true
     a2a:
       key: research

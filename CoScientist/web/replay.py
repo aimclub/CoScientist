@@ -286,7 +286,6 @@ class ReplaySession:
                 ],
                 "planned_tools": args.get("planned_tools") or [],
                 "side_effects": args.get("side_effects") or [],
-                "budget": args.get("budget") or {},
                 "expected_outcome": cls._payload(args.get("expected_outcome") or ""),
                 "revision": 1,
             }

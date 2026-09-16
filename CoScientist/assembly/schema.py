@@ -17,7 +17,7 @@ The YAML declares every agent of the system in one place. Per agent:
   hitl:         whether the agent uses human-in-the-loop (tools + prompt section
                 for llm agents, review-loop handler for session agents)
   work_order:   before acting, the agent declares a Work Order (goal, assumptions,
-                steps, tools, side effects, budget) for the human to review, and
+                steps, tools, side effects) for the human to review, and
                 a guard keeps it inside the approved contract (llm agents with
                 hitl only; see CoScientist/hitl/work_order.py)
   critic:       an LLM critic reviews the agent's output once and it rewrites

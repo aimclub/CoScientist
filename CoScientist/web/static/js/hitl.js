@@ -582,7 +582,6 @@ function workOrderBody(order, rid, interactive) {
   }).join('');
   const effects = (order.side_effects || []).map(e =>
     woChip((e.kind || e) + (e.detail ? ': ' + e.detail : ''), WO_TIER_STYLE.side_effect)).join(' ');
-  const budget = Object.entries(order.budget || {}).map(([k, v]) => woChip(`${k} ≤ ${v}`)).join(' ');
   const tools = woToolChips(order.planned_tools, order.internal_tools);
   // Only internal tools: the whole section hides with them.
   const toolsOnlyInternal = !(order.planned_tools || []).length;
@@ -598,7 +597,6 @@ function workOrderBody(order, rid, interactive) {
       ? `<ol data-wo-steps class="flex flex-col gap-1.5">${order.steps.map(woStepRow).join('')}</ol>` : '')}
           ${tools ? `<div class="${toolsOnlyInternal ? 'wo-internal' : ''}">${woSection('workOrder.tools', `<div class="flex flex-wrap gap-1">${tools}</div>`)}</div>` : ''}
           ${woSection('workOrder.sideEffects', effects ? `<div class="flex flex-wrap gap-1">${effects}</div>` : '')}
-          ${woSection('workOrder.budget', budget ? `<div class="flex flex-wrap gap-1">${budget}</div>` : '')}
           ${woSection('workOrder.expected', order.expected_outcome ? `<p>${escHtml(order.expected_outcome)}</p>` : '')}
           ${woSection('workOrder.fallback', order.fallback ? `<p>${escHtml(order.fallback)}</p>` : '')}
           <div data-wo-deviations class="mt-2 flex flex-col gap-1"></div>
@@ -611,8 +609,6 @@ function workOrderDiff(ctx) {
   (diff.added_tools || []).forEach(tn => rows.push('+ ' + tn));
   (diff.added_side_effects || []).forEach(e => rows.push('+ ' + e.kind + (e.detail ? ': ' + e.detail : '')));
   (diff.added_steps || []).forEach(st => rows.push('+ ' + st.id + '. ' + st.title));
-  Object.entries(diff.budget_changes || {}).forEach(([k, v]) =>
-    rows.push(`~ ${k}: ${v.from == null ? '∞' : v.from} → ${v.to}`));
   const reason = ctx.reason ? woSection('workOrder.reason', `<p class="text-on-surface">${escHtml(ctx.reason)}</p>`) : '';
   const changes = rows.length ? woSection('workOrder.added',
     `<pre class="font-mono text-[11px] text-secondary whitespace-pre-wrap bg-surface-container-high p-2 rounded border border-outline-variant/10">${escHtml(rows.join('\n'))}</pre>`) : '';

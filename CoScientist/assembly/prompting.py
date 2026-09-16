@@ -39,8 +39,10 @@ Two ways to involve them:
   honor whichever they provide. Returns {selected, approved, feedback}.
 
 Pass your own name as `agent_name`. If a request is denied, don't retry the same
-thing — adjust using the feedback.
+thing — adjust using the feedback."""
 
+# Agents with a Work Order get their plan approved through it instead.
+_HITL_WHEN_TO_ASK = """\
 **When to ask.** State your intended course of action and get it approved BEFORE
 you carry it out — not only for expensive or irreversible steps. Concretely, ask
 whenever you have decided:
@@ -55,6 +57,13 @@ Ask once per decision, not once per tool call: a plan of action is one question,
 and the calls that carry it out are not. Do not ask about routine reads, or
 about anything a previous answer in this session already settled — a human who
 is asked to confirm the obvious stops reading the questions."""
+
+_HITL_WHEN_TO_ASK_WORK_ORDER = """\
+**When to ask.** Your plan is approved through the work order below — do not ask
+for it separately. Ask only about decisions that come up along the way and the
+order did not settle (e.g. which of several found options to take, whether a
+result is good enough to hand on). Do not ask about routine reads, or about
+anything a previous answer in this session already settled."""
 
 
 _HITL_RESEARCH_COOP = """\
@@ -126,9 +135,7 @@ Protocol:
 
 Keep the order honest and specific: a human who reads "search the literature"
 learns nothing; "искать в PubMed РКИ по X с 2015 года, без описаний клинических
-случаев" is something they can correct. This work order replaces separate approval requests
-for the plan itself — use `request_approval` only for decisions that come up
-along the way."""
+случаев" is something they can correct."""
 
 _WORK_ORDER_HINTS = (
     (("websearch",),
@@ -254,7 +261,9 @@ class PromptContext:
     def render_hitl(self) -> str:
         if not self.hitl_attached:
             return ""
-        section = _HITL_SECTION
+        section = _HITL_SECTION + "\n\n" + (
+            _HITL_WHEN_TO_ASK_WORK_ORDER if self.work_order_attached else _HITL_WHEN_TO_ASK
+        )
         # Agents that also write the research graph get the co-building protocol
         # (validate hypotheses with the human; a hypothesis needs acceptance
         # criteria before verification — ask for them if the human didn't give any).

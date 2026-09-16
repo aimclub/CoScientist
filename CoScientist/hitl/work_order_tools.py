@@ -12,7 +12,7 @@ How a contract is confirmed depends on its risk tier (work_order_risk.py):
   side_effect  a HITL request under the operator's global HITL timeout.
 
 With HITL or Work Orders switched off, the contract is still recorded (the guard
-keeps working as a budget/scope check) and approved without asking anyone.
+keeps working as a scope check) and approved without asking anyone.
 """
 from __future__ import annotations
 
@@ -34,7 +34,6 @@ from CoScientist.hitl.work_order import (
     load_order,
     render_work_order,
     save_order,
-    usage_key,
 )
 from CoScientist.hitl.work_order_risk import (
     EXEMPT_TOOLS,
@@ -340,7 +339,6 @@ class WorkOrderToolset:
         order.status = "approved"
         order.operator_notes = feedback
         save_order(state, order)
-        state[usage_key(self.agent_name)] = {}
 
         result: Dict[str, Any] = {
             "status": "approved",

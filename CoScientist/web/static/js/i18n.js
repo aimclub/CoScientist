@@ -516,7 +516,6 @@ const i18n = {
   'workOrder.steps': { en: 'Steps', ru: 'Шаги' },
   'workOrder.tools': { en: 'Tools', ru: 'Инструменты' },
   'workOrder.sideEffects': { en: 'Side effects', ru: 'Побочные эффекты' },
-  'workOrder.budget': { en: 'Budget', ru: 'Бюджет' },
   'workOrder.expected': { en: 'Expected outcome', ru: 'Ожидаемый результат' },
   'workOrder.fallback': { en: 'If it fails', ru: 'Если не получится' },
   'workOrder.reason': { en: 'Reason', ru: 'Обоснование' },
@@ -535,8 +534,6 @@ const i18n = {
   'workOrder.reason.no_work_order': { en: 'no work order declared yet', ru: 'план работы ещё не объявлен' },
   'workOrder.reason.rejected': { en: 'work order was rejected', ru: 'план работы отклонён' },
   'workOrder.reason.undeclared_tool': { en: 'tool not in the work order', ru: 'инструмента нет в плане работы' },
-  'workOrder.reason.budget_exceeded': { en: 'budget used up', ru: 'бюджет исчерпан' },
-  'workOrder.reason.undeclared_side_effect': { en: 'undeclared side effect', ru: 'незаявленный побочный эффект' },
 
   // ── HITL research-frame form (rendered at runtime, keyed by currentLang) ──
   'hitl.form.sidebarTitle': { en: 'Research Frame', ru: 'Рамка исследования' },

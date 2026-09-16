@@ -1,8 +1,8 @@
 """Work Order — the contract an executor agent declares before it acts.
 
 Before its first external action an agent states WHAT it is going to do and on
-WHICH assumptions: goal, done criteria, assumptions, steps, tools, side effects,
-budget and the outcome it expects. The human reviews that contract (by risk
+WHICH assumptions: goal, done criteria, assumptions, steps, tools and the
+outcome it expects (side effects follow from the tools). The human reviews that contract (by risk
 tier, see work_order_risk.py) and the guard (work_order_guard.py) then keeps
 the agent inside it. Needing more is not forbidden — it is an amendment the
 agent must justify, and the human sees it as a diff.
@@ -25,10 +25,6 @@ OrderStatus = Literal["pending", "approved", "rejected"]
 
 def order_key(agent_name: str) -> str:
     return f"work_order:{agent_name}"
-
-
-def usage_key(agent_name: str) -> str:
-    return f"work_order_usage:{agent_name}"
 
 
 class WorkStep(BaseModel):
@@ -64,8 +60,6 @@ class WorkOrder(BaseModel):
     # Internal tools the agent named anywhere in the order (see WorkStep).
     internal_tools: List[str] = Field(default_factory=list)
     side_effects: List[SideEffect] = Field(default_factory=list)
-    # tool name -> max calls; a tool absent from the budget is not capped.
-    budget: Dict[str, int] = Field(default_factory=dict)
     expected_outcome: str = ""
     fallback: str = ""
     tier: Tier = Tier.READ
@@ -129,8 +123,6 @@ def render_work_order(order: WorkOrder) -> str:
         lines.append("Side effects: " + "; ".join(
             f"{s.kind.value}" + (f" ({s.detail})" if s.detail else "") for s in order.side_effects
         ))
-    if order.budget:
-        lines.append("Budget: " + ", ".join(f"{k} ≤ {v}" for k, v in order.budget.items()))
     if order.expected_outcome:
         lines.append(f"Expected outcome: {order.expected_outcome}")
     if order.fallback:
@@ -149,9 +141,4 @@ def diff_work_orders(old: WorkOrder, new: WorkOrder) -> Dict[str, Any]:
             if (s.kind, s.detail) not in old_effects
         ],
         "added_steps": [s.model_dump(mode="json") for s in new.steps if s.id not in old_steps],
-        "budget_changes": {
-            tool: {"from": old.budget.get(tool), "to": limit}
-            for tool, limit in new.budget.items()
-            if old.budget.get(tool) != limit
-        },
     }

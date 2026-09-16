@@ -7,7 +7,7 @@ import pytest
 
 from CoScientist.config import get_settings
 from CoScientist.hitl.models import HITLAction, HITLResponse
-from CoScientist.hitl.work_order import load_order, usage_key
+from CoScientist.hitl.work_order import load_order
 from CoScientist.hitl.work_order_tools import WorkOrderToolset
 
 AGENT = "DatasetCollectorAgent"
@@ -154,7 +154,6 @@ def test_approval_carries_rejected_assumptions_and_operator_notes(hitl_on):
     assert result["operator_notes"] == "Use only pChEMBL values"
     order = load_order(ctx.state, AGENT)
     assert [a.rejected for a in order.assumptions] == [False, True]
-    assert ctx.state[usage_key(AGENT)] == {}
 
 
 def test_revise_asks_for_a_new_declaration_and_records_nothing(hitl_on):
