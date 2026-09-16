@@ -1114,3 +1114,60 @@ def test_what_the_headline_says_is_not_repeated_under_details(store):
     attrs = {"confirmation_criteria": "валидность ≥ 0.9", "reproducibility": "2 прогона"}
     headline = _headline("ConfirmationCriteria", attrs)
     assert "confirmation_criteria" not in _fields(attrs, headline, "ConfirmationCriteria")
+
+
+def test_the_orchestrator_can_say_why_a_branch_was_left_untested(store):
+    """The triggers tell it to; the store used to refuse.
+
+    `study_open` ends with "commit attrs.not_tested_reason saying why the
+    verdict already obtained makes testing it unnecessary" — and the
+    orchestrator, the only agent that reads triggers, could not write that
+    field on a Hypothesis. So the study stayed open, and the run learned to
+    answer that closing it was somebody else's job and not critical anyway.
+    """
+    _init(store)
+    r = store.commit(source="HypothesesAgent", nodes=[
+        {"type": "Hypothesis", "attrs": {"formulation": "H one"}},
+        {"type": "Hypothesis", "attrs": {"formulation": "H two"}},
+    ])
+    assert r.ok, r.errors
+    backlog = r.committed["nodes"][1]["id"]
+
+    r2 = store.commit(
+        source="OrchestratorAgent",
+        nodes=[{"id": backlog, "attrs": {
+            "not_tested_reason": "H1 подтверждена; проверять эту ветку незачем"}}],
+    )
+    assert r2.ok, r2.errors
+    node = next(n for n in store.full()["nodes"] if n["id"] == backlog)
+    assert node["attrs"]["not_tested_reason"].startswith("H1 подтверждена")
+
+
+def test_that_grant_does_not_open_the_rest_of_the_hypothesis(store):
+    """One field, not the node: the formulation stays with the agent that owns it."""
+    _init(store)
+    r = store.commit(source="HypothesesAgent", nodes=[
+        {"type": "Hypothesis", "attrs": {"formulation": "H one"}}])
+    hid = r.committed["nodes"][0]["id"]
+
+    denied = store.commit(
+        source="OrchestratorAgent",
+        nodes=[{"id": hid, "attrs": {"formulation": "rewritten"}}])
+    assert not denied.ok
+    assert "not_tested_reason" in " ".join(denied.errors), denied.errors
+
+    # Nor smuggled in beside a field it may write.
+    mixed = store.commit(
+        source="OrchestratorAgent",
+        nodes=[{"id": hid, "attrs": {"not_tested_reason": "ok", "priority": "high"}}])
+    assert not mixed.ok
+
+
+def test_the_prompt_tells_the_agent_about_the_field_it_may_write():
+    """Prompt and enforcement come from one table, so neither can drift."""
+    from CoScientist.graph.research import schema
+
+    summary = schema.permitted_summary("OrchestratorAgent")
+    assert any("not_tested_reason" in line for line in summary["update_attrs"]), summary
+    validator = schema.permitted_summary("ValidatorAgent")
+    assert any("inconclusive_reason" in line for line in validator["update_attrs"])

@@ -1015,15 +1015,23 @@ class ResearchGraphStore:
                     f"{self._ids_hint()}"]
         ntype = self._g.nodes[nid].get("type")
         perm = schema.AGENT_PERMISSIONS.get(source)
-        if perm is None or (ntype not in perm.update_attrs
-                            and ntype not in perm.create):
-            allowed = ", ".join(sorted(perm.update_attrs | perm.create)) if perm else "none"
-            return [f"nodes[{i}]: agent '{source}' may not update attrs of "
-                    f"{ntype} nodes (yours: {allowed})."]
         attrs = draft.get("attrs")
         if not isinstance(attrs, dict) or not attrs:
             return [f"nodes[{i}]: an attrs object with the fields to merge is "
                     f"required to update '{nid}'."]
+        # A role that does not own the node may still owe it one field — the
+        # reason a branch was left untested, what the evidence failed to
+        # settle. Those are granted one (type, attribute) at a time, and only
+        # a merge confined to them gets through this way.
+        granted = {a for t, a in (perm.update_fields if perm else ()) if t == ntype}
+        owns_type = perm is not None and (ntype in perm.update_attrs
+                                          or ntype in perm.create)
+        if not owns_type and not (granted and set(attrs) <= granted):
+            allowed = ", ".join(sorted(perm.update_attrs | perm.create)) if perm else "none"
+            if granted:
+                allowed += f"; on {ntype} only attrs.{', attrs.'.join(sorted(granted))}"
+            return [f"nodes[{i}]: agent '{source}' may not update attrs of "
+                    f"{ntype} nodes (yours: {allowed})."]
         if "subtype" in attrs:
             attrs = {**attrs, "subtype": schema.normalize_token(str(attrs["subtype"]))}
         merges.append({"id": nid, "attrs": attrs})
