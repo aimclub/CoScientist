@@ -90,9 +90,10 @@ def _download_link(uri: str) -> Optional[str]:
 
 
 async def format_results(tool_context: ToolContext) -> Dict[str, Any]:
-    """Collect every figure and data table this run produced into the report
-    folder and return markdown blocks (image embeds + tables) to embed verbatim
-    in the final report. Call this FIRST, before writing the report."""
+    """Collect every figure, data table and downloadable file this run produced
+    into the report folder and return markdown blocks (image embeds, tables,
+    download links) to embed verbatim in the final report. Call this FIRST,
+    before writing the report."""
     state = _state_to_dict(getattr(tool_context, "state", {}))
     session_id = _session_id(tool_context)
     cfg = ReportConfig.from_mapping(state.get("report_config"))
@@ -127,14 +128,15 @@ async def format_results(tool_context: ToolContext) -> Dict[str, Any]:
         synced_files=synced,
     )
     logger.info(
-        "format_results: session=%s figures=%d tables=%d",
-        session_id, len(result["figures"]), len(result["tables"]),
+        "format_results: session=%s figures=%d tables=%d files=%d",
+        session_id, len(result["figures"]), len(result["tables"]), len(result["files"]),
     )
     return {
         "status": "success",
         "report_dir": result["report_dir"],
         "figures_count": len(result["figures"]),
         "tables_count": len(result["tables"]),
+        "files_count": len(result["files"]),
         "formatted_markdown": result["blocks_markdown"],
     }
 

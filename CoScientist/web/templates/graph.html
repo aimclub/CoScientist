@@ -2,8 +2,9 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>CoScientist — Research Graph</title>
+  <title data-i18n="graph.title">CoScientist — Research Graph</title>
   <script src="/static/vis-network.min.js"></script>
+  <script src="/static/js/i18n.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
   <style>
@@ -143,22 +144,22 @@
 </head>
 <body>
   <div id="bar">
-    <span class="brand">CoScientist <span class="dot">◆</span> Graph</span>
-    <label>view
+    <span class="brand">CoScientist <span class="dot">◆</span> <span data-i18n="graph.brand">Graph</span></span>
+    <label><span data-i18n="graph.view.label">view</span>
       <select id="view">
-        <option value="research">research</option>
-        <option value="slide">research · slide</option>
-        <option value="execution">execution log</option>
+        <option value="research" data-i18n="graph.view.research">research</option>
+        <option value="slide" data-i18n="graph.view.slide">research · slide</option>
+        <option value="execution" data-i18n="graph.view.execution">execution log</option>
       </select>
     </label>
     <label id="turnWrap" style="display:none"><span id="turnLabel">request</span>
       <select id="turn" style="max-width:340px"></select>
     </label>
-    <label><input type="checkbox" id="auto" checked /> live</label>
-    <button id="refresh">↻</button>
+    <label><input type="checkbox" id="auto" checked /> <span data-i18n="graph.live">live</span></label>
+    <button id="refresh" data-i18n-title="graph.refresh">↻</button>
     <span class="spacer"></span>
-    <span id="status">connecting…</span>
-      <a id="totrace" href="/trace" style="margin-left:auto;background:var(--surface2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:5px 9px;font-size:12px;text-decoration:none">← session trace</a>
+    <span id="status" data-i18n="graph.connecting">connecting…</span>
+      <a id="totrace" href="/trace" style="margin-left:auto;background:var(--surface2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:5px 9px;font-size:12px;text-decoration:none" data-i18n="graph.backTrace">← session trace</a>
   </div>
 
   <div id="head">
@@ -219,7 +220,11 @@
       relates_to:"relates to", applies_to:"applies to", via:"via" };
     // The server now names the type and the status in the words a scientist
     // uses; the client keeps its own table only as a fallback for older data.
-    const rTypeName = n => n.type_word || R_TYPE_NAME[n.kind] || n.kind || "";
+    const rTypeName = n => {
+      if (n.type_word) return n.type_word;
+      const key = "graph.type." + n.kind;
+      return t(key, R_TYPE_NAME[n.kind] || n.kind || "");
+    };
     const rStatusWord = n => n.status_word || String(n.status || "").replace(/_/g, " ");
     const RESEARCH_KINDS = new Set(Object.keys(R_LEVEL));
     // What the research graph draws: the scientific record and nothing else.
@@ -292,9 +297,9 @@
       const meta = metaOf(n);
       const tail = meta ? "\n" + meta : "";
       if (n.kind === "goal")
-        return "❯ " + String(n.label || "request").slice(0, 90) + tail;
+        return "❯ " + String(n.label || t('graph.detail.request')).slice(0, 90) + tail;
       if (n.kind === "result")
-        return "✔ answer" + tail;
+        return "✔ " + t('graph.detail.answer') + tail;
       if (n.kind === "agent" || n.kind === "agent_call") {
         // Numbered in the order the stages ran; an agent that ran more than
         // once in the request says which run this is, so a loop reads as one.
@@ -303,8 +308,8 @@
         const calls = Array.isArray(n.calls) ? n.calls.length : 0;
         const name = String(n.executor_agent || n.label || "").slice(0, 30);
         return (n.stage ? n.stage + ". " : "") + name
-          + (n.runs > 1 ? "  (run " + n.run + " of " + n.runs + ")" : "") + tail
-          + (calls ? "\n🛠 " + calls + (calls === 1 ? " call" : " calls") : "");
+          + (n.runs > 1 ? "  (" + t('graph.detail.runOf', { run: n.run, runs: n.runs }) + ")" : "") + tail
+          + (calls ? "\n🛠 " + t('graph.count.calls', { count: calls }) : "");
       }
       return String(n.label || n.id || "").slice(0, 30) + tail;
     }
@@ -345,14 +350,15 @@
       const by = n.executor_agent ? esc(shortAgent(n.executor_agent)) : "";
       // The footer is what makes a verdict checkable without opening the logs:
       // who recorded it, and how many tool calls it came from.
-      const foot = [by, calls ? `🛠️ ${calls} call${calls > 1 ? "s" : ""}` : ""]
+      const foot = [by, calls ? `🛠️ ${t('graph.count.calls', { count: calls })}` : ""]
         .filter(Boolean).join("  ·  ");
       return head + "\n" + body + (foot ? `\n<i>${foot}</i>` : "");
     }
     const shortAgent = a => String(a).replace(/Agent$/, "");
-    const titleOf = n => [ "type: "+(n.kind||""),
-      n.executor_agent?"source: "+n.executor_agent:"", "status: "+(n.status||""),
-      Array.isArray(n.calls) && n.calls.length ? "tool calls: " + n.calls.length : "",
+    const titleOf = n => [ t('graph.tooltip.type', { kind: n.kind || "" }),
+      n.executor_agent ? t('graph.tooltip.source', { agent: n.executor_agent }) : "",
+      t('graph.tooltip.status', { status: n.status || "" }),
+      Array.isArray(n.calls) && n.calls.length ? t('graph.tooltip.toolCalls', { count: n.calls.length }) : "",
       n.output?String(n.output).slice(0,300):"" ].filter(Boolean).join("\n");
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -442,7 +448,7 @@
         const userId = params.get("user_id") || "";
         const sessionId = params.get("session_id") || "";
         if (!userId || !sessionId) {
-          throw new Error("Open the graph from an active CoScientist session.");
+          throw new Error(t('graph.noSession'));
         }
         // Slide view is a server-rendered SVG, not a node-link canvas.
         const netBox = document.getElementById("net"), slideBox = document.getElementById("slide");
@@ -470,14 +476,15 @@
         const choices = research
           ? (g.studies || []).map(x => ({
               id: x.study_id,
-              text: (x.live ? "live · " : "archived · ") + (x.label || "study")
+              text: (x.live ? t('graph.choice.live') + " · " : t('graph.choice.archived') + " · ")
+                    + (x.label || t('graph.choice.study'))
                     + ` (${x.node_count})` }))
-          : (g.turns || []).map((t, i) => ({
-              id: t.turn_id, text: `${i + 1}. ${t.prompt || "request"}` }));
+          : (g.turns || []).map((turn, i) => ({
+              id: turn.turn_id, text: `${i + 1}. ${turn.prompt || t('graph.turn.request')}` }));
         const current = research ? g.study_id : g.turn_id;
         if (choices.length) {
           turnWrap.style.display = "";
-          turnLabel.textContent = research ? "study" : "request";
+          turnLabel.textContent = research ? t('graph.turn.study') : t('graph.turn.request');
           const want = choices.map(c => c.id).join("|");
           if (turnSel.dataset.keys !== want) {
             turnSel.dataset.keys = want;
@@ -562,7 +569,8 @@
           if (seenEdges.has(id) || !e.src || !e.dst) return;
           seenEdges.add(id);
           // human-readable edge label ("tested by", "criterion for", …) in research
-          const rlabel = research ? (R_EDGE_NAME[e.type] || e.type || "") : (e.type || "");
+          const ekey = "graph.edge." + e.type;
+          const rlabel = research ? t(ekey, R_EDGE_NAME[e.type] || e.type || "") : (e.type || "");
           const edge = { id, from:e.src, to:e.dst, label: e.provenance ? "" : rlabel };
           if (e.synthetic) { edge.color={color:"#2c313a",highlight:"#3a4150"}; edge.dashes=true; edge.width=1; edge.arrows=""; edge.label=""; }
           else if (research) { const c=R_EDGE[e.type];
@@ -578,17 +586,16 @@
         let age = "";
         if (research && g.updated_at) {
           const mins = (Date.now() / 1000 - g.updated_at) / 60;
-          age = " · last written "
-            + (mins < 2 ? "just now"
-             : mins < 90 ? Math.round(mins) + " min ago"
-             : mins < 60 * 36 ? Math.round(mins / 60) + " h ago"
-             : new Date(g.updated_at * 1000).toLocaleString());
+          age = mins < 2 ? t('graph.age.justNow')
+             : mins < 90 ? t('graph.age.min', { mins: Math.round(mins) })
+             : mins < 60 * 36 ? t('graph.age.hours', { hours: Math.round(mins / 60) })
+             : t('graph.age.date', { date: new Date(g.updated_at * 1000).toLocaleString() });
         }
-        document.getElementById("status").textContent =
-          (g.nodes||[]).filter(n=>!hidden.has(n.id)).length + " nodes · " +
-          (g.edges||[]).filter(e=>!(hidden.has(e.src)||hidden.has(e.dst))).length
-          + " edges" + age;
-      } catch (err) { document.getElementById("status").textContent = "error: " + err; }
+        document.getElementById("status").textContent = t('graph.status', {
+          nodes: (g.nodes||[]).filter(n=>!hidden.has(n.id)).length,
+          edges: (g.edges||[]).filter(e=>!(hidden.has(e.src)||hidden.has(e.dst))).length
+        }) + age;
+      } catch (err) { document.getElementById("status").textContent = t('graph.error', { error: err }); }
     }
 
     // ── header ────────────────────────────────────────────────────────────────
@@ -619,23 +626,23 @@
       // Only shown when there is a trace to show: a heading followed by "no
       // tool-call trace captured" is a line of furniture on every other card.
       const provHtml = (n.kind === "evidence" && prov.length)
-        ? `<div class="k">provenance — produced by</div>` + prov.map(p => {
-                const jump = p.exec_id ? ` onclick="jumpToExecution('${esc(String(p.exec_id))}')" title="open this call in the execution log"` : "";
-                return `<div class="prov"${jump}><span class="tool">🛠️ ${esc(p.tool||"call")}</span>`
-                  + (p.exec_id ? `<span class="jump">↗ execution log</span>` : "")
+        ? `<div class="k">${t('graph.detail.provenance')}</div>` + prov.map(p => {
+                const jump = p.exec_id ? ` onclick="jumpToExecution('${esc(String(p.exec_id))}')" title="${esc(t('graph.detail.openInLog'))}"` : "";
+                return `<div class="prov"${jump}><span class="tool">🛠️ ${esc(p.tool||t('graph.detail.call'))}</span>`
+                  + (p.exec_id ? `<span class="jump">${esc(t('graph.detail.execLog'))}</span>` : "")
                   + (p.result ? `<div class="res">${esc(p.result)}</div>` : "") + `</div>`;
               }).join("")
         : "";
       document.getElementById("detail").innerHTML =
         `<div class="dhead"><span class="close" onclick="closeDetail()">✕</span>`
         + `<h3>${R_ICON[n.kind]||"•"} ${esc(rTypeName(n))}</h3>`
-        + `<div class="sub">${esc(n.id)}${n.executor_agent?" · by "+esc(n.executor_agent):""}</div>`
+        + `<div class="sub">${esc(n.id)}${n.executor_agent ? esc(" · " + t('graph.detail.by', { agent: n.executor_agent })) : ""}</div>`
         + `<span class="badge" style="background:${rgba(st.c,.18)};color:${st.c};border:1px solid ${st.c}">${st.g} ${esc(rStatusWord(n))}</span></div>`
         + `<div class="dbody">`
         // The node's own sentence first: the panel used to open on a list of
         // attributes, so the thing the node actually says was somewhere in it.
-        + (n.label ? `<div class="k">what this says</div><pre>${esc(n.label)}</pre>` : "")
-        + (rows ? `<div class="k">details</div>${rows}` : "")
+        + (n.label ? `<div class="k">${t('graph.detail.says')}</div><pre>${esc(n.label)}</pre>` : "")
+        + (rows ? `<div class="k">${t('graph.detail.details')}</div>${rows}` : "")
         + provHtml + `</div>`;
       document.getElementById("detail").style.display = "block";
     }
@@ -712,11 +719,12 @@
       const m = typeof value === "string" ? value.match(CUT_MARK) : null;
       if (m) {
         const kept = value.length - m[0].length;
-        return `<div class="empty" style="margin-top:6px">recorded up to ${kept.toLocaleString()} characters · `
-          + `${Number(m[1]).toLocaleString()} more were not kept</div>`;
+        return `<div class="empty" style="margin-top:6px">`
+          + esc(t('graph.detail.truncated', { kept: kept.toLocaleString(), dropped: Number(m[1]).toLocaleString() }))
+          + `</div>`;
       }
       // Cut by a recorder that left no marker: only the repair says so.
-      return repaired ? `<div class="empty" style="margin-top:6px">recorded value was cut short · shown up to the last complete field</div>` : "";
+      return repaired ? `<div class="empty" style="margin-top:6px">${esc(t('graph.detail.cutShort'))}</div>` : "";
     }
     // Bookkeeping fields nobody reads, and values already said once.
     const NOISE_KEYS = new Set(["is_root", "routing", "run_id", "semantic", "verdict",
@@ -743,8 +751,8 @@
           if (Array.isArray(v) && v.every(x => isScalar(x) && String(x).length <= 40))
             return `<div class="row">${key}<span class="val">`
               + v.map(x => `<span class="pill">${esc(x)}</span>`).join("") + `</span></div>`;
-          const count = Array.isArray(v) ? v.length + (v.length === 1 ? " item" : " items")
-                                         : Object.keys(v).length + " fields";
+          const count = Array.isArray(v) ? t('graph.count.item', { count: v.length })
+                                         : t('graph.count.field', { count: Object.keys(v).length });
           return `<div class="row">${key}<span class="val dim">${count}</span>`
             + `<div class="nested">${nestedValue(v, depth + 1)}</div></div>`;
         }
@@ -773,7 +781,7 @@
         body = kvRows(t, 0);
       } else body = `<pre>${esc(String(v))}</pre>`;
       const raw = typeof value === "string" ? value.length : 0;
-      const size = raw > 900 ? ` <span class="chars">${raw.toLocaleString()} chars</span>` : "";
+      const size = raw > 900 ? ` <span class="chars">${esc(t('graph.chars', { count: raw.toLocaleString() }))}</span>` : "";
       return `<div class="k">${title}${size}</div>${body}${truncationNote(value, repaired)}`;
     }
     // One line saying what a call was about, so the history scans unopened.
@@ -781,11 +789,11 @@
       const v = parseValue(value);
       if (v === null) return "";
       let text;
-      if (Array.isArray(v)) text = v.length + " items";
+      if (Array.isArray(v)) text = t('graph.count.item', { count: v.length });
       else if (typeof v === "object")
         text = Object.entries(tidy(v)).map(([k, x]) => `${k}: `
           + (isScalar(x) ? String(x).replace(/\s+/g, " ").slice(0, 48)
-                         : Array.isArray(x) ? x.length + " items" : "…")).join("  ·  ");
+                         : Array.isArray(x) ? t('graph.count.item', { count: x.length }) : "…")).join("  ·  ");
       else text = String(v).replace(/\s+/g, " ");
       return text.length > 140 ? text.slice(0, 140) + "…" : text;
     }
@@ -809,11 +817,15 @@
     }
     const KIND_WORD = { goal:"request", result:"answer", agent:"agent", agent_call:"agent",
                         tool_call:"tool call", system:"system" };
+    const kindWord = n => {
+      const key = "graph.kind." + n.kind;
+      return t(key, KIND_WORD[n.kind] || n.kind || "");
+    };
     function headOf(n, title){
       const c = statusColor(n), at = clockOf(n), dur = secsOf(n);
-      const sub = [KIND_WORD[n.kind] || n.kind || "",
-                   n.runs > 1 ? "run " + n.run + " of " + n.runs : "",
-                   at ? "started " + at : "", dur].filter(Boolean).join(" · ");
+      const sub = [kindWord(n),
+                   n.runs > 1 ? t('graph.detail.runOf', { run: n.run, runs: n.runs }) : "",
+                   at ? t('graph.detail.started', { at }) : "", dur].filter(Boolean).join(" · ");
       return `<div class="dhead"><span class="close" onclick="closeDetail()">✕</span>`
         + `<h3>${esc(title)}</h3><div class="sub">${esc(sub)}</div>`
         + (n.status ? `<span class="badge" style="background:${rgba(c,.18)};color:${c};border:1px solid ${c}">${esc(n.status)}</span>` : "")
@@ -823,14 +835,15 @@
       const when = [clockOf(c), secsOf(c)].filter(Boolean).join(" · ");
       const gist = gistOf(c.input);
       const files = [...(c.input_files || []), ...(c.output_files || [])];
-      const body = (readable("arguments", c.input) || `<div class="k">arguments</div><div class="empty">none</div>`)
-        + readable("result", c.output)
-        + (files.length ? `<div class="k">files</div><div class="kv">` + files.map(f =>
+      const body = (readable(t('graph.detail.arguments'), c.input)
+          || `<div class="k">${t('graph.detail.arguments')}</div><div class="empty">${t('graph.detail.none')}</div>`)
+        + readable(t('graph.detail.result'), c.output)
+        + (files.length ? `<div class="k">${t('graph.detail.files')}</div><div class="kv">` + files.map(f =>
             `<div class="row"><span class="val mono">${esc(f)}</span></div>`).join("") + `</div>` : "");
       return `<div class="call${openCalls.has(c.id) ? " open" : ""}" data-call="${esc(c.id)}">`
         + `<div class="hd" onclick="toggleCall(this.parentNode)">`
         + `<i class="st" style="background:${STATUS_COLOR[c.status] || "#cbd5e1"}" title="${esc(c.status || "")}"></i>`
-        + `<span class="tool">${esc(c.tool || "call")}</span><span class="when">${esc(when)}</span>`
+        + `<span class="tool">${esc(c.tool || t('graph.detail.call'))}</span><span class="when">${esc(when)}</span>`
         + `<span class="caret">▶</span></div>`
         + (gist ? `<div class="gist">${esc(gist)}</div>` : "")
         + `<div class="bd">${body}</div></div>`;
@@ -851,7 +864,7 @@
                 .replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" '); }
         catch (e) { html = null; }
       }
-      const size = raw.length > 900 ? ` <span class="chars">${raw.length.toLocaleString()} chars</span>` : "";
+      const size = raw.length > 900 ? ` <span class="chars">${esc(t('graph.chars', { count: raw.length.toLocaleString() }))}</span>` : "";
       return `<div class="k">${title}${size}</div>`
         + (html ? `<div class="report">${html}</div>` : `<pre>${esc(raw)}</pre>`)
         + truncationNote(raw, false);
@@ -859,7 +872,7 @@
     // What the agent left behind: files its tools wrote and links its report names.
     function artifactsBlock(list){
       if (!Array.isArray(list) || !list.length) return "";
-      return `<div class="k">artifacts <span class="chars">${list.length}</span></div>` + list.map(a => {
+      return `<div class="k">${t('graph.detail.artifacts')} <span class="chars">${list.length}</span></div>` + list.map(a => {
         const file = a.kind === "file";
         const name = file ? `<span class="uri">${esc(a.uri)}</span>`
           : `<a class="uri" href="${esc(a.uri)}" target="_blank" rel="noopener noreferrer">${esc(a.uri)}</a>`;
@@ -872,33 +885,33 @@
     // on the prompt, an answer on the answer, and a call nobody owns on itself.
     function showDetailClassic(n){
       const isAgent = n.kind === "agent" || n.kind === "agent_call";
-      const name = String(n.executor_agent || n.label || "agent");
+      const name = String(n.executor_agent || n.label || t('graph.detail.agent'));
       const title = isAgent ? (n.stage ? n.stage + ". " : "") + name
-        : n.kind === "goal" ? "❯ request" : n.kind === "result" ? "✔ answer"
+        : n.kind === "goal" ? "❯ " + t('graph.detail.request') : n.kind === "result" ? "✔ " + t('graph.detail.answer')
         : String(n.label || n.kind || "");
       let body;
-      if (n.kind === "goal") body = readable("what was asked", n.label);
-      else if (n.kind === "result") body = reportBlock("answer", n.output || n.label);
+      if (n.kind === "goal") body = readable(t('graph.detail.whatAsked'), n.label);
+      else if (n.kind === "result") body = reportBlock(t('graph.detail.answer'), n.output || n.label);
       else if (isAgent) {
-        const where = n.io_source === "delegation" ? "task and report come from the delegation that started this run"
-          : n.io_source === "request" ? "task and report come from the request this agent served and its answer" : "";
-        body = reportBlock("report", n.output)
+        const where = n.io_source === "delegation" ? t('graph.detail.ioDelegation')
+          : n.io_source === "request" ? t('graph.detail.ioRequest') : "";
+        body = reportBlock(t('graph.detail.report'), n.output)
           + artifactsBlock(n.artifacts)
-          + readable("task", n.input, { agent: n.executor_agent })
-          + (where ? `<div class="note">${where}</div>` : "");
-      } else body = readable("arguments", n.input) + readable("result", n.output);
+          + readable(t('graph.detail.task'), n.input, { agent: n.executor_agent })
+          + (where ? `<div class="note">${esc(where)}</div>` : "");
+      } else body = readable(t('graph.detail.arguments'), n.input) + readable(t('graph.detail.result'), n.output);
       if (isAgent) {
         // Older snapshots recorded nothing on the agent itself; say so, or
         // the panel opening on the call list reads as a missing section.
-        if (!body) body = `<div class="k">task · report</div><div class="empty">not recorded for this agent</div>`;
+        if (!body) body = `<div class="k">${t('graph.detail.taskReport')}</div><div class="empty">${t('graph.detail.notRecorded')}</div>`;
         const calls = Array.isArray(n.calls) ? n.calls : [];
         const failed = calls.filter(c => c.status === "failed").length;
         body += calls.length
-          ? `<div class="k">tool calls <span class="chars">${calls.length}${failed ? " · " + failed + " failed" : ""}</span></div>`
+          ? `<div class="k">${t('graph.detail.toolCalls')} <span class="chars">${calls.length}${failed ? t('graph.detail.failedCount', { count: failed }) : ""}</span></div>`
             + calls.map(callRow).join("")
-          : `<div class="k">tool calls</div><div class="empty">none recorded</div>`;
+          : `<div class="k">${t('graph.detail.toolCalls')}</div><div class="empty">${t('graph.detail.noneRecorded')}</div>`;
       }
-      if (!body) body = `<div class="empty">nothing recorded yet</div>`;
+      if (!body) body = `<div class="empty">${t('graph.detail.empty')}</div>`;
       paint(n, headOf(n, title) + `<div class="dbody">${body}</div>`);
     }
     function closeDetail(){ selectedId=null; lastDetailStamp=null; paintedId=null;
@@ -964,7 +977,7 @@
         // nothing. Say which call could not be placed and stop trying.
         if (++revealTries > 3) {
           document.getElementById("status").textContent =
-            "вызов " + wantedCall + " не найден в этой сессии";
+            t('graph.callNotFound', { call: wantedCall });
           wantedCall = null;
         }
         return;

@@ -209,20 +209,25 @@ def test_an_expired_url_on_an_indexed_artifact_is_counted_as_unresolved(index_ro
 
 
 def test_a_source_pdf_never_lands_in_the_report(index_root, tmp_path, monkeypatch):
-    """The papers server uploads every PDF it finds and returns a link to each.
-    Those are source material, and the report holds figures and tables."""
+    """The papers server uploads every PDF it finds under one key prefix and
+    returns a link to each. Those are source material, not run output: the
+    report collects what the run produced, and a produced PDF is a File."""
     from CoScientist.reporting import collect
 
     downloaded = []
     monkeypatch.setattr(collect, "_download",
                         lambda url, dest: downloaded.append(url) or dest.write_bytes(b"x") or True)
+    key = "ephemeral/u1/s1/papers_search_results/paper.pdf"
+    artifact_index.record([{
+        "bucket": "agent-vault", "s3_key": key, "tool": "search_papers",
+        "label": "paper.pdf", "url": f"http://minio/agent-vault/{key}?sig=1",
+    }], user_id="u1", session_id="s1")
 
     result = collect.collect_artifacts(
-        session_id="s1",
-        state={"mcp_artifacts": [{"url": "http://minio/b/paper.pdf?sig=1", "tool": "papers"}]},
-        reports_root=tmp_path / "reports",
-        workspace_root=tmp_path / "ws",
+        session_id="s1", state={}, reports_root=tmp_path / "reports",
+        workspace_root=tmp_path / "ws", index_key=("u1", "s1"),
     )
 
     assert downloaded == []
-    assert result["tables"] == []
+    assert result["files"] == []
+    assert "## Files" not in result["blocks_markdown"]

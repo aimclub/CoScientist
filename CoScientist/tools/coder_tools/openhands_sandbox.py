@@ -37,6 +37,10 @@ Server-side contract used here (see ``api/routes.py``):
   That list is the ONLY carrier of those links — the sandbox agent keeps them
   out of its ``summary`` prose — so every layer between here and the model
   passes the field through untouched instead of re-reading it out of text.
+  The server names the object key but not the bucket, so each entry is
+  normalized on the way in (see :func:`_normalize_uploads`): ``key`` stays,
+  and ``s3_key`` plus ``bucket`` join it — the durable reference the artifact
+  index and the report collector need.
 * ``GET /api/v1/metrics?task_id=<id>`` returns what the run cost: wall clock,
   CPU/GPU work, energy, LLM tokens and money.
 
@@ -58,6 +62,7 @@ import os
 import sys
 import threading
 import time
+import urllib.parse
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional
 
@@ -451,6 +456,70 @@ async def _afetch_task(api_url: str, sandbox_id: str) -> Optional[Dict[str, Any]
         return _parse_task(await client.get(
             f"{api_url}/status", params={"task_id": sandbox_id},
         ))
+
+
+# ---------------------------------------------------------------------------
+# Uploads: turning the server's s3_uploads into durable artifact references
+# ---------------------------------------------------------------------------
+
+def _upload_bucket(entry: Dict[str, Any]) -> Optional[str]:
+    """Which bucket holds one sandbox upload, or None when nothing says.
+
+    The ``/status`` answer carries the object key but not the bucket, and a key
+    alone resolves to nothing. The presigned URL is the ground truth: the vault
+    signs path-style URLs (``<endpoint>/<bucket>/<key>``), so the bucket is the
+    path segment in front of the key. Failing that, the deployment config —
+    checked last because the main app's ``S3__BUCKET_NAME`` can name a
+    different (paper pipeline) bucket than the one the sandbox uploaded to.
+    """
+    url = entry.get("url")
+    key = entry.get("s3_key") or entry.get("key")
+    if isinstance(url, str) and isinstance(key, str) and key:
+        path = urllib.parse.urlparse(url).path.lstrip("/")
+        if path.endswith(key) and len(path) > len(key):
+            prefix = path[: -len(key)].strip("/")
+            if prefix and "/" not in prefix:
+                return prefix
+    for var in ("SANDBOX_S3_BUCKET", "S3__BUCKET_NAME", "MINIO_BUCKET"):
+        value = os.getenv(var)
+        if value:
+            return value
+    try:  # optional dependency — only present inside CoScientist
+        from CoScientist.config import get_settings
+
+        bucket = get_settings().s3.bucket_name
+        if bucket:
+            return str(bucket)
+    except Exception:  # noqa: BLE001 - absence of the package is normal here
+        pass
+    return None
+
+
+def _normalize_uploads(uploads: Any) -> List[Any]:
+    """Add the durable reference (``bucket`` + ``s3_key``) to every upload.
+
+    The server reports ``key``; everything downstream — ``find_s3_artifacts``,
+    the capture plugin, the report collector — speaks ``s3_key`` and needs the
+    bucket beside it. ``key`` stays: it is part of the server contract and of
+    the prompt text that describes these entries to the model.
+    """
+    if not isinstance(uploads, list):
+        return []
+    out: List[Any] = []
+    for entry in uploads:
+        if not isinstance(entry, dict):
+            out.append(entry)
+            continue
+        entry = dict(entry)
+        key = entry.get("s3_key") or entry.get("key")
+        if isinstance(key, str) and key:
+            entry.setdefault("s3_key", key)
+            if not entry.get("bucket"):
+                bucket = _upload_bucket(entry)
+                if bucket:
+                    entry["bucket"] = bucket
+        out.append(entry)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1348,11 +1417,12 @@ class _PollState:
                 "succeeded": status in SUCCESS_STATUSES,
                 "summary": task_details.get("summary", ""),
                 # The artifacts the run uploaded, as the server structured
-                # them. Carried through verbatim and NOT re-derived from the
-                # summary: the sandbox agent no longer writes its links into
-                # that text at all, and a presigned URL is the one string a
-                # model cannot be trusted to reproduce anyway.
-                "s3_uploads": task_details.get("s3_uploads") or [],
+                # them. Carried through and NOT re-derived from the summary:
+                # the sandbox agent no longer writes its links into that text
+                # at all, and a presigned URL is the one string a model cannot
+                # be trusted to reproduce anyway. Normalized so each entry
+                # also carries the durable bucket/s3_key reference.
+                "s3_uploads": _normalize_uploads(task_details.get("s3_uploads")),
                 "watch_url": task_details.get("watch_url", ""),
                 "vscode_url": task_details.get("vscode_url", ""),
                 "error": task_details.get("error"),
@@ -1553,7 +1623,7 @@ def get_sandbox_status(
         "busy": status in ("queued", "running"),
         "accepts_followup": status == "cooldown",
         "summary": task_details.get("summary", ""),
-        "s3_uploads": task_details.get("s3_uploads") or [],
+        "s3_uploads": _normalize_uploads(task_details.get("s3_uploads")),
         "watch_url": task_details.get("watch_url", ""),
         "vscode_url": task_details.get("vscode_url", ""),
         "error": task_details.get("error"),

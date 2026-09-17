@@ -12,6 +12,8 @@ let knownUsers = [];
 let knownSessions = [];
 let datasetUrl = '';
 let reportLanguage = '';
+// True while the active session processes a run. Locks the language control.
+let runActive = false;
 let activeSandboxWatchUrl = null;
 
 const USER_STORAGE_KEY = 'coscientist.user_id';

@@ -749,3 +749,21 @@ def test_a_run_of_agents_nobody_classified_gets_no_bands():
     ], "edges": [{"src": "goal:1", "dst": "a:X", "type": "caused_by"}]}
 
     assert execution_tree(full, "one")["phases"] == []
+
+
+def test_mcp_endpoint_links_are_not_artifacts():
+    """An agent that echoes the tool server it called produced nothing there."""
+    from CoScientist.graph.projection import _artifacts_of
+
+    agent = {"output": (
+        "Uploaded through http://10.32.1.114:7338/mcp and the figure is at "
+        "http://10.32.1.114:9000/agent-vault/ephemeral/u/s/fig.png?X-Amz-Signature=ab12. "
+        "See also s3://agent-vault/ephemeral/u/s/table.csv"
+    )}
+
+    artifacts = _artifacts_of(agent)
+
+    uris = [a["uri"] for a in artifacts]
+    assert not any(uri.rstrip("/").endswith("/mcp") for uri in uris)
+    assert any(uri.endswith("table.csv") for uri in uris)
+    assert any("fig.png" in uri for uri in uris)

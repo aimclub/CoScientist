@@ -301,7 +301,7 @@ function hitlResponseSummary(response) {
 }
 
 function hitlTimeoutSummary(data) {
-  return '⏱ HITL: нет ответа ' + (data.timeout_seconds || 300) + ' с — предложение агента ' + (data.agent_name || '') + ' авто-подтверждено, пайплайн продолжен.';
+  return t('hitl.timeoutMsg', { seconds: (data.timeout_seconds || 300), agent: (data.agent_name || '') });
 }
 window.hitlTimeoutSummary = hitlTimeoutSummary;
 

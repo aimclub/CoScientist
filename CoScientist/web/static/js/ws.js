@@ -23,7 +23,7 @@
         const badgeEntry = i18n['chat.online'];
         document.getElementById('active-badge').textContent = (badgeEntry && badgeEntry[currentLang]) || 'Online';
         document.getElementById('active-badge').className = 'text-[10px] bg-surface-container-highest px-3 py-1 rounded text-primary border border-primary/20 uppercase font-bold tracking-widest';
-        document.getElementById('telemetry-live').innerHTML = '<span class="w-1 h-1 bg-secondary rounded-full"></span> Live';
+        document.getElementById('telemetry-live').innerHTML = '<span class="w-1 h-1 bg-secondary rounded-full"></span> ' + t('telemetry.live');
         document.getElementById('telemetry-live').className = 'text-[8px] font-bold text-secondary animate-pulse font-mono tracking-tighter uppercase flex items-center gap-1';
         addTelemetry('CONNECTED to backend');
         StatusIndicator.setConnected(true);
@@ -79,7 +79,7 @@
           case 'user_message':
             addUserMsg(data.message, data.timestamp);
             eventCount++;
-            document.getElementById('event-count').textContent = 'Events: ' + eventCount;
+            renderEventCount();
             break;
           case 'agent_event':
             activityTouchAgent(data.author, data.timestamp);
@@ -172,12 +172,12 @@
             applyDatasetUrl(data.dataset_url);
             addTelemetry('DATASET :: ' + (data.dataset_url ? 'attached' : 'detached'));
             addSystemMsg(data.dataset_url
-              ? 'Dataset attached: ' + data.dataset_url + '\nThe coder agent will pass it to the sandbox when a step needs that data.'
-              : 'Dataset link detached.');
+              ? t('ws.datasetAttached', { url: data.dataset_url })
+              : t('ws.datasetDetached'));
             break;
           case 'dataset_url_rejected':
             showDatasetError(data.message);
-            addSystemMsg('Dataset link rejected: ' + data.message);
+            addSystemMsg(t('ws.datasetRejected', { message: data.message }));
             addTelemetry('DATASET :: rejected');
             break;
           case 'report_language':
@@ -185,8 +185,12 @@
             addTelemetry('REPORT LANG :: ' + data.report_language);
             break;
           case 'report_language_rejected':
-            addSystemMsg('Report language rejected: ' + data.message);
-            addTelemetry('REPORT LANG :: rejected');
+            addSystemMsg(t('ws.reportLangRejected', { message: data.message }));
+            addTelemetry('REPORT LANG :: rejected' + (data.reason ? ' (' + data.reason + ')' : ''));
+            // The server kept the old language. Put the interface back on it;
+            // applyLanguage() without an argument re-renders and does not resend.
+            currentLang = reportLanguage || currentLang;
+            applyLanguage();
             break;
           case 'chat_accepted': {
             const input = document.getElementById('chat-input');
@@ -197,7 +201,7 @@
           }
           case 'error':
             hideTyping();
-            addSystemMsg('Error: ' + data.message);
+            addSystemMsg(t('common.errorPrefix', { error: data.message }));
             addTelemetry('ERROR :: ' + data.message);
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();

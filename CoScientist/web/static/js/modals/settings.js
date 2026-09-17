@@ -618,15 +618,20 @@
               <span class="w-10 h-6 rounded-full bg-surface-variant border border-outline-variant/30 peer-checked:bg-primary peer-checked:border-primary transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-primary/50"></span>
               <span class="absolute left-1 top-1 w-4 h-4 rounded-full bg-on-surface-variant peer-checked:bg-on-primary peer-checked:translate-x-4 transition-transform"></span>
             </label>`;
-        case 'language':
+        case 'language': {
+          // The one language control sets the interface and the report. The
+          // server rejects a change while a run is active; lock the radio too.
+          const locked = typeof runActive !== 'undefined' && runActive;
           return `
-            <div role="radiogroup" class="inline-flex gap-0.5 p-0.5 rounded-md bg-surface-container-high border border-outline-variant/20">
+            <div role="radiogroup" class="inline-flex gap-0.5 p-0.5 rounded-md bg-surface-container-high border border-outline-variant/20 ${locked ? 'opacity-40' : ''}">
               ${['ru', 'en'].map(lang => `
                 <button type="button" role="radio" aria-checked="${currentLang === lang}" data-action="language" data-lang="${lang}"
-                  class="px-3 py-1.5 rounded text-[11px] font-semibold transition-colors ${currentLang === lang ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:text-on-surface'}">
+                  ${locked ? 'disabled' : ''}
+                  class="px-3 py-1.5 rounded text-[11px] font-semibold transition-colors ${currentLang === lang ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:text-on-surface'} disabled:cursor-not-allowed">
                   ${lang === 'ru' ? 'Русский' : 'English'}
                 </button>`).join('')}
             </div>`;
+        }
         case 'env':
           return `
             <div class="text-right">
