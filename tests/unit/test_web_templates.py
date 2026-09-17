@@ -90,3 +90,49 @@ def test_every_module_the_page_loads_exists():
     ]
 
     assert not missing, f"index.html loads files that do not exist: {missing}"
+
+
+def test_the_plan_card_survives_a_language_switch():
+    """Every other HITL card relocalizes through data-i18n spans.
+
+    The experiment plan card cannot: it interpolates counts into "{n} tasks",
+    builds the design-matrix headers and the per-task field names in JS, and
+    none of that leaves a span for applyTranslations to swap. So it is redrawn,
+    and applyTranslations has to reach the redraw.
+    """
+    hitl = _read(WEB / "static" / "js" / "hitl.js")
+    i18n = _read(WEB / "static" / "js" / "i18n.js")
+
+    assert "relocalizeHitlCards" in i18n, "applyTranslations must call into the cards"
+    assert "redrawPlanCards()" in hitl, "relocalizeHitlCards must reach the plan card"
+    body = hitl.split("function redrawPlanCards()", 1)[1].split("\nfunction ", 1)[0]
+    assert "renderExperimentPlanReview" in body
+    # placeHitlCard appends when it finds no card, so a stale planByRequest
+    # entry would resurrect one the session has already cleared.
+    assert "data-hitl-card" in body
+    # A review already answered must stay answered after the redraw.
+    assert "disableHitlControls" in body
+
+
+def test_the_front_end_knows_the_experiment_module_agents():
+    """Four agents with no label, no icon and no place in the tree read as
+    blanks in the activity rail and in the agent graph.
+
+    The live hierarchy comes from /api/agents, but the labels and icons are
+    static tables, and nothing fails when a name is missing from them — the
+    user just sees a bare class name, or nothing.
+    """
+    names = (
+        "ExperimentModuleAgent",
+        "ExperimentPlannerAgent",
+        "ExperimentExecutorAgent",
+        "ExperimentResultReviewAgent",
+    )
+    indicator = _read(WEB / "static" / "status_indicator.js")
+    experiments = _read(WEB / "static" / "js" / "modals" / "experiments.js")
+    roadmap = _read(WEB / "static" / "js" / "modals" / "roadmap.js")
+
+    for name in names:
+        assert name in indicator, f"{name}: no RU/EN label for the activity rail"
+        assert name in experiments, f"{name}: unknown to the agent tree"
+    assert "ExperimentModuleAgent" in roadmap, "the module has no icon"

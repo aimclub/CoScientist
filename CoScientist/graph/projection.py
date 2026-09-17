@@ -229,7 +229,11 @@ def turns(full: Dict[str, Any]) -> Dict[str, Any]:
     turn is, so recovering it from time is exact wherever the ids are silent.
     """
     nodes = {n["id"]: n for n in full.get("nodes", [])}
-    order = {"goal": 0, "tool_call": 1, "result": 2}
+    # A `decision` sits with the tool calls: it is something an agent did in the
+    # turn, with a start, an end and a verdict. The Experiment Module records
+    # its plan as one, and a trace that skipped it showed a run executing a plan
+    # the reader could not see.
+    order = {"goal": 0, "tool_call": 1, "decision": 1, "result": 2}
 
     members = [n for n in nodes.values() if n.get("kind") in order]
     members.sort(key=lambda n: (n.get("t_start") or 0.0, order[n["kind"]]))
@@ -244,7 +248,7 @@ def turns(full: Dict[str, Any]) -> Dict[str, Any]:
         members.sort(key=lambda n: (n.get("t_start") or 0.0, order[n["kind"]]))
         goal = next((m for m in members if m["kind"] == "goal"), None)
         result = next((m for m in members if m["kind"] == "result"), None)
-        calls = [m for m in members if m["kind"] == "tool_call"]
+        calls = [m for m in members if m["kind"] in ("tool_call", "decision")]
         started = min((m.get("t_start") or 0.0) for m in members)
         ended = max((m.get("t_end") or m.get("t_start") or 0.0) for m in members)
         out.append({
@@ -640,6 +644,21 @@ _PHASE_OF_AGENT = {
     "McpBuilderAgent": "experiment",
     "ToolPipelineAgent": "experiment",
     "ToolPreparerAgent": "experiment",
+    # The Experiment Module runs as one contiguous stretch — discover, plan,
+    # execute, review — so its stages share the band rather than scattering the
+    # module across three of them. An agent nobody names here inherits the phase
+    # of the next one that is named, which is how these read before.
+    "ExperimentModuleAgent": "experiment",
+    "ExperimentPlannerAgent": "experiment",
+    "ExperimentExecutorAgent": "experiment",
+    "ExperimentResultReviewAgent": "experiment",
+    "ParallelToolSearcherAgent": "experiment",
+    "LocalToolsExtractorAgent": "experiment",
+    "ToolRetrieverAgent": "experiment",
+    "ToolReranker": "experiment",
+    "ToolWebSearcherAgent": "experiment",
+    "FullSetToolReranker": "experiment",
+    "WebToolsDeployerAgent": "experiment",
 
     "ResultAggregatorAgent": "report",
 }

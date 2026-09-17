@@ -94,6 +94,31 @@ function relocalizeHitlCards() {
     if (!data) return;
     el.textContent = el.dataset.hitlPart === 'via' ? describeHitlVia(data) : localizeHitlMessage(data);
   });
+  redrawPlanCards();
+}
+
+// The plan card builds every label in JS — counts interpolated into "{n} tasks",
+// the design-matrix headers, the per-task field names — so there is no
+// data-i18n span for applyTranslations to swap. It is redrawn from the request
+// it was drawn from instead; fold state lives in planOpenTasks, so the same
+// tasks stay open across the redraw.
+function redrawPlanCards() {
+  if (typeof planByRequest === 'undefined') return;
+  planByRequest.forEach((_, rid) => {
+    const data = hitlCards.get(rid);
+    // Only cards actually on screen: placeHitlCard appends when it finds none,
+    // so a stale entry would resurrect a card the session has already cleared.
+    if (!data || !document.querySelector(`[data-hitl-card="${CSS.escape(rid)}"]`)) return;
+    const box = document.getElementById('hitl-controls-' + rid);
+    const answered = !!(box && box.querySelector('button[disabled]'));
+    // Redraw the sidebar only while it belongs to THIS request — a newer one
+    // may own it by now, and its panel is not ours to overwrite.
+    const panel = document.getElementById('hitl-panel');
+    const owns = !answered && panel && !panel.classList.contains('hidden')
+      && panel.innerHTML.indexOf(rid) !== -1;
+    renderExperimentPlanReview(owns ? panel : null, data);
+    if (answered) disableHitlControls(rid);
+  });
 }
 window.relocalizeHitlCards = relocalizeHitlCards;
 

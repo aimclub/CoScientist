@@ -749,3 +749,48 @@ def test_a_run_of_agents_nobody_classified_gets_no_bands():
     ], "edges": [{"src": "goal:1", "dst": "a:X", "type": "caused_by"}]}
 
     assert execution_tree(full, "one")["phases"] == []
+
+
+def test_a_recorded_plan_shows_up_in_the_trace():
+    """The Experiment Module records its plan as a `decision` node.
+
+    A trace that listed only tool calls showed a run executing a plan the reader
+    could not see. A decision belongs with the calls: something an agent did in
+    the turn, with a start, an end and a verdict.
+    """
+    full = {"nodes": [
+        {"id": "goal:a", "kind": "goal", "turn_id": "a", "label": "run the experiment",
+         "status": "success", "t_start": 100.0, "t_end": 140.0},
+        {"id": "plan:P1@r1:agent:x", "kind": "decision", "turn_id": "a",
+         "label": "plan rev 1 - 3 tasks - 45 min",
+         "executor_agent": "ExperimentPlannerAgent", "status": "success",
+         "verdict": "approved",
+         "input": {"kind": "experiment_plan", "task_count": 3},
+         "output": "plan rev 1 - 3 tasks - 45 min", "t_start": 105.0, "t_end": 118.0},
+        {"id": "tool:1", "kind": "tool_call", "turn_id": "a", "label": "start_task",
+         "executor_agent": "ExperimentExecutorAgent", "status": "success",
+         "t_start": 120.0, "t_end": 120.5},
+    ]}
+
+    calls = turns(full)["turns"][0]["calls"]
+    assert [c["tool"] for c in calls] == ["plan rev 1 - 3 tasks - 45 min", "start_task"]
+    plan = calls[0]
+    assert plan["agent"] == "ExperimentPlannerAgent"
+    assert plan["input"]["kind"] == "experiment_plan"
+    assert plan["duration"] == 13.0
+
+
+def test_the_experiment_module_reads_as_one_stretch():
+    """Its stages share the experiment band instead of scattering the module
+    across three of them."""
+    from CoScientist.graph.projection import _PHASE_OF_AGENT
+
+    for name in (
+        "ExperimentModuleAgent",
+        "ExperimentPlannerAgent",
+        "ExperimentExecutorAgent",
+        "ExperimentResultReviewAgent",
+        "ToolRetrieverAgent",
+        "ToolReranker",
+    ):
+        assert _PHASE_OF_AGENT[name] == "experiment", name
