@@ -27,46 +27,122 @@ def test_experiments_settings_defaults_and_nested_env(monkeypatch):
     assert configured.experiments.max_plan_tasks == 6
 
 
-def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
-    from CoScientist.assembly import build_system
-    from CoScientist.experiments.review import ExperimentReviewSessionAgent
+def test_experiment_profile_is_an_overlay_not_a_copy():
+    """The profile says only what belongs to the module.
 
+    It was a standalone copy of system.yaml once, forked before the research
+    graph existed, and it drifted for two months. Re-declaring a section here
+    is how that starts again, so the absence of one is the assertion.
+    """
+    import yaml
+
+    with open(resolve_config_path("experiments"), encoding="utf-8") as fh:
+        raw = yaml.safe_load(fh)
+    assert raw["extends"] == "system"
+    for section in ("defaults", "pipeline", "internal_tools"):
+        assert section not in raw, f"{section} must be inherited, not restated"
+
+
+def test_the_module_replaces_mains_execution_lane():
     config = load_config(resolve_config_path("experiments"))
     assert config.root.name == "OrchestratorAgent"
     orch = config.agent("OrchestratorAgent")
     assert orch.cls == "llm"
     assert orch.children == []
-    assert "ExperimentModuleAgent" in orch.subordinates
-    assert "TaskExecutorAgent" not in orch.subordinates
-    # Target contract: no keyword-rewrite callbacks. Structural fan-out merge +
-    # state-keyed module-first gate survive; research-vs-compute is decided by
-    # the module's inventory, never by matching words in the request.
-    assert "coalesce_experiment_module_calls" in orch.callbacks.after_model
-    assert "suppress_experiment_module_after_completed" in orch.callbacks.after_model
-    assert "redirect_research_to_experiment_module" not in orch.callbacks.after_model
-    assert "normalize_experiment_module_brief" not in orch.callbacks.after_model
-    assert "inject_upstream_artifacts" not in orch.callbacks.before_agent
-
+    # main's roster, with the module standing exactly where TaskExecutor stood.
+    assert orch.subordinates == [
+        "PlannerAgent",
+        "HypothesesAgent",
+        "ResearchAgent",
+        "ExperimentModuleAgent",
+        "MedicalAgent",
+        "McpBuilderAgent",
+    ]
+    # Three agents stand down, each for a structural reason: ADK allows an agent
+    # exactly one `children` parent, and ToolPreparerAgent belongs to the module.
+    for name in ("TaskExecutorAgent", "ToolPipelineAgent", "ExecutorSwitchAgent"):
+        assert not config.agent(name).is_enabled(), name
     module = config.agent("ExperimentModuleAgent")
-    assert module.a2a.key == "task_execution"
-    assert module.a2a.port == 8004
     assert module.children == [
         "ToolPreparerAgent",
         "ExperimentPlannerAgent",
         "ExperimentExecutorAgent",
         "ExperimentResultReviewAgent",
     ]
+    # The A2A identity moves with the lane — two agents cannot claim one key.
+    assert module.a2a.key == "task_execution"
+    assert module.a2a.port == 8004
+    assert config.agent("TaskExecutorAgent").a2a is None
+    # The module's answer is a deliverable, like TaskExecutor's in main. It is
+    # the only one of the four attached as an AgentTool, so the only one where
+    # the flag does anything.
+    assert module.report_output is True
+
+
+def test_the_profile_inherits_mains_capabilities():
+    """What the overlay does NOT say is the point: it arrives from system.yaml."""
+    config = load_config(resolve_config_path("experiments"))
+    main = load_config(resolve_config_path("system"))
+
+    assert config.internal_tools and config.internal_tools == main.internal_tools
+    assert {
+        a.name for a in config.agents.values() if a.work_order and a.is_enabled()
+    } == {
+        "HypothesesAgent",
+        "ResearchAgent",
+        "MedicalAgent",
+        "DatasetCollectorAgent",
+        "ExperimentAgent",
+    }
+    # Plumbing the web UI hides, the S3 vault, the anti-fabrication checker and
+    # the per-call sandbox approval: not one line of this file mentions them.
+    assert len(config.internal_agent_names()) >= 12
+    coder = config.agent("CoderAgent")
+    assert {"vault", "verify"} <= set(coder.tools)
+    assert coder.hitl and "hitl_before_tool" in coder.callbacks.before_tool
+    assert config.agent("HypothesesAgent").reasoning == "high"
+    assert config.agent("CoderAgent").reasoning == "medium"
+
+
+def test_route_agents_read_the_graph_and_the_bridge_writes_it():
+    """A task must not end up with two independent Evidence nodes.
+
+    The run record is written deterministically by runtime/graph_bridge from
+    record_result — richer than an LLM commit and schema-correct — so the route
+    agents get the research graph read-only. Lanes whose commit IS the science
+    keep main's writing tool.
+    """
+    config = load_config(resolve_config_path("experiments"))
+    for name in ("ExperimentAgent", "FedotAgent", "CoderAgent"):
+        tools = config.agent(name).tools or []
+        assert "research_graph_readonly" in tools, name
+        assert "research_graph" not in tools, name
+    for name in (
+        "HypothesesAgent",
+        "ResearchAgent",
+        "MedicalAgent",
+        "DatasetCollectorAgent",
+    ):
+        assert "research_graph" in (config.agent(name).tools or []), name
+    # build_experiment_context reads state["research_context"]; without this
+    # callback the planner inherited whatever slice ran last, or nothing.
+    planner = config.agent("ExperimentPlannerAgent")
+    assert planner.callbacks.before_agent.index("inject_research_context") < (
+        planner.callbacks.before_agent.index("build_experiment_context")
+    )
+
+
+def test_the_modules_own_methods_survive_the_overlay():
+    config = load_config(resolve_config_path("experiments"))
+
     hyp = config.agent("HypothesesAgent")
     assert hyp.prompt == "hypotheses"
-    # `main`, not a literal: a literal model string goes straight to the named
-    # provider and ignores LLM__MAIN_MODEL, which is what routes this profile
-    # through OpenRouter.
-    assert hyp.model == "main"
-    assert hyp.tools == ["research_graph"]
+    # Never a literal model string: that goes straight to the named provider and
+    # ignores LLM__MAIN_MODEL, which is what routes this profile through
+    # OpenRouter. Unset means defaults.model, which is `main`.
+    assert hyp.model in (None, "main")
     assert "commit_experiment_hypotheses" in hyp.callbacks.after_agent
     assert "seed_hypotheses_from_em_request" in hyp.callbacks.before_model
-    assert "enforce_hypothesis_research_commit" in hyp.callbacks.after_model
-    assert "normalize_em_hypothesis_commit" in hyp.callbacks.after_model
     assert hyp.callbacks.after_model.index("enforce_hypothesis_research_commit") < (
         hyp.callbacks.after_model.index("normalize_em_hypothesis_commit")
     )
@@ -76,86 +152,129 @@ def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
     assert hyp.callbacks.before_agent.index("bootstrap_research_question_if_empty") < (
         hyp.callbacks.before_agent.index("inject_research_context")
     )
+
+    orch = config.agent("OrchestratorAgent")
+    assert "coalesce_experiment_module_calls" in orch.callbacks.after_model
+    assert "suppress_experiment_module_after_completed" in orch.callbacks.after_model
+    assert "ask_pipeline_scope" in orch.callbacks.before_agent
+    # Target contract: no keyword-rewrite callbacks. Research-vs-compute is
+    # decided by the module's inventory, never by matching words in the request.
+    assert "redirect_research_to_experiment_module" not in orch.callbacks.after_model
+    assert "normalize_experiment_module_brief" not in orch.callbacks.after_model
+    assert "inject_upstream_artifacts" not in orch.callbacks.before_agent
+
     preparer = config.agent("ToolPreparerAgent")
+    assert "skip_when_experiment_stage_complete" in preparer.callbacks.before_agent
     assert "assess_experiment_inventory_feasibility" in preparer.callbacks.after_agent
-    assert config.agent("ExperimentPlannerAgent").callbacks.before_agent[0] == (
-        "skip_when_experiment_stage_complete"
-    )
-    assert config.agent("ExperimentExecutorAgent").callbacks.before_agent[0] == (
-        "skip_when_experiment_stage_complete"
-    )
-    assert config.agent("ExperimentResultReviewAgent").callbacks.before_agent == [
-        "skip_when_experiment_stage_complete",
-        "skip_when_experiment_not_feasible",
-    ]
-    assert "skip_when_experiment_stage_complete" in config.agent("ToolPreparerAgent").callbacks.before_agent
-    # Three-lane target: science/compute → EM only (no orch→Coder shadow science).
-    assert "CoderAgent" not in orch.subordinates
-    assert "McpBuilderAgent" not in orch.subordinates
-    # The orchestrator now carries the retrieval tool: choosing a lane requires
-    # knowing whether ready-made MCP tools can do the work, and asking that
-    # question is cheaper than routing a computable task into a literature review
-    # and discovering it there. test_assembly.py::test_orchestrator_tool_discovery_gate
-    # holds the matching invariant on the prompt side.
-    assert "retrieval" in (orch.tools or [])
-    assert "McpBuilderAgent" in config.agents
-    # Coder + McpBuilder remain EM-internal Executor routes as well.
-    # Research/Medical are shared: orch lanes for cheap single-domain asks,
-    # Executor routes for mixed evidence+compute plans.
-    assert "CoderAgent" in config.agent("ExperimentExecutorAgent").subordinates
-    assert "McpBuilderAgent" in config.agent("ExperimentExecutorAgent").subordinates
-    assert "ResearchAgent" in config.agent("ExperimentExecutorAgent").subordinates
-    assert "MedicalAgent" in config.agent("ExperimentExecutorAgent").subordinates
-    assert "ResearchAgent" in orch.subordinates
-    research = config.agent("ResearchAgent")
-    assert "reset_research_searches" in research.callbacks.before_agent
-    assert research.callbacks.after_tool == [
-        "log_research_tool_calls",
-        "count_research_searches",
-    ]
-    assert "MedicalAgent" in orch.subordinates
-    mcp_builder = config.agent("McpBuilderAgent")
-    assert mcp_builder.callbacks.before_tool == ["pin_alembic_build_args"]
-    assert mcp_builder.callbacks.after_tool == ["await_alembic_job_if_experiment"]
-    fedot = config.agent("FedotAgent")
-    fedot_before = fedot.callbacks.before_agent
-    assert "refuse_when_fedot_deliverable" not in fedot_before
-    assert "inject_upstream_artifacts" not in fedot_before
-    assert "refuse_when_fedot_deliverable" not in config.agent("CoderAgent").callbacks.before_agent
-    assert fedot.callbacks.before_tool == ["pin_fedot_alembic_task"]
-    assert fedot.prompt == "experiment_fedot_route"
-    assert "task_tracker" not in (fedot.tools or [])
-    assert "task_tracker" not in (config.agent("ExperimentAgent").tools or [])
-    assert config.agent("ExperimentAgent").callbacks.before_tool == [
-        "force_schema_s3_upload"
-    ]
-    assert config.agent("ExperimentExecutorAgent").callbacks.before_tool == [
-        "guard_experiment_route"
-    ]
-    assert config.agent("ExperimentExecutorAgent").callbacks.after_tool == [
-        "mark_experiment_route_returned"
-    ]
+
     retriever = config.agent("ToolRetrieverAgent")
     assert retriever.prompt == "experiment_tool_retriever"
     assert "persist_experiment_em_request" in retriever.callbacks.before_agent
     assert "reset_experiment_retrieval_budget" in retriever.callbacks.before_agent
-    assert "inject_experiment_retrieve_facets" not in (retriever.callbacks.before_model or [])
     assert "enforce_experiment_retrieval_budget" in retriever.callbacks.after_model
     assert "persist_experiment_retrieved_capabilities" in retriever.callbacks.after_agent
 
     reranker = config.agent("ToolReranker")
+    # shortlist_reranker_tools narrows accumulated_tools to the top-K, and the
+    # full pre-rerank set is what the planner falls back on when the reranker
+    # abstains — so the module's snapshot has to be taken first.
+    assert reranker.callbacks.before_agent.index(
+        "stash_experiment_retrieved_capabilities"
+    ) < reranker.callbacks.before_agent.index("shortlist_reranker_tools")
     assert reranker.callbacks.after_model == ["sanitize_json_output"]
     assert "collect_reranked_tools" in reranker.callbacks.after_agent
-    assert "collect_reranked_tools_from_model" not in reranker.callbacks.after_model
+    assert "snapshot_experiment_discovered_capabilities" in reranker.callbacks.after_agent
+
+    executor = config.agent("ExperimentExecutorAgent")
+    assert executor.callbacks.before_agent[0] == "skip_when_experiment_stage_complete"
+    assert executor.callbacks.before_tool == ["guard_experiment_route"]
+    assert executor.callbacks.after_tool == ["mark_experiment_route_returned"]
+    # ADK stops an after_model chain at the first callback that returns a
+    # response, so this order is the contract, not a preference.
+    assert executor.callbacks.after_model == [
+        "enforce_pending_record_result",
+        "rewrite_mismatched_control_action",
+        "enforce_continue_until_reporting",
+    ]
+    assert "CoderAgent" in executor.subordinates
+    assert "McpBuilderAgent" in executor.subordinates
+    assert "ResearchAgent" in executor.subordinates
+    assert "MedicalAgent" in executor.subordinates
+
+    fedot = config.agent("FedotAgent")
+    assert fedot.prompt == "experiment_fedot_route"
+    assert "pin_fedot_alembic_task" in fedot.callbacks.before_tool
+    assert "refuse_when_fedot_deliverable" not in fedot.callbacks.before_agent
+    assert config.agent("ExperimentAgent").prompt == "experiment_react_route"
+    assert "force_schema_s3_upload" in config.agent("ExperimentAgent").callbacks.before_tool
+
+    mcp_builder = config.agent("McpBuilderAgent")
+    assert "pin_alembic_build_args" in mcp_builder.callbacks.before_tool
+    assert "await_alembic_job_if_experiment" in mcp_builder.callbacks.after_tool
 
     planner = config.agent("ExperimentPlannerAgent")
-    assert planner.model == "main"
     assert planner.include_contents == "none"
     assert "skip_retriever_context" in planner.callbacks.before_model
     # ExperimentPlan is enforced by sanitize_json_output + deterministic critique.
     assert planner.output_schema is None
+    assert config.agent("ResultAggregatorAgent").prompt == "experiment_result_aggregator"
 
+
+def test_the_overlay_keeps_mains_link_and_artifact_hooks():
+    """Re-declaring `callbacks:` replaces the whole block, so every hook main
+    put on an agent has to be repeated here. This is the guard against losing
+    one silently: uploaded-file links, tool-result links and the [[linkNNNN]]
+    round trip all die quietly, not loudly."""
+    config = load_config(resolve_config_path("experiments"))
+    main = load_config(resolve_config_path("system"))
+    hooks = {
+        "user_links",
+        "redact_link_urls",
+        "resolve_link_refs",
+        "register_tool_result_links",
+        "expand_link_refs",
+        "inject_report_language",
+        "inject_dataset_context",
+        "capture_mcp_artifacts",
+        "save_uploaded_artifacts",
+    }
+    for name, agent in config.agents.items():
+        if name not in main.agents or not agent.is_enabled():
+            continue
+        for kind in ("before_agent", "before_model", "before_tool", "after_tool", "after_model", "after_agent"):
+            expected = [c for c in getattr(main.agent(name).callbacks, kind) if c in hooks]
+            got = getattr(agent.callbacks, kind)
+            missing = [c for c in expected if c not in got]
+            assert not missing, f"{name}.{kind} lost {missing}"
+    # Ordering rules the registry itself depends on.
+    for name, agent in config.agents.items():
+        if not agent.is_enabled():
+            continue
+        before_agent = agent.callbacks.before_agent
+        if "user_links" in before_agent:
+            assert before_agent[-1] == "user_links", f"{name}: user_links must be last"
+        after_model = agent.callbacks.after_model
+        if "expand_link_refs" in after_model:
+            assert after_model[0] == "expand_link_refs", f"{name}: expand_link_refs must be first"
+
+
+def test_the_experiment_profile_builds():
+    """Validation is not enough: `python -m CoScientist.assembly` only checks the
+    config, and ADK's one-parent rule for `children` fires at construction. A
+    double-parented agent would sail through CI without this."""
+    from CoScientist.assembly import build_system
+    from CoScientist.experiments.review import ExperimentReviewSessionAgent
+
+    config = load_config(resolve_config_path("experiments"))
     system = build_system(config)
+    module = system.agent("ExperimentModuleAgent")
+    assert [child.name for child in module.sub_agents] == [
+        "ToolPreparerAgent",
+        "ExperimentPlannerAgent",
+        "ExperimentExecutorAgent",
+        "ExperimentResultReviewAgent",
+    ]
+    assert system.agent("ToolPreparerAgent").parent_agent.name == "ExperimentModuleAgent"
     for name in ("ExperimentPlannerAgent", "ExperimentResultReviewAgent"):
         review_agent = system.agent(name)
         assert isinstance(review_agent, ExperimentReviewSessionAgent)

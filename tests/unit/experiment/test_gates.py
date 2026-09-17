@@ -174,14 +174,19 @@ def test_orchestrator_subordinates_clean_lanes():
     orch = agents.get("OrchestratorAgent", {})
     subordinates = orch.get("subordinates", [])
 
-    # Orchestrator has HypothesesAgent, ResearchAgent, ExperimentModuleAgent
+    # The roster is main's, with the module standing where TaskExecutorAgent
+    # stood — the profile is an overlay now, so the lanes it does not own are
+    # main's to decide.
     assert "HypothesesAgent" in subordinates
     assert "ResearchAgent" in subordinates
     assert "ExperimentModuleAgent" in subordinates
+    assert "PlannerAgent" in subordinates
+    assert "McpBuilderAgent" in subordinates
 
-    # Orchestrator does NOT have McpBuilderAgent or PlannerAgent at root
-    assert "McpBuilderAgent" not in subordinates
-    assert "PlannerAgent" not in subordinates
+    # The one lane rule the module does own: no orchestrator→Coder shadow
+    # science. Coding is reached through the module, as a route of its executor.
+    assert "CoderAgent" not in subordinates
+    assert "TaskExecutorAgent" not in subordinates
 
 
 def test_early_feasibility_skips_check_for_explicit_module_call():
