@@ -131,3 +131,59 @@ def test_unreachable_agent_is_left_alone():
     bare = SimpleNamespace(agent_name="x")
     prose = _response([types.Part(text='prose ```json\n{"a": 1}\n```')])
     assert _run(plugin, prose, ctx=bare) is None
+
+
+def _truncated_response(parts):
+    """A response the provider cut off at the output limit."""
+    return SimpleNamespace(
+        content=types.Content(role="model", parts=parts),
+        finish_reason=types.FinishReason.MAX_TOKENS,
+    )
+
+
+def test_a_truncated_config_says_so_in_the_log(caplog):
+    """Nothing is recoverable from half a JSON object — but silence is worse.
+
+    On 2026-09-17 routing_meta_agent was cut off at the output limit on both
+    fedot_tool calls of EXP-3. The module fell back to react_tools, and
+    logs/app.log carried not one mention of why: the reason survived only inside
+    the TaskResult summary, where nobody watching a run would look.
+    """
+    plugin = MetaJsonRecoveryPlugin()
+    half = json.dumps(CONFIG)[: len(json.dumps(CONFIG)) // 2]
+
+    with caplog.at_level("WARNING"):
+        out = _run(plugin, _truncated_response([types.Part(text=half)]))
+
+    assert out is None, "a half-written config must not be passed off as recovered"
+    assert plugin.repaired == []
+    text = caplog.text
+    assert "MAX_TOKENS" in text
+    assert "FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS" in text, (
+        "the log must name the knob that fixes it"
+    )
+
+
+def test_an_ordinary_unrecoverable_answer_stays_quiet_about_tokens(caplog):
+    """Only truncation earns the token warning; prose with no JSON is a
+    different failure and must not be blamed on the output limit."""
+    plugin = MetaJsonRecoveryPlugin()
+
+    with caplog.at_level("WARNING"):
+        out = _run(plugin, _response([types.Part(text="I could not build a config.")]))
+
+    assert out is None
+    assert "FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS" not in caplog.text
+
+
+def test_a_recoverable_answer_is_still_recovered_when_truncated():
+    """Truncation that still left a complete object behind is recoverable, and
+    the salvage must win over the warning."""
+    plugin = MetaJsonRecoveryPlugin()
+
+    out = _run(plugin, _truncated_response([
+        types.Part(text="Here is the config:\n```json\n" + json.dumps(CONFIG) + "\n```\ntrailing"),
+    ]))
+
+    assert out is not None
+    assert plugin.repaired == ["pool_generator"]

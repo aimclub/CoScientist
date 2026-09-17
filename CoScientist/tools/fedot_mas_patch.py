@@ -504,7 +504,23 @@ class MetaJsonRecoveryPlugin(BasePlugin):
             payload = _extract_json(thought)
             source = "thought"
         if not isinstance(payload, dict):
-            return None  # nothing recoverable; let the original error report it
+            # Nothing recoverable — the original error will report it. Say WHY
+            # when the cause is knowable, because the alternative is what
+            # happened on 2026-09-17: routing_meta_agent was cut off at the
+            # output limit on both fedot_tool calls of EXP-3, the module fell
+            # back to react_tools, and logs/app.log carried not one mention of
+            # it. The reason survived only inside the TaskResult summary, where
+            # nobody watching the run would look.
+            if _finished_truncated(llm_response):
+                _log.warning(
+                    "MetaJsonRecovery: %s hit the output limit "
+                    "(finish_reason=MAX_TOKENS) with no complete JSON left to "
+                    "recover. Raise FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS — the "
+                    "library default is 2048, and a reasoning model spends that "
+                    "same budget on its thinking.",
+                    _agent_name_of(callback_context),
+                )
+            return None
 
         agent = _agent_name_of(callback_context)
         self.repaired.append(agent)
@@ -514,6 +530,20 @@ class MetaJsonRecoveryPlugin(BasePlugin):
             agent, source,
         )
         return _rewritten_json_response(llm_response, payload)
+
+
+def _finished_truncated(llm_response: Any) -> bool:
+    """Did the model stop because it ran out of output budget?
+
+    Read by name rather than by identity: the enum lives in google.genai.types
+    and a provider that reports the reason as a bare string should read the
+    same. Anything unrecognised is treated as "not truncated" — this only ever
+    decides whether to add a line to the log.
+    """
+    reason = getattr(llm_response, "finish_reason", None)
+    if reason is None:
+        return False
+    return "MAX_TOKENS" in str(getattr(reason, "name", reason)).upper()
 
 
 def _agent_name_of(callback_context: Any) -> str:
