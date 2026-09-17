@@ -47,17 +47,26 @@ _SHIM = r"""
 const fs = require('fs'), path = require('path'), vm = require('vm');
 const [root, planFile, lang, outFile] = process.argv.slice(2);
 const elements = new Map();
-const element = id => ({ id, innerHTML: '', classList: { add() {}, remove() {} },
+const classList = () => ({ add() {}, remove() {}, toggle() {}, contains: () => false });
+const element = id => ({ id, innerHTML: '', textContent: '', style: {},
+  classList: classList(), dataset: {},
   insertAdjacentHTML(_w, html) { this.innerHTML += html; },
+  setAttribute() {}, removeAttribute() {}, addEventListener() {},
   querySelector: () => null, querySelectorAll: () => [], scrollTop: 0, scrollHeight: 0 });
 const sandbox = {
   console,
   localStorage: { getItem: () => lang, setItem() {} },
   document: {
+    // documentElement/body: the modules toggle page-level classes on load.
+    documentElement: element('html'),
+    body: element('body'),
     getElementById: id => (elements.has(id) ? elements : elements.set(id, element(id))).get(id),
-    addEventListener() {}, querySelectorAll: () => [],
+    createElement: tag => element(tag),
+    addEventListener() {}, querySelector: () => null, querySelectorAll: () => [],
   },
-  window: {}, LANG_STORAGE_KEY: 'coscientist.lang',
+  // placeHitlCard escapes the request id before querying for an existing card.
+  CSS: { escape: v => String(v) },
+  window: {}, navigator: { language: lang }, LANG_STORAGE_KEY: 'coscientist.lang',
 };
 sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
