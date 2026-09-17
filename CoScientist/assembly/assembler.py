@@ -330,7 +330,15 @@ def build_system(
     built: Dict[str, BaseAgent] = {}
     for name in config.build_order():
         cfg = config.agent(name)
-        if cfg.cls == "llm":
+        if cfg.cls == "masda_a2a":
+            from CoScientist.a2a.masda import MasdaDatasetsAgent
+
+            agent = MasdaDatasetsAgent(
+                name=cfg.name,
+                description=cfg.description,
+                **cfg.resolved_options(),
+            )
+        elif cfg.cls == "llm":
             agent = _build_llm_agent(cfg, config, built, remote_subagents)
         elif cfg.cls in ("sequential", "parallel"):
             cls = SequentialAgent if cfg.cls == "sequential" else ParallelAgent

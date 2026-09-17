@@ -3,7 +3,7 @@ Application configuration using Pydantic Settings.
 """
 import os as _os
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Literal, Optional, Union
 
 from dotenv import find_dotenv as _find_dotenv, load_dotenv as _load_dotenv
 from pydantic import BaseModel, model_validator
@@ -234,6 +234,18 @@ class OrchestratorSettings(BaseModel):
     # backstop. Override via ORCHESTRATOR__MAX_LLM_CALLS.
     max_llm_calls: int = 3000
 
+
+class DatasetSettings(BaseModel):
+    """Select the dataset provider and configure the experimental MASDA wire adapter."""
+
+    provider: Literal["builtin", "masda"] = "builtin"
+    masda_a2a_rpc_url: Optional[str] = None
+    # Kept for the initial integration: the adapter may read its `url` field.
+    masda_a2a_card_url: Optional[str] = None
+    masda_a2a_version: str = "1.0"
+    masda_timeout_s: float = 300.0
+
+
 # =========================
 # CODE EXECUTION
 # =========================
@@ -371,6 +383,7 @@ class Settings(BaseSettings):
     hitl: HITLSettings = HITLSettings()
     context_init: ContextInitSettings = ContextInitSettings()
     orchestrator: OrchestratorSettings = OrchestratorSettings()
+    dataset: DatasetSettings = DatasetSettings()
     code_exec: CodeExecSettings = CodeExecSettings()
     tool_rag: ToolRAGSettings = ToolRAGSettings()
     mcp: MCPSettings = MCPSettings()

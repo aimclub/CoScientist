@@ -1588,6 +1588,7 @@ def orchestrator(ctx: PromptContext) -> str:
     has_exec = ctx.has_subordinate("TaskExecutorAgent")
     has_coder = ctx.has_subordinate("CoderAgent")
     has_research = ctx.has_subordinate("ResearchAgent")
+    has_masda = ctx.has_subordinate("MasdaDatasetsAgent")
     exec_routes_to_coder = has_exec and _executor_routes_to_coder(ctx)
     has_retrieval = ctx.has_tool("retrieval")
     has_research_graph = ctx.has_tool("research_graph_orchestrator")
@@ -1614,6 +1615,17 @@ def orchestrator(ctx: PromptContext) -> str:
         steps.append(
             "If the task is complex, break it into a short ordered list of sub-steps\n"
             "   yourself, then carry them out. There is NO planner tool — do not call one."
+        )
+
+    if has_masda:
+        steps.append(
+            "For acquisition of an EXISTING external dataset, delegate directly to\n"
+            "   MasdaDatasetsAgent through its A2A adapter. Use the returned local\n"
+            "   workspace artifact path for downstream work; a MASDA-local path is\n"
+            "   not a CoScientist file. A remote failure is a real\n"
+            "   blocker: report it and do not silently retry through CoderAgent or\n"
+            "   DatasetCollectorAgent. Computation or generation of new data still\n"
+            "   belongs to the execution path."
         )
 
     # The tool-discovery gate — an EARLY, mandatory step so it is read before
@@ -1654,8 +1666,12 @@ def orchestrator(ctx: PromptContext) -> str:
             )
         else:
             discovery_clause = ""
+        discovery_intro = (
+            "BEFORE delegating execution other than MASDA dataset acquisition, "
+            if has_masda else "BEFORE delegating, "
+        )
         steps.append(
-            "BEFORE delegating, call `retrieve_tools` to discover which ready-made MCP\n"
+            discovery_intro + "call `retrieve_tools` to discover which ready-made MCP\n"
             "   tools exist for the task. Run one or two focused `retrieve_tools` queries per capability\n"
             f"   (e.g. \"molecule generation\", \"inhibitor design\"); if a relevant tool\n"
             f"   exists, {prefer}.{research_clause}"
@@ -1689,10 +1705,17 @@ def orchestrator(ctx: PromptContext) -> str:
     # left for the orchestrator: it delegates the OUTCOME once and the router
     # picks the path (and absorbs the NO_MATCHING_TOOL abstention internally).
     if exec_routes_to_coder:
+        execution_example = (
+            "   existing tool\" and \"write/run code, clone repo X, run a\n"
+            "   computation\". Existing external dataset acquisition goes to\n"
+            "   MasdaDatasetsAgent instead."
+            if has_masda else
+            "   existing tool\" and \"write/run code, clone repo X, build this\n"
+            "   dataset\"."
+        )
         steps.append(
             "Send ALL execution to TaskExecutorAgent — both \"compute this with an\n"
-            "   existing tool\" and \"write/run code, clone repo X, build this\n"
-            "   dataset\". It routes to the right path itself, so do NOT pre-judge\n"
+            + execution_example + " It routes to the right path itself, so do NOT pre-judge\n"
             "   whether a ready tool exists, and do not split a step by execution\n"
             "   mechanism. Delegate the OUTCOME you need, with every concrete\n"
             "   detail (names, ids, URLs, thresholds, output format), writing any link\n"
