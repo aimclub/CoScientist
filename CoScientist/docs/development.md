@@ -481,6 +481,21 @@ enabled*" (`HITL__ENABLED` in `.env`). What it does depends on the class:
 
 Your template must contain `<<HITL>>` (it renders empty when off).
 
+`work_order: true` adds a contract around the run (`hitl/work_order*.py`):
+the agent declares a Work Order before acting, the guard keeps it inside the
+declared tools, and **before its final answer** the agent calls
+`submit_work_report` — summary, findings with evidence and confidence, a
+`met` / `partial` / `not_met` verdict on the done criteria, the actual outcome
+and artifacts. The web card sets these claims against what the system
+recorded (step statuses, calls per tool, performed side effects, amendments,
+blocked calls) and flags the gaps (`report_warnings`). The human accepts it,
+sends it back for rework (the tool returns `revise` and the agent keeps
+working in the same run, findings marked wrong included), or rejects it. It is
+confirmed at the order's tier, like the declaration. An agent that finishes
+without an accepted report hits `make_work_report_fallback` (last
+`after_agent` callback): the card is built from the record and the final
+answer, and a rejection replaces the answer so the parent can delegate again.
+
 ### 4.5a Critics
 
 Three critics exist, wired independently — you can run any subset:

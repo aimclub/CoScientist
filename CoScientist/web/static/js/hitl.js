@@ -17,6 +17,7 @@ const TRIGGER_KEYS = {
   bash_command: 'bashCommand',
   work_order: 'workOrder',
   work_order_amendment: 'workOrderAmendment',
+  work_report: 'workReport',
 };
 const hitlCards = new Map();  // request_id -> payload, re-rendered on language switch
 
@@ -120,6 +121,10 @@ function showHITL(data, { history = false } = {}) {
   // the free-text / option path below.
   if (data.form && Array.isArray(data.form.blocks)) {
     renderHitlForm(panel, data);
+  } else if (data.trigger === 'work_report') {
+    // Work Report (what the agent found, against its order): accept, send back
+    // for rework with findings marked wrong, or reject.
+    renderWorkReportCard(panel, data);
   } else if (String(data.trigger || '').startsWith('work_order')) {
     // Work Order (the agent's contract before it acts): its own card with
     // assumptions to uncheck, a veto countdown and a Pause button.
@@ -280,6 +285,13 @@ function hitlResponseSummary(response) {
     const rejected = ((response.form_values || {}).rejected_assumption_ids || []).length;
     return t('workOrder.approved')
       + (rejected ? ' — ' + t('workOrder.rejectedAssumptions').replace('{n}', rejected) : '')
+      + (feedback ? ': ' + feedback : '');
+  }
+  if (request.trigger === 'work_report') {
+    const disputed = ((response.form_values || {}).disputed_finding_ids || []).length;
+    const key = action === 'approve' ? 'workReport.accepted' : action === 'edit' ? 'workReport.sentBack' : 'workReport.rejected';
+    return t(key)
+      + (disputed ? ' — ' + t('workReport.disputedCount').replace('{n}', disputed) : '')
       + (feedback ? ': ' + feedback : '');
   }
   if (action === 'provide_input') return '💬 HITL Input: ' + (feedback || '(empty)');
@@ -649,14 +661,7 @@ function renderWorkOrderCard(panel, data) {
         </div>`;
   }
 
-  const countdown = !panel ? '' : timeout > 0 && !data.held ? `
-        <div id="wo-countdown-${rid}" class="mt-4 flex flex-col gap-1">
-          <p class="text-[11px] text-tertiary" data-wo-countdown-text>${escHtml(t('workOrder.countdown').replace('{s}', Math.ceil(timeout)))}</p>
-          <div class="h-1 w-full bg-surface-container-high rounded overflow-hidden">
-            <div data-wo-countdown-bar class="h-full bg-tertiary transition-[width] duration-1000 ease-linear" style="width:100%"></div>
-          </div>
-        </div>` : `
-        <p id="wo-countdown-${rid}" class="mt-4 text-[11px] text-outline-variant">${hitlLabel(data.held ? 'workOrder.paused' : 'workOrder.blocking')}</p>`;
+  const countdown = woCountdown(panel, data, timeout, 'workOrder.countdown');
 
   placeHitlCard(rid, `
         <div class="my-6 relative msg-enter" data-hitl-card="${escHtml(rid || '')}" data-wo-agent="${escHtml(data.agent_name || '')}" data-wo-rev="${escHtml(String(order.revision || 1))}">
@@ -692,6 +697,23 @@ function renderWorkOrderCard(panel, data) {
   if (timeout > 0 && !data.held) startWorkOrderCountdown(rid, timeout);
 }
 
+// The veto countdown (or "waiting for your decision") under a live card.
+function woCountdown(panel, data, timeout, textKey) {
+  const rid = data.request_id;
+  if (!panel) return '';
+  if (timeout > 0 && !data.held) {
+    return `
+        <div id="wo-countdown-${rid}" data-wo-countdown-key="${escHtml(textKey)}" class="mt-4 flex flex-col gap-1">
+          <p class="text-[11px] text-tertiary" data-wo-countdown-text>${escHtml(t(textKey).replace('{s}', Math.ceil(timeout)))}</p>
+          <div class="h-1 w-full bg-surface-container-high rounded overflow-hidden">
+            <div data-wo-countdown-bar class="h-full bg-tertiary transition-[width] duration-1000 ease-linear" style="width:100%"></div>
+          </div>
+        </div>`;
+  }
+  return `
+        <p id="wo-countdown-${rid}" class="mt-4 text-[11px] text-outline-variant">${hitlLabel(data.held ? 'workOrder.paused' : 'workOrder.blocking')}</p>`;
+}
+
 function startWorkOrderCountdown(rid, timeout) {
   stopWorkOrderCountdown(rid);
   const deadline = Date.now() + timeout * 1000;
@@ -701,7 +723,8 @@ function startWorkOrderCountdown(rid, timeout) {
     const left = Math.max(0, (deadline - Date.now()) / 1000);
     const text = box.querySelector('[data-wo-countdown-text]');
     const bar = box.querySelector('[data-wo-countdown-bar]');
-    if (text) text.textContent = t('workOrder.countdown').replace('{s}', Math.ceil(left));
+    const key = box.dataset.woCountdownKey || 'workOrder.countdown';
+    if (text) text.textContent = t(key).replace('{s}', Math.ceil(left));
     if (bar) bar.style.width = (100 * left / timeout) + '%';
     if (left <= 0) stopWorkOrderCountdown(rid);
   };
@@ -743,11 +766,17 @@ function respondWorkOrder(rid, action) {
     if (feedbackEl) feedbackEl.focus();
     return;
   }
-  const card = feedbackEl ? feedbackEl.closest('[data-wo-agent]') : null;
+  const card = feedbackEl ? feedbackEl.closest('[data-hitl-card]') : null;
   const rejectedIds = card
     ? [...card.querySelectorAll('input[data-wo-assumption]')].filter(el => !el.checked).map(el => el.dataset.woAssumption)
     : [];
-  if (card) card.querySelectorAll('input[data-wo-assumption]').forEach(el => { el.disabled = true; });
+  const disputedIds = card
+    ? [...card.querySelectorAll('input[data-wr-finding]')].filter(el => el.checked).map(el => el.dataset.wrFinding)
+    : [];
+  if (card) card.querySelectorAll('input[data-wo-assumption], input[data-wr-finding]').forEach(el => { el.disabled = true; });
+  let formValues = null;
+  if (action === 'approve') formValues = { rejected_assumption_ids: rejectedIds };
+  else if (action === 'edit' && disputedIds.length) formValues = { disputed_finding_ids: disputedIds };
   sendHitlResponse({
     type: 'hitl_response',
     request_id: rid,
@@ -755,7 +784,7 @@ function respondWorkOrder(rid, action) {
     approved: action === 'approve',
     instructions: feedback || null,
     free_input: feedback || null,
-    form_values: action === 'approve' ? { rejected_assumption_ids: rejectedIds } : null,
+    form_values: formValues,
   });
   document.getElementById('hitl-panel').classList.add('hidden');
   disableHitlControls(rid);
@@ -763,14 +792,192 @@ function respondWorkOrder(rid, action) {
   if (box) box.remove();
 }
 
+// ── Work Report cards ────────────────────────────────────────────────────
+const WR_VERDICT_STYLE = {
+  met: 'text-primary border-primary/30 bg-primary/10',
+  partial: 'text-tertiary border-tertiary/30 bg-tertiary/10',
+  not_met: 'text-error border-error/30 bg-error/10',
+};
+const WR_CONFIDENCE_STYLE = {
+  high: 'text-primary border-primary/30 bg-primary/10',
+  medium: 'text-on-surface-variant border-outline-variant/20 bg-surface-container-high',
+  low: 'text-tertiary border-tertiary/30 bg-tertiary/10',
+};
+
+function wrWarning(w) {
+  const params = {
+    steps: (w.steps || []).join(', '),
+    findings: (w.findings || []).join(', '),
+    count: w.count != null ? w.count : '',
+    verdict: t('workReport.verdict.' + w.verdict, w.verdict || ''),
+  };
+  return `<p class="text-[11px] text-tertiary">⚠ ${escHtml(fillHitl('workReport.warn.' + w.code, params))}</p>`;
+}
+
+function wrFindingRow(f, interactive) {
+  const head = `
+            <span class="font-mono text-[10px] text-outline-variant">${escHtml(f.id)}</span>
+            <span class="text-on-surface">${escHtml(f.text || '')}</span>
+            ${woChip(t('workReport.confidence.' + f.confidence, f.confidence || ''), WR_CONFIDENCE_STYLE[f.confidence] || WR_CONFIDENCE_STYLE.medium)}
+            ${f.step_id ? `<span class="font-mono text-[10px] text-outline-variant">${escHtml(f.step_id)}</span>` : ''}`;
+  const evidence = f.evidence
+    ? `<p class="pl-6 text-[11px] font-mono text-secondary break-all whitespace-pre-wrap">${escHtml(f.evidence)}</p>`
+    : `<p class="pl-6 text-[11px] text-tertiary italic">${hitlLabel('workReport.noEvidence')}</p>`;
+  if (interactive) {
+    return `
+          <li class="flex flex-col gap-0.5">
+            <label class="flex items-baseline gap-2 flex-wrap cursor-pointer">
+              <input type="checkbox" data-wr-finding="${escHtml(f.id)}" class="accent-error" title="${escHtml(t('workReport.markWrong'))}" />
+              ${head}
+            </label>
+            ${evidence}
+          </li>`;
+  }
+  const struck = f.disputed ? 'line-through' : '';
+  return `
+          <li class="flex flex-col gap-0.5">
+            <div class="flex items-baseline gap-2 flex-wrap pl-6 ${struck}">${head}</div>
+            ${evidence}
+          </li>`;
+}
+
+// The report set against the order. interactive=true lets the human mark findings wrong.
+function workReportBody(order, report, extra, interactive) {
+  const warnings = (extra.warnings || []).map(wrWarning).join('');
+  const journal = extra.journal || {
+    tool_calls: order.tool_calls || {},
+    side_effects: [],
+    amendments: order.amendments || [],
+    deviations: order.deviations || [],
+  };
+  const disputed = new Set(report.disputed_finding_ids || []);
+  const findings = (report.findings || [])
+    .map(f => wrFindingRow({ ...f, disputed: disputed.has(f.id) }, interactive)).join('');
+  const verdict = report.fallback ? '' : woChip(
+    t('workReport.verdict.' + report.done_verdict, report.done_verdict || ''),
+    WR_VERDICT_STYLE[report.done_verdict] || WR_VERDICT_STYLE.partial);
+  const done = order.done_criteria || verdict ? `
+            <p>${escHtml(order.done_criteria || '')} ${verdict}</p>
+            ${report.done_evidence ? `<p class="text-[11px] text-outline-variant">${escHtml(report.done_evidence)}</p>` : ''}` : '';
+  const outcome = order.expected_outcome || report.actual_outcome ? `
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div><p class="text-[10px] text-outline-variant">${hitlLabel('workOrder.expected')}</p><p>${escHtml(order.expected_outcome || '—')}</p></div>
+              <div><p class="text-[10px] text-outline-variant">${hitlLabel('workReport.actual')}</p><p class="text-on-surface">${escHtml(report.actual_outcome || '—')}</p></div>
+            </div>` : '';
+  const artifacts = (report.artifacts || []).map(a => `
+            <p class="flex items-baseline gap-2 flex-wrap">${woChip(t('workReport.kind.' + a.kind, a.kind || 'other'))}
+              <span class="font-mono text-[11px] text-on-surface break-all">${escHtml(a.ref || '')}</span>
+              ${a.description ? `<span class="text-[11px] text-outline-variant">${escHtml(a.description)}</span>` : ''}</p>`).join('');
+  const calls = Object.entries(journal.tool_calls || {}).map(([tn, n]) => woChip(`${tn} ×${n}`)).join(' ');
+  const effects = (journal.side_effects || []).map(k => woChip(k, WO_TIER_STYLE.side_effect)).join(' ');
+  const amendments = (journal.amendments || []).map(a =>
+    `<p class="text-[11px]"><span class="font-mono text-outline-variant">rev ${escHtml(String(a.revision || '?'))}</span> ${escHtml(a.reason || '')}</p>`).join('');
+  const deviations = (journal.deviations || []).map(d =>
+    `<p class="text-[11px] text-tertiary font-mono">⚠ ${escHtml(d.tool || '?')} — ${escHtml(t('workOrder.reason.' + d.reason, d.reason || ''))}</p>`).join('');
+  const journalHtml = calls || effects || amendments || deviations ? `
+            <div class="flex flex-col gap-1.5">
+              ${calls ? `<div class="flex flex-wrap gap-1">${calls}</div>` : ''}
+              ${effects ? `<div class="flex flex-wrap gap-1 items-center"><span class="text-[10px] text-outline-variant">${hitlLabel('workReport.sideEffectsDone')}</span> ${effects}</div>` : ''}
+              ${amendments ? `<div><p class="text-[10px] text-outline-variant">${hitlLabel('workReport.amendments')}</p>${amendments}</div>` : ''}
+              ${deviations ? `<div><p class="text-[10px] text-outline-variant">${hitlLabel('workReport.deviations')}</p>${deviations}</div>` : ''}
+            </div>` : '';
+  const summary = report.fallback
+    ? `<p class="text-[10px] text-outline-variant mb-1">${hitlLabel('workReport.finalAnswer')}</p>
+       <pre class="text-[11px] text-on-surface whitespace-pre-wrap bg-surface-container-high p-2 rounded border border-outline-variant/10 max-h-64 overflow-auto">${escHtml(report.summary || '—')}</pre>`
+    : `<p class="text-on-surface">${escHtml(report.summary || '')}</p>`;
+  return `
+        <div class="text-xs text-on-surface-variant leading-relaxed">
+          ${warnings ? `<div class="mt-3 flex flex-col gap-1 p-2 rounded border border-tertiary/30 bg-tertiary/5">${warnings}</div>` : ''}
+          ${woSection('workOrder.goal', `<p>${escHtml(order.goal || '')}</p>`)}
+          ${woSection('workReport.summary', summary)}
+          ${woSection('workReport.findings', findings
+    ? (interactive ? `<p class="text-[10px] text-outline-variant mb-1">${hitlLabel('workReport.findingsHint')}</p>` : '')
+    + `<ol class="flex flex-col gap-1.5">${findings}</ol>` : '')}
+          ${woSection('workOrder.done', done)}
+          ${woSection('workReport.outcome', outcome)}
+          ${woSection('workReport.steps', (order.steps || []).length
+      ? `<ol class="flex flex-col gap-1.5">${order.steps.map(woStepRow).join('')}</ol>` : '')}
+          ${woSection('workReport.artifacts', artifacts ? `<div class="flex flex-col gap-1">${artifacts}</div>` : '')}
+          ${woSection('workReport.journal', journalHtml)}
+        </div>`;
+}
+
+function renderWorkReportCard(panel, data) {
+  const rid = data.request_id;
+  const ctx = data.context || {};
+  const order = ctx.work_order || {};
+  const report = ctx.work_report || {};
+  const tier = ctx.tier || order.tier || 'compute';
+  const timeout = panel ? (Number(data.timeout_seconds) || 0) : 0;
+  const messageHtml = hitlDynamic(data, 'message', localizeHitlMessage(data));
+  // A fallback card comes after the run ended: "rework" can only return the task to the parent.
+  const reviseKey = report.fallback ? 'workReport.btn.returnParent' : 'workReport.btn.rework';
+
+  if (panel) {
+    panel.classList.remove('hidden');
+    panel.innerHTML = `
+        <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-2">
+          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${hitlLabel('workReport.title')}</h3>
+          <p class="text-[11px] text-on-surface-variant">${messageHtml}</p>
+          <p class="text-[10px] text-outline-variant leading-relaxed">${hitlLabel('hitl.answerInChat')}</p>
+        </div>`;
+  }
+
+  placeHitlCard(rid, `
+        <div class="my-6 relative msg-enter" data-hitl-card="${escHtml(rid || '')}" data-wr-agent="${escHtml(data.agent_name || '')}">
+          <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
+            ${woHeader('fact_check', 'workReport.title', tier, data.agent_name, order.revision)}
+            <p class="font-mono text-[10px] text-outline-variant mt-1">${escHtml(t('workReport.round').replace('{n}', report.round || 1))}</p>
+            <p class="text-sm text-on-surface-variant leading-relaxed mt-2">${messageHtml}</p>
+            ${workReportBody(order, report, ctx, !report.fallback)}
+            ${woCountdown(panel, data, timeout, 'workReport.countdown')}
+            <div id="hitl-controls-${rid}" class="mt-4 flex flex-col gap-2">
+              <textarea id="hitl-feedback-${rid}" rows="2" data-i18n-placeholder="workReport.ph.notes" placeholder="${escHtml(t('workReport.ph.notes'))}"
+                class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
+              <div class="flex flex-wrap gap-3">
+                <button onclick="respondWorkOrder('${rid}', 'approve')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+                  <span class="material-symbols-outlined text-base">check_circle</span> ${hitlLabel('hitl.btn.accept')}
+                </button>
+                ${timeout > 0 && !data.held ? `
+                <button id="wo-pause-${rid}" onclick="holdWorkOrder('${rid}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-tertiary/30 text-tertiary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-tertiary/10 transition-all">
+                  <span class="material-symbols-outlined text-base">pause</span> ${hitlLabel('workOrder.btn.pause')}
+                </button>` : ''}
+                <button onclick="respondWorkOrder('${rid}', 'edit')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
+                  <span class="material-symbols-outlined text-base">replay</span> ${hitlLabel(reviseKey)}
+                </button>
+                <button onclick="respondWorkOrder('${rid}', 'reject')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
+                  <span class="material-symbols-outlined text-base">close</span> ${hitlLabel('hitl.btn.reject')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>`);
+
+  if (timeout > 0 && !data.held) startWorkOrderCountdown(rid, timeout);
+}
+
 function latestWorkOrderCard(agent) {
   const cards = document.querySelectorAll(`[data-wo-agent="${CSS.escape(agent || '')}"]`);
   return cards.length ? cards[cards.length - 1] : null;
 }
 
-// Non-blocking notices: a read-tier contract, step progress, a deviation.
+// Non-blocking notices: a read-tier contract, step progress, a deviation, and
+// (from a replayed transcript) a submitted Work Report.
 function renderWorkOrderNotice(data) {
   const kind = data.kind;
+  if (kind === 'report') {
+    const order = data.work_order || {};
+    const report = data.work_report || {};
+    appendMsgToFeed(`
+          <div class="my-4 relative msg-enter" data-wr-agent="${escHtml(data.agent_name || '')}">
+            <div class="relative bg-surface-container-lowest p-5 rounded-xl border border-outline-variant/20">
+              ${woHeader('fact_check', 'workReport.title', data.tier || order.tier, data.agent_name, order.revision)}
+              ${workReportBody(order, report, data, false)}
+            </div>
+          </div>`);
+    scrollChat();
+    return;
+  }
   if (kind === 'declared' || kind === 'amended') {
     const order = data.work_order || {};
     const amended = kind === 'amended';

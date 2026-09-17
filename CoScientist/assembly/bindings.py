@@ -840,6 +840,18 @@ WORK_ORDER_TOOL_DOCS = (
             "human can follow the plan live."
         ),
     ),
+    ToolDoc(
+        name="submit_work_report",
+        signature=(
+            "submit_work_report(summary, findings, done_verdict, done_evidence, "
+            "actual_outcome, artifacts)"
+        ),
+        purpose=(
+            "(Work Order) Before your final answer, report what you found (with "
+            "evidence) and produced. The human accepts it, sends it back for rework "
+            "or rejects it. Returns status accepted / revise / rejected."
+        ),
+    ),
 )
 
 
