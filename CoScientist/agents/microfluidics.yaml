@@ -79,6 +79,7 @@ agents:
 
   # ── ТЗ stage (ported from VibePAV) ─────────────────────────────────────────
   TZAgent:
+    internal: true
     class: sequential
     description: >-
       составляет структурированное техническое задание (ТЗ) из свободного

@@ -1407,23 +1407,23 @@
 
           <div class="space-y-1 pt-0.5 max-h-80 overflow-y-auto pr-1">
             ${(() => {
-            const list = st.tasks && st.tasks.length ? st.tasks : [];
-            const displayList = showAllPlanTasks ? list : list.slice(0, 5);
-            const remaining = list.length - 5;
-            return displayList.map(task => {
-              const isDone = isTaskDone(task);
-              const isActive = isTaskActive(task);
-              const norm = isDone ? 'done' : (isActive ? 'active' : 'todo');
-              const icon = norm === 'done' ? 'check' : (norm === 'active' ? 'autorenew' : 'radio_button_unchecked');
-              const tone = norm === 'done' ? 'text-outline-variant' : (norm === 'active' ? 'text-primary font-medium' : 'text-outline-variant');
-              const spin = norm === 'active' ? 'si-icon' : '';
-              const assignee = task.assignee ? agentLabel(task.assignee) : '';
-              return `<div class="flex items-center gap-2 py-1 border-b border-outline-variant/10 last:border-b-0 text-[10px] ${tone}" title="${esc(task.title || '')}">
+              const list = st.tasks && st.tasks.length ? st.tasks : [];
+              const displayList = showAllPlanTasks ? list : list.slice(0, 5);
+              const remaining = list.length - 5;
+              return displayList.map(task => {
+                const isDone = isTaskDone(task);
+                const isActive = isTaskActive(task);
+                const norm = isDone ? 'done' : (isActive ? 'active' : 'todo');
+                const icon = norm === 'done' ? 'check' : (norm === 'active' ? 'autorenew' : 'radio_button_unchecked');
+                const tone = norm === 'done' ? 'text-outline-variant' : (norm === 'active' ? 'text-primary font-medium' : 'text-outline-variant');
+                const spin = norm === 'active' ? 'si-icon' : '';
+                const assignee = task.assignee ? agentLabel(task.assignee) : '';
+                return `<div class="flex items-center gap-2 py-1 border-b border-outline-variant/10 last:border-b-0 text-[10px] ${tone}" title="${esc(task.title || '')}">
                   <span class="material-symbols-outlined text-[13px] shrink-0 ${spin}">${icon}</span>
                   <span class="font-medium flex-1 min-w-0 truncate">${task.id ? `<span class="font-mono text-[9px] opacity-75 mr-1">${esc(task.id)}</span>` : ''}${esc(task.title || '')}</span>
                   ${assignee ? `<span class="text-[8px] font-mono shrink-0 px-1 py-0.2 rounded bg-surface-container-high text-outline-variant/80">${esc(assignee)}</span>` : ''}
                 </div>`;
-            }).join('') + (remaining > 0 ? `
+              }).join('') + (remaining > 0 ? `
                 <div class="pt-0.5 flex items-center justify-between text-[9px] font-mono">
                   <button type="button" class="si-toggle-plan-tasks text-primary/80 hover:underline">
                     ${showAllPlanTasks ? '↑ ' + (lang === 'ru' ? 'Свернуть задачи' : 'Show fewer') : '+ ' + pick(TEXT.moreTasks).replace('%d', remaining)}
@@ -1432,7 +1432,7 @@
                     ${esc(pick(TEXT.openPlan))} →
                   </button>
                 </div>` : '');
-          })()}
+            })()}
           </div>` : ''}
         </div>` : ''}
 
@@ -1457,15 +1457,15 @@
             </div>
           </div>
           ${activityExpanded ? steps.map(step => {
-            const stepTone = step.status === 'error' ? 'text-error'
-              : step.status === 'done' ? 'text-outline-variant' : 'text-primary';
-            const stepIcon = step.status === 'error' ? 'close'
-              : step.status === 'done' ? 'check' : step.icon;
-            return `<div class="flex items-center gap-2 ${stepTone}">
+              const stepTone = step.status === 'error' ? 'text-error'
+                : step.status === 'done' ? 'text-outline-variant' : 'text-primary';
+              const stepIcon = step.status === 'error' ? 'close'
+                : step.status === 'done' ? 'check' : step.icon;
+              return `<div class="flex items-center gap-2 ${stepTone}">
               <span class="material-symbols-outlined text-[13px] ${step.status === 'running' ? 'si-icon' : ''}">${stepIcon}</span>
               <span class="text-[10px] truncate">${esc(step.text)}</span>
             </div>`;
-          }).join('') : ''}
+            }).join('') : ''}
         </div>` : ''}
       </div>` : ''}`;
 
@@ -1485,7 +1485,7 @@
           return;
         }
         planExpanded = !planExpanded;
-        try { localStorage.setItem(PLAN_EXPAND_KEY, planExpanded ? 'on' : 'off'); } catch (_) {}
+        try { localStorage.setItem(PLAN_EXPAND_KEY, planExpanded ? 'on' : 'off'); } catch (_) { }
         paint();
       });
     }
@@ -1497,7 +1497,7 @@
           return;
         }
         activityExpanded = !activityExpanded;
-        try { localStorage.setItem(ACTIVITY_EXPAND_KEY, activityExpanded ? 'on' : 'off'); } catch (_) {}
+        try { localStorage.setItem(ACTIVITY_EXPAND_KEY, activityExpanded ? 'on' : 'off'); } catch (_) { }
         paint();
       });
     }
