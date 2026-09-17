@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 from uuid import uuid4
 
@@ -8,6 +9,24 @@ from CoScientist.graph.memory import get_knowledge_graph
 from CoScientist.graph.models import Edge, Node
 from CoScientist.graph.research import store as research_store
 from CoScientist.graph.store import GraphStore
+
+
+def _served_frontend(client: TestClient) -> str:
+    """The page plus every script it loads, as the browser ends up with it.
+
+    Asserting against the page alone was how these checks came to be satisfied
+    by dead code: a17e018 (#333) pasted a copy of the front-end into index.html
+    with no opening <script>, and the assertions matched that copy while the
+    real code ran from /static/js. Fetching what the page actually loads cannot
+    be satisfied by text nobody executes.
+    """
+    page = client.get("/").text
+    sources = [page]
+    for src in re.findall(r'<script src="(/static/[^"]+)"', page):
+        response = client.get(src)
+        assert response.status_code == 200, f"{src} is loaded but not served"
+        sources.append(response.text)
+    return "\n".join(sources)
 
 
 def _scope_ids():
@@ -435,12 +454,12 @@ def test_settings_modal_exposes_a_graph_delete_button():
 
     app = create_app()
     with TestClient(app) as client:
-        index_html = client.get("/").text
+        frontend = _served_frontend(client)
 
-    assert 'id="graph-delete-btn"' in index_html
-    assert 'id="graph-delete-target"' in index_html
-    assert "async function deleteGraphData()" in index_html
-    assert "method: 'DELETE'" in index_html
+    assert 'id="graph-delete-btn"' in frontend
+    assert 'id="graph-delete-target"' in frontend
+    assert "async function deleteGraphData()" in frontend
+    assert "method: 'DELETE'" in frontend
 
 
 def test_graph_ui_uses_active_user_and_session_in_url():
@@ -448,14 +467,14 @@ def test_graph_ui_uses_active_user_and_session_in_url():
 
     app = create_app()
     with TestClient(app) as client:
-        index_html = client.get("/").text
+        frontend = _served_frontend(client)
         graph_html = client.get("/graph").text
 
-    assert 'id="graph-link"' in index_html
+    assert 'id="graph-link"' in frontend
     assert (
         "/graph?user_id=${encodeURIComponent(user.id)}"
         "&session_id=${encodeURIComponent(session.id)}"
-    ) in index_html
+    ) in frontend
     assert "new URLSearchParams(location.search)" in graph_html
     assert (
         "/api/users/${encodeURIComponent(userId)}"
