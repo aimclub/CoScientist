@@ -52,6 +52,15 @@ defaults:
 pipeline:
   linear: true
 
+# Tools that serve the system, not the task: a Work Order allows them without
+# declaring them and its card does not list them (see system.yaml). This profile
+# does not extend system.yaml, so it names its own. get_active_tasks needs no
+# entry: it is an orientation read, allowed anyway.
+internal_tools:
+  - update_task_status
+  # waiting between polls of a CFD run is not work the human needs to approve
+  - sleep_tool
+
 agents:
   # ── Root — routes MODULES, never their internals ───────────────────────────
   RootOrchestrator:
@@ -213,6 +222,10 @@ agents:
     prompt: research
     tools: [websearch, paper_analysis, papers_search, task_tracker]
     output_key: search_results
+    # Runs once per LIT-xx task: each run is a plan, a check per step and a
+    # report. Drop work_order_step_review here if that is too many checks.
+    work_order: true
+    work_order_step_review: true
     # What each LIT-xx task actually found is the deliverable — post it to the
     # chat instead of leaving it inside the orchestrator's function_response.
     report_output: true
@@ -270,6 +283,12 @@ agents:
     prompt: microfluidics_mol_design
     tools: [molecular_design_stub]
     output_key: design_candidates
+    # Structured hand-off (DesignCandidates): who to synthesise, with SMILES.
+    output_schema: design_candidates
+    callbacks:
+      # A molecule the customer fixed in the ТЗ is handed on as the only
+      # candidate — no LLM call, no design.
+      before_agent: [use_fixed_target_molecule]
 
   SynthRouteAgent:
     class: llm
@@ -280,6 +299,9 @@ agents:
     prompt: microfluidics_synth_route
     tools: [retrosynthesis_stub]
     output_key: synthesis_routes
+    # Structured hand-off (SynthesisRoutes): steps with reactants / agents /
+    # products / conditions / yield — the shape the economics server costs.
+    output_schema: synthesis_routes
 
   # Node 5 is a LEAF: nothing consumes `economics` until the report (11).
   EconomicsAgent:
@@ -292,6 +314,17 @@ agents:
     # economics_mcp once MCP_MICROFLUIDIC_ECONOMIC is set, otherwise the stub.
     tools: [economics_mcp, economics_mcp_stub]
     output_key: economics
+    # The agent sends routes and substances to an external service: the human
+    # approves the plan (what goes out, what is expected), checks every step
+    # (sent / expected / found) and the final report. Needs HITL__ENABLED=true —
+    # without it none of this is attached and the agent runs straight through.
+    hitl: true
+    work_order: true
+    work_order_step_review: true
+    callbacks:
+      before_agent: [inject_target_molecule]
+      # The server's numbers, as given, for the report: economics_ranking.
+      after_tool: [collect_economics_result]
 
   # ── Module C — stages 6–10: experiment ─────────────────────────────────────
   ModuleC_Experiment:
@@ -340,9 +373,16 @@ agents:
       команды на микрофлюидную установку, снимая телеметрию.
     prompt: microfluidics_equipment
     # cfd_mcp once MCP_MICROFLUIDIC_CFD_3_TOOLS is set, otherwise the stub.
-    tools: [cfd_mcp, cfd_mcp_stub, rig_mcp_stub, microfluidics]
+    # sleep: waiting between polls of a CFD run that returned "pending".
+    tools: [cfd_mcp, cfd_mcp_stub, rig_mcp_stub, microfluidics, sleep]
     output_key: experiment_journal
     hitl: true
+    # Once per loop iteration. Rig commands are side effects: blocking checks.
+    work_order: true
+    work_order_step_review: true
+    callbacks:
+      # The CFD service's numbers, as given, per request id: cfd_runs.
+      after_tool: [collect_cfd_result]
 
   # Writes back into `experiment_plan` ON PURPOSE: that shared key IS edge 8→7,
   # so the next iteration of EquipmentAgent runs the refined plan.

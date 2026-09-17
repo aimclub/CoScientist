@@ -10,6 +10,7 @@ import re
 from typing import Any, AsyncGenerator, Optional
 
 import litellm
+from google.adk.models._capabilities import LlmCapabilities
 from google.adk.models.lite_llm import LiteLlm
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
@@ -215,6 +216,22 @@ class RetryingLiteLlm(LiteLlm):
     def __init__(self, model: str, *, deadline_s: Optional[float] = None, **kwargs):
         super().__init__(model=model, **kwargs)
         self._deadline_s = deadline_s
+
+    @property
+    def capabilities(self) -> LlmCapabilities:
+        """No native output schema next to tools.
+
+        LiteLlm declares it, so ADK would send the JSON schema as the response
+        format together with the tools. Providers behind OpenRouter then answer
+        with the JSON straight away and never call a tool (seen with DeepSeek
+        on the microfluidics design stages). Declaring it unsupported makes ADK
+        add its set_model_response tool instead: the model calls its tools
+        first and gives the structured answer through that tool at the end.
+        Agents with an output schema and no tools are not affected.
+        """
+        return LlmCapabilities(
+            **super().capabilities.model_dump() | {"output_schema_and_tools": False}
+        )
 
     @staticmethod
     async def _verify_proxy_reachable() -> None:

@@ -89,7 +89,51 @@ SEED_SEARCH_RESULTS = (
     "контакта; описан микрореактор с T-образным смесителем."
 )
 
-SEED_STATE = {"structured_tz": SEED_TZ, "search_results": SEED_SEARCH_RESULTS}
+# What module A hands on: the structured literature analysis (routes with step
+# products and yields, so the economics stage can cost them).
+SEED_LITERATURE_ANALYSIS = {
+    "target_molecule": {"fixed": False, "name": "", "smiles": "", "cas": "",
+                        "source": "не задано"},
+    "analogues": [
+        {"name": "Додецилбензолсульфонат натрия (SDBS)",
+         "smiles": "CCCCCCCCCCCCc1ccc(cc1)S(=O)(=O)[O-].[Na+]",
+         "compound_class": "сульфонаты",
+         "properties": [{"name": "Солеустойчивость", "value": "до 50 г/л",
+                         "conditions": "Ca2+/Mg2+"}],
+         "relevance": "дёшев, но осаждается в жёсткой воде", "sources": []},
+        {"name": "Кокамидопропилбетаин (CAPB)",
+         "smiles": "CCCCCCCCCCCC(=O)NCCC[N+](C)(C)CC(=O)[O-]",
+         "compound_class": "бетаины",
+         "properties": [{"name": "МПН", "value": "0.008 мН/м",
+                         "conditions": "в смеси с со-ПАВ, 90 °C"}],
+         "relevance": "устойчив к жёсткости и 90 °C", "sources": []},
+    ],
+    "synthesis_routes": [
+        {"product": "додецилсульфат натрия (CCCCCCCCCCCCOS(=O)(=O)[O-].[Na+])",
+         "steps": [
+             {"operation": "сульфатирование",
+              "reagents": ["1-dodecanol (CCCCCCCCCCCCO)", "chlorosulfonic acid (OS(=O)(=O)Cl)"],
+              "products": ["dodecyl hydrogen sulfate (CCCCCCCCCCCCOS(=O)(=O)O)"],
+              "yield_value": "90 %",
+              "conditions": [{"name": "Температура", "value": "25 °C", "conditions": ""}]},
+             {"operation": "нейтрализация",
+              "reagents": ["продукт стадии 1", "sodium hydroxide ([Na+].[OH-])"],
+              "products": ["sodium dodecyl sulfate (CCCCCCCCCCCCOS(=O)(=O)[O-].[Na+])"],
+              "yield_value": "95 %",
+              "conditions": [{"name": "Температура", "value": "30 °C", "conditions": ""}]},
+         ],
+         "flow_suitability": "экзотермика — узкий канал, контроль времени контакта",
+         "sources": []},
+    ],
+    "facts": [{"statement": SEED_SEARCH_RESULTS, "query_id": "LIT-01", "sources": []}],
+    "gaps": [],
+}
+
+SEED_STATE = {
+    "structured_tz": SEED_TZ,
+    "target_molecule": SEED_LITERATURE_ANALYSIS["target_molecule"],
+    "literature_analysis": SEED_LITERATURE_ANALYSIS,
+}
 
 KICKOFF = "Выполни свою стадию по данным из состояния сессии."
 

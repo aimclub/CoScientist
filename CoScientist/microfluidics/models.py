@@ -8,6 +8,8 @@ carries a provenance status. The TZAgent pipeline outputs:
   TZSpecAgent      -> StructuredTZ        (state key ``structured_tz``)
   TZQueryGenAgent  -> LiteratureQueries   (state key ``tz_literature_queries``)
   LiteratureSynthesisAgent -> LiteratureAnalysis (state key ``literature_analysis``)
+  MolDesignAgent   -> DesignCandidates    (state key ``design_candidates``)
+  SynthRouteAgent  -> SynthesisRoutes     (state key ``synthesis_routes``)
 
 ``CoScientist.microfluidics.render.render_tz_document`` turns a validated
 StructuredTZ into the human-readable Markdown document of the reference
@@ -20,7 +22,7 @@ JSON-like text instead of Enum reprs.
 """
 from __future__ import annotations
 
-from typing import List
+from typing import List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -145,10 +147,21 @@ class Analogue(BaseModel):
 
 
 class RouteStep(BaseModel):
-    """Одна операция маршрута синтеза."""
+    """Одна операция маршрута синтеза.
+
+    ``products`` и ``yield_value`` нужны для экономической оценки: сервер
+    стоимости собирает маршрут по продуктам стадий и выводит расход реагентов
+    обратным ходом от выхода.
+    """
 
     operation: str
     reagents: List[str] = Field(default_factory=list)
+    products: List[str] = Field(
+        default_factory=list, description="Что получается на стадии (название / SMILES)"
+    )
+    yield_value: str = Field(
+        default="", description="Выход стадии как в источнике, напр. «75 %»; пусто — не указан"
+    )
     conditions: List[NamedValue] = Field(default_factory=list)
 
 
@@ -183,9 +196,94 @@ class LiteratureAnalysis(BaseModel):
     )
 
 
+# ── Module B hand-off: design and synthesis routes ───────────────────────────
+# The shape the design system (ГПН) is expected to return, and the one the
+# economics server costs: a step names its reactants, agents and products and
+# carries a yield as a fraction — the fields rank_routes_by_cost chains a route by.
+
+class Substance(BaseModel):
+    """Вещество: название и, если известна, структура."""
+
+    name: str = Field(default="", description="Название; английское, если известно")
+    smiles: str = Field(default="", description="SMILES, если известен")
+    amount: str = Field(
+        default="",
+        description="Только для растворителей и катализаторов: сколько закупать "
+                    "на всю наработку, напр. «500 ml»; пусто — не учитывать",
+    )
+
+
+class DesignCandidate(BaseModel):
+    """Кандидат на синтез (или сама целевая молекула заказчика)."""
+
+    name: str
+    smiles: str = Field(default="", description="SMILES; пусто — структура не установлена")
+    compound_class: str = Field(default="", description="Химический класс")
+    properties: List[NamedValue] = Field(default_factory=list)
+    tz_fit: str = Field(default="", description="Какие требования ТЗ закрывает, какие нет")
+    risks: str = Field(default="")
+    source: str = Field(
+        default="дизайн", description="Откуда кандидат: «ТЗ», «дизайн» или «литература»"
+    )
+    stub: bool = Field(default=False, description="Данные получены от заглушки")
+
+
+class DesignCandidates(BaseModel):
+    """Выход стадии 3 — кого синтезировать."""
+
+    fixed_target: bool = Field(
+        default=False, description="Заказчик задал молекулу — подбора не было"
+    )
+    candidates: List[DesignCandidate] = Field(default_factory=list)
+    gaps: List[str] = Field(default_factory=list, description="Каких данных не хватает")
+
+
+class ProcessStep(BaseModel):
+    """Стадия маршрута в форме, которую принимает сервер стоимости."""
+
+    operation: str
+    reactants: List[Substance] = Field(
+        default_factory=list,
+        description="Исходные вещества стадии; продукт предыдущей стадии — name «@prev»",
+    )
+    agents: List[Substance] = Field(
+        default_factory=list, description="Растворители, катализаторы, среды"
+    )
+    products: List[Substance] = Field(default_factory=list)
+    conditions: List[NamedValue] = Field(default_factory=list)
+    yield_fraction: Optional[float] = Field(
+        default=None, gt=0, le=1, description="Выход стадии, доля 0–1; нет данных — null"
+    )
+    flow_notes: str = Field(
+        default="", description="Как стадия переносится на проточный реактор"
+    )
+
+
+class SynthesisRoute(BaseModel):
+    """Маршрут синтеза одного продукта."""
+
+    route_id: str = Field(description="GPN-1, GPN-2… — ретросинтез; LIT-1… — из литературы")
+    product: Substance
+    source: str = Field(default="ретросинтез", description="«ретросинтез» или «литература»")
+    steps: List[ProcessStep] = Field(default_factory=list)
+    flow_suitability: str = Field(default="")
+    bottlenecks: List[str] = Field(default_factory=list)
+    sources: List[str] = Field(default_factory=list, description="Ссылки / DOI")
+    stub: bool = Field(default=False, description="Маршрут получен от заглушки")
+
+
+class SynthesisRoutes(BaseModel):
+    """Выход стадии 4 — как синтезировать."""
+
+    routes: List[SynthesisRoute] = Field(default_factory=list)
+    gaps: List[str] = Field(default_factory=list)
+
+
 __all__ = [
     "Analogue",
     "CANONICAL_BLOCKS",
+    "DesignCandidate",
+    "DesignCandidates",
     "FieldStatus",
     "LiteratureAnalysis",
     "LiteratureFact",
@@ -194,8 +292,12 @@ __all__ = [
     "LiteratureRoute",
     "NamedValue",
     "OPEN_STATUSES",
+    "ProcessStep",
     "RouteStep",
     "StructuredTZ",
+    "Substance",
+    "SynthesisRoute",
+    "SynthesisRoutes",
     "TargetMolecule",
     "TZBlock",
     "TZFieldRow",

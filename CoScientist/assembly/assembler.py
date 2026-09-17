@@ -188,7 +188,7 @@ def _work_order_tool_names(
 
 
 def _attach_work_order_callbacks(
-    kwargs: dict, agent_name: str, internal_tools: List[str]
+    kwargs: dict, agent_name: str, internal_tools: List[str], step_review: bool = False
 ) -> None:
     """Reset the contract and enforce it FIRST: on agent start, before anything
     reads the state; before a tool, so a call the contract blocks never reaches
@@ -199,6 +199,7 @@ def _attach_work_order_callbacks(
         make_reset_work_order,
         make_work_order_guard,
         make_work_report_fallback,
+        make_work_step_journal,
     )
 
     def as_list(value) -> list:
@@ -212,6 +213,13 @@ def _attach_work_order_callbacks(
     kwargs["before_tool_callback"] = (
         [make_work_order_guard(agent_name, internal_tools=internal_tools)] + as_list(kwargs.get("before_tool_callback"))
     )
+    if step_review:
+        # First after the tool: the journal records the answer as the tool gave
+        # it, before any other callback could replace it.
+        kwargs["after_tool_callback"] = (
+            [make_work_step_journal(agent_name, internal_tools=internal_tools)]
+            + as_list(kwargs.get("after_tool_callback"))
+        )
     # Last after the agent: the other after_agent callbacks (e.g. collectors)
     # see the answer as the agent gave it; the human's verdict may replace it.
     kwargs["after_agent_callback"] = (
@@ -276,6 +284,7 @@ def _build_llm_agent(
         tools.extend(make_work_order_tools(
             cfg.name, _work_order_tool_names(cfg, system, tool_entries),
             internal_tools=system.internal_tools,
+            step_review=cfg.work_order_step_review,
         ))
 
     if hitl_attached:
@@ -306,7 +315,10 @@ def _build_llm_agent(
 
     callbacks = _callback_kwargs(cfg, ctx)
     if work_order_attached:
-        _attach_work_order_callbacks(callbacks, cfg.name, system.internal_tools)
+        _attach_work_order_callbacks(
+            callbacks, cfg.name, system.internal_tools,
+            step_review=cfg.work_order_step_review,
+        )
 
     kwargs = dict(
         name=cfg.name,
@@ -459,7 +471,7 @@ def load_config_cli() -> None:  # pragma: no cover — `python -m` helper
         if cfg.hitl:
             bits.append("hitl")
         if cfg.work_order:
-            bits.append("work_order")
+            bits.append("work_order+step_review" if cfg.work_order_step_review else "work_order")
         if cfg.uses_critic():
             bits.append("critic")
         if cfg.a2a:

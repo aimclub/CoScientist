@@ -89,6 +89,10 @@ def test_retrosynthesis_returns_a_route_with_operating_conditions():
     for step in result["steps"]:
         assert step["operation"]
         assert step["conditions"]
+        # Node 5 costs the route: it chains the steps by their products and
+        # scales the reagents back from the yields.
+        assert step["products"]
+        assert 0 < step["yield"] <= 1
 
 
 def test_economics_returns_cost_russian_availability_and_risks():

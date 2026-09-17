@@ -22,6 +22,8 @@ The YAML declares every agent of the system in one place. Per agent:
                 steps, tools, side effects) for the human to review, and
                 a guard keeps it inside the approved contract (llm agents with
                 hitl only; see CoScientist/hitl/work_order.py)
+  work_order_step_review: every finished step of the Work Order goes before the
+                human — what was sent, expected and found (needs work_order)
   critic:       an LLM critic reviews the agent's output once and it rewrites
                 on request (session agents only; bool or "${settings.path}")
   report_output: the agent's final answer is a deliverable — show it in the chat
@@ -193,6 +195,9 @@ class AgentConfig(BaseModel):
     hitl: bool = False
     # Declare a Work Order before acting; a guard enforces it (needs hitl).
     work_order: bool = False
+    # Each finished Work Order step is reviewed by the human: sent / expected /
+    # found, with the calls the system recorded for it (needs work_order).
+    work_order_step_review: bool = False
     # An LLM critic reviews my proposed output once before it is accepted, and
     # I rewrite it if the critic asks (session-style custom agents only — the
     # review loop is theirs). Independent of the orchestrator's pre/post-action
@@ -254,6 +259,8 @@ class AgentConfig(BaseModel):
             # The contract is declared through tools and reviewed through the
             # HITL channel: only a plain llm agent with hitl has both.
             raise ValueError("work_order needs class: llm and hitl: true")
+        if self.work_order_step_review and not self.work_order:
+            raise ValueError("work_order_step_review needs work_order: true")
         return self
 
     def is_enabled(self) -> bool:

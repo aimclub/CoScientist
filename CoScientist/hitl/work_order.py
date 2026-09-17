@@ -25,10 +25,25 @@ ReportStatus = Literal["pending", "accepted", "revise", "rejected"]
 DoneVerdict = Literal["met", "partial", "not_met"]
 Confidence = Literal["high", "medium", "low"]
 ArtifactKind = Literal["file", "dataset", "graph_node", "link", "other"]
+StepReviewStatus = Literal["pending", "accepted", "revise", "rejected"]
+
+# How much of a tool answer the step journal keeps: enough to judge the step,
+# small enough that the flat per-agent state key stays cheap to rewrite whole.
+STEP_CALL_ARGS_CHARS = 500
+STEP_CALL_RESULT_CHARS = 2000
 
 
 def order_key(agent_name: str) -> str:
     return f"work_order:{agent_name}"
+
+
+class StepReview(BaseModel):
+    """The human's verdict on one finished step (step-review mode only)."""
+    status: StepReviewStatus = "pending"
+    round: int = 1
+    notes: str = ""
+    # Earlier rounds the human sent back: what was claimed and called then.
+    history: List[Dict[str, Any]] = Field(default_factory=list)
 
 
 class WorkStep(BaseModel):
@@ -38,9 +53,18 @@ class WorkStep(BaseModel):
     # Internal tools the agent named for this step: allowed anyway, kept out of
     # `tools` (and so out of the tier), shown only when the viewer asks for them.
     internal_tools: List[str] = Field(default_factory=list)
+    # What the agent will SEND to its tools in this step (queries, names,
+    # SMILES, parameters) — the human sees it before anything leaves.
+    inputs: str = ""
     expected_outcome: str = ""
     status: StepStatus = "pending"
     note: str = ""
+    # What the agent says the step produced (concrete values, ids).
+    result: str = ""
+    # Recorded by the system, not claimed by the agent: every tool call made
+    # while this step was in progress — {tool, args, result_excerpt, is_error}.
+    calls: List[Dict[str, Any]] = Field(default_factory=list)
+    review: Optional[StepReview] = None
 
 
 class Assumption(BaseModel):
@@ -100,6 +124,8 @@ class WorkOrder(BaseModel):
     side_effects: List[SideEffect] = Field(default_factory=list)
     expected_outcome: str = ""
     fallback: str = ""
+    # Every finished step goes before the human (sent / expected / found).
+    step_review: bool = False
     tier: Tier = Tier.READ
     status: OrderStatus = "pending"
     revision: int = 1
@@ -121,6 +147,18 @@ class WorkOrder(BaseModel):
 
     def step(self, step_id: str) -> Optional[WorkStep]:
         return next((s for s in self.steps if s.id == step_id), None)
+
+    def step_for_call(self, tool_name: str) -> Optional[WorkStep]:
+        """The in-progress step a call of ``tool_name`` belongs to.
+
+        The in-progress step that declares the tool wins; otherwise the only
+        in-progress step; with several and none declaring it — no step.
+        """
+        active = [s for s in self.steps if s.status == "in_progress"]
+        declaring = [s for s in active if tool_name in s.tools]
+        if declaring:
+            return declaring[0]
+        return active[0] if len(active) == 1 else None
 
 
 def load_order(state: Any, agent_name: str) -> Optional[WorkOrder]:
@@ -158,6 +196,8 @@ def render_work_order(order: WorkOrder) -> str:
         for s in order.steps:
             tools = f" — {', '.join(s.tools)}" if s.tools else ""
             lines.append(f"  {_STEP_MARK.get(s.status, '[ ]')} {s.id}. {s.title}{tools}")
+            if s.inputs:
+                lines.append(f"      send: {s.inputs}")
             if s.expected_outcome:
                 lines.append(f"      expect: {s.expected_outcome}")
     if order.planned_tools:
@@ -171,6 +211,45 @@ def render_work_order(order: WorkOrder) -> str:
     if order.fallback:
         lines.append(f"If it fails: {order.fallback}")
     return "\n".join(lines)
+
+
+def render_work_step_review(order: WorkOrder, step: WorkStep) -> str:
+    """Plain-text step review (sent / expected / found) for the console and logs."""
+    review = step.review or StepReview()
+    lines = [
+        f"Work Step: {order.agent} {step.id} (rev {order.revision}, round {review.round}, "
+        f"tier {order.tier.value})",
+        f"Step: {step.title} [{step.status}]",
+    ]
+    if step.tools:
+        lines.append(f"Tools: {', '.join(step.tools)}")
+    lines.append(f"Sent: {step.inputs or '-'}")
+    lines.append(f"Expected: {step.expected_outcome or '-'}")
+    lines.append(f"Found: {step.result or '-'}")
+    if step.note:
+        lines.append(f"Note: {step.note}")
+    if step.calls:
+        lines.append("\nCalls:")
+        for call in step.calls:
+            mark = " [ERROR]" if call.get("is_error") else ""
+            lines.append(f"  {call.get('tool', '?')}{mark}({call.get('args', '')})")
+            excerpt = str(call.get("result_excerpt") or "")
+            if excerpt:
+                lines.append(f"      -> {excerpt[:300]}")
+    else:
+        lines.append("Calls: none recorded")
+    return "\n".join(lines)
+
+
+def unreviewed_steps(order: WorkOrder) -> List[str]:
+    """Finished steps that used tools but were never accepted by the human."""
+    if not order.step_review:
+        return []
+    return [
+        s.id for s in order.steps
+        if s.status == "done" and (s.tools or s.calls)
+        and (s.review is None or s.review.status != "accepted")
+    ]
 
 
 def performed_side_effects(order: WorkOrder) -> List[str]:
@@ -202,6 +281,9 @@ def report_warnings(order: WorkOrder) -> List[Dict[str, Any]]:
             warnings.append({"code": "findings_without_evidence", "findings": unsupported})
     if order.deviations:
         warnings.append({"code": "deviations", "count": len(order.deviations)})
+    unreviewed = unreviewed_steps(order)
+    if unreviewed:
+        warnings.append({"code": "unreviewed_steps", "steps": unreviewed})
     return warnings
 
 

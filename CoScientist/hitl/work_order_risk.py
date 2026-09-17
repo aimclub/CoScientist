@@ -71,6 +71,24 @@ TOOL_TIERS: dict[str, Tier] = {
     "get_download_link": Tier.READ,
     "install_package": Tier.SIDE_EFFECT,
     "get_upload_link": Tier.SIDE_EFFECT,
+    # microfluidics: economics server — price lists and name resolution, read only
+    "search_reagents_by_name": Tier.READ,
+    "get_price": Tier.READ,
+    "search_by_structure": Tier.READ,
+    "resolve_chemicals": Tier.READ,
+    "estimate_synthesis_cost": Tier.READ,
+    "rank_routes_by_cost": Tier.READ,
+    # microfluidics: CFD service — a run takes the service's only solver slot;
+    # reading results and the reactor list is harmless.
+    "cfd_list_reactors": Tier.READ,
+    "cfd_get_experiment_result": Tier.READ,
+    "cfd_list_artifacts": Tier.READ,
+    "cfd_run_reactor_experiment": Tier.COMPUTE,
+    "cfd_cancel_run": Tier.COMPUTE,
+    # microfluidics: the chip simulation and the rig. The rig is a stub today,
+    # but it stands for physical hardware: its commands are reviewed as such.
+    "cfd_mcp_stub": Tier.COMPUTE,
+    "rig_mcp_stub": Tier.SIDE_EFFECT,
 }
 
 # Side effect a tool has by its very nature, whatever its arguments.

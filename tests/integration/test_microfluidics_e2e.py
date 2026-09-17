@@ -1,14 +1,16 @@
 """Live end-to-end test of the MICROFLUIDICS profile, stages 1–2.
 
 Runs module A (TZAgent -> PlannerAgent -> LiteratureOrchestrator ->
-ResearchAgent) on a microfluidics-case request and verifies the contract
-the profile exists for:
+ResearchAgent -> LiteratureSynthesisAgent) on a microfluidics-case request and
+verifies the contract the profile exists for:
 
   1. the ТЗ agent produces a structured ТЗ table from the free-form request;
   2. literature queries (LIT-xx) are derived FROM that ТЗ;
   3. the planner registers them as tasks assigned to ResearchAgent;
   4. the request that actually REACHES ResearchAgent carries the ТЗ-derived
-     task (its terms), i.e. the ТЗ table drives the literature search.
+     task (its terms), i.e. the ТЗ table drives the literature search;
+  5–7. every answer is kept, the summary is saved, and module A hands on a
+     structured literature_analysis.
 
 Scoped to module A on purpose: since stages 3–11 landed, the ROOT
 (RootOrchestrator) would also run design, experiment and report, which is a
@@ -169,3 +171,28 @@ def test_tz_table_drives_the_literature_requests():
         f"Requests: {[str(r)[:200] for r in research_requests]}"
     )
     print(f"[e2e] ТЗ -> ResearchAgent handoff confirmed for: {matched}")
+
+    # 5) Every ResearchAgent answer was kept — not only the last one. The
+    # collector runs inside the AgentTool sub-run: this proves its state delta
+    # reaches the parent session.
+    findings = state.get("literature_findings") or []
+    assert findings, "no literature finding reached the parent session"
+    assert len(findings) >= min(2, len(research_requests)), (
+        f"{len(research_requests)} delegations but only {len(findings)} findings kept"
+    )
+    print(f"[e2e] findings kept: {[f.get('query_id') or '?' for f in findings]}")
+
+    # 6) The orchestrator's closing summary was saved.
+    assert state.get("literature_report"), "literature_report was not saved"
+
+    # 7) Module A handed on its structured result.
+    from CoScientist.microfluidics.models import LiteratureAnalysis
+
+    analysis = LiteratureAnalysis.model_validate(state.get("literature_analysis") or {})
+    assert analysis.analogues or analysis.synthesis_routes or analysis.facts, (
+        f"literature_analysis is empty: {analysis}"
+    )
+    assert state.get("target_molecule") is not None, "target_molecule was not extracted"
+    print(f"[e2e] literature_analysis: {len(analysis.analogues)} analogues, "
+          f"{len(analysis.synthesis_routes)} routes, {len(analysis.facts)} facts, "
+          f"{len(analysis.gaps)} gaps")

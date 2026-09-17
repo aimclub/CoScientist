@@ -692,6 +692,9 @@ REGISTRY.register_tool(ToolEntry(
     ),
 ))
 
+# The economics server's contract, as recorded in
+# tests/fixtures/economics_mcp/ (scripts/mcp_contract_dump.py). Real tool names,
+# so a Work Order can check them; the answers arrive as structuredContent.
 REGISTRY.register_tool(ToolEntry(
     key="economics_mcp",
     factory=_microfluidic_economic,
@@ -699,17 +702,113 @@ REGISTRY.register_tool(ToolEntry(
     runtime_resolved=True,  # real MCP server — tool surface comes from it
     docs=(
         ToolDoc(
-            name="<economics MCP tools>",
-            signature="(varies)",
+            name="resolve_chemicals",
+            signature="resolve_chemicals(names, use_llm=false)",
             purpose=(
-                "Tools of the economics MCP server: cost of a synthesis route, "
-                "reagent availability in Russia, supply risks — call them "
-                "directly with the route and its reagents."
+                "Names or SMILES -> structures. Up to 200 per call. Returns "
+                "items[]: {input, canonical_smiles, inchikey, formula, molar_mass, "
+                "method, confidence, error, hint}; error \"unresolved\" means no "
+                "structure, and a route using that name cannot be costed."
             ),
+            usage=(
+                "Russian trivial names often do NOT resolve (\"додеканол-1\", "
+                "\"хлорсульфоновая кислота\" fail); English names and SMILES do "
+                "(\"1-dodecanol\", \"chlorosulfonic acid\"). Send English names or "
+                "SMILES.",
+                "A string that reads both as a name and as SMILES (CO, NO, Br) is "
+                "refused: write it as a SMILES object or a full name.",
+            ),
+        ),
+        ToolDoc(
+            name="rank_routes_by_cost",
+            signature=(
+                "rank_routes_by_cost(routes, target_qty, target_unit, default_yield=1.0, "
+                "strategy=\"cheapest\", similarity=\"soft\", preferred_currency=\"RUB\", "
+                "rank_by=\"per_unit\", include_breakdown=true)"
+            ),
+            purpose=(
+                "Costs synthesis routes for ONE target amount and ranks them "
+                "cheapest first. Returns routes[]: {route_id, status (ok | partial | "
+                "invalid | unpriceable), rank, currency, cost_per_unit, cost_packs, "
+                "starting_materials[] (smiles, qty, unit, moles), intermediates, "
+                "missing[] (smiles, reason), steps_smiles, resolved_inputs, warnings, "
+                "estimate (per-reagent line_items with the chosen offer)}, plus "
+                "assumptions."
+            ),
+            usage=(
+                "Route: {route_id, steps, target_smiles?, target_name?, overrides?}. "
+                "Step: {reactants: [...], agents: [...], products: [...], conditions, "
+                "yield (0-1)} — substances as {\"smiles\": ...} or English names; "
+                "\"@prev\" in reactants is the previous step's product (never in the "
+                "first step). Or a reaction SMILES string.",
+                "target_unit is g, kg, mol or mmol (not a volume). default_yield 1.0 "
+                "means no losses — pass real yields.",
+                "Only starting materials are bought; agents (solvents, catalysts) are "
+                "NOT in the sum unless given an amount or an override.",
+                "partial = a lower bound (missing items are not priced). invalid = a "
+                "name did not resolve (see warnings) — fix the name, run again.",
+                "cost_per_unit is the cost of the quantity used; cost_packs is the "
+                "real bill for whole packs. Compare costs only within one currency.",
+            ),
+        ),
+        ToolDoc(
+            name="estimate_synthesis_cost",
+            signature=(
+                "estimate_synthesis_cost(reagents, strategy=\"cheapest\", "
+                "similarity=\"hard\", preferred_currency=\"RUB\")"
+            ),
+            purpose=(
+                "Costs a plain list of reagents {smiles | name, qty, unit, "
+                "purity_min?}. Returns line_items[] (match_level, chosen {supplier, "
+                "name_raw, pack_qty, pack_unit, price, price_currency, unit_price}, "
+                "packs_needed, cost_packs, cost_per_unit), total_by_currency, "
+                "resolved_inputs, missing[]."
+            ),
+            usage=(
+                "Use it for a set of reagents without a route (a solvent, a "
+                "catalyst, a recheck). With similarity=hard any miss is an error "
+                "no_exact_match; soft allows the nearest structure.",
+            ),
+        ),
+        ToolDoc(
+            name="get_price",
+            signature="get_price(name, pack_unit=null, purity_grade=null, limit=50)",
+            purpose=(
+                "All offers for a fuzzy-matched name, cheapest per unit first: "
+                "result[] {name_raw, supplier, purity_grade, pack_qty, pack_unit, "
+                "price, price_currency, unit_price, price_basis}."
+            ),
+            usage=(
+                "Explains a missing or suspicious item: read name_raw — a match may "
+                "be a solution (\"0,1Н\"), another grade or a neighbour by name "
+                "(\"ацетон\" also matches \"ацетилацетон\").",
+            ),
+        ),
+        ToolDoc(
+            name="search_by_structure",
+            signature="search_by_structure(smiles=null, name=null, mode=\"exact\", limit=50)",
+            purpose=(
+                "Offers by structure (give smiles OR name): per compound the cheapest "
+                "offer, with match_level (точный, по_связности, подструктура)."
+            ),
+            usage=("mode=substructure finds molecules containing the fragment.",),
+        ),
+        ToolDoc(
+            name="search_reagents_by_name",
+            signature="search_reagents_by_name(query, limit=20)",
+            purpose=(
+                "Fuzzy search by Russian name, one row per reagent: result[] "
+                "{name_norm, supplier, best_price, price_currency, unit_price, "
+                "pack_qty, pack_unit, offer_count, similarity}."
+            ),
+            usage=("For finding how a reagent is listed in the price lists.",),
         ),
     ),
 ))
 
+# The CFD service's contract, as recorded in tests/fixtures/cfd_mcp/
+# (scripts/mcp_contract_dump.py). A run is asynchronous: it blocks up to
+# wait_seconds, then the result is fetched by the caller-chosen request_id.
 REGISTRY.register_tool(ToolEntry(
     key="cfd_mcp",
     factory=_microfluidic_cfd,
@@ -717,13 +816,74 @@ REGISTRY.register_tool(ToolEntry(
     runtime_resolved=True,  # real MCP server — tool surface comes from it
     docs=(
         ToolDoc(
-            name="<CFD MCP tools>",
-            signature="(varies)",
+            name="cfd_list_reactors",
+            signature="cfd_list_reactors()",
             purpose=(
-                "Tools of the chip CFD MCP server: from geometry / flows / "
-                "telemetry they compute RTD, pressure drop and a recommended "
-                "geometry — call them directly."
+                "The reactor geometries: reactors[] {reactor (the id to run), title, "
+                "description, available, zones {inlets, outlets, inlet_count, "
+                "supports_two_reactant_feed}}."
             ),
+            usage=(
+                "An A + B reaction needs supports_two_reactant_feed=true; "
+                "available=false means the mesh is not on the host.",
+            ),
+        ),
+        ToolDoc(
+            name="cfd_run_reactor_experiment",
+            signature=(
+                "cfd_run_reactor_experiment(reactor, inlet_speed_m_per_s, "
+                "concentration_a_mol_per_m3, concentration_b_mol_per_m3, "
+                "rate_constant_m3_per_mol_s, temperature_k=298.15, turnovers=4, "
+                "wait_seconds=600, request_id)"
+            ),
+            purpose=(
+                "Runs flow -> mixing -> reaction on one reactor for A + B -> C and "
+                "returns status (succeeded | failed | cancelled | pending), design "
+                "(the parameters used), derived.operating_point (flow rate, "
+                "residence_time_s_estimate), results (pressure_drop_pa, "
+                "residence_time_s, damkohler, conversion_by_reactant, outlet "
+                "concentrations, mixing index), trustworthy, blocking, stages[] "
+                "(exit_code per stage) and error {code, message}."
+            ),
+            usage=(
+                "Always pass your own request_id (e.g. \"exp1-cfd-1\"): reusing it "
+                "returns the same run instead of starting another; a FAILED run "
+                "reused starts afresh.",
+                "Units: concentrations in mol/m3 (1 mol/L = 1000 mol/m3), rate "
+                "constant in m3/(mol*s), temperature in K, inlet speed in m/s "
+                "(flow rate = speed x inlet area).",
+                "status pending: the call stopped waiting, the run goes on — fetch it "
+                "with cfd_get_experiment_result. The service runs ONE experiment at a "
+                "time: error capacity_exceeded means wait and retry the same request_id.",
+                "A result is valid only with blocking empty; a run under 3 residence "
+                "times reports near-zero conversion that means \"still filling\" — "
+                "raise turnovers. Aim for damkohler 1-10; do not tune the diffusivity.",
+            ),
+        ),
+        ToolDoc(
+            name="cfd_get_experiment_result",
+            signature="cfd_get_experiment_result(request_id)",
+            purpose=(
+                "The run by request_id, same payload as the run call. pending — "
+                "still running; succeeded, failed, cancelled — final."
+            ),
+            usage=(
+                "Between polls of a pending run wait with sleep_tool — do not poll "
+                "in a tight loop.",
+            ),
+        ),
+        ToolDoc(
+            name="cfd_list_artifacts",
+            signature="cfd_list_artifacts(request_id, offset=0, limit=50)",
+            purpose=(
+                "Files the run produced: keys[] are paths on the CFD host, not "
+                "links — cite their count, not the paths."
+            ),
+        ),
+        ToolDoc(
+            name="cfd_cancel_run",
+            signature="cfd_cancel_run(request_id)",
+            purpose="Stops a run in progress (only your own, only if it is no longer needed).",
         ),
     ),
 ))
@@ -1277,6 +1437,21 @@ def _microfluidics_literature(name: str):
     return factory
 
 
+def _use_fixed_target_molecule():
+    from CoScientist.microfluidics.design import use_fixed_target_molecule
+    return use_fixed_target_molecule
+
+
+def _collect_cfd_result():
+    from CoScientist.microfluidics.cfd import collect_cfd_result
+    return collect_cfd_result
+
+
+def _collect_economics_result():
+    from CoScientist.microfluidics.economics import collect_economics_result
+    return collect_economics_result
+
+
 def _export_tz_and_queries():
     from CoScientist.microfluidics.export import export_tz_and_queries
     return export_tz_and_queries
@@ -1414,6 +1589,12 @@ _cb("inject_target_molecule", "before_agent",
     factory=_microfluidics_literature("inject_target_molecule"))
 _cb("pin_target_molecule", "after_agent",
     factory=_microfluidics_literature("pin_target_molecule"))
+# Microfluidics module B: keep the economics server's costing answers as given.
+_cb("collect_economics_result", "after_tool", factory=lambda ctx: _collect_economics_result())
+# Stage 3: a molecule fixed in the ТЗ is handed on as the only candidate — no design.
+_cb("use_fixed_target_molecule", "before_agent", factory=lambda ctx: _use_fixed_target_molecule())
+# Stage 9: keep the CFD service's run results as given, under their request ids.
+_cb("collect_cfd_result", "after_tool", factory=lambda ctx: _collect_cfd_result())
 # Critic callbacks: their LLM prompts embed the orchestrator's current roster.
 _cb("pre_action_critique", "after_model", factory=_pre_action_critique)
 _cb("post_action_critique", "after_tool", factory=_post_action_critique)
@@ -1444,9 +1625,11 @@ def _register_classes() -> None:
 def _register_schemas() -> None:
     from CoScientist.storage import MCPRanking, ToolRanking
     from CoScientist.microfluidics.models import (
+        DesignCandidates,
         LiteratureAnalysis,
         LiteratureQueries,
         StructuredTZ,
+        SynthesisRoutes,
     )
     from CoScientist.context_init.models import ResearchFrame
 
@@ -1457,6 +1640,9 @@ def _register_schemas() -> None:
     REGISTRY.register_output_schema("structured_tz", StructuredTZ)
     REGISTRY.register_output_schema("tz_literature_queries", LiteratureQueries)
     REGISTRY.register_output_schema("literature_analysis", LiteratureAnalysis)
+    # Module B hand-off: candidates and routes in the shape the economics server costs.
+    REGISTRY.register_output_schema("design_candidates", DesignCandidates)
+    REGISTRY.register_output_schema("synthesis_routes", SynthesisRoutes)
     # Framing entities of the meta-model, filled per run (context_init pre-stage).
     REGISTRY.register_output_schema("research_frame", ResearchFrame)
 

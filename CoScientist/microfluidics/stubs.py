@@ -89,6 +89,8 @@ def retrosynthesis_stub(smiles: str) -> Dict[str, Any]:
                 "num": 1,
                 "operation": "Сульфатирование додеканола хлорсульфоновой кислотой",
                 "reagents": ["додеканол-1", "хлорсульфоновая кислота"],
+                "products": ["додецилгидросульфат (CCCCCCCCCCCCOS(=O)(=O)O)"],
+                "yield": 0.9,
                 "conditions": {
                     "Температура, °C": 25,
                     "Время, мин": 90,
@@ -99,7 +101,9 @@ def retrosynthesis_stub(smiles: str) -> Dict[str, Any]:
             {
                 "num": 2,
                 "operation": "Нейтрализация водным раствором NaOH",
-                "reagents": ["NaOH (20 % водн.)"],
+                "reagents": ["продукт стадии 1", "NaOH (20 % водн.)"],
+                "products": ["додецилсульфат натрия (CCCCCCCCCCCCOS(=O)(=O)[O-].[Na+])"],
+                "yield": 0.95,
                 "conditions": {
                     "Температура, °C": 30,
                     "Время, мин": 30,
@@ -109,7 +113,9 @@ def retrosynthesis_stub(smiles: str) -> Dict[str, Any]:
             {
                 "num": 3,
                 "operation": "Отгонка растворителя и сушка продукта",
-                "reagents": [],
+                "reagents": ["продукт стадии 2"],
+                "products": ["додецилсульфат натрия, сухой"],
+                "yield": 0.98,
                 "conditions": {
                     "Температура, °C": 60,
                     "Давление, мбар": 40,
