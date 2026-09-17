@@ -281,10 +281,31 @@ class RetryingLiteLlm(LiteLlm):
             # Drop the stalled HTTP response rather than leaking the connection.
             await source.aclose()
 
+    def _apply_dynamic_openrouter_provider(self, effective_model: str) -> None:
+        """Dynamically sync provider routing from settings.web without breaking custom kwargs."""
+        if not effective_model or not (effective_model.startswith("openrouter/") or effective_model.startswith("~")):
+            return
+        extra = _openrouter_provider_kwargs(effective_model)
+        if extra and "extra_body" in extra:
+            if not isinstance(getattr(self, "_additional_args", None), dict):
+                self._additional_args = {}
+            extra_body = self._additional_args.setdefault("extra_body", {})
+            if isinstance(extra_body, dict):
+                extra_body["provider"] = extra["extra_body"]["provider"]
+        else:
+            if isinstance(getattr(self, "_additional_args", None), dict):
+                extra_body = self._additional_args.get("extra_body")
+                if isinstance(extra_body, dict):
+                    extra_body.pop("provider", None)
+                    if not extra_body:
+                        self._additional_args.pop("extra_body", None)
+
     async def generate_content_async(
         self, llm_request: LlmRequest, stream: bool = False
     ) -> AsyncGenerator[LlmResponse, None]:
         await self._verify_proxy_reachable()
+        effective_model = getattr(llm_request, "model", None) or getattr(self, "model", "") or ""
+        self._apply_dynamic_openrouter_provider(effective_model)
         attempt = throttle_attempt = 0
         while True:
             yielded = False
@@ -476,6 +497,48 @@ def _reasoning_kwargs(model: str, spec: Optional[Any]) -> dict:
     )
 
 
+def _openrouter_provider_kwargs(model: str) -> dict:
+    """litellm kwargs implementing OpenRouter provider routing for *model*.
+
+    Returns an empty dict if the model is not routed through OpenRouter,
+    or if default routing is active with no specific provider ordering.
+    """
+    if not (model.startswith("openrouter/") or model.startswith("~")):
+        return {}
+    web = settings.web
+    sort_val = (getattr(web, "openrouter_provider_sort", None) or "default").strip().lower()
+    order_val = getattr(web, "openrouter_provider_order", None)
+
+    provider_cfg = {}
+    if sort_val in ("price", "throughput", "latency"):
+        provider_cfg["sort"] = sort_val
+    if order_val:
+        if isinstance(order_val, str):
+            providers = [p.strip() for p in order_val.split(",") if p.strip()]
+        elif isinstance(order_val, (list, tuple)):
+            providers = [str(p).strip() for p in order_val if str(p).strip()]
+        else:
+            providers = []
+        if providers:
+            provider_cfg["order"] = providers
+
+    if not provider_cfg:
+        return {}
+    return {"extra_body": {"provider": provider_cfg}}
+
+
+def _combine_llm_kwargs(*kwarg_dicts: dict) -> dict:
+    """Merge multiple kwargs dicts for LiteLlm, combining extra_body cleanly."""
+    merged = {}
+    for d in kwarg_dicts:
+        for k, v in d.items():
+            if k == "extra_body" and isinstance(v, dict) and isinstance(merged.get("extra_body"), dict):
+                merged["extra_body"] = {**merged["extra_body"], **v}
+            else:
+                merged[k] = v
+    return merged
+
+
 def make_llm(
     model: str = MODEL,
     *,
@@ -483,9 +546,13 @@ def make_llm(
     reasoning: Optional[Any] = None,
 ) -> LiteLlm:
     """Return a (retry-wrapped) LiteLlm for the main model (or an override)."""
+    kwargs = _combine_llm_kwargs(
+        _reasoning_kwargs(model, reasoning),
+        _openrouter_provider_kwargs(model),
+    )
     return RetryingLiteLlm(
         model=model, deadline_s=deadline_s, timeout=REQUEST_TIMEOUT,
-        **_reasoning_kwargs(model, reasoning)
+        **kwargs
     )
 
 
@@ -493,9 +560,13 @@ def make_coder_llm(
     *, deadline_s: Optional[float] = None, reasoning: Optional[Any] = None
 ) -> LiteLlm:
     """Return a (retry-wrapped) LiteLlm for the dedicated coder model."""
+    kwargs = _combine_llm_kwargs(
+        _reasoning_kwargs(CODER_MODEL, reasoning),
+        _openrouter_provider_kwargs(CODER_MODEL),
+    )
     return RetryingLiteLlm(
         model=CODER_MODEL,
         deadline_s=deadline_s,
         timeout=REQUEST_TIMEOUT,
-        **_reasoning_kwargs(CODER_MODEL, reasoning),
+        **kwargs
     )

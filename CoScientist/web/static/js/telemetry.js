@@ -96,5 +96,228 @@
       summaryEl.dataset.empty = '1';
       document.getElementById('metrics-agents').innerHTML = '';
       document.getElementById('metrics-note').classList.add('hidden');
+      RunTimer.reset();
     }
+
+    // =========================================================================
+    // Run Execution Timer (Start to Finish)
+    // =========================================================================
+    function fmtDuration(ms) {
+      const total = Math.max(0, Math.floor(ms / 1000));
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const s = total % 60;
+      const pad = (n) => String(n).padStart(2, '0');
+      if (h > 0) {
+        return `${h}:${pad(m)}:${pad(s)}`;
+      }
+      return `${pad(m)}:${pad(s)}`;
+    }
+
+    function fmtDurationHuman(ms, isRu) {
+      const total = Math.max(0, Math.round(ms / 1000));
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const s = total % 60;
+      if (isRu) {
+        const parts = [];
+        if (h > 0) parts.push(`${h} ч`);
+        if (m > 0 || h > 0) parts.push(`${m} мин`);
+        parts.push(`${s} с`);
+        return parts.join(' ');
+      } else {
+        const parts = [];
+        if (h > 0) parts.push(`${h}h`);
+        if (m > 0 || h > 0) parts.push(`${m}m`);
+        parts.push(`${s}s`);
+        return parts.join(' ');
+      }
+    }
+
+    const RunTimer = {
+      startedAt: null,
+      finishedAt: null,
+      lastElapsedMs: 0,
+      timerId: null,
+      isRunning: false,
+
+      start(timestamp) {
+        const parsed = timestamp ? new Date(timestamp).getTime() : Date.now();
+        this.startedAt = Number.isFinite(parsed) ? parsed : Date.now();
+        this.finishedAt = null;
+        this.isRunning = true;
+        this.stopInterval();
+
+        const dot = document.getElementById('metrics-duration-dot');
+        if (dot) dot.classList.remove('hidden');
+
+        const durEl = document.getElementById('metrics-duration');
+        if (durEl) {
+          durEl.classList.add('text-primary');
+          durEl.classList.remove('text-outline-variant');
+        }
+
+        this.tick();
+        this.timerId = setInterval(() => this.tick(), 1000);
+      },
+
+      finish(timestamp) {
+        if (!this.isRunning && this.finishedAt) return;
+        this.stopInterval();
+        const parsed = timestamp ? new Date(timestamp).getTime() : Date.now();
+        this.finishedAt = Number.isFinite(parsed) ? parsed : Date.now();
+        this.isRunning = false;
+
+        const dot = document.getElementById('metrics-duration-dot');
+        if (dot) dot.classList.add('hidden');
+
+        const durEl = document.getElementById('metrics-duration');
+        if (durEl) {
+          durEl.classList.remove('text-primary');
+          durEl.classList.add('text-on-surface/90');
+        }
+
+        const elapsedMs = this.startedAt ? Math.max(0, this.finishedAt - this.startedAt) : this.lastElapsedMs;
+        this.lastElapsedMs = elapsedMs;
+        this.render(elapsedMs, false);
+      },
+
+      setDuration(elapsedMs) {
+        this.stopInterval();
+        this.isRunning = false;
+        this.lastElapsedMs = Math.max(0, Number(elapsedMs) || 0);
+
+        const dot = document.getElementById('metrics-duration-dot');
+        if (dot) dot.classList.add('hidden');
+
+        const durEl = document.getElementById('metrics-duration');
+        if (durEl) {
+          durEl.classList.remove('text-primary');
+          durEl.classList.add('text-on-surface/90');
+        }
+
+        this.render(this.lastElapsedMs, false);
+      },
+
+      reset() {
+        this.stopInterval();
+        this.startedAt = null;
+        this.finishedAt = null;
+        this.lastElapsedMs = 0;
+        this.isRunning = false;
+
+        const dot = document.getElementById('metrics-duration-dot');
+        if (dot) dot.classList.add('hidden');
+
+        const durEl = document.getElementById('metrics-duration');
+        if (durEl) {
+          durEl.textContent = '00:00';
+          durEl.classList.remove('text-primary');
+          durEl.classList.add('text-outline-variant');
+        }
+
+        const wrap = document.getElementById('metrics-duration-wrap');
+        if (wrap) {
+          const isRu = typeof currentLang !== 'undefined' && currentLang === 'ru';
+          wrap.title = isRu ? 'Время выполнения' : 'Run duration';
+        }
+      },
+
+      stopInterval() {
+        if (this.timerId) {
+          clearInterval(this.timerId);
+          this.timerId = null;
+        }
+      },
+
+      tick() {
+        if (!this.startedAt) return;
+        const elapsedMs = Math.max(0, Date.now() - this.startedAt);
+        this.lastElapsedMs = elapsedMs;
+        this.render(elapsedMs, true);
+      },
+
+      render(ms, running) {
+        const durEl = document.getElementById('metrics-duration');
+        if (durEl) {
+          durEl.textContent = fmtDuration(ms);
+        }
+        const wrap = document.getElementById('metrics-duration-wrap');
+        if (wrap) {
+          const isRu = typeof currentLang !== 'undefined' && currentLang === 'ru';
+          const human = fmtDurationHuman(ms, isRu);
+          wrap.title = running
+            ? (isRu ? `Выполняется: ${human}` : `Running: ${human}`)
+            : (isRu ? `Время работы: ${human} (со старта до финиша)` : `Run time: ${human} (start to finish)`);
+        }
+      },
+
+      reapplyLanguage() {
+        this.render(this.lastElapsedMs, this.isRunning);
+      },
+
+      restoreFromSnapshot(snapshot) {
+        if (!snapshot) return;
+        if (snapshot.status === 'processing') {
+          const start = (snapshot.run_times && snapshot.run_times.started_at)
+            || this._findLastUserMessageTimestamp(snapshot.messages)
+            || Date.now();
+          this.start(start);
+        } else {
+          if (snapshot.run_times && snapshot.run_times.started_at && snapshot.run_times.finished_at) {
+            const start = new Date(snapshot.run_times.started_at).getTime();
+            const finish = new Date(snapshot.run_times.finished_at).getTime();
+            if (Number.isFinite(start) && Number.isFinite(finish) && finish >= start) {
+              this.setDuration(finish - start);
+              return;
+            }
+          }
+          // Fallback to message history
+          const duration = this._calcDurationFromMessages(snapshot.messages);
+          if (duration !== null) {
+            this.setDuration(duration);
+          } else {
+            this.reset();
+          }
+        }
+      },
+
+      _findLastUserMessageTimestamp(messages) {
+        if (!Array.isArray(messages)) return null;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].type === 'user_message' && messages[i].timestamp) {
+            return messages[i].timestamp;
+          }
+        }
+        return null;
+      },
+
+      _calcDurationFromMessages(messages) {
+        if (!Array.isArray(messages) || !messages.length) return null;
+        let lastUserIndex = -1;
+        for (let i = messages.length - 1; i >= 0; i--) {
+          if (messages[i].type === 'user_message') {
+            lastUserIndex = i;
+            break;
+          }
+        }
+        if (lastUserIndex === -1) return null;
+        const userMsg = messages[lastUserIndex];
+        const start = new Date(userMsg.timestamp).getTime();
+        if (!Number.isFinite(start)) return null;
+
+        let end = start;
+        for (let i = messages.length - 1; i > lastUserIndex; i--) {
+          if (messages[i].timestamp) {
+            const t = new Date(messages[i].timestamp).getTime();
+            if (Number.isFinite(t) && t >= start) {
+              end = t;
+              break;
+            }
+          }
+        }
+        return Math.max(0, end - start);
+      }
+    };
+    window.RunTimer = RunTimer;
 

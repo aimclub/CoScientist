@@ -19,23 +19,46 @@ let activeSandboxWatchUrl = null;
 const USER_STORAGE_KEY = 'coscientist.user_id';
 const SESSION_STORAGE_KEY = 'coscientist.session_id';
 const NICK_STORAGE_KEY = 'coscientist.nickname';
+const BOOT_STORAGE_KEY = 'coscientist.server_boot_id';
+let serverBootId = null;
 const SIDE_NAV_KEY = 'coscientist.side_nav';
 const LANG_STORAGE_KEY = 'coscientist.lang';
+const SHOW_INTERNAL_KEY = 'coscientist.show_internal';
 
+// Per-browser view preference: show the agents and tools the system YAML marks
+// internal. The html class drives the Work Order chips through CSS, so cards
+// already on the page follow the switch without being redrawn. Only a choice
+// that differs from the server default (SHOW_INTERNAL__ENABLED) is stored;
+// without one the browser follows that default once /api/settings answers.
+let showInternalStored = null;
+try {
+  const stored = localStorage.getItem(SHOW_INTERNAL_KEY);
+  if (stored === 'true' || stored === 'false') showInternalStored = stored === 'true';
+} catch (_) { }
+let showInternal = !!showInternalStored;
+document.documentElement.classList.toggle('show-internal', showInternal);
+
+// Mirror of the server settings (/api/settings). The settings modal edits a
+// draft copy and writes it back here after a successful save.
 const appSettings = {
   general: {
+    openrouterProviderSort: 'default', // 'default' | 'price' | 'throughput' | 'latency'
+    openrouterProviderOrder: '',       // e.g. 'Together, DeepInfra'
     startMode: 'planner',   // 'planner' | 'orchestrator' | 'orchestrator_planner'
     maxRetries: 3,
     hitlEnabled: false,
-    hitlAutoApproveTimeout: 300,
-    usePlanner: true,
-    useProxy: true,
+    hitlAutoApproveTimeout: -1,        // seconds; -1 = wait for the human
+    workOrderEnabled: true,
+    workOrderVetoSeconds: -1,          // seconds; -1 = wait for the human
+    useProxy: true,                    // read-only: USE_PROXY in .env
     opikEnabled: false,
     autoNamingEnabled: true,
+    showInternal: false,               // default only: SHOW_INTERNAL__ENABLED; the browser's choice wins
     contextInitEnabled: true,
     knowledgeGraphEnabled: true,
-    autoClearGraphEnabled: false,
+    autoClearGraphEnabled: false,      // read-only: GRAPH__AUTO_CLEAR in .env
     researchGraphEnabled: true,
+    coscientistUsername: '',
   },
   researchAgent: {
     maxSearches: 2,
@@ -45,11 +68,10 @@ const appSettings = {
     abstainScore: 0.2,
   },
   coderAgent: {
-    sandboxUrl: 'http://localhost:8884',
+    sandboxUrl: '',                    // empty: the sandbox button falls back to localhost:8884
     workspaceId: '',
     mode: 'local',
   },
-  orchestratorAgent: {},
   plannerAgent: {
     retrievalEnabled: true,
     graphEnabled: true,
@@ -60,8 +82,6 @@ const appSettings = {
   hypothesesAgent: {
     maxActiveHypotheses: 1,
   },
-  medicalAgent: {},
-  experimentAgent: {},
 };
 
 function escHtml(s) {

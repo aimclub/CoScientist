@@ -248,7 +248,7 @@
       const collapsed = box.classList.toggle(button.dataset.fold);
       box.classList.toggle('overflow-hidden', collapsed);
       button.textContent = collapsed ? button.dataset.label : t('chat.collapse');
-      if (collapsed) box.scrollIntoView({ block: 'nearest' }); else scrollChat();
+      if (collapsed) box.scrollIntoView({ block: 'nearest' });
     }
 
     function addUserMsg(text, timestamp = null) {
@@ -318,6 +318,7 @@
       maybeAutoNameSession(msg);
       ws.send(JSON.stringify({ type: 'chat_message', message: msg }));
       addTelemetry('SEND :: user query');
+      if (typeof RunTimer !== 'undefined') RunTimer.start();
     });
 
     function stopChat() {
@@ -325,6 +326,7 @@
       ws.send(JSON.stringify({ type: 'stop_chat' }));
       addTelemetry('STOP :: user requested stop');
       StatusIndicator.markStopped();
+      if (typeof RunTimer !== 'undefined') RunTimer.finish();
     }
 
 
