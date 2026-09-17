@@ -17,6 +17,11 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 defaults:
+  # `main` / `coder` resolve through LLM__MAIN_MODEL / LLM__CODER_MODEL, which
+  # point at OpenRouter. A literal litellm string here (e.g. "openai/<model>")
+  # bypasses that and goes straight to the named provider — which is how five
+  # agents in this profile ended up calling OpenAI directly and failing with
+  # "Country, region, or territory not supported".
   model: main
 
 pipeline:
@@ -31,7 +36,7 @@ agents:
   # ── Root orchestrator ───────────────────────────────────────────────────────
   OrchestratorAgent:
     class: llm
-    model: openai/gemini-3.7-flash
+    model: main
     root: true
     include_contents: none
     description: Main CoScientist Orchestrator — coordinates specialized agents to solve scientific tasks.
@@ -86,7 +91,7 @@ agents:
 
   ResultAggregatorAgent:
     class: llm
-    model: openai/gemini-3.7-flash
+    model: main
     description: >-
       Reads the finished Research Context Graph (conclusions, evidence,
       hypotheses with their status), Experiment Module TaskResults when present,
@@ -102,7 +107,7 @@ agents:
   # ── Direct subordinates ────────────────────────────────────────────────────
   HypothesesAgent:
     class: llm
-    model: openai/gemini-3.7-flash
+    model: main
     include_contents: none
     description: generates ideas and hypotheses.
     routing: when the direction is unclear or multiple approaches need to be proposed.
@@ -120,7 +125,7 @@ agents:
 
   ResearchAgent:
     class: llm
-    model: openai/gemini-3.7-flash
+    model: main
     description: >-
       retrieves scientific knowledge and searches/downloads literature
       (web, RAG, paper search). Open-ended search only — it cannot read
@@ -194,7 +199,7 @@ agents:
 
   ExperimentPlannerAgent:
     class: custom:experiment_review
-    model: openai/gemini-3.7-flash
+    model: main
     include_contents: none
     description: Build a strict ExperimentPlan and obtain explicit human approval.
     prompt: experiment_planner

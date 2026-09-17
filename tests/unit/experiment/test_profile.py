@@ -58,7 +58,10 @@ def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
     ]
     hyp = config.agent("HypothesesAgent")
     assert hyp.prompt == "hypotheses"
-    assert hyp.model == "openai/gemini-3.7-flash"
+    # `main`, not a literal: a literal model string goes straight to the named
+    # provider and ignores LLM__MAIN_MODEL, which is what routes this profile
+    # through OpenRouter.
+    assert hyp.model == "main"
     assert hyp.tools == ["research_graph"]
     assert "commit_experiment_hypotheses" in hyp.callbacks.after_agent
     assert "seed_hypotheses_from_em_request" in hyp.callbacks.before_model
@@ -146,7 +149,7 @@ def test_experiment_profile_is_isolated_and_preserves_a2a_contract():
     assert "collect_reranked_tools_from_model" not in reranker.callbacks.after_model
 
     planner = config.agent("ExperimentPlannerAgent")
-    assert planner.model == "openai/gemini-3.7-flash"
+    assert planner.model == "main"
     assert planner.include_contents == "none"
     assert "skip_retriever_context" in planner.callbacks.before_model
     # ExperimentPlan is enforced by sanitize_json_output + deterministic critique.
