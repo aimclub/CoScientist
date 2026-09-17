@@ -307,7 +307,14 @@ def test_experiments_yaml_asks_scope_first():
     assert before[0] == "ask_pipeline_scope"
     orch = config.agent("OrchestratorAgent").callbacks
     assert "inject_pipeline_scope_directive" not in orch.before_model
-    assert orch.after_model[0] == "enforce_pipeline_scope_hops"
+    # expand_link_refs owns the first slot — it is the egress point for the
+    # agent's own text, and any callback that returns a response short-circuits
+    # the rest of the chain. What matters for the scope is that it is enforced
+    # before the module-call callbacks reshape the turn.
+    assert orch.after_model[0] == "expand_link_refs"
+    assert orch.after_model.index("enforce_pipeline_scope_hops") < (
+        orch.after_model.index("coalesce_experiment_module_calls")
+    )
     assert "mark_pipeline_scope_lane" in orch.after_tool
 
 
