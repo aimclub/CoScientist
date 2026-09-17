@@ -19,11 +19,23 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import pytest  # noqa: E402
 from google.adk.models import LlmResponse  # noqa: E402
 from google.genai import types  # noqa: E402
 
 from CoScientist.assembly import build_system  # noqa: E402
 from CoScientist.assembly.schema import get_config  # noqa: E402
+
+# These assert how the subsystem is WIRED, so they only mean anything while it
+# is wired. The configured profile decides that: system.yaml carries the LLM
+# HypothesesAgent again (the shape main had before #326), and pointing
+# COSCIENTIST_CONFIG at a profile that declares `class: custom:hypothesis_subsystem`
+# brings both tests back automatically — no skip to remember to remove.
+_WIRED = (get_config().agents["HypothesesAgent"].cls or "") == "custom:hypothesis_subsystem"
+pytestmark = pytest.mark.skipif(
+    not _WIRED,
+    reason="HypothesesAgent is not wired to the hypothesis subsystem in this profile",
+)
 
 
 class _CallbackContext:
