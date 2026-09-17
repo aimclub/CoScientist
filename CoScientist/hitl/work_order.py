@@ -21,6 +21,10 @@ from CoScientist.hitl.work_order_risk import SideEffectKind, Tier, order_tier
 
 StepStatus = Literal["pending", "in_progress", "done", "skipped"]
 OrderStatus = Literal["pending", "approved", "rejected"]
+ReportStatus = Literal["pending", "accepted", "revise", "rejected"]
+DoneVerdict = Literal["met", "partial", "not_met"]
+Confidence = Literal["high", "medium", "low"]
+ArtifactKind = Literal["file", "dataset", "graph_node", "link", "other"]
 
 
 def order_key(agent_name: str) -> str:
@@ -50,6 +54,40 @@ class SideEffect(BaseModel):
     detail: str = ""
 
 
+class Finding(BaseModel):
+    id: str
+    text: str
+    evidence: str = ""
+    confidence: Confidence = "medium"
+    step_id: str = ""
+
+
+class Artifact(BaseModel):
+    kind: ArtifactKind = "other"
+    ref: str
+    description: str = ""
+
+
+class WorkReport(BaseModel):
+    """What the agent says it found and made, put before the human at the end.
+
+    Everything here is the agent's claim; the order around it (steps, tool calls,
+    amendments, deviations) is what the system recorded — the card shows both.
+    """
+    summary: str = ""
+    findings: List[Finding] = Field(default_factory=list)
+    done_verdict: DoneVerdict = "not_met"
+    done_evidence: str = ""
+    actual_outcome: str = ""
+    artifacts: List[Artifact] = Field(default_factory=list)
+    status: ReportStatus = "pending"
+    round: int = 1
+    operator_notes: str = ""
+    disputed_finding_ids: List[str] = Field(default_factory=list)
+    # Built by the after_agent fallback from the order alone: the agent never reported.
+    fallback: bool = False
+
+
 class WorkOrder(BaseModel):
     agent: str
     goal: str
@@ -68,6 +106,11 @@ class WorkOrder(BaseModel):
     amendments: List[Dict[str, Any]] = Field(default_factory=list)
     deviations: List[Dict[str, Any]] = Field(default_factory=list)
     operator_notes: str = ""
+    # Calls the guard let through, per tool (exempt and internal tools not counted).
+    tool_calls: Dict[str, int] = Field(default_factory=dict)
+    report: Optional[WorkReport] = None
+    # Earlier report rounds the human sent back, oldest first.
+    reports: List[Dict[str, Any]] = Field(default_factory=list)
 
     def side_effect_kinds(self) -> set:
         return {s.kind for s in self.side_effects}
@@ -127,6 +170,81 @@ def render_work_order(order: WorkOrder) -> str:
         lines.append(f"Expected outcome: {order.expected_outcome}")
     if order.fallback:
         lines.append(f"If it fails: {order.fallback}")
+    return "\n".join(lines)
+
+
+def performed_side_effects(order: WorkOrder) -> List[str]:
+    """Side effects the run actually had: tools whose nature is one, and were called."""
+    from CoScientist.hitl.work_order_risk import TOOL_SIDE_EFFECTS
+
+    kinds: List[str] = []
+    for tool in order.tool_calls:
+        kind = TOOL_SIDE_EFFECTS.get(tool)
+        if kind is not None and kind.value not in kinds:
+            kinds.append(kind.value)
+    return kinds
+
+
+def report_warnings(order: WorkOrder) -> List[Dict[str, Any]]:
+    """What the human should look at first: where the claim and the record disagree."""
+    warnings: List[Dict[str, Any]] = []
+    report = order.report
+    if report is not None and report.fallback:
+        warnings.append({"code": "no_report"})
+    open_steps = [s.id for s in order.steps if s.status in ("pending", "in_progress")]
+    if open_steps:
+        warnings.append({"code": "open_steps", "steps": open_steps})
+    if report is not None and not report.fallback:
+        if report.done_verdict != "met":
+            warnings.append({"code": "done_not_met", "verdict": report.done_verdict})
+        unsupported = [f.id for f in report.findings if not f.evidence.strip()]
+        if unsupported:
+            warnings.append({"code": "findings_without_evidence", "findings": unsupported})
+    if order.deviations:
+        warnings.append({"code": "deviations", "count": len(order.deviations)})
+    return warnings
+
+
+def render_work_report(order: WorkOrder) -> str:
+    """Plain-text rendering of the report for the console handler and logs."""
+    report = order.report or WorkReport()
+    lines = [
+        f"Work Report: {order.agent} (rev {order.revision}, round {report.round}, tier {order.tier.value})",
+        f"Goal: {order.goal}",
+    ]
+    if report.summary:
+        lines.append(f"Summary: {report.summary}")
+    if order.done_criteria:
+        lines.append(f"Done when: {order.done_criteria} -> {report.done_verdict}"
+                     + (f" ({report.done_evidence})" if report.done_evidence else ""))
+    if order.expected_outcome or report.actual_outcome:
+        lines.append(f"Expected: {order.expected_outcome or '-'}")
+        lines.append(f"Actual: {report.actual_outcome or '-'}")
+    if report.findings:
+        lines.append("\nFindings:")
+        for f in report.findings:
+            lines.append(f"  {f.id}. {f.text} [{f.confidence}]")
+            if f.evidence:
+                lines.append(f"      evidence: {f.evidence}")
+    if order.steps:
+        lines.append("\nSteps:")
+        for s in order.steps:
+            note = f" — {s.note}" if s.note else ""
+            lines.append(f"  {_STEP_MARK.get(s.status, '[ ]')} {s.id}. {s.title}{note}")
+    if report.artifacts:
+        lines.append("\nArtifacts:")
+        for a in report.artifacts:
+            desc = f" — {a.description}" if a.description else ""
+            lines.append(f"  [{a.kind}] {a.ref}{desc}")
+    if order.tool_calls:
+        lines.append("\nTool calls: " + ", ".join(f"{t}×{n}" for t, n in order.tool_calls.items()))
+    effects = performed_side_effects(order)
+    if effects:
+        lines.append("Side effects performed: " + ", ".join(effects))
+    if order.amendments:
+        lines.append(f"Amendments: {len(order.amendments)}")
+    if order.deviations:
+        lines.append("Blocked calls: " + ", ".join(d.get("tool", "?") for d in order.deviations))
     return "\n".join(lines)
 
 

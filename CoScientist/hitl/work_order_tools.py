@@ -1,4 +1,5 @@
-"""Work Order tools: declare the contract, amend it, report step progress.
+"""Work Order tools: declare the contract, amend it, report step progress, and
+submit the Work Report the human checks before the result goes on.
 
 One toolset instance per agent (the assembler builds it with the agent's real
 tool names, so a contract can only name tools the agent actually has).
@@ -10,6 +11,9 @@ How a contract is confirmed depends on its risk tier (work_order_risk.py):
   compute      a HITL request with a veto window — auto-approved when it runs out
                (a window of -1 disables auto-approval: it waits for the human);
   side_effect  a HITL request under the operator's global HITL timeout.
+
+The Work Report is confirmed at the tier of the order it reports on. Sent back
+for rework, the agent keeps working in the same run and reports again.
 
 With HITL or Work Orders switched off, the contract is still recorded (the guard
 keeps working as a scope check) and approved without asking anyone.
@@ -26,13 +30,19 @@ from CoScientist.config import get_settings
 from CoScientist.graph.session_scope import session_key
 from CoScientist.hitl.models import HITLAction, HITLRequest, HITLResponse
 from CoScientist.hitl.work_order import (
+    Artifact,
     Assumption,
+    Finding,
     SideEffect,
     WorkOrder,
+    WorkReport,
     WorkStep,
     diff_work_orders,
     load_order,
+    performed_side_effects,
     render_work_order,
+    render_work_report,
+    report_warnings,
     save_order,
 )
 from CoScientist.hitl.work_order_risk import (
@@ -48,6 +58,9 @@ from CoScientist.hitl.work_order_risk import (
 logger = logging.getLogger("CoScientist.hitl.work_order")
 
 _STEP_STATUSES = ("pending", "in_progress", "done", "skipped")
+_DONE_VERDICTS = ("met", "partial", "not_met")
+_CONFIDENCES = ("high", "medium", "low")
+_ARTIFACT_KINDS = ("file", "dataset", "graph_node", "link", "other")
 
 
 def work_order_active() -> bool:
@@ -65,7 +78,8 @@ def session_context(tool_context: Any) -> Dict[str, str]:
 
 
 class WorkOrderToolset:
-    """declare_work_order / update_work_order / update_work_step for one agent."""
+    """declare_work_order / update_work_order / update_work_step /
+    submit_work_report for one agent."""
 
     def __init__(
         self,
@@ -99,6 +113,7 @@ class WorkOrderToolset:
             FunctionTool(self.declare_work_order),
             FunctionTool(self.update_work_order),
             FunctionTool(self.update_work_step),
+            FunctionTool(self.submit_work_report),
         ]
 
     def _unknown_tools(self, names: Iterable[str]) -> List[str]:
@@ -218,6 +233,84 @@ class WorkOrderToolset:
             timeout_seconds=veto_timeout if veto else None,
         )
         return await self.handler.handle_request(request)
+
+    async def review_report(self, order: WorkOrder, tool_context: Any) -> Optional[HITLResponse]:
+        """Put ``order.report`` before the human at the order's tier.
+
+        Returns None when Work Orders are off: the caller treats that as accepted.
+        """
+        if not work_order_active():
+            return None
+        report = order.report or WorkReport()
+        # Same windows as the declaration: veto for read/compute (a non-positive
+        # window waits for the human), the global HITL timeout for side effects.
+        veto_seconds = get_settings().web.work_order_veto_seconds
+        veto = order.tier in (Tier.READ, Tier.COMPUTE)
+        veto_timeout = float(veto_seconds) if veto_seconds > 0 else -1.0
+        request = HITLRequest(
+            agent_name=self.agent_name,
+            action_type=HITLAction.APPROVE,
+            message=(
+                f"Agent '{self.agent_name}' reports the result of its work order "
+                f"(rev {order.revision}, round {report.round}). Please check it."
+            ),
+            context={
+                "work_order": order.model_dump(mode="json"),
+                "work_report": report.model_dump(mode="json"),
+                "tier": order.tier.value,
+                "warnings": report_warnings(order),
+                "journal": {
+                    "tool_calls": dict(order.tool_calls),
+                    "side_effects": performed_side_effects(order),
+                    "amendments": list(order.amendments),
+                    "deviations": list(order.deviations),
+                },
+                "output": render_work_report(order),
+                "_session": session_context(tool_context),
+            },
+            invoked_via="tool",
+            trigger="work_report",
+            timeout_seconds=veto_timeout if veto else None,
+        )
+        return await self.handler.handle_request(request)
+
+    @staticmethod
+    def _parse_findings(raw: Optional[List[Any]]) -> List[Finding] | str:
+        findings: List[Finding] = []
+        for offset, item in enumerate(raw or []):
+            if isinstance(item, str):
+                item = {"text": item}
+            if not isinstance(item, dict) or not str(item.get("text") or "").strip():
+                return f"Finding at index {offset} needs a non-empty 'text'."
+            confidence = str(item.get("confidence") or "medium").lower()
+            if confidence not in _CONFIDENCES:
+                return f"Finding at index {offset}: 'confidence' must be one of {list(_CONFIDENCES)}."
+            findings.append(Finding(
+                id=f"F{offset + 1}",
+                text=str(item["text"]).strip(),
+                evidence=str(item.get("evidence") or "").strip(),
+                confidence=confidence,  # type: ignore[arg-type]
+                step_id=str(item.get("step_id") or ""),
+            ))
+        return findings
+
+    @staticmethod
+    def _parse_artifacts(raw: Optional[List[Any]]) -> List[Artifact] | str:
+        artifacts: List[Artifact] = []
+        for offset, item in enumerate(raw or []):
+            if isinstance(item, str):
+                item = {"ref": item}
+            if not isinstance(item, dict) or not str(item.get("ref") or "").strip():
+                return f"Artifact at index {offset} needs a non-empty 'ref'."
+            kind = str(item.get("kind") or "other").lower()
+            if kind not in _ARTIFACT_KINDS:
+                kind = "other"
+            artifacts.append(Artifact(
+                kind=kind,  # type: ignore[arg-type]
+                ref=str(item["ref"]).strip(),
+                description=str(item.get("description") or "").strip(),
+            ))
+        return artifacts
 
     # ── tools ───────────────────────────────────────────────────────────────
     async def declare_work_order(
@@ -510,6 +603,120 @@ class WorkOrderToolset:
             except Exception:  # noqa: BLE001 - a notice must never fail the run
                 logger.exception("%s: work step notice failed", self.agent_name)
         return {"status": "ok", "step": step.id, "step_status": step.status}
+
+
+    async def submit_work_report(
+        self,
+        summary: str,
+        findings: List[Dict[str, Any]],
+        done_verdict: str,
+        tool_context: ToolContext,
+        done_evidence: str = "",
+        actual_outcome: str = "",
+        artifacts: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Report what you did and found BEFORE your final answer.
+
+        The human checks the report against your work order and may accept it,
+        send you back to rework it, or reject it.
+
+        Args:
+            summary: The result in 2-4 sentences.
+            findings: What you found, one item per finding: {"text", "evidence"
+                (links, DOIs, file paths, graph node ids backing it),
+                "confidence": high | medium | low, "step_id" (e.g. "S2")}.
+            done_verdict: Whether the done criteria are met: met | partial | not_met.
+            done_evidence: Why you judge the done criteria so (counts, checks).
+            actual_outcome: The concrete result to set against the expected
+                outcome (counts, ranges, metrics).
+            artifacts: What you produced, each {"kind": file | dataset |
+                graph_node | link | other, "ref", "description"}. Only what exists.
+
+        Returns:
+            {"status": "accepted" | "revise" | "rejected" | "error", ...}.
+        """
+        state = tool_context.state
+        order = load_order(state, self.agent_name)
+        if order is None or order.status != "approved":
+            return _error("There is no approved work order to report on — call declare_work_order first.")
+        if order.report is not None and order.report.status in ("accepted", "rejected"):
+            return _error(
+                f"Your work report was already {order.report.status}. "
+                "Give your final answer now."
+            )
+        if not str(summary or "").strip():
+            return _error("'summary' must not be empty.")
+        verdict = str(done_verdict or "").strip().lower()
+        if verdict not in _DONE_VERDICTS:
+            return _error(f"'done_verdict' must be one of {list(_DONE_VERDICTS)}.")
+        parsed_findings = self._parse_findings(findings)
+        if isinstance(parsed_findings, str):
+            return _error(parsed_findings)
+        parsed_artifacts = self._parse_artifacts(artifacts)
+        if isinstance(parsed_artifacts, str):
+            return _error(parsed_artifacts)
+
+        previous_round = order.report.round if order.report is not None else 0
+        order.report = WorkReport(
+            summary=str(summary).strip(),
+            findings=parsed_findings,
+            done_verdict=verdict,  # type: ignore[arg-type]
+            done_evidence=str(done_evidence or "").strip(),
+            actual_outcome=str(actual_outcome or "").strip(),
+            artifacts=parsed_artifacts,
+            round=previous_round + 1,
+        )
+        response = await self.review_report(order, tool_context)
+        feedback = (response.instructions or response.free_input or "").strip() if response else ""
+        report = order.report
+
+        if response is not None and response.action == HITLAction.EDIT:
+            disputed = []
+            if isinstance(response.form_values, dict):
+                disputed = [str(i) for i in response.form_values.get("disputed_finding_ids") or []]
+            report.status = "revise"
+            report.operator_notes = feedback
+            report.disputed_finding_ids = disputed
+            order.reports.append(report.model_dump(mode="json"))
+            save_order(state, order)
+            result: Dict[str, Any] = {
+                "status": "revise",
+                "round": report.round,
+                "feedback": feedback or "No feedback provided.",
+                "message": "The human sent your result back for rework. Address the "
+                           "feedback, then call submit_work_report again. If you need "
+                           "tools beyond your work order, call update_work_order first.",
+            }
+            if disputed:
+                result["disputed_findings"] = [
+                    {"id": f.id, "text": f.text} for f in report.findings if f.id in disputed
+                ]
+                result["message"] += " The human marked the listed findings as wrong: recheck them."
+            return result
+
+        if response is not None and not response.approved:
+            report.status = "rejected"
+            report.operator_notes = feedback
+            save_order(state, order)
+            return {
+                "status": "rejected",
+                "reason": feedback or "No reason given.",
+                "message": "The human rejected your result. Do not continue; finish and "
+                           "state plainly that the result was not accepted and why.",
+            }
+
+        report.status = "accepted"
+        report.operator_notes = feedback
+        save_order(state, order)
+        result = {
+            "status": "accepted",
+            "round": report.round,
+            "message": "The human accepted your report. Give your final answer based on it.",
+        }
+        if feedback:
+            result["operator_notes"] = feedback
+            result["message"] += " Take the operator notes into account."
+        return result
 
 
 def make_work_order_tools(

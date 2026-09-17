@@ -198,6 +198,7 @@ def _attach_work_order_callbacks(
     from CoScientist.hitl.work_order_guard import (
         make_reset_work_order,
         make_work_order_guard,
+        make_work_report_fallback,
     )
 
     def as_list(value) -> list:
@@ -210,6 +211,11 @@ def _attach_work_order_callbacks(
     )
     kwargs["before_tool_callback"] = (
         [make_work_order_guard(agent_name, internal_tools=internal_tools)] + as_list(kwargs.get("before_tool_callback"))
+    )
+    # Last after the agent: the other after_agent callbacks (e.g. collectors)
+    # see the answer as the agent gave it; the human's verdict may replace it.
+    kwargs["after_agent_callback"] = (
+        as_list(kwargs.get("after_agent_callback")) + [make_work_report_fallback(agent_name)]
     )
 
 

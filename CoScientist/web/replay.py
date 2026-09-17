@@ -292,6 +292,49 @@ class ReplaySession:
             return {"type": "work_order_notice", "kind": "declared",
                     "agent_name": author, "work_order": order,
                     "timestamp": stamp}
+        # A submitted Work Report: a read-only card from the recorded arguments.
+        # The system's side (steps, journal) is not in the recording.
+        if kind == "tool_call" and event.get("tool") == "submit_work_report":
+            args = event.get("args")
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except ValueError:
+                    args = {}
+            args = args if isinstance(args, dict) else {}
+
+            def _item(value: Any, key: str) -> Dict[str, Any]:
+                return value if isinstance(value, dict) else {key: str(value)}
+
+            report = {
+                "summary": cls._payload(args.get("summary") or ""),
+                "findings": [
+                    {
+                        "id": f"F{i}",
+                        "text": cls._payload(f.get("text") or ""),
+                        "evidence": cls._payload(f.get("evidence") or ""),
+                        "confidence": f.get("confidence") or "medium",
+                        "step_id": f.get("step_id") or "",
+                    }
+                    for i, f in enumerate(
+                        (_item(x, "text") for x in args.get("findings") or []), 1
+                    )
+                ],
+                "done_verdict": args.get("done_verdict") or "",
+                "done_evidence": cls._payload(args.get("done_evidence") or ""),
+                "actual_outcome": cls._payload(args.get("actual_outcome") or ""),
+                "artifacts": [
+                    {
+                        "kind": a.get("kind") or "other",
+                        "ref": a.get("ref") or "",
+                        "description": cls._payload(a.get("description") or ""),
+                    }
+                    for a in (_item(x, "ref") for x in args.get("artifacts") or [])
+                ],
+            }
+            return {"type": "work_order_notice", "kind": "report",
+                    "agent_name": author, "work_order": {"agent": author},
+                    "work_report": report, "timestamp": stamp}
         if kind == "tool_result" and event.get("tool") in _HITL_TOOLS:
             answer = event.get("result")
             if isinstance(answer, str):

@@ -660,7 +660,8 @@ def test_coder_local_tools_switch_on_attaches_the_local_toolset(monkeypatch, con
 
 # ── Work Order wiring ────────────────────────────────────────────────────────
 
-_WORK_ORDER_TOOLS = {"declare_work_order", "update_work_order", "update_work_step"}
+_WORK_ORDER_TOOLS = {"declare_work_order", "update_work_order", "update_work_step",
+                     "submit_work_report"}
 
 
 def _as_list(callbacks):
@@ -683,6 +684,8 @@ def test_work_order_agents_get_tools_guard_reset_and_prompt(monkeypatch, config)
         # (the search limiter would count it), and the reset precedes any read.
         assert _as_list(agent.before_tool_callback)[0].__name__ == "work_order_guard", name
         assert _as_list(agent.before_agent_callback)[0].__name__ == "reset_work_order", name
+        # Last: the human's verdict on an unreported result replaces the answer.
+        assert _as_list(agent.after_agent_callback)[-1].__name__ == "work_report_fallback", name
         assert "### Work Order" in agent.instruction, name
         for tool in _WORK_ORDER_TOOLS:
             assert tool in agent.instruction, f"{name}: {tool} not documented"

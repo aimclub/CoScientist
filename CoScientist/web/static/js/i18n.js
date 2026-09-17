@@ -536,6 +536,67 @@ const i18n = {
   'workOrder.reason.rejected': { en: 'work order was rejected', ru: 'план работы отклонён' },
   'workOrder.reason.undeclared_tool': { en: 'tool not in the work order', ru: 'инструмента нет в плане работы' },
 
+  // ── Work Report cards (hitl.js) ──
+  'hitl.msg.workReport': {
+    en: 'Agent {agent} reports what it did. Check the findings against its work order.',
+    ru: 'Агент {agent} отчитался о работе. Сверьте находки с планом работы.'
+  },
+  'hitl.via.workReport': { en: 'work report (result after acting)', ru: 'отчёт агента (результат после работы)' },
+  'workReport.title': { en: 'Work Report', ru: 'Отчёт агента' },
+  'workReport.round': { en: 'round {n}', ru: 'раунд {n}' },
+  'workReport.summary': { en: 'Summary', ru: 'Итог' },
+  'workReport.finalAnswer': {
+    en: 'The agent finished without a report — its final answer:',
+    ru: 'Агент завершил работу без отчёта — его итоговый ответ:'
+  },
+  'workReport.findings': { en: 'Findings', ru: 'Находки' },
+  'workReport.findingsHint': {
+    en: 'Tick the findings that are wrong — the agent will recheck them on rework.',
+    ru: 'Отметьте неверные находки — при доработке агент перепроверит их.'
+  },
+  'workReport.markWrong': { en: 'Wrong', ru: 'Неверно' },
+  'workReport.noEvidence': { en: 'no evidence given', ru: 'нет подтверждения' },
+  'workReport.confidence.high': { en: 'high confidence', ru: 'высокая уверенность' },
+  'workReport.confidence.medium': { en: 'medium confidence', ru: 'средняя уверенность' },
+  'workReport.confidence.low': { en: 'low confidence', ru: 'низкая уверенность' },
+  'workReport.verdict.met': { en: 'met', ru: 'выполнен' },
+  'workReport.verdict.partial': { en: 'partially met', ru: 'выполнен частично' },
+  'workReport.verdict.not_met': { en: 'not met', ru: 'не выполнен' },
+  'workReport.outcome': { en: 'Expected vs actual', ru: 'Ожидание и факт' },
+  'workReport.actual': { en: 'Actual outcome', ru: 'Фактический результат' },
+  'workReport.steps': { en: 'Steps: plan vs done', ru: 'Шаги: план и факт' },
+  'workReport.artifacts': { en: 'Artifacts', ru: 'Артефакты' },
+  'workReport.kind.file': { en: 'file', ru: 'файл' },
+  'workReport.kind.dataset': { en: 'dataset', ru: 'датасет' },
+  'workReport.kind.graph_node': { en: 'graph node', ru: 'узел графа' },
+  'workReport.kind.link': { en: 'link', ru: 'ссылка' },
+  'workReport.kind.other': { en: 'other', ru: 'другое' },
+  'workReport.journal': { en: 'Journal (recorded by the system)', ru: 'Журнал (записан системой)' },
+  'workReport.sideEffectsDone': { en: 'Side effects performed:', ru: 'Выполненные побочные эффекты:' },
+  'workReport.amendments': { en: 'Amendments', ru: 'Поправки к плану' },
+  'workReport.deviations': { en: 'Blocked calls', ru: 'Заблокированные вызовы' },
+  'workReport.warn.no_report': {
+    en: 'The agent finished without a report: only its answer and the journal are shown.',
+    ru: 'Агент завершил работу без отчёта: показаны только его ответ и журнал.'
+  },
+  'workReport.warn.open_steps': { en: 'Steps not closed: {steps}', ru: 'Незакрытые шаги: {steps}' },
+  'workReport.warn.done_not_met': { en: 'Done criteria: {verdict}', ru: 'Критерий готовности: {verdict}' },
+  'workReport.warn.findings_without_evidence': {
+    en: 'Findings without evidence: {findings}', ru: 'Находки без подтверждения: {findings}'
+  },
+  'workReport.warn.deviations': { en: 'Blocked calls during the run: {count}', ru: 'Заблокированных вызовов за работу: {count}' },
+  'workReport.countdown': { en: 'Accepted automatically in {s} s', ru: 'Автоматическое принятие через {s} с' },
+  'workReport.btn.rework': { en: 'Send back for rework', ru: 'На доработку' },
+  'workReport.btn.returnParent': { en: 'Return to parent', ru: 'Вернуть родителю' },
+  'workReport.ph.notes': {
+    en: 'What is wrong or missing (optional for Accept, required for rework)',
+    ru: 'Что неверно или чего не хватает (для «Принять» — необязательно, для доработки — обязательно)'
+  },
+  'workReport.accepted': { en: '✓ Work report accepted', ru: '✓ Отчёт принят' },
+  'workReport.sentBack': { en: '↺ Sent back for rework', ru: '↺ Отправлено на доработку' },
+  'workReport.rejected': { en: '✗ Work report rejected', ru: '✗ Отчёт отклонён' },
+  'workReport.disputedCount': { en: '{n} finding(s) marked wrong', ru: 'неверных находок: {n}' },
+
   // ── HITL research-frame form (rendered at runtime, keyed by currentLang) ──
   'hitl.form.sidebarTitle': { en: 'Research Frame', ru: 'Рамка исследования' },
   'hitl.form.sidebarHint': {
