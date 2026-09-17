@@ -6,23 +6,45 @@ steps are argv sequences and the packing works on a temp directory.
 
 The modules import under the container's package layout, so they are loaded
 with CoScientist/ on sys.path, the same way the build container sees them.
+
+That path is removed again as soon as they are imported. Left in place it
+makes every directory under CoScientist/ importable as a top-level package for
+the rest of the session — `a2a` then resolves to CoScientist/a2a instead of the
+installed A2A SDK, and any module collected later that imports the real one
+fails. Nothing noticed until something did import it, and then the whole test
+session stopped collecting.
 """
 
 import sys
 import tarfile
+from contextlib import contextmanager
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "CoScientist"))
 
-from alembic.hub import (  # noqa: E402
-    HubCreds,
-    bundle_name,
-    choose_strategy,
-    hub_image_ref,
-    pack_artifacts,
-    push_commands,
-    unpack_bundle,
-)
+@contextmanager
+def _container_layout():
+    """CoScientist/ on sys.path for the duration of an import, and no longer."""
+    root = str(Path(__file__).resolve().parents[2] / "CoScientist")
+    sys.path.insert(0, root)
+    try:
+        yield
+    finally:
+        try:
+            sys.path.remove(root)
+        except ValueError:  # pragma: no cover - someone else removed it
+            pass
+
+
+with _container_layout():
+    from alembic.hub import (  # noqa: E402
+        HubCreds,
+        bundle_name,
+        choose_strategy,
+        hub_image_ref,
+        pack_artifacts,
+        push_commands,
+        unpack_bundle,
+    )
 
 
 # ── credentials ──────────────────────────────────────────────────────────────
