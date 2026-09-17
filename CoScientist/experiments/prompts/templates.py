@@ -202,8 +202,12 @@ Never NO_MATCHING_TOOL, never recommend CoderAgent, never invent a local .py.
 Missing inputs → honest failure. Non-Alembic miss → NO_MATCHING_TOOL.
 Else fedot_tool once with goal, resolved_inputs/upstream_bindings, launch_params,
 criteria, artifacts; upload_results_to_s3 when schema allows. No second call; never fabricate.
+The research graph is yours to READ. The module records this task from
+record_result, so committing here would put a second Evidence on one task.
+<<HITL>>
 """,
         TOOLS=ctx.render_tools(),
+        HITL=ctx.render_hitl(),
     )
 
 
@@ -212,10 +216,16 @@ def experiment_react_route(ctx: PromptContext) -> str:
     return render_template(
         """ExperimentAgent ReAct: one attempt.
 Envelope: {experiment_active_envelope?}
+<<TOOLS>>
 Only attached MCP tools; prefer resolved_inputs/upstream_bindings;
 upload_results_to_s3 when allowed. On miss/fail → honest failure/NO_MATCHING_TOOL.
 No fabricate / no self-retry / no other route.
+The research graph is yours to READ. The module records this task from
+record_result, so committing here would put a second Evidence on one task.
+<<HITL>>
 """,
+        TOOLS=ctx.render_tools(),
+        HITL=ctx.render_hitl(),
     )
 
 
@@ -258,6 +268,8 @@ Run summary: {experiment_summary?}
 TaskResults: {experiment_task_results?}
 Artifacts manifest: {experiment_artifacts_manifest?}
 Research context: {research_context?}
+Links: {links_context?}
+{report_language_block?}
 
 <<TOOLS>>
 

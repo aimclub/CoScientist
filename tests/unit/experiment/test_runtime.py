@@ -1205,3 +1205,45 @@ def test_plan_approval_records_a_state_delta():
     assert RUNTIME_KEY in delta, "approve_plan mutated the runtime without reassigning it"
     assert delta[RUNTIME_KEY]["phase"] == "execution"
     assert delta[RUNTIME_KEY]["approved"] is True
+
+
+def _settings_stub(monkeypatch, *, fedot_agent_attached: bool):
+    """Swap the settings the state machine reads, keeping the real experiments half."""
+    from CoScientist.config import get_settings
+    from CoScientist.experiments.runtime import state_machine
+
+    real = get_settings()
+    stub = SimpleNamespace(
+        experiments=real.experiments,
+        web=SimpleNamespace(fedot_fallback_enabled=fedot_agent_attached),
+    )
+    monkeypatch.setattr(state_machine, "get_settings", lambda: stub)
+
+
+def test_turning_the_fedot_agent_off_takes_its_route_down_with_it(monkeypatch):
+    """Two switches guard FEDOT from opposite sides and must agree.
+
+    EXECUTOR__FEDOT_FALLBACK gates the AGENT (the YAML enables FedotAgent on it),
+    while EXPERIMENTS__ROUTE_FEDOT gates the ROUTE. With only the first turned
+    off, start_task used to hand back route_agent=FedotAgent for an agent that
+    was never attached to the tree, and enforce_continue_until_reporting went on
+    demanding a call to it until the attempt budget ran out.
+    """
+    _settings_stub(monkeypatch, fedot_agent_attached=False)
+    state = _approved_state(_plan(_task("EXP-1")))
+    assert state["experiment_runtime"]["tasks"]["EXP-1"]["current_route"] == "fedot_mas"
+
+    started = start_task(state, "EXP-1")
+    assert started["route"] == "react_tools"
+    assert started["route_agent"] == "ExperimentAgent"
+    history = state["experiment_runtime"]["tasks"]["EXP-1"]["route_history"]
+    assert "EXECUTOR__FEDOT_FALLBACK" in history[-1]["reason"]
+
+
+def test_the_fedot_route_is_untouched_while_its_agent_is_attached(monkeypatch):
+    _settings_stub(monkeypatch, fedot_agent_attached=True)
+    state = _approved_state(_plan(_task("EXP-1")))
+
+    started = start_task(state, "EXP-1")
+    assert started["route"] == "fedot_mas"
+    assert started["route_agent"] == "FedotAgent"

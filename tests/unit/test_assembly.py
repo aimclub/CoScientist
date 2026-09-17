@@ -689,3 +689,40 @@ def test_work_order_requires_an_llm_agent_with_hitl():
     with pytest.raises(ValueError, match="work_order"):
         AgentConfig(name="X", **{"class": "custom:session"}, hitl=True, work_order=True)
     assert AgentConfig(name="X", hitl=True, work_order=True).work_order
+
+
+@pytest.mark.parametrize("profile", ["system", "experiments"])
+def test_every_declared_hitl_reaches_the_agent_that_must_use_it(monkeypatch, profile):
+    """A flag the prompt never mentions is a capability the model never uses.
+
+    For work_order it is worse than unused: the guard blocks every tool until an
+    order is declared, so an agent that was never told to declare one deadlocks
+    on its first call. Nothing catches that today — _render_instruction only
+    complains about placeholders that are LEFT OVER, never about ones that were
+    never written. The experiments profile had exactly this hole: not one of its
+    nine prompt templates carried <<HITL>>.
+
+    Custom session agents are excluded on purpose: they drive their own review
+    loop and are handed a handler instead of tools, so the section never renders
+    for them however the flag is set.
+    """
+    from CoScientist.assembly.schema import resolve_config_path
+
+    config = load_config(resolve_config_path(profile))
+    system = _build_with(monkeypatch, config, hitl_enabled=True)
+
+    checked = 0
+    for name, cfg in config.agents.items():
+        if not cfg.is_enabled() or cfg.cls != "llm" or not cfg.hitl:
+            continue
+        checked += 1
+        instruction = system.agent(name).instruction
+        assert "request_approval" in instruction, f"{profile}/{name}: hitl: true, silent prompt"
+        if cfg.work_order:
+            assert "### Work Order" in instruction, f"{profile}/{name}: no work order protocol"
+            # Declaring opens the contract; the report closes it. Missing the
+            # second one means the after_agent fallback files a no_report
+            # warning on every single run.
+            for tool in ("declare_work_order", "submit_work_report"):
+                assert tool in instruction, f"{profile}/{name}: {tool} not documented"
+    assert checked, f"{profile}: no hitl llm agents found — the test proves nothing"

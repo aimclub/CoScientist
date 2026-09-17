@@ -427,9 +427,27 @@ def _route_timeout(settings: ExperimentsSettings, route: str) -> float:
     }[route]
 
 
+def _fedot_route_available(settings: ExperimentsSettings) -> bool:
+    """FEDOT is a route only while its agent is actually in the tree.
+
+    Two switches guard it from opposite sides: EXPERIMENTS__ROUTE_FEDOT picks
+    the route, while the YAML gates FedotAgent itself on
+    ``web.fedot_fallback_enabled``. With the web switch off and the route switch
+    on, ``start_task`` would hand back ``route_agent=FedotAgent`` for an agent
+    that was never attached, and ``enforce_continue_until_reporting`` would go
+    on demanding a call to it until the attempt budget ran out.
+    """
+    if not settings.route_fedot:
+        return False
+    try:
+        return bool(get_settings().web.fedot_fallback_enabled)
+    except Exception:  # noqa: BLE001 - an unreadable setting must not stop a run
+        return True
+
+
 def _route_enabled(route: str, settings: ExperimentsSettings) -> bool:
     if route == ExecutionRoute.FEDOT_MAS.value:
-        return settings.route_fedot
+        return _fedot_route_available(settings)
     if route == ExecutionRoute.ALEMBIC_BUILD.value:
         return settings.route_alembic
     return route in {
@@ -603,10 +621,12 @@ def start_task(
             f"Task {task_id} exhausted its {cfg.task_max_attempts} attempts on route {route!r}.",
         )
 
-    if route == ExecutionRoute.FEDOT_MAS.value and not cfg.route_fedot:
+    if route == ExecutionRoute.FEDOT_MAS.value and not _fedot_route_available(cfg):
         route = ExecutionRoute.REACT_TOOLS.value
         task_runtime["current_route"] = route
-        task_runtime["route_history"].append({"route": route, "reason": "EXPERIMENTS__ROUTE_FEDOT kill-switch"})
+        task_runtime["route_history"].append(
+            {"route": route, "reason": "FEDOT unavailable (EXPERIMENTS__ROUTE_FEDOT / EXECUTOR__FEDOT_FALLBACK)"}
+        )
     if not _route_enabled(route, cfg):
         raise ExperimentRuntimeError("route_disabled", f"Route {route!r} is disabled for Experiment Module v0.")
 
@@ -641,7 +661,7 @@ def start_task(
         elif session_inventory_nonempty(state) and (
             matched := match_session_inventory_tool(state, task_model, blob)
         ):
-            route = ExecutionRoute.FEDOT_MAS.value if cfg.route_fedot else ExecutionRoute.REACT_TOOLS.value
+            route = ExecutionRoute.FEDOT_MAS.value if _fedot_route_available(cfg) else ExecutionRoute.REACT_TOOLS.value
             if not _route_enabled(route, cfg):
                 raise ExperimentRuntimeError("route_disabled", f"Route {route!r} is disabled for Experiment Module v0.")
             task_runtime["current_route"] = route
