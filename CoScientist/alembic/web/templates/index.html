@@ -481,12 +481,15 @@
       wireCallForm(name);
     }
 
-    // Default Call args: the last recorded invocation, else the defaults from
-    // the served tool's input schema.
+    // Default Call args: the last recorded invocation, else the tool's invocation
+    // example from the plan, else the defaults from the served tool's input schema.
+    // A server taken from a tool image has no build log, so no recorded invocations.
     function defaultArgs(name) {
       const runs = toolRuns[name] || [];
       const last = runs.length ? runs[runs.length - 1].input : null;
       if (last && Object.keys(last).length) return last;
+      const example = (left.examples || []).find(e => e.name === name);
+      if (example && example.args && Object.keys(example.args).length) return example.args;
       const props = (mcpTools[name] || {}).properties || {};
       const out = {};
       for (const [k, p] of Object.entries(props)) out[k] = p.default !== undefined ? p.default : "";
@@ -735,7 +738,10 @@
           break;
         case "files": left.files = m.files || []; renderLeft(); break;
         case "setup": left.setup = m.content || ""; renderLeft(); break;
-        case "examples": left.examples = m.examples || []; renderLeft(); break;
+        case "examples":
+          left.examples = m.examples || []; renderLeft();
+          expandedTools.forEach(name => renderRuns(name));  // Call forms take their defaults from them
+          break;
         case "server":
           serverTools = m.tools || []; renderServer();
           document.getElementById("download-btn").disabled = !serverTools.length;

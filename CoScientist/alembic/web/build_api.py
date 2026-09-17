@@ -71,6 +71,12 @@ def _annotate_container_status(builds: list) -> list:
 
 # ── list + snapshot ────────────────────────────────────────────────────────
 def _list_builds() -> list:
+    # A running server started outside the builds tool gets its record first,
+    # so it is on the list before any agent reuses it.
+    try:
+        alembic_tools.adopt_unclaimed_servers()
+    except Exception as exc:  # noqa: BLE001  the list must load regardless
+        print(f"[builds] recording servers started outside the builds tool failed: {exc}")
     return _annotate_container_status(alembic_tools.web_list_builds())
 
 
@@ -290,8 +296,10 @@ def _invoke_in_container(snap: dict, tool: str, args: dict) -> dict:
 
     The tools venv was created in the container and points at container paths,
     so it cannot run on the host. The build's serve container is reused while it
-    runs; otherwise a throwaway container starts from ``alembic-tool:<repo>``,
-    which is the latest build of that repository.
+    runs; otherwise a throwaway container starts from the build's own image.
+    ``alembic-tool:<repo>`` moves to every newer build of the repository, whose
+    tools can differ: an older mordred build's calc_descriptors was looked up in
+    the newer image and was not found.
     """
     repo_url = snap.get("repo_url")
     if not repo_url:
@@ -302,7 +310,10 @@ def _invoke_in_container(snap: dict, tool: str, args: dict) -> dict:
     if _container_running(container):
         cmd = ["docker", "exec", *opts, container, "python", *argv]
     else:
-        image = f"alembic-tool:{alembic_tools._repo_name(repo_url)}"
+        image = alembic_tools.job_image(snap, alembic_tools.docker_inventory())
+        if not image:
+            return {"ok": False, "error": "this build has no image of its own on this host, "
+                                          "so its tools cannot run in a container"}
         cmd = ["docker", "run", "--rm", *opts, "--entrypoint", "python", image, *argv]
     try:
         out = subprocess.run(cmd, capture_output=True, text=True,

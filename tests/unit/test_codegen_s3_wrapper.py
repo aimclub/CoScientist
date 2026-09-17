@@ -759,3 +759,33 @@ def test_call_does_not_publish_an_echoed_path_from_the_mounted_data(tmp_path, mo
     assert "data_path_s3" not in result
     assert "result_path_s3" in result
     assert len(uploaded) == 1
+
+
+def test_call_hands_back_a_big_result_shortened_with_a_link_to_all_of_it(tmp_path, monkeypatch):
+    """A client cuts a long tool result to fit a model's context, and a JSON
+    document cut in the middle loses whole fields (mordred's values)."""
+    _set_s3_env(monkeypatch)
+    server_path = _write_rendered_server(
+        tmp_path, helper_source=_REAL_S3_TRANSFER.read_text(encoding="utf-8"))
+    mod = _load_server_module(server_path, monkeypatch)
+    stored = {}
+
+    class _FakeClient:
+        def put_object(self, Bucket, Key, Body, ContentType):
+            stored[Key] = Body
+
+        def generate_presigned_url(self, method, Params, ExpiresIn):
+            return f"https://signed/{Params['Key']}"
+
+    monkeypatch.setattr(mod._s3, "_client_factory", lambda *a: _FakeClient())
+    big = {"descriptor_names": [f"D{i}" for i in range(1613)], "values": list(range(1613))}
+    monkeypatch.setattr(mod.subprocess, "run",
+                        lambda cmd, **kw: _FakeCompleted(_sentinel_stdout(big)))
+
+    result = mod._call("predict", {})
+
+    [key] = stored
+    assert key.endswith("/result/result.json")
+    assert json.loads(stored[key]) == big
+    assert result["result_s3"]["presigned_url"] == f"https://signed/{key}"
+    assert 0 < len(result["values"]) < 1613
