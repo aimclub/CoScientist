@@ -39,8 +39,10 @@ Two ways to involve them:
   honor whichever they provide. Returns {selected, approved, feedback}.
 
 Pass your own name as `agent_name`. If a request is denied, don't retry the same
-thing — adjust using the feedback.
+thing — adjust using the feedback."""
 
+# Agents with a Work Order get their plan approved through it instead.
+_HITL_WHEN_TO_ASK = """\
 **When to ask.** State your intended course of action and get it approved BEFORE
 you carry it out — not only for expensive or irreversible steps. Concretely, ask
 whenever you have decided:
@@ -55,6 +57,13 @@ Ask once per decision, not once per tool call: a plan of action is one question,
 and the calls that carry it out are not. Do not ask about routine reads, or
 about anything a previous answer in this session already settled — a human who
 is asked to confirm the obvious stops reading the questions."""
+
+_HITL_WHEN_TO_ASK_WORK_ORDER = """\
+**When to ask.** Your plan is approved through the work order below — do not ask
+for it separately. Ask only about decisions that come up along the way and the
+order did not settle (e.g. which of several found options to take, whether a
+result is good enough to hand on). Do not ask about routine reads, or about
+anything a previous answer in this session already settled."""
 
 
 _HITL_RESEARCH_COOP = """\
@@ -76,6 +85,105 @@ human — not by inventing the answer. Commit the human's input with
 `research_commit`; if your role may not create that node type, state their
 decision in your text answer so the orchestrator records it."""
 
+# No curly braces in this text: the instruction goes through ADK's session-state
+# injection, which treats a braced identifier as a state key.
+_WORK_ORDER_SECTION = """\
+### Work Order — declare what you will do before you do it
+
+The human must be able to see your plan and the assumptions behind it BEFORE
+you act.
+
+Language: the human reads the work order in Russian. Write every human-readable
+value in Russian — `goal`, `done_criteria`, assumption texts, step titles and
+expected outcomes, `expected_outcome`, `fallback`, the `reason` of
+`update_work_order`, the `note` of `update_work_step`, and the `summary`,
+finding texts, evidence descriptions, `done_evidence`, `actual_outcome` and
+artifact descriptions of `submit_work_report` — even when the task,
+the context or these instructions are in English. Keep as they are: tool names,
+step and assumption ids, numbers, units, formulas,
+identifiers (database ids, file paths, links), paper titles and author names.
+
+Protocol:
+1. Orient yourself first if you need to: reading your own context (research
+   context, active tasks, directory listings) is allowed before declaring.
+2. Call `declare_work_order` before your first external action (search, download,
+   code run, graph write). Provide:
+   - `goal`: what this run must achieve in 1-2 sentences.
+   - `done_criteria`: concrete condition for completion.
+   - `assumptions`: list of strings, one assumption per item.
+     Rules for assumptions:
+     * ATOMIC: each item is a single, falsifiable constraint (1 checkbox for the human). Never bundle multiple conditions into one item.
+     * NON-TRIVIAL: do NOT state obvious facts (e.g. "инструменты работают", "данные существуют", "Python доступен").
+     * CONCRETE DOMAIN CONSTRAINTS:
+       - Scope & cohort: exact date ranges (e.g. 2020-2025), organisms, clinical phases, target IDs.
+       - Data & normalization: specific sources, units of measurement (e.g. nM vs µM), activity cutoffs (e.g. IC50 < 100 nM).
+       - Methodology & filters: study designs accepted (RCTs only, peer-reviewed), exclusions (exclude case reports).
+       - Volume & sufficiency: e.g. "10 самых цитируемых статей достаточно для первичного обзора".
+   - `steps`: ordered steps `[{"title": "...", "tools": [...], "expected_outcome": "..."}]`.
+   - `planned_tools`: all tool names you intend to call.
+   - `expected_outcome`: concrete results (counts, ranges, metrics).
+   - `fallback`: alternative approach if the plan fails.
+3. Read the result:
+   - `approved` — proceed. Assumptions the human rejected are listed: do not rely
+     on them. Operator notes are instructions: follow them.
+   - `revise` — declare again, taking the feedback into account.
+   - `rejected` — do not act; finish and report why the task was not done.
+4. As you work, mark steps with `update_work_step` (in_progress, then done or
+   skipped with a short note on what came out).
+5. A call outside the approved order (undeclared tool) is BLOCKED. Do not retry
+   it: if you really need it, call `update_work_order` with the reason — what you
+   learned that the plan did not foresee — and what tools you need added. Otherwise
+   continue within the order.
+6. BEFORE your final answer call `submit_work_report`. The human checks it
+   against your order:
+   - `summary`: the result in 2-4 sentences.
+   - `findings`: one atomic finding per item, `{"text", "evidence", "confidence",
+     "step_id"}`. Evidence is what backs it — links, DOIs, file paths, graph node
+     ids, numbers. A finding without evidence is flagged to the human.
+   - `done_verdict`: `met` / `partial` / `not_met` against your `done_criteria`,
+     with `done_evidence`. Be honest: `partial` with reasons beats a false `met`.
+   - `actual_outcome`: the concrete result to set against `expected_outcome`.
+   - `artifacts`: only what really exists — files, datasets, graph nodes, links.
+   Close your steps with `update_work_step` first: open steps are flagged too.
+   Read the result:
+   - `accepted` — give your final answer based on the report.
+   - `revise` — rework what the feedback (and any disputed findings) points at,
+     amend the order if you need more tools, then submit the report again.
+   - `rejected` — stop; state plainly that the result was not accepted and why.
+
+Keep the order honest and specific: a human who reads "search the literature"
+learns nothing; "искать в PubMed РКИ по X с 2015 года, без описаний клинических
+случаев" is something they can correct."""
+
+_WORK_ORDER_HINTS = (
+    (("websearch",),
+     "For searches, the query formulations and the source selection criteria "
+     "(recency, study types, venues) are assumptions — list them as atomic items "
+     '(e.g. "Только рецензируемые статьи 2020–2025 гг.").'),
+    (("papers_search",),
+     "For paper downloads, state which papers or how many you will fetch, and why those as assumptions "
+     '(e.g. "Скачать полные тексты 5 наиболее релевантных статей").'),
+    (("medical",),
+     "For clinical evidence, state the population, study designs and date range "
+     "you will accept as separate atomic assumptions "
+     '(e.g. "Только взрослые пациенты, без педиатрических исследований", '
+     '"Только рандомизированные контролируемые исследования (РКИ)").'),
+    (("dynamic_tools",),
+     "For MCP tools, name the exact tools you will call in `planned_tools` and the steps; "
+     "the input values you choose (models, parameters, units, thresholds, number of runs) "
+     "are assumptions "
+     '(e.g. "Аффинность связывания в ккал/моль").'),
+    (("coder", "sandbox"),
+     "For data work, the data sources, filters, units and expected volumes are "
+     "assumptions "
+     '(e.g. "Активность соединений выражена в нМ", '
+     '"Основной источник активностей — ChEMBL v33 или новее").'),
+    (("research_graph",),
+     "If you will write the research graph, name in the steps which nodes you will "
+     "create or change."),
+)
+
+
 # The orchestrator alone holds `research_triggers`, so only its copy of the
 # protocol may name it. Naming it for every writer told worker agents to call a
 # tool they are not given, which is exactly the kind of instruction that makes a
@@ -92,6 +200,7 @@ class PromptContext:
     # (includes the synthetic HITL entry when HITL tools are attached).
     tool_entries: List[ToolEntry] = field(default_factory=list)
     hitl_attached: bool = False
+    work_order_attached: bool = False
 
     # ── queries ──────────────────────────────────────────────────────────────
     def has_tool(self, key: str) -> bool:
@@ -170,7 +279,9 @@ class PromptContext:
     def render_hitl(self) -> str:
         if not self.hitl_attached:
             return ""
-        section = _HITL_SECTION
+        section = _HITL_SECTION + "\n\n" + (
+            _HITL_WHEN_TO_ASK_WORK_ORDER if self.work_order_attached else _HITL_WHEN_TO_ASK
+        )
         # Agents that also write the research graph get the co-building protocol
         # (validate hypotheses with the human; a hypothesis needs acceptance
         # criteria before verification — ask for them if the human didn't give any).
@@ -178,6 +289,14 @@ class PromptContext:
             section += "\n\n" + _HITL_RESEARCH_COOP
             if self.has_tool("research_graph_orchestrator"):
                 section += "\n" + _HITL_RESEARCH_COOP_ORCHESTRATOR
+        if self.work_order_attached:
+            section += "\n\n" + _WORK_ORDER_SECTION
+            hints = [
+                hint for keys, hint in _WORK_ORDER_HINTS
+                if any(self.has_tool(key) for key in keys)
+            ]
+            if hints:
+                section += "\n\n" + "\n".join(f"- {hint}" for hint in hints)
         return section
 
     def render_sibling_roster(self) -> str:

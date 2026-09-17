@@ -152,6 +152,75 @@ def _parent_agent_name(tool_context: Any, author: str) -> Optional[str]:
         return None
 
 
+async def report_activity(context: Any, payload: dict) -> None:
+    """Send one record to the sink on behalf of ``context``'s session.
+
+    The plugin's own entry point, and the one for work that is not an ADK tool
+    or agent but should show up as one — the planner's plan critic is a bare
+    LLM call that no callback ever sees.
+    """
+    sink = _sink
+    if sink is None:
+        return
+    try:
+        key = session_key(context)
+    except Exception:  # noqa: BLE001 - context shapes vary across ADK paths
+        return
+    payload.setdefault("timestamp", datetime.now().isoformat())
+    try:
+        await sink(key, payload)
+    except Exception as exc:  # noqa: BLE001 - an observer must not fail a run
+        logger.warning("Tool activity sink failed: %s", exc)
+
+
+async def report_delegation(
+    context: Any,
+    *,
+    author: str,
+    target: str,
+    call_id: str,
+    args: Any = None,
+    result: Any = None,
+    error: Optional[str] = None,
+    phase: str,
+) -> None:
+    """Report a hand-off ``author`` → ``target`` that no AgentTool carries.
+
+    ``phase="call"`` opens it (with ``args``) and starts ``target``;
+    ``"result"``/``"error"`` ends ``target`` and closes the call. Observers
+    render it exactly like an AgentTool delegation: ``target`` gets its own
+    entry in the activity rail and the agent tree, the call its record in the
+    ToolsViewer, and the status line says who is working.
+    """
+    if phase == "call":
+        await report_activity(context, {
+            "phase": "agent_start", "author": target, "parent": author,
+            "agent_class": target,
+        })
+        preview, full, truncated = _preview_and_full(args)
+        payload = {
+            "phase": "call", "author": author, "tool": target,
+            "call_id": call_id, "args": preview, "args_truncated": truncated,
+            "parent": author, "is_delegation": True, "target_agent": target,
+        }
+        if truncated:
+            payload["args_full"] = full
+        await report_activity(context, payload)
+        return
+
+    await report_activity(context, {"phase": "agent_end", "author": target})
+    field = "error" if phase == "error" else "result"
+    preview, full, truncated = _preview_and_full(error if phase == "error" else result)
+    payload = {
+        "phase": phase, "author": author, "tool": target, "call_id": call_id,
+        field: preview, f"{field}_truncated": truncated,
+        "is_delegation": True, "target_agent": target,
+    }
+    if truncated:
+        payload[f"{field}_full"] = full
+    await report_activity(context, payload)
+
+
 class ToolActivityPlugin(BasePlugin):
     """Report every tool call, result, and error to the registered sink."""
 
@@ -159,18 +228,7 @@ class ToolActivityPlugin(BasePlugin):
         super().__init__(name=name)
 
     async def _dispatch(self, tool_context: Any, payload: dict) -> None:
-        sink = _sink
-        if sink is None:
-            return
-        try:
-            key = session_key(tool_context)
-        except Exception:  # noqa: BLE001 - context shapes vary across ADK paths
-            return
-        payload.setdefault("timestamp", datetime.now().isoformat())
-        try:
-            await sink(key, payload)
-        except Exception as exc:  # noqa: BLE001 - an observer must not fail a run
-            logger.warning("Tool activity sink failed: %s", exc)
+        await report_activity(tool_context, payload)
 
     async def before_agent_callback(self, *, agent, callback_context) -> None:
         author = getattr(agent, "name", "unknown")

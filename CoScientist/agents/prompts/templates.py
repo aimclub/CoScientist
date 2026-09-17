@@ -2392,6 +2392,10 @@ plan is executed as-is. So spend the round only on a defect worth a rewrite.
     succeed. You judge the roadmap as a delegation contract, not the science.
   - Wording, formatting, or ordering that is merely not how you would write it.
   - How an assignee will do its step internally — that is its own decision.
+  - Which exact step IDs a step lists as dependencies (e.g. mixed-up TASK-N
+    references) or the order of that list, as long as the plan is still
+    executable in the listed order — that is a formatting detail, not a
+    defect worth a rewrite.
 
 When in doubt, APPROVE. An unjustified rewrite costs a full planning round and
 usually returns a worse plan.

@@ -20,6 +20,18 @@ class AbstractHITLHandler(ABC):
         """Process a HITL request and return the human's response."""
         ...
 
+    async def notify(self, payload: dict) -> None:
+        """Tell the human something without waiting for an answer.
+
+        Used for Work Order notices (a read-tier contract, step progress, a
+        deviation). ``payload`` may carry ``_session`` like a request context.
+        Default: log it — a UI without a notice channel loses nothing but the
+        heads-up.
+        """
+        logging.getLogger(__name__).info(
+            "[HITL notice] %s %s", payload.get("agent_name"), payload.get("kind"),
+        )
+
 
 class DelegatingHITLHandler(AbstractHITLHandler):
     """A handler that delegates to another handler, allowing runtime swapping."""
@@ -33,6 +45,9 @@ class DelegatingHITLHandler(AbstractHITLHandler):
     async def handle_request(self, request: HITLRequest) -> HITLResponse:
         return await self.delegate.handle_request(request)
 
+    async def notify(self, payload: dict) -> None:
+        await self.delegate.notify(payload)
+
     def __deepcopy__(self, memo):
         # Return self so that workflow deepcopies share the same handler instance
         return self
@@ -41,6 +56,13 @@ class DelegatingHITLHandler(AbstractHITLHandler):
 
 class ConsoleHITLHandler(AbstractHITLHandler):
     """Simple console-based HITL handler (for local development/testing)."""
+
+    async def notify(self, payload: dict) -> None:
+        text = payload.get("text")
+        if text and sys.stdin.isatty():
+            print(f"\n[HITL notice] {payload.get('agent_name')}: {text}")
+        else:
+            await super().notify(payload)
 
     async def handle_request(self, request: HITLRequest) -> HITLResponse:
         # No console attached (A2A/uvicorn server, headless run, cron): reading
