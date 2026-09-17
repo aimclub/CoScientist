@@ -10,14 +10,14 @@ from CoScientist.assembly.schema import (
 )
 
 
-def test_microfluidics_runs_its_modules_as_ten_stages():
+def test_microfluidics_runs_its_modules_as_eleven_stages():
     config = load_config(resolve_config_path("microfluidics"))
 
     stages = config.linear_stages()
 
     assert [s["agent"] for s in stages] == [
         "TZSpecAgent", "TZQueryGenAgent", "PlannerAgent", "LiteratureOrchestrator",
-        "MolDesignAgent", "SynthRouteAgent", "EconomicsAgent",
+        "LiteratureSynthesisAgent", "MolDesignAgent", "SynthRouteAgent", "EconomicsAgent",
         "ExpPlannerAgent", "ExperimentLoop", "ReportAgent",
     ]
     assert stages[0]["title"] == "Техническое задание"

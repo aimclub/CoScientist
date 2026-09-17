@@ -7,6 +7,7 @@ carries a provenance status. The TZAgent pipeline outputs:
 
   TZSpecAgent      -> StructuredTZ        (state key ``structured_tz``)
   TZQueryGenAgent  -> LiteratureQueries   (state key ``tz_literature_queries``)
+  LiteratureSynthesisAgent -> LiteratureAnalysis (state key ``literature_analysis``)
 
 ``CoScientist.microfluidics.render.render_tz_document`` turns a validated
 StructuredTZ into the human-readable Markdown document of the reference
@@ -105,13 +106,97 @@ class LiteratureQueries(BaseModel):
     queries: List[LiteratureQuery] = Field(default_factory=list)
 
 
+class TargetMolecule(BaseModel):
+    """Целевая молекула заказчика — то, что передаётся в модуль дизайна.
+
+    ``fixed`` = заказчик задал конкретное вещество, подбирать кандидатов не
+    нужно. Когда ТЗ его задаёт, значения берутся из ТЗ, а не из литературы.
+    """
+
+    fixed: bool = Field(
+        default=False, description="Задача с фиксированной молекулой (задана заказчиком)"
+    )
+    name: str = Field(default="", description="Название вещества")
+    smiles: str = Field(default="", description="SMILES, если известен")
+    cas: str = Field(default="", description="CAS, если известен")
+    source: str = Field(
+        default="не задано",
+        description="Откуда значения: «ТЗ», «литература» или «не задано»",
+    )
+
+
+class NamedValue(BaseModel):
+    """Свойство или условие: название, значение с единицами, условия измерения."""
+
+    name: str = Field(description="Напр. «ККМ» или «Температура»")
+    value: str = Field(description="Значение с единицами, напр. «1.2 ммоль/л»")
+    conditions: str = Field(default="", description="Условия измерения, если указаны")
+
+
+class Analogue(BaseModel):
+    """Аналог целевого продукта, найденный в литературе."""
+
+    name: str
+    smiles: str = Field(default="", description="SMILES, если удалось установить")
+    compound_class: str = Field(default="", description="Химический класс")
+    properties: List[NamedValue] = Field(default_factory=list)
+    relevance: str = Field(default="", description="Чем аналог полезен для ТЗ")
+    sources: List[str] = Field(default_factory=list, description="Ссылки / DOI")
+
+
+class RouteStep(BaseModel):
+    """Одна операция маршрута синтеза."""
+
+    operation: str
+    reagents: List[str] = Field(default_factory=list)
+    conditions: List[NamedValue] = Field(default_factory=list)
+
+
+class LiteratureRoute(BaseModel):
+    """Маршрут синтеза, описанный в литературе."""
+
+    product: str = Field(description="Какое вещество получают (название / SMILES)")
+    steps: List[RouteStep] = Field(default_factory=list)
+    flow_suitability: str = Field(
+        default="", description="Пригодность для проточного / микрофлюидного реактора"
+    )
+    sources: List[str] = Field(default_factory=list)
+
+
+class LiteratureFact(BaseModel):
+    """Факт из литературы, привязанный к поисковой задаче."""
+
+    statement: str
+    query_id: str = Field(default="", description="LIT-xx, по которой найден факт")
+    sources: List[str] = Field(default_factory=list)
+
+
+class LiteratureAnalysis(BaseModel):
+    """Итог модуля A (ТЗ + литература) — вход модуля дизайна и отчёта."""
+
+    target_molecule: TargetMolecule = Field(default_factory=TargetMolecule)
+    analogues: List[Analogue] = Field(default_factory=list)
+    synthesis_routes: List[LiteratureRoute] = Field(default_factory=list)
+    facts: List[LiteratureFact] = Field(default_factory=list)
+    gaps: List[str] = Field(
+        default_factory=list, description="Что не удалось найти в литературе"
+    )
+
+
 __all__ = [
+    "Analogue",
     "CANONICAL_BLOCKS",
     "FieldStatus",
+    "LiteratureAnalysis",
+    "LiteratureFact",
     "LiteratureQueries",
     "LiteratureQuery",
+    "LiteratureRoute",
+    "NamedValue",
     "OPEN_STATUSES",
+    "RouteStep",
     "StructuredTZ",
+    "TargetMolecule",
     "TZBlock",
     "TZFieldRow",
 ]

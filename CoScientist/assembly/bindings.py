@@ -1270,6 +1270,13 @@ def _save_tz_document():
     return save_tz_document
 
 
+def _microfluidics_literature(name: str):
+    def factory(ctx):
+        from CoScientist.microfluidics import literature
+        return getattr(literature, name)
+    return factory
+
+
 def _export_tz_and_queries():
     from CoScientist.microfluidics.export import export_tz_and_queries
     return export_tz_and_queries
@@ -1398,6 +1405,15 @@ _cb("sanitize_json_output", "after_model", factory=lambda ctx: _sanitize_json_ou
 _cb("save_tz_document", "after_agent", factory=lambda ctx: _save_tz_document())
 # Save the ТЗ + literature queries as shareable Markdown & HTML for hand-off.
 _cb("export_tz_and_queries", "after_agent", factory=lambda ctx: _export_tz_and_queries())
+# Microfluidics module A: keep EVERY LIT-xx answer (search_results is
+# overwritten per call), expose the ТЗ's target molecule as its own key, and
+# let a fixed molecule from the ТЗ win in the literature analysis.
+_cb("collect_literature_finding", "after_agent",
+    factory=_microfluidics_literature("collect_literature_finding"))
+_cb("inject_target_molecule", "before_agent",
+    factory=_microfluidics_literature("inject_target_molecule"))
+_cb("pin_target_molecule", "after_agent",
+    factory=_microfluidics_literature("pin_target_molecule"))
 # Critic callbacks: their LLM prompts embed the orchestrator's current roster.
 _cb("pre_action_critique", "after_model", factory=_pre_action_critique)
 _cb("post_action_critique", "after_tool", factory=_post_action_critique)
@@ -1427,7 +1443,11 @@ def _register_classes() -> None:
 
 def _register_schemas() -> None:
     from CoScientist.storage import MCPRanking, ToolRanking
-    from CoScientist.microfluidics.models import LiteratureQueries, StructuredTZ
+    from CoScientist.microfluidics.models import (
+        LiteratureAnalysis,
+        LiteratureQueries,
+        StructuredTZ,
+    )
     from CoScientist.context_init.models import ResearchFrame
 
     REGISTRY.register_output_schema("tool_ranking", ToolRanking)
@@ -1436,6 +1456,7 @@ def _register_schemas() -> None:
     # from it (see CoScientist/agents/microfluidics.yaml).
     REGISTRY.register_output_schema("structured_tz", StructuredTZ)
     REGISTRY.register_output_schema("tz_literature_queries", LiteratureQueries)
+    REGISTRY.register_output_schema("literature_analysis", LiteratureAnalysis)
     # Framing entities of the meta-model, filled per run (context_init pre-stage).
     REGISTRY.register_output_schema("research_frame", ResearchFrame)
 

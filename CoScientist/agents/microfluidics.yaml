@@ -15,7 +15,11 @@
 #   │    │    ├─ TZSpecAgent      -> state["structured_tz"]         (ТЗ, by section)
 #   │    │    └─ TZQueryGenAgent  -> state["tz_literature_queries"] (LIT-01…)
 #   │    ├─ PlannerAgent          -> create_plan(…), one task per LIT query
-#   │    └─ LiteratureOrchestrator-> delegates each LIT task to ResearchAgent
+#   │    ├─ LiteratureOrchestrator-> delegates each LIT task to ResearchAgent
+#   │    │                           (every answer -> state["literature_findings"])
+#   │    └─ LiteratureSynthesisAgent -> state["literature_analysis"] (structured
+#   │                                   hand-off: target molecule, analogues,
+#   │                                   routes + conditions, facts, gaps)
 #   ├─ ModuleB_Design (sequential)            stages 3–5
 #   │    └─ MolDesignAgent → SynthRouteAgent → EconomicsAgent
 #   ├─ ModuleC_Experiment (sequential)        stages 6–10
@@ -71,11 +75,13 @@ agents:
       возвращает аналоги и факты. Всегда первый модуль.
     routing: >-
       always run this FIRST — it produces the structured ТЗ every later module
-      reads, plus the literature analogues and facts.
+      reads, plus the structured literature analysis: the target molecule,
+      analogues, synthesis routes with conditions, and facts.
     children:
       - TZAgent
       - PlannerAgent
       - LiteratureOrchestrator
+      - LiteratureSynthesisAgent
 
   # ── ТЗ stage (ported from VibePAV) ─────────────────────────────────────────
   TZAgent:
@@ -149,6 +155,8 @@ agents:
     output_schema: tz_literature_queries
     hitl: true
     callbacks:
+      # The queries must target the customer's molecule when the ТЗ fixes one.
+      before_agent: [inject_target_molecule]
       after_model: [sanitize_json_output]
       # Save the ТЗ + literature queries as shareable Markdown & HTML files.
       after_agent: [export_tz_and_queries]
@@ -179,10 +187,12 @@ agents:
       against the ТЗ.
     prompt: microfluidics_orchestrator
     tools: [task_tracker]
+    # Its closing summary across all LIT tasks — kept, not just posted.
+    output_key: literature_report
     subordinates:
       - ResearchAgent
     callbacks:
-      before_agent: [before_get_task]
+      before_agent: [before_get_task, inject_target_molecule]
 
   ResearchAgent:
     class: llm
@@ -211,7 +221,29 @@ agents:
       before_model: [inject_uploaded_papers]
       before_tool: [WebSearchLimiter]
       after_tool: [log_research_tool_calls]
+      # search_results is overwritten per call — keep every LIT-xx answer.
+      after_agent: [collect_literature_finding]
     hitl: true
+
+  # ── Hand-off of module A ───────────────────────────────────────────────────
+  # Turns the per-task answers into ONE structured result the design module
+  # and the report read. No tools: output_schema only. When the ТЗ fixes the
+  # target molecule, pin_target_molecule makes the ТЗ's values win.
+  LiteratureSynthesisAgent:
+    class: llm
+    title: Итоги литературного анализа
+    include_contents: none
+    description: >-
+      сводит результаты всех литературных задач в структурированный итог:
+      целевая молекула, аналоги (SMILES + свойства), маршруты синтеза с
+      условиями, факты с источниками и пробелы.
+    prompt: microfluidics_literature_synthesis
+    output_key: literature_analysis
+    output_schema: literature_analysis
+    callbacks:
+      before_agent: [inject_target_molecule]
+      after_model: [sanitize_json_output]
+      after_agent: [pin_target_molecule]
 
   # ── Module B — stages 3–5: design ──────────────────────────────────────────
   # Edge 4→5 stays inside B while 4→6 leaves for C: B runs to completion (the
