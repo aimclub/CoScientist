@@ -87,6 +87,27 @@ microfluidics_toolset_instance = _http_mcp_toolset(
     ),
 )
 
+# ---------------------------------------------------------------------------
+# Microfluidics case services — economics (stage 5) and CFD (stage 9).
+# Internal-network servers: no proxy. Only the CFD server takes a key
+# (X-API-Key). Unset URLs leave the agents on their stubs.
+# ---------------------------------------------------------------------------
+_CFD_TIMEOUT = 60 * 15.0  # a flow simulation can run for minutes
+
+microfluidic_economic_toolset_instance = _http_mcp_toolset(
+    settings.mcp.microfluidic_economic_url,
+)
+
+microfluidic_cfd_toolset_instance = _http_mcp_toolset(
+    settings.mcp.microfluidic_cfd_url,
+    sse_read_timeout=_CFD_TIMEOUT,
+    headers=(
+        {"X-API-Key": settings.mcp.microfluidic_cfd_api_key}
+        if settings.mcp.microfluidic_cfd_api_key
+        else {}
+    ),
+)
+
 # Optional paper-analysis / paper-search MCP servers — only built when configured
 # (MCP__PAPER_ANALYSIS_URL / MCP__PAPERS_SEARCH_URL in .env).
 paper_analysis_toolset_instance = _http_mcp_toolset(PAPER_ANALYSIS_URL, sse_read_timeout=_PAPER_ANALYSIS_TIMEOUT)

@@ -257,7 +257,8 @@ agents:
       экономика маршрутов — стоимость за кг, доступность реагентов в РФ, риски
       поставок.
     prompt: microfluidics_economics
-    tools: [economics_mcp_stub]
+    # economics_mcp once MCP_MICROFLUIDIC_ECONOMIC is set, otherwise the stub.
+    tools: [economics_mcp, economics_mcp_stub]
     output_key: economics
 
   # ── Module C — stages 6–10: experiment ─────────────────────────────────────
@@ -306,7 +307,8 @@ agents:
       установка — исполняет план опытов: считает течение в чипе (CFD) и подаёт
       команды на микрофлюидную установку, снимая телеметрию.
     prompt: microfluidics_equipment
-    tools: [cfd_mcp_stub, rig_mcp_stub, microfluidics]
+    # cfd_mcp once MCP_MICROFLUIDIC_CFD_3_TOOLS is set, otherwise the stub.
+    tools: [cfd_mcp, cfd_mcp_stub, rig_mcp_stub, microfluidics]
     output_key: experiment_journal
     hitl: true
 

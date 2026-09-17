@@ -174,6 +174,12 @@ class MCPSettings(BaseModel):
     vault_url: Optional[str] = None
     microfluidics_url: Optional[str] = None
     microfluidics_api_key: Optional[str] = None
+    # Microfluidics case services behind stages 5 (economics) and 9 (CFD).
+    # Read from the flat names the service owners hand out; MCP__* nested
+    # variables still override them. Unset means the agent keeps its stub.
+    microfluidic_economic_url: Optional[str] = _os.getenv("MCP_MICROFLUIDIC_ECONOMIC") or None
+    microfluidic_cfd_url: Optional[str] = _os.getenv("MCP_MICROFLUIDIC_CFD_3_TOOLS") or None
+    microfluidic_cfd_api_key: Optional[str] = _os.getenv("MICROFLUIDIC_CFD_3_TOOLS_KEY") or None
 
 
 # =========================

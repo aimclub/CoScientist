@@ -40,6 +40,7 @@ from google.adk.sessions import InMemorySessionService  # noqa: E402
 from google.genai import types  # noqa: E402
 
 from CoScientist.assembly import build_system  # noqa: E402
+from CoScientist.config import get_settings  # noqa: E402
 from CoScientist.assembly.schema import resolve_config_path  # noqa: E402
 
 APP, USER, SESSION = "microfluidics_stages_3_11", "test_user", "session_3_11"
@@ -140,7 +141,10 @@ def test_stages_3_to_11_reach_the_report():
     assert state.get("experiment_journal"), "the rig produced no journal (node 7)"
 
     # The stubs behind nodes 3, 4, 5, 9, 10 were really called.
-    for stub in ("molecular_design_stub", "retrosynthesis_stub", "economics_mcp_stub"):
+    module_b_stubs = ["molecular_design_stub", "retrosynthesis_stub"]
+    if not get_settings().mcp.microfluidic_economic_url:
+        module_b_stubs.append("economics_mcp_stub")  # else the real MCP server
+    for stub in module_b_stubs:
         assert stub in tool_calls, f"{stub} never called — module B faked its answer"
     assert "rig_mcp_stub" in tool_calls, "node 7 never touched the rig"
 

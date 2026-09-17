@@ -106,6 +106,34 @@ def _create_plan_tool():
     return [create_plan_tool()]
 
 
+def _microfluidic_economic():
+    from CoScientist.tools import microfluidic_economic_toolset_instance
+    return microfluidic_economic_toolset_instance
+
+
+def _microfluidic_cfd():
+    from CoScientist.tools import microfluidic_cfd_toolset_instance
+    return microfluidic_cfd_toolset_instance
+
+
+def _microfluidics_stub_unless(name: str, real_url_setting: str):
+    """The stub, only while its real MCP server is not configured.
+
+    The YAML lists both the real toolset and the stub; exactly one of them is
+    attached, so the agent never sees a stub next to the service it replaces.
+    """
+    stub_factory = _microfluidics_stub(name)
+
+    def factory():
+        from CoScientist.config import get_settings
+
+        if getattr(get_settings().mcp, real_url_setting):
+            return None
+        return stub_factory()
+
+    return factory
+
+
 def _microfluidics_stub(name: str):
     """Wrap one microfluidics STUB (stages 3–11) as an attachable function tool.
 
@@ -650,7 +678,8 @@ REGISTRY.register_tool(ToolEntry(
 
 REGISTRY.register_tool(ToolEntry(
     key="economics_mcp_stub",
-    factory=_microfluidics_stub("economics_mcp_stub"),
+    factory=_microfluidics_stub_unless("economics_mcp_stub", "microfluidic_economic_url"),
+    optional=True,  # dropped once the real MCP server is configured
     docs=(
         ToolDoc(
             name="economics_mcp_stub",
@@ -664,8 +693,45 @@ REGISTRY.register_tool(ToolEntry(
 ))
 
 REGISTRY.register_tool(ToolEntry(
+    key="economics_mcp",
+    factory=_microfluidic_economic,
+    optional=True,  # built only when MCP_MICROFLUIDIC_ECONOMIC is configured
+    runtime_resolved=True,  # real MCP server — tool surface comes from it
+    docs=(
+        ToolDoc(
+            name="<economics MCP tools>",
+            signature="(varies)",
+            purpose=(
+                "Tools of the economics MCP server: cost of a synthesis route, "
+                "reagent availability in Russia, supply risks — call them "
+                "directly with the route and its reagents."
+            ),
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="cfd_mcp",
+    factory=_microfluidic_cfd,
+    optional=True,  # built only when MCP_MICROFLUIDIC_CFD_3_TOOLS is configured
+    runtime_resolved=True,  # real MCP server — tool surface comes from it
+    docs=(
+        ToolDoc(
+            name="<CFD MCP tools>",
+            signature="(varies)",
+            purpose=(
+                "Tools of the chip CFD MCP server: from geometry / flows / "
+                "telemetry they compute RTD, pressure drop and a recommended "
+                "geometry — call them directly."
+            ),
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
     key="cfd_mcp_stub",
-    factory=_microfluidics_stub("cfd_mcp_stub"),
+    factory=_microfluidics_stub_unless("cfd_mcp_stub", "microfluidic_cfd_url"),
+    optional=True,  # dropped once the real MCP server is configured
     docs=(
         ToolDoc(
             name="cfd_mcp_stub",
