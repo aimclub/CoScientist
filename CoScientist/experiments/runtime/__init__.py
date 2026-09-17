@@ -2,7 +2,6 @@
 
 from .coalesce import (
     coalesce_experiment_module_calls,
-    enforce_experiment_module_first,
     suppress_experiment_module_after_completed,
 )
 from .guards import (
@@ -50,7 +49,6 @@ __all__ = [
     "approve_plan",
     "assess_experiment_inventory_feasibility",
     "coalesce_experiment_module_calls",
-    "enforce_experiment_module_first",
     "suppress_experiment_module_after_completed",
     "enforce_continue_until_reporting",
     "enforce_pending_record_result",

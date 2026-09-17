@@ -24,9 +24,6 @@ RESEARCH_SERVER_ID = "__research__"
 MEDICAL_SERVER_ID = "__medical__"
 _SYNTHETIC_SERVER_IDS = frozenset({RESEARCH_SERVER_ID, MEDICAL_SERVER_ID})
 
-CAPABILITY_SPECS: tuple[tuple[str, re.Pattern[str], re.Pattern[str]], ...] = ()
-PRIMARY_CAP_PRIORITY: tuple[str, ...] = ()
-
 # Tool names + purposes from CoScientist.assembly.bindings ToolDoc entries
 # for ResearchAgent / MedicalAgent. Coverage is still name/score bind, not
 # ask-phrase tables.
@@ -77,18 +74,6 @@ def declared_family_capabilities(*families: str) -> list[dict[str, Any]]:
             "url": None,
         })
     return out
-
-
-def request_capabilities(request: str = "") -> set[str]:
-    return set()
-
-
-def tool_capabilities(tool_name: str = "", description: str = "") -> set[str]:
-    return set()
-
-
-def primary_needed_capability(needed: Iterable[str] = ()) -> str | None:
-    return None
 
 
 def inventory_covers_capabilities(
@@ -301,10 +286,8 @@ def get_grouped_mcp_inventory(
 
 
 __all__ = [
-    "CAPABILITY_SPECS",
     "FAMILY_MEDICAL",
     "FAMILY_RESEARCH",
-    "PRIMARY_CAP_PRIORITY",
     "declared_family_capabilities",
     "filter_inventory_to_needed",
     "get_grouped_mcp_inventory",
@@ -315,7 +298,4 @@ __all__ = [
     "match_inventory_tool",
     "match_named_family_capability",
     "match_named_inventory_tool",
-    "primary_needed_capability",
-    "request_capabilities",
-    "tool_capabilities",
 ]

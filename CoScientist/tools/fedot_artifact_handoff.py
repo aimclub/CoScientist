@@ -7,9 +7,6 @@ columns from that artifact as arguments. We fetch + parse it into
 (case-insensitive), bind those authoritative values into the task text so the
 next step cannot invent placeholders. Matching is equality only — no alias map,
 no domain allowlist.
-
-This module also owns the FEDOT/Coder "hard-stop" decision (``should_hard_stop_fedot``):
-whether an agent should refuse to re-run once a deliverable is already captured.
 """
 
 from __future__ import annotations
@@ -19,7 +16,6 @@ import html
 import io
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, MutableMapping, Optional, Sequence
 
@@ -29,87 +25,6 @@ _MAX_ROWS = 10
 _MAX_BYTES = 200_000
 # Presigned viz/binaries we never try to parse as a handoff table.
 _SKIP_EXTENSIONS = (".html", ".htm", ".png", ".jpg", ".jpeg", ".gif", ".pdf", ".svg")
-
-FEDOT_PRODUCER_TOOLS_KEY = "fedot_producer_tools"
-# Duplicated from tool_callbacks.{FEDOT_DELIVERABLE_READY_KEY,TOOL_MATCH_STATE_KEY}
-# as plain strings to avoid a circular import (tool_callbacks -> this module).
-_FEDOT_DELIVERABLE_READY_KEY = "fedot_deliverable_ready"
-_TOOL_MATCH_STATE_KEY = "executor_tool_match"
-
-
-def _experiment_module_active(state: Mapping[str, Any]) -> bool:
-    """True while the Experiment Module owns the session.
-
-    Hard-stop is a legacy-profile gate (no experiment_runtime). Inside EM the
-    state machine already decides start / retry / next-task; a session stop
-    would refuse transitions the machine considers valid.
-    """
-    runtime = state.get("experiment_runtime")
-    if isinstance(runtime, Mapping) and runtime:
-        return True
-    envelope = state.get("experiment_active_envelope")
-    return isinstance(envelope, Mapping) and bool(envelope)
-
-
-def _tool_names(tools: Sequence[Any] | None) -> set[str]:
-    names: set[str] = set()
-    for tool in tools or []:
-        if isinstance(tool, str):
-            name = tool.strip()
-        elif isinstance(tool, Mapping):
-            name = str(tool.get("tool") or tool.get("name") or "").strip()
-        else:
-            name = ""
-        if name:
-            names.add(name)
-    return names
-
-
-def record_fedot_producer_tools(
-    state: MutableMapping[str, Any],
-    filtered_tools: Sequence[Mapping[str, Any]] | None,
-) -> List[str]:
-    """Union tool names from a successful capture into ``fedot_producer_tools``."""
-    merged = _tool_names(state.get(FEDOT_PRODUCER_TOOLS_KEY)) | _tool_names(filtered_tools)
-    ordered = sorted(merged)
-    state[FEDOT_PRODUCER_TOOLS_KEY] = ordered
-    return ordered
-
-
-def should_hard_stop_fedot(state: Mapping[str, Any]) -> bool:
-    """Whether Fedot/Coder should refuse to run again after a captured deliverable.
-
-    Deliberately conservative — this only stops a REPEAT of already-delivered
-    work, never a step the orchestrator still genuinely needs:
-
-    - The latest tool-reranker verdict abstained (``matched`` is False) — the
-      current step is asking for a DIFFERENT capability than what FEDOT already
-      delivered (this is exactly when the orchestrator's own routing rules send
-      the step to CoderAgent) — never stop.
-    - The latest matched tool(s) are not all among tools already used
-      successfully (e.g. a generate -> dock handoff) — a new FEDOT step is
-      pending — never stop.
-    - Otherwise (the matched tool is one already delivered, or there is no
-      tool-match context at all) — nothing new to do — stop the loop.
-
-    Kill-switch: ``COSCIENTIST_FEDOT_HARD_STOP=0``.
-    """
-    if os.getenv("COSCIENTIST_FEDOT_HARD_STOP", "1") == "0":
-        return False
-    if _experiment_module_active(state):
-        return False
-    if not state.get(_FEDOT_DELIVERABLE_READY_KEY):
-        return False
-
-    verdict = state.get(_TOOL_MATCH_STATE_KEY) or {}
-    if verdict and not verdict.get("matched"):
-        return False
-
-    current = _tool_names(state.get("filtered_tools") or [])
-    producers = _tool_names(state.get(FEDOT_PRODUCER_TOOLS_KEY) or [])
-    if current and producers and not current.issubset(producers):
-        return False
-    return True
 
 
 def _cell(value: Any) -> str:

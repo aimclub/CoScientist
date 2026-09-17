@@ -6,14 +6,8 @@ Two structural (never keyword-based) safety nets live here:
    out several ExperimentModuleAgent calls in one turn, merge them into a single
    self-contained brief so the module builds ONE ExperimentPlan.
 
-2. ``enforce_experiment_module_first`` — give the Experiment Module the FIRST
-   shot at any ask before literature research *or* a top-level McpBuilder hop,
-   decided by EXECUTION STATE (has the module run this session?). After the
-   module started, orch Research/McpBuilder is only the NO_MATCHING_TOOL
-   fallback — including after phase=completed. The module then decides
-   research-vs-compute from its own inventory. A first-shot McpBuilder call
-   is rewritten to the module (same as Research). Each rewrite flags
-   ``GATE_ROUTED_STATE_KEY`` so the early feasibility gate may apply.
+2. ``suppress_experiment_module_after_completed`` — prevent re-entering the module
+   after result HITL accepted the stage or if planning budget is exhausted.
 """
 
 from __future__ import annotations
@@ -25,13 +19,9 @@ from google.adk.agents.callback_context import CallbackContext
 from google.adk.models import LlmResponse
 from google.genai import types
 
-from .shared import GATE_ROUTED_STATE_KEY
-
 logger = logging.getLogger(__name__)
 
 _EM_NAME = "ExperimentModuleAgent"
-_RESEARCH_NAME = "ResearchAgent"
-_MCP_BUILDER_NAME = "McpBuilderAgent"
 # Set by research_init, or by ContextInit from the user's original_request.
 _ROOT_GOAL_STATE_KEY = "orchestrator_root_goal"
 _FRAME_STATE_KEY = "research_frame"
@@ -66,31 +56,6 @@ def _canonical_ask(callback_context: CallbackContext, fallback: str) -> str:
             return text.strip()
     user = _text_parts(getattr(callback_context, "user_content", None))
     return user or fallback
-
-
-def _experiment_module_attempted(state: object) -> bool:
-    """True once the Experiment Module has started for this session.
-
-    ``experiment_source_request`` is persisted the moment the module's
-    ToolPreparer runs; ``experiment_runtime``/``experiment_context`` appear once
-    planning begins. Any of them means the module already had its shot (and, if
-    it bailed, emitted NO_MATCHING_TOOL), so the gate must not re-route Research.
-    """
-    getter = getattr(state, "get", None)
-    if not callable(getter):
-        return False
-    for key in ("experiment_source_request", "experiment_runtime", "experiment_context"):
-        if getter(key):
-            return True
-    return False
-
-
-def enforce_experiment_module_first(
-    callback_context: CallbackContext,
-    llm_response: LlmResponse,
-) -> Optional[LlmResponse]:
-    """No-op: orchestrator selects its own lane (Research, Hypotheses, EM)."""
-    return None
 
 
 def coalesce_experiment_module_calls(
@@ -232,6 +197,5 @@ def suppress_experiment_module_after_completed(
 
 __all__ = [
     "coalesce_experiment_module_calls",
-    "enforce_experiment_module_first",
     "suppress_experiment_module_after_completed",
 ]

@@ -26,8 +26,6 @@ from CoScientist.tools.fedot_artifact_plugin import ArtifactCapturePlugin, merge
 from CoScientist.tools.fedot_artifact_handoff import (
     bind_upstream_inputs_to_task,
     materialize_tables_from_artifacts,
-    record_fedot_producer_tools,
-    should_hard_stop_fedot,
     tables_from_state,
 )
 from CoScientist.tools.fedot_mas_patch import (
@@ -41,9 +39,6 @@ from rag_tools.storage import PostgresClient
 from rag_tools.config.settings import get_settings
 
 settings = get_settings()
-
-# Duplicated from tool_callbacks.FEDOT_DELIVERABLE_READY_KEY (avoid import cycle).
-_FEDOT_DELIVERABLE_READY_KEY = "fedot_deliverable_ready"
 
 
 class FedotMASToolset(BaseToolset):
@@ -84,20 +79,6 @@ class FedotMASToolset(BaseToolset):
         alembic_ctx = alembic_post_build_context(state)
         if alembic_ctx:
             task_description = compose_alembic_fedot_task(alembic_ctx, task_description)
-        # The Experiment Module owns anti-duplication through its task/attempt
-        # state machine and AgentTool route guard.  Its path must not consult
-        # the legacy session-scoped FEDOT deliverable flag.
-        if not state.get("experiment_runtime") and should_hard_stop_fedot(state):
-            arts = list(state.get("fedot_artifacts") or [])
-            return {
-                "status": "success",
-                "artifacts": arts,
-                "already_delivered": True,
-                "message": (
-                    "FEDOT deliverable already captured; refusing a second run. "
-                    "Use existing artifacts / URLs for the Final Response."
-                ),
-            }
         servers_payload: dict[str, HttpMCPServer] = {}
         envelope = state.get("experiment_active_envelope") or {}
         task_data = envelope.get("task") or {}
@@ -333,9 +314,6 @@ class FedotMASToolset(BaseToolset):
                 tables = list(tool_context.state.get("fedot_artifact_tables") or [])
             tool_context.state["fedot_artifacts"] = previous
             tool_context.state["fedot_artifact_tables"] = tables
-            # Even on timeout: if we already have S3 links, treat as delivered.
-            tool_context.state[_FEDOT_DELIVERABLE_READY_KEY] = True
-            record_fedot_producer_tools(tool_context.state, lookup_tools)
 
         ret = {"status": status, "artifacts": cap.captured}
         if result is not None:

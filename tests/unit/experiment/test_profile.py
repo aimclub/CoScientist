@@ -221,48 +221,6 @@ def test_research_prompt_requires_both_literature_tools():
     assert "argument `keywords`" in prompt
 
 
-def test_fedot_tool_skips_legacy_hard_stop_for_experiment_runtime(monkeypatch):
-    import CoScientist.tools.fedotmas_tools as module
-
-    calls = []
-
-    def hard_stop(state):
-        calls.append(state)
-        return True
-
-    class FakePostgres:
-        def __init__(self, settings):
-            pass
-
-        async def initialize(self):
-            return None
-
-        async def close(self):
-            return None
-
-        async def get_server(self, server_id):
-            return None
-
-    monkeypatch.setattr(module, "should_hard_stop_fedot", hard_stop)
-    monkeypatch.setattr(module, "PostgresClient", FakePostgres)
-
-    context = SimpleNamespace(
-        state={
-            "experiment_runtime": {"run_id": "EXRUN-1"},
-            "fedot_deliverable_ready": True,
-            "filtered_tools": [],
-        }
-    )
-    result = asyncio.run(module.fedot_toolset.fedot_tool("task", context))
-    assert calls == []
-    assert result["status"] == "error"  # reached normal no-server validation
-
-    legacy = SimpleNamespace(state={"fedot_deliverable_ready": True})
-    legacy_result = asyncio.run(module.fedot_toolset.fedot_tool("task", legacy))
-    assert len(calls) == 1
-    assert legacy_result["already_delivered"] is True
-
-
 def test_web_hitl_timeout_is_fail_closed_only_for_experiment_review():
     async def scenario():
         handler = WebHITLHandler()
@@ -290,30 +248,6 @@ def test_web_hitl_timeout_is_fail_closed_only_for_experiment_review():
         assert legacy.timed_out is False
 
     asyncio.run(scenario())
-
-
-def test_hard_stop_never_fires_under_experiment_runtime():
-    """EM owns anti-dup via the state machine; session hard-stop must not fire."""
-    from CoScientist.tools.fedot_artifact_handoff import should_hard_stop_fedot
-
-    state = {
-        "experiment_runtime": {"run_id": "EXRUN-1", "active_attempt_id": "ATT-4"},
-        "experiment_active_envelope": {"attempt_id": "ATT-4"},
-        "fedot_deliverable_ready": True,
-        "executor_tool_match": {"matched": True},
-    }
-    assert should_hard_stop_fedot(state) is False
-
-    state["experiment_active_envelope"] = {"attempt_id": "ATT-5"}
-    assert should_hard_stop_fedot(state) is False
-
-
-def test_hard_stop_unchanged_without_experiment_runtime():
-    """Non-EM flows keep the legacy (attempt-agnostic) behavior."""
-    from CoScientist.tools.fedot_artifact_handoff import should_hard_stop_fedot
-
-    state = {"fedot_deliverable_ready": True, "executor_tool_match": {"matched": True}}
-    assert should_hard_stop_fedot(state) is True
 
 
 def test_glued_imperative_ask_splits_into_internal_ops():

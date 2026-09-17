@@ -86,21 +86,6 @@ def test_coalesce_merges_parallel_experiment_module_calls():
     assert state.get("experiment_module_dispatched") is True
 
 
-def test_enforce_experiment_module_first_does_not_rewrite_research():
-    from CoScientist.experiments.runtime.coalesce import (
-        enforce_experiment_module_first,
-    )
-
-    state: dict = {}
-    response = _research_call_response("Dock aspirin against COX-2 and report affinity.")
-    ctx = SimpleNamespace(state=state, user_content=None, agent_name="OrchestratorAgent")
-
-    # Clean architecture: no-op, never rewrites ResearchAgent to ExperimentModuleAgent
-    assert enforce_experiment_module_first(ctx, response) is None
-    fc = response.content.parts[0].function_call
-    assert fc.name == "ResearchAgent"
-
-
 def test_suppress_experiment_module_after_completed_and_success():
     from google.adk.models import LlmResponse
     from google.genai import types

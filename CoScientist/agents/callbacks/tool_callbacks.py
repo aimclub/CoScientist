@@ -27,10 +27,6 @@ logger = logging.getLogger(__name__)
 # State key carrying the executor's tool-match verdict for the redirect guard.
 TOOL_MATCH_STATE_KEY = "executor_tool_match"
 
-# Set after a successful fedot_tool capture so Fedot/Coder cannot re-enter.
-FEDOT_DELIVERABLE_READY_KEY = "fedot_deliverable_ready"
-FEDOT_DELIVERABLE_READY_TOKEN = "FEDOT_DELIVERABLE_READY"
-
 RERANK_SCORED = "scored"                  # the model ranked the candidates
 RERANK_RECOVERED = "recovered_local"      # ranked by the local cross-encoder instead
 RERANK_PARSE_FAILED = "parse_failed"      # output_key payload unreadable
@@ -368,10 +364,7 @@ def apply_tool_rerank_scores(
     # redirect guard on ExperimentAgent sends the task to CoderAgent instead of
     # running an unrelated tool. Only for a reason that actually judged them.
 
-    # Record the verdict for the redirect guard / the orchestrator's critic /
-    # the FEDOT hard-stop (a False "matched" here means a DIFFERENT capability
-    # is being asked for, so fedot_artifact_handoff.should_hard_stop_fedot must
-    # let this step through even if a prior deliverable is already captured).
+    # Record the verdict for the redirect guard / the orchestrator's critic.
     state[TOOL_MATCH_STATE_KEY] = {
         "matched": matched,
         "best_score": round(best_score, 3),
@@ -679,68 +672,6 @@ def redirect_when_no_tools(
     logger.info("[ExperimentAgent] abstaining (no matching tool, best=%s) → CoderAgent", best)
     state["fedot_results"] = message
     return types.Content(role="model", parts=[types.Part(text=message)])
-
-
-def _artifact_urls(artifacts: Any) -> List[str]:
-    urls: List[str] = []
-    for art in artifacts or []:
-        if isinstance(art, dict):
-            for key in ("results_presigned_url", "url", "presigned_url"):
-                val = art.get(key)
-                if val:
-                    urls.append(str(val))
-                    break
-        elif isinstance(art, str) and art.strip():
-            urls.append(art.strip())
-    return urls
-
-
-def refuse_when_fedot_deliverable(
-    callback_context: CallbackContext,
-) -> Optional[types.Content]:
-    """before_agent: hard-stop route agents once the ask's deliverable is done.
-
-    Soft prompt STOP alone does not prevent ADK re-entry after a successful
-    compute/MCP capture. Uses ``should_hard_stop_fedot`` (conservative predicate
-    shared with the FEDOT tool path): it does NOT fire when the current step's
-    tool-match verdict abstained or names a new tool — e.g. gen→dock handoff or
-    a distinct Coder step — so retries for *new* work still run.
-
-    Also useful under Experiment Module retries: re-entering Fedot/Coder for the
-    same already-captured tool set is refused; ``retry_task`` / new attempt with
-    a different tool match still proceeds.
-    """
-    from CoScientist.tools.fedot_artifact_handoff import should_hard_stop_fedot
-
-    state = callback_context.state
-    if not should_hard_stop_fedot(state):
-        return None
-    urls = _artifact_urls(state.get("fedot_artifacts"))
-    if not urls:
-        # EM managed captures may live outside fedot_artifacts.
-        manifest = state.get("experiment_artifacts_manifest") or []
-        if isinstance(manifest, list):
-            for item in manifest:
-                if isinstance(item, dict):
-                    for key in ("presigned_url", "url", "resolved_url"):
-                        val = item.get(key)
-                        if isinstance(val, str) and val.strip():
-                            urls.append(val.strip())
-    body = "\n".join(urls) if urls else "(see session artifact state)"
-    message = (
-        f"{FEDOT_DELIVERABLE_READY_TOKEN}: S3/artifacts already captured. "
-        "Do NOT call fedot_tool, CoderAgent, or retrieve again. "
-        "Hand these URLs to the orchestrator for Final Response:\n"
-        f"{body}"
-    )
-    logger.info(
-        "[%s] refusing re-entry — deliverable already ready (%s url(s))",
-        _agent_name(callback_context),
-        len(urls),
-    )
-    state["fedot_results"] = message
-    return types.Content(role="model", parts=[types.Part(text=message)])
-
 
 
 # ResearchAgent as AgentTool dies if we replace a function_call with model text:

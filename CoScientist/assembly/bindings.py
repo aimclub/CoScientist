@@ -973,11 +973,6 @@ def _redirect_when_no_tools():
     return redirect_when_no_tools
 
 
-def _refuse_when_fedot_deliverable():
-    from CoScientist.agents.callbacks import refuse_when_fedot_deliverable
-    return refuse_when_fedot_deliverable
-
-
 def _inject_fedot_candidates():
     from CoScientist.agents.callbacks import inject_fedot_candidates
     return inject_fedot_candidates
@@ -1182,13 +1177,6 @@ _cb(
 _cb("collect_reranked_mcps", "after_agent", factory=lambda ctx: _collect_reranked_mcps())
 # Coder↔Executor redirect: abstain to CoderAgent when no tool matched the task.
 _cb("redirect_when_no_tools", "before_agent", factory=lambda ctx: _redirect_when_no_tools())
-# Hard-stop route-agent re-entry once S3 artifacts are already captured (never
-# fires while a genuinely new/different tool is pending — see should_hard_stop_fedot).
-_cb(
-    "refuse_when_fedot_deliverable",
-    "before_agent",
-    factory=lambda ctx: _refuse_when_fedot_deliverable(),
-)
 # Reranker fallback: show FedotAgent the candidate pool fedot_tool will receive.
 _cb("inject_fedot_candidates", "before_agent", factory=lambda ctx: _inject_fedot_candidates())
 # Load active tasks into agent state before the agent runs.
@@ -1288,7 +1276,6 @@ _EM_CALLBACKS: tuple[tuple[str, str, str], ...] = (
     # Collapse parallel ExperimentModuleAgent fan-out into one merged request.
     ("coalesce_experiment_module_calls", "after_model", f"{_EM}.runtime:coalesce_experiment_module_calls"),
     ("suppress_experiment_module_after_completed", "after_model", f"{_EM}.runtime:suppress_experiment_module_after_completed"),
-    ("enforce_experiment_module_first", "after_model", f"{_EM}.runtime:enforce_experiment_module_first"),
 )
 
 

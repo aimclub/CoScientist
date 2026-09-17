@@ -43,7 +43,6 @@ from CoScientist.agents.callbacks.tool_callbacks import (
     inject_original_query,
     print_research_agent_tool_call,
     redirect_when_no_tools,
-    refuse_when_fedot_deliverable,
 )
 
 __all__ = [
@@ -63,7 +62,6 @@ __all__ = [
     "print_research_agent_tool_call",
     "capture_mcp_artifacts",
     "redirect_when_no_tools",
-    "refuse_when_fedot_deliverable",
     "make_unknown_tool_guard",
     "resolve_hallucinated_tool",
     "make_plan_registration_guard",
