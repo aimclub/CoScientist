@@ -96,6 +96,7 @@ EXEMPT_TOOLS = frozenset({
     "declare_work_order",
     "update_work_order",
     "update_work_step",
+    "submit_work_report",
     "request_approval",
     "request_selection",
 })

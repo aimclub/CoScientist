@@ -9,6 +9,10 @@ being a promise the model may forget after the first surprising search result:
 
 A blocked call is not a dead end: the message tells the agent to amend the
 contract (update_work_order), which puts the change in front of the human.
+
+The guard also keeps the journal the Work Report shows next to the agent's
+claims (calls per tool), and ``make_work_report_fallback`` puts a report before
+the human when the agent finished without submitting one.
 """
 from __future__ import annotations
 
@@ -16,7 +20,9 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, Optional
 
-from CoScientist.hitl.work_order import load_order, order_key, save_order
+from google.genai import types as genai_types
+
+from CoScientist.hitl.work_order import WorkReport, load_order, order_key, save_order
 from CoScientist.hitl.work_order_risk import ORIENTATION_TOOLS, exempt_tools
 
 logger = logging.getLogger("CoScientist.hitl.work_order")
@@ -109,6 +115,8 @@ def make_work_order_guard(
             )
 
         if tool_name in order.planned_tools or tool_name in ORIENTATION_TOOLS:
+            order.tool_calls[tool_name] = order.tool_calls.get(tool_name, 0) + 1
+            save_order(state, order)
             return None
         block = _blocked(
             "undeclared_tool", tool_name,
@@ -140,3 +148,75 @@ def make_reset_work_order(agent_name: str):
         return None
 
     return reset_work_order
+
+
+def _final_text(callback_context: Any, agent_name: str) -> str:
+    """The agent's last text answer in this session, if the session is reachable."""
+    invocation = getattr(callback_context, "_invocation_context", None)
+    session = getattr(invocation, "session", None)
+    for event in reversed(list(getattr(session, "events", None) or [])):
+        if getattr(event, "author", None) != agent_name:
+            continue
+        parts = getattr(getattr(event, "content", None), "parts", None) or []
+        text = "".join(getattr(p, "text", None) or "" for p in parts).strip()
+        if text:
+            return text
+    return ""
+
+
+def make_work_report_fallback(agent_name: str, handler: Any = None):
+    """after_agent callback: the agent finished without an accepted Work Report.
+
+    The run is over, so the human cannot send the agent back to work from here.
+    The card is built from what the system recorded plus the agent's final text;
+    anything but acceptance replaces the answer with the human's verdict, so the
+    parent sees it and can delegate again.
+    """
+
+    def _handler():
+        if handler is not None:
+            return handler
+        from CoScientist.agents.common import hitl_handler
+        return hitl_handler
+
+    async def work_report_fallback(callback_context=None, **kwargs) -> Optional[genai_types.Content]:
+        from CoScientist.hitl.work_order_tools import WorkOrderToolset, work_order_active
+
+        context = callback_context if callback_context is not None else kwargs.get("callback_context")
+        if context is None or not work_order_active():
+            return None
+        order = load_order(context.state, agent_name)
+        if order is None or order.status != "approved":
+            return None
+        if order.report is not None and order.report.status in ("accepted", "rejected"):
+            return None
+
+        final_text = _final_text(context, agent_name)
+        previous_round = order.report.round if order.report is not None else 0
+        order.report = WorkReport(
+            summary=final_text, round=previous_round + 1, fallback=True,
+        )
+        toolset = WorkOrderToolset(agent_name, handler=_handler())
+        try:
+            response = await toolset.review_report(order, context)
+        except Exception:  # noqa: BLE001 - a failed card must not swallow the answer
+            logger.exception("%s: work report fallback failed", agent_name)
+            return None
+
+        feedback = (response.instructions or response.free_input or "").strip() if response else ""
+        accepted = response is None or response.approved
+        order.report.status = "accepted" if accepted else "rejected"
+        order.report.operator_notes = feedback
+        save_order(context.state, order)
+        if accepted:
+            return None
+        return genai_types.Content(role="model", parts=[genai_types.Part(text=(
+            f"The human did not accept the result of {agent_name}"
+            f" (the agent finished without a work report). "
+            f"Feedback: {feedback or 'none given'}. "
+            f"Agent's answer was:\n{final_text or '(empty)'}\n\n"
+            "Delegate the task again with this feedback, or report to the human "
+            "why it could not be done."
+        ))])
+
+    return work_report_fallback
