@@ -31,10 +31,10 @@ class ResearchDomainFilter(BaseModel):
     """A domain and the fields that must be matched within it."""
 
     domain: ResearchDomain = Field(description="One OpenAlex research domain")
-    fields: list[str] | None = Field(
-        description="Up to three fields that belong to this domain",
-        default=None,
-        max_length=3,
+    fields: list[str] = Field(
+        description="Exactly five distinct fields that belong to this domain",
+        min_length=5,
+        max_length=5,
     )
 
     @field_validator("fields", mode="before")
@@ -46,8 +46,8 @@ class ResearchDomainFilter(BaseModel):
 
     @model_validator(mode="after")
     def validate_fields(self):
-        if not self.fields:
-            return self
+        if len(self.fields) != len(set(self.fields)):
+            raise ValueError("fields must contain exactly five distinct values")
 
         allowed_fields = get_sub_domains_for_domain(self.domain)
         invalid_fields = [
@@ -84,12 +84,12 @@ class QueryFilters(BaseModel):
         description="Journal or publication source name",
         default=None
     )
-    domains: list[ResearchDomainFilter] | None = Field(
+    domains: list[ResearchDomainFilter] = Field(
         description=(
-            "Up to two research-domain selections. Each selection keeps its "
-            "fields paired with its domain."
+            "Exactly two distinct research-domain selections, each with "
+            "exactly five distinct fields paired with that domain."
         ),
-        default=None,
+        min_length=2,
         max_length=2,
     )
 
@@ -100,6 +100,13 @@ class QueryFilters(BaseModel):
         if isinstance(v, list):
             return v
         return [v]
+
+    @model_validator(mode="after")
+    def validate_distinct_domains(self):
+        domains = [selection.domain for selection in self.domains]
+        if len(domains) != len(set(domains)):
+            raise ValueError("domains must contain exactly two distinct values")
+        return self
 
 
 def extract_metadata_filters(question: str, llm_url: str, extraction_prompt: str) -> QueryFilters:
@@ -142,10 +149,10 @@ def extract_metadata_filters(question: str, llm_url: str, extraction_prompt: str
                 time.sleep(wait_time)
             else:
                 print(f"Failed to extract metadata filters for question: {question}")
-                # Return empty QueryFilters on final error to allow pipeline to continue
-                return QueryFilters()
-    
-    return QueryFilters()
+                raise RuntimeError(
+                    f"Failed to extract valid metadata filters after "
+                    f"{max_retries} attempts: {e}"
+                ) from e
 
 
 def build_chroma_where_filter(filters: QueryFilters) -> dict | None:
@@ -593,13 +600,11 @@ def process_scientific_question(
     simple_retriever,
     s3_store,
     llm_url: str,
-    initial_number_of_papers: int = 30,
-    number_of_papers_after_rerank: int = 10,
     top_k: int = 60,
     rerank_k: int = 20,
 ) -> dict:
     """
-    End-to-end pipeline: metadata filters → two-stage retrieval →
+    End-to-end pipeline: metadata filters → direct body retrieval →
     image loading from S3 → LLM answer generation.
     """
 
@@ -609,68 +614,44 @@ def process_scientific_question(
     )
     meta_filter_chroma = build_chroma_where_filter(meta_filter)
     domain_metadata_type = get_domain_metadata_type(meta_filter) or ""
-    
-    # ── 2. Filter for summary chunks ──────────────────────────────
-    summary_filters: dict = {"role": {"$eq": "summary"}}
-    if meta_filter_chroma:
-        summary_filters = {
-            "$and": [meta_filter_chroma, {"role": {"$eq": "summary"}}]
-        }
 
-    # ── 3. Stage 1: search for articles by summary ────────────────────────
-    try:
-        summary_chunks = retriever.retrieve(
-            query=question,
-            top_k=initial_number_of_papers,
-            rerank_k=number_of_papers_after_rerank,
-            filters=summary_filters,
-        )
-    except Exception as e:
-        logger.error(f"Failed to retrieve papers: {e}")
-        return {"answer": f"Failed to retrieve papers. Error: {e}"}
-
+    # ── 2. Retrieving and reranking body chunks ──────────────────────
     papers: list[dict] = []
     titles: dict[str, str] = {}
     article_ids: list[str] = []
     seen_articles: set[str] = set()
 
-    for c in summary_chunks:
-        if c.article_id in seen_articles:
-            continue
-        seen_articles.add(c.article_id)
-        article_ids.append(c.article_id)
-        title = (c.metadata or {}).get("paper_title", "")
-        titles[c.article_id] = title
-        papers.append(
-            {
-                "article_id": c.article_id,
-                "title": title,
-                "summary": c.content,
-                "domain": c.domain,
-                "field": c.field,
-            }
-        )
-    if not article_ids:
-        return {"answer": "No relevant papers found in the database."}
-
-    # ── 4. Stage 2: Search for body chunks of selected articles ─────────────
+    body_filters: dict = {"role": {"$eq": "body"}}
+    if meta_filter_chroma:
+        body_filters = {
+            "$and": [meta_filter_chroma, {"role": {"$eq": "body"}}]
+        }
     try:
         body_chunks = retriever.retrieve(
-            query=question,
-            top_k=top_k,
-            rerank_k=rerank_k,
-            filters={
-                "$and": [
-                    {"article_id": {"$in": article_ids}},
-                    {"role": {"$eq": "body"}},
-                ]
-            },
+            query=question, top_k=top_k, rerank_k=rerank_k,
+            filters=body_filters,
         )
     except Exception as e:
         logger.error(f"Failed to retrieve body chunks: {e}")
         return {"answer": f"Failed to retrieve text chunks. Error: {e}"}
+    for chunk in body_chunks:
+        if chunk.article_id in seen_articles:
+            continue
+        seen_articles.add(chunk.article_id)
+        article_ids.append(chunk.article_id)
+        title = (chunk.metadata or {}).get("paper_title", "")
+        titles[chunk.article_id] = title
+        papers.append({
+            "article_id": chunk.article_id,
+            "title": title,
+            "domain": chunk.domain,
+            "field": chunk.field,
+        })
 
-    # ── 5. Collecting image names and uploading captions ──────────────
+    if not article_ids:
+        return {"answer": "No relevant papers found in the database."}
+
+    # ── 3. Collecting image names and retrieving captions ─────────────
     raw_image_names: set[str] = set()
     for chunk in body_chunks:
         raw_image_names.update(chunk.images_in_chunk or [])
@@ -695,7 +676,7 @@ def process_scientific_question(
         except Exception as e:
             logger.warning(f"Failed to retrieve image captions: {e}")
 
-    # ── 6. Downloading images from S3 (base64) ────────────────────
+    # ── 4. Downloading images from S3 (base64) ─────────────────────────
     images_base64: list[str] = []
     images_meta: list[dict] = []
     seen_images: set[tuple[str, str]] = set()
@@ -733,7 +714,7 @@ def process_scientific_question(
                     chunk.article_id,
                 )
 
-    # ── 7. Formation of the text context ──────────────────────
+    # ── 5. Forming the text context ────────────────────────────────────
     txt_parts: list[str] = []
     for idx, chunk in enumerate(body_chunks, start=1):
         txt_parts.append(
@@ -759,12 +740,12 @@ def process_scientific_question(
     else:
         txt_context += "No domain metadata found for context."
 
-    # ── 8. Query LLM ───────────────────────────────────────────
+    # ── 6. Querying the LLM ────────────────────────────────────────────
     ans = query_llm_with_context(
         llm_url, question, system_prompt, txt_context, images_base64
     )
 
-    # ── 9. Compose a response with a relevant context ───────────
+    # ── 7. Composing a response with relevant context ──────────────────
     relevant_txt_context: list[dict] = []
     for num in ans.get("relevant_text", []):
         if 1 <= num <= len(body_chunks):

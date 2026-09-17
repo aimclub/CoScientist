@@ -37,6 +37,17 @@ class LLMSettings(BaseModel):
     # endpoint, so no separate URL is needed.
     coder_model: Optional[str] = None
 
+    # Seconds to wait for a single completion before giving up. Without this a
+    # provider that accepts the connection and then goes quiet never raises, so
+    # the agent waits forever and the run looks frozen with nothing in the log.
+    # A timeout turns that silence into a retryable error. Override with
+    # LLM__REQUEST_TIMEOUT.
+    request_timeout: int = 180
+
+    openrouter_provider: Optional[str] = None
+    openrouter_provider_sort: Optional[str] = None
+    openrouter_provider_order: Optional[str] = None
+
     service_url: Optional[str] = None
     service_cc_url: Optional[str] = None
 
@@ -130,6 +141,10 @@ class S3Settings(BaseModel):
     access_key: Optional[str] = None
     secret_key: Optional[str] = None
     bucket_name: Optional[str] = None
+    # Lifetime of presigned artifact URLs, in seconds. 604800 (7 days) is the
+    # SigV4 maximum. The default of the S3 client (360 s) expires before the
+    # operator opens the report. Override via S3__PRESIGN_TTL.
+    presign_ttl: int = 604800
 
 
 # =========================
@@ -261,6 +276,24 @@ class CodeExecSettings(BaseModel):
 import os as _os
 from typing import Optional as _Optional
 
+def _default_openrouter_provider_sort() -> str:
+    explicit_sort = _os.getenv("OPENROUTER_PROVIDER_SORT", _os.getenv("LLM__OPENROUTER_PROVIDER_SORT", "")).strip().lower()
+    if explicit_sort:
+        return explicit_sort
+    general = _os.getenv("OPENROUTER_PROVIDER", _os.getenv("LLM__OPENROUTER_PROVIDER", "")).strip().lower()
+    if general in ("price", "throughput", "latency"):
+        return general
+    return "default"
+
+def _default_openrouter_provider_order() -> str:
+    explicit_order = _os.getenv("OPENROUTER_PROVIDER_ORDER", _os.getenv("LLM__OPENROUTER_PROVIDER_ORDER", "")).strip()
+    if explicit_order:
+        return explicit_order
+    general = _os.getenv("OPENROUTER_PROVIDER", _os.getenv("LLM__OPENROUTER_PROVIDER", "")).strip()
+    if general.lower() not in ("price", "throughput", "latency", "default", "auto", "none", ""):
+        return general
+    return ""
+
 class WebSettings(BaseModel):
     """Runtime-tunable parameters configurable from the web UI.
 
@@ -269,11 +302,21 @@ class WebSettings(BaseModel):
     singleton is the single source of truth — all components read from it
     directly.
     """
-    start_mode: str = _os.getenv("START_MODE", "orchestrator")        # "planner" | "orchestrator" | "orchestrator_planner"
+    openrouter_provider_sort: str = _default_openrouter_provider_sort()   # "default" | "price" | "throughput" | "latency"
+    openrouter_provider_order: str = _default_openrouter_provider_order() # e.g. "Together, DeepInfra" or empty
+    start_mode: str = _os.getenv("START_MODE", "planner")             # "init" | "planner" | "orchestrator" | "orchestrator_planner"
     max_searches: int = int(_os.getenv("RESEARCH_AGENT_SEARCHES", "2"))           # WebSearchLimiter per-turn cap
     max_retries: int = int(_os.getenv("LLM_MAX_RETRIES", "3"))
     hitl_enabled: bool = _os.getenv("HITL__ENABLED", "false").lower() in ("true", "1", "yes")
     hitl_auto_approve_timeout: int = int(_os.getenv("HITL_AUTO_APPROVE_TIMEOUT", _os.getenv("HITL__AUTO_APPROVE_TIMEOUT", _os.getenv("HITL_TIMEOUT_SECONDS", "300"))))
+    # Work Order: executor agents declare a contract (goal, assumptions, steps,
+    # tools, side effects) before acting. Inert unless HITL is on.
+    work_order_enabled: bool = _os.getenv("WORK_ORDER__ENABLED", "true").lower() in ("true", "1", "yes")
+    # Veto window for compute-tier contracts: auto-approved after this many seconds.
+    # -1 (default) disables auto-approval — the contract waits for the human.
+    work_order_veto_seconds: int = int(_os.getenv("WORK_ORDER__VETO_SECONDS", "-1"))
+    # Amendments per agent run before every further one needs a blocking review.
+    work_order_max_amendments: int = int(_os.getenv("WORK_ORDER__MAX_AMENDMENTS", "3"))
     use_planner: bool = _os.getenv("ORCHESTRATOR__USE_PLANNER", "true").lower() in ("true", "1", "yes")
     planner_retrieval_enabled: bool = _os.getenv("PLANNER__RETRIEVAL_ENABLED", "true").lower() in ("true", "1", "yes")
     planner_graph_enabled: bool = _os.getenv("PLANNER__GRAPH_ENABLED", "true").lower() in ("true", "1", "yes")
@@ -293,6 +336,9 @@ class WebSettings(BaseModel):
     use_proxy: bool = _os.getenv("USE_PROXY", "True").lower() in ("true", "1", "yes")
     opik_enabled: bool = _os.getenv("OPIK__ENABLED", "false").lower() in ("true", "1", "yes")
     auto_naming_enabled: bool = _os.getenv("AUTO_NAMING__ENABLED", "true").lower() in ("true", "1", "yes")
+    # Default of the per-browser "Show internal agents and tools" switch. A
+    # browser that flipped the switch keeps its own choice.
+    show_internal_enabled: bool = _os.getenv("SHOW_INTERNAL__ENABLED", "false").lower() in ("true", "1", "yes")
     coscientist_username: _Optional[str] = _os.getenv("COSCIENTIST_USERNAME") or _os.getenv("DEFAULT_USERNAME")
     context_init_enabled: bool = _os.getenv("RESEARCH_FRAME", "true").lower() in ("true", "1", "yes")
     session_snapshots_dir: str = _os.getenv("SESSION_SNAPSHOTS_DIR", "session_snapshots")

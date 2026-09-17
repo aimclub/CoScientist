@@ -519,5 +519,8 @@
       animation: railPing 1.6s cubic-bezier(0, 0, 0.2, 1) infinite;
     }
 
-
-
+    /* Internal tools on Work Order cards: hidden unless the viewer turned
+       "Show internal agents and tools" on (state.js sets the class). */
+    html:not(.show-internal) .wo-internal {
+      display: none !important;
+    }

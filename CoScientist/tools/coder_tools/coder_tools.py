@@ -245,6 +245,7 @@ class CoderToolset(BaseToolset):
                 },
             },
             invoked_via="callback",
+            trigger="bash_command",
         )
         response = await self._hitl_handler.handle_request(request)
         if response.approved:

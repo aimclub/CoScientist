@@ -52,11 +52,13 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 import os
 import sys
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, NamedTuple, Optional
 
 import httpx
@@ -141,26 +143,84 @@ def _api(base_url: str) -> str:
 # ---------------------------------------------------------------------------
 
 class _SessionRegistry:
-    """Thread-safe ``session key -> sandbox id`` map, process-local."""
+    """Thread-safe ``session key -> sandbox id`` map, mirrored to disk.
+
+    Each task runs in its OWN container with its OWN /workspace, so the binding
+    is the only thing that lets a follow-up call land where the previous one left
+    its files. Keeping it in memory alone meant a server restart silently
+    provisioned a fresh container: the work was still in the old one, the new
+    task saw an empty workspace, and nothing reported that the two were
+    different machines.
+    """
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._bindings: Dict[str, str] = {}
+        self._loaded_from: Optional[Path] = None
+
+    @staticmethod
+    def _path() -> Path:
+        # Resolved per call, not pinned at import: this object is a module-level
+        # singleton, so a pinned path would ignore any later configuration — and
+        # would send every test's fake container id into the file the running
+        # system reads to decide which sandbox to continue in.
+        return Path(os.getenv(
+            "SANDBOX_BINDINGS_FILE",
+            os.path.join(os.getenv("RESEARCH_GRAPH_DIR", "./graph_runs"),
+                         "sandbox_bindings.json")))
+
+    def _sync(self) -> Path:
+        """Load the bindings for the currently configured path, once per path."""
+        path = self._path()
+        if self._loaded_from == path:
+            return path
+        self._bindings = {}
+        try:
+            if path.exists():
+                data = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    self._bindings = {str(k): str(v) for k, v in data.items() if v}
+                    logger.info("Restored %d sandbox binding(s) from %s",
+                                len(self._bindings), path)
+        except Exception:  # noqa: BLE001 — a bad file must not stop the process
+            logger.warning("Could not read sandbox bindings from %s", path,
+                           exc_info=True)
+        self._loaded_from = path
+        return path
+
+    def _save(self, path: Path) -> None:
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".json.tmp")
+            tmp.write_text(json.dumps(self._bindings, indent=1), encoding="utf-8")
+            os.replace(tmp, path)
+        except Exception:  # noqa: BLE001
+            logger.warning("Could not persist sandbox bindings", exc_info=True)
 
     def get(self, session: str) -> Optional[str]:
         with self._lock:
+            self._sync()
             return self._bindings.get(session)
 
     def set(self, session: str, sandbox_id: str) -> None:
         with self._lock:
+            path = self._sync()
+            if self._bindings.get(session) == sandbox_id:
+                return
             self._bindings[session] = sandbox_id
+            self._save(path)
 
     def drop(self, session: str) -> Optional[str]:
         with self._lock:
-            return self._bindings.pop(session, None)
+            path = self._sync()
+            previous = self._bindings.pop(session, None)
+            if previous is not None:
+                self._save(path)
+            return previous
 
     def snapshot(self) -> Dict[str, str]:
         with self._lock:
+            self._sync()
             return dict(self._bindings)
 
 
@@ -1053,6 +1113,15 @@ def run_sandbox_task(
         timeout=timeout,
         verbose=verbose,
         on_plan=on_plan,
+    )
+    _collect_metrics(
+        api_url=sub.api_url,
+        session=sub.session,
+        sandbox_id=base_result["sandbox_id"],
+        status=comp.get("status"),
+        tool_context=tool_context,
+        sink=metrics_sink,
+        collect=collect_metrics,
     )
     _collect_metrics(
         api_url=sub.api_url,

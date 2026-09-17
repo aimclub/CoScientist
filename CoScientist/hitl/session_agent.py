@@ -71,6 +71,27 @@ def render_task_plan(tasks) -> str:
     return "\n".join(lines)
 
 
+# Chat text for one plan-critic verdict, keyed by verdict then report language
+# ("report_language" session state — see agents/callbacks/report_language.py).
+# "failed" covers both an exception and the critic's OWN silent fallback to
+# "approve" on a timed-out/unparseable LLM call (agents/callbacks/critic.py) —
+# from here the two are indistinguishable, so a failure is announced as one.
+_CRITIC_VERDICT_TEXT = {
+    "approve": {
+        "ru": "✅ **Одобрено** (раунд {round}/{max}) — критик не нашёл, что поправить.",
+        "en": "✅ **Approved** (round {round}/{max}) — nothing for the critic to flag.",
+    },
+    "revise": {
+        "ru": "🔁 **Отправлено на доработку** (раунд {round}/{max})\n\n{feedback}",
+        "en": "🔁 **Sent back for revision** (round {round}/{max})\n\n{feedback}",
+    },
+    "failed": {
+        "ru": "⚠️ Критик не ответил (сбой или таймаут) — план принят без проверки.",
+        "en": "⚠️ The critic did not answer (failed or timed out) — the plan was accepted unreviewed.",
+    },
+}
+
+
 def _user_task(ctx: InvocationContext) -> str:
     """The user's request as plain text ('' when the turn opened with a file)."""
     content = getattr(ctx, "user_content", None)
@@ -100,8 +121,11 @@ class SessionAgent(LlmAgent):
     # Times an agent that stopped half way (see `_unfinished_feedback`) is sent
     # back to finish, per review pass. After that its output is reviewed as is.
     unfinished_max_rounds: int = 3
-    correction_prompt: str = "The human reviewed your output and provided this feedback/correction:\n\n{feedback}\n\nYou MUST rewrite your output incorporating this feedback."
-    critic_correction_prompt: str = "A plan critic reviewed your output and asked for one revision:\n\n{feedback}\n\nProduce the output again ONCE, in full, fixing exactly what the critic named — the previous version was discarded. Registering it normalises it (ids are renumbered, adjacent steps with the same executor assignee are merged); that is expected, so do not register again to undo it. This is the last round: there is no second review."
+    # Who the critic's review is reported as in the web UI (activity rail,
+    # agent tree, ToolsViewer, status line). Not a YAML agent, so never internal.
+    critic_agent_name: str = "PlanCriticAgent"
+    correction_prompt: str = "The human reviewed your output and provided this feedback/correction:\n\n{feedback}\n\nYou MUST rewrite your output incorporating this feedback. Write your answer in the report language of this session. The session state key `report_language` gives it: en = English, ru = Russian. If it is empty, use English."
+    critic_correction_prompt: str = "A plan critic reviewed your output and asked for one revision:\n\n{feedback}\n\nProduce the output again ONCE, in full, fixing exactly what the critic named — the previous version was discarded. Registering it normalises it (ids are renumbered, adjacent steps with the same executor assignee are merged); that is expected, so do not register again to undo it. This is the last round: there is no second review. Write your answer in the report language of this session. The session state key `report_language` gives it: en = English, ru = Russian. If it is empty, use English."
 
     def _review_output(self, output_text) -> str:
         """How the proposed output is presented to the human reviewer.
@@ -164,8 +188,14 @@ class SessionAgent(LlmAgent):
         ctx: InvocationContext,
         feedback_prompt: str,
         state_delta: Optional[dict] = None,
+        author: str = "user",
     ) -> AsyncGenerator[Event, None]:
         """Hand review feedback to the agent as a user turn and let it re-run.
+
+        ``author`` is who the feedback comes from: the human by default, or the
+        critic. A non-user author reaches the model as ADK's
+        "For context: [<author>] said: ..." turn, so the critic's objection is
+        not mistaken for the user's own words.
 
         Yielding the event is what puts it in front of the model: the consumer
         (the Runner) appends everything we yield to the session before asking us
@@ -181,7 +211,7 @@ class SessionAgent(LlmAgent):
         """
         event = Event(
             invocation_id=ctx.invocation_id,
-            author="user",
+            author=author,
             branch=ctx.branch,
             content=types.Content(
                 role="user", parts=[types.Part(text=feedback_prompt)]
@@ -239,8 +269,7 @@ class SessionAgent(LlmAgent):
             agent_name=self.name,
             action_type=HITLAction.APPROVE,
             message=(
-                f"[INTERNAL_LOOP: SessionAgent] Agent '{self.name}' proposes "
-                "its result. Please review."
+                f"Agent '{self.name}' proposes its result. Please review."
             ),
             context={
                 "output": self._review_output(review_output),
@@ -252,6 +281,70 @@ class SessionAgent(LlmAgent):
             invoked_via="internal_loop",
         )
         return await self.hitl_handler.handle_request(request)
+
+    async def _run_plan_critic(
+        self, ctx: InvocationContext, critic_input, round_no: int
+    ) -> Optional[str]:
+        """One critic review: feedback to act on, or None to accept.
+
+        The critic is a bare LLM call, not an ADK agent, so no callback reports
+        it — without the records below it ran invisibly, and a run where it
+        approved looked exactly like a run where it never ran, or hung. It is
+        reported two ways, both as ``critic_agent_name``: a hand-off in the
+        activity rail/ToolsViewer (open on the call, closed on the verdict),
+        and — since a delegation's own result is never shown, only its
+        preview — the verdict itself as a chat message, the same way any
+        other agent's deliverable reaches the user.
+        """
+        from CoScientist.logging.tool_activity import report_delegation
+        from CoScientist.logging.agent_output import report_output
+
+        task = _user_task(ctx)
+        plan = self._review_output(self._proposed_output(ctx, critic_input))
+        report = dict(
+            author=self.name,
+            target=self.critic_agent_name,
+            call_id=f"plan_critic-{ctx.invocation_id}-{round_no}",
+        )
+        lang = "ru" if ctx.session.state.get("report_language") == "ru" else "en"
+
+        async def announce(verdict: str, feedback_text: str = "") -> None:
+            template = _CRITIC_VERDICT_TEXT[verdict][lang]
+            await report_output(ctx, {
+                "agent": self.critic_agent_name,
+                "caller": self.name,
+                "call_id": report["call_id"],
+                "content": template.format(
+                    round=round_no, max=self.critic_max_rounds,
+                    feedback=feedback_text,
+                ),
+            })
+
+        await report_delegation(
+            ctx, phase="call",
+            args={"task": task, "plan": plan, "round": round_no,
+                  "max_rounds": self.critic_max_rounds},
+            **report,
+        )
+        try:
+            feedback = await self.plan_critic(task, plan)
+        except Exception as exc:  # noqa: BLE001
+            # A reviewer must never take the run down with it.
+            logger.exception(
+                "%s: plan critic failed — output accepted unreviewed", self.name,
+            )
+            await report_delegation(ctx, phase="error", error=repr(exc), **report)
+            await announce("failed")
+            return None
+
+        await report_delegation(
+            ctx, phase="result",
+            result={"verdict": "revise" if feedback else "approve",
+                    "feedback": feedback or ""},
+            **report,
+        )
+        await announce("revise" if feedback else "approve", feedback or "")
+        return feedback
 
     async def _run_async_impl(self, ctx: InvocationContext) -> AsyncGenerator[Event, None]:
 
@@ -329,18 +422,9 @@ class SessionAgent(LlmAgent):
                     critic_input = ctx.session.state.get(self.output_key, output_text)
 
                 critic_rounds += 1
-                try:
-                    feedback = await self.plan_critic(
-                        _user_task(ctx),
-                        self._review_output(self._proposed_output(ctx, critic_input)),
-                    )
-                except Exception:  # noqa: BLE001
-                    # A reviewer must never take the run down with it.
-                    logger.exception(
-                        "%s: plan critic failed — output accepted unreviewed",
-                        self.name,
-                    )
-                    feedback = None
+                feedback = await self._run_plan_critic(
+                    ctx, critic_input, critic_rounds
+                )
 
                 if feedback:
                     logger.info(
@@ -354,6 +438,7 @@ class SessionAgent(LlmAgent):
                         ctx,
                         self.critic_correction_prompt.format(feedback=feedback),
                         self._rewrite_state_delta(ctx),
+                        author=self.critic_agent_name,
                     ):
                         yield event
                     continue

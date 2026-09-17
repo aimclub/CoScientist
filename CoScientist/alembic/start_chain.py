@@ -24,13 +24,16 @@ Run from anywhere:
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import os
 import platform
 import random
 import secrets
 import subprocess
 import sys
+import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 from dotenv import dotenv_values
 
@@ -74,6 +77,28 @@ PASSTHROUGH_ENV = (
     # Set WANDB_MODE=offline to disable without leaking the key.
     "WANDB_API_KEY", "WANDB_MODE",
 )
+
+# S3 pass-through for served tool file I/O (helpers/s3_transfer.py). Unset =
+# generated server.py behaves exactly as before S3 support existed.
+#
+# Deliberately NOT in PASSTHROUGH_ENV: a build container runs arbitrary
+# repository code (setup.sh, coder-written tool functions), so these
+# credentials must never land in its environment at all — only the serve
+# container, which runs nothing but the generated server.py, gets them.
+SERVE_ONLY_ENV = (
+    "ENDPOINT_URL", "ACCESS_KEY", "SECRET_KEY", "BUCKET_NAME",
+    "S3_REGION", "S3_PRESIGN_EXPIRATION", "S3_HTTP_TIMEOUT", "S3_HTTP_MAX_BYTES",
+    # The vault contract's own nested-settings spelling (config/settings.py:
+    # S3Settings, env_nested_delimiter "__") — helpers/s3_transfer.py reads
+    # THESE first now, falling back to the bare names above only as a
+    # deprecated legacy spelling; both must be excluded from the build
+    # container regardless of which one is actually set.
+    "S3__ENDPOINT_URL", "S3__ACCESS_KEY", "S3__SECRET_KEY", "S3__BUCKET_NAME",
+    "S3__EXTERNAL_ENDPOINT_URL", "S3_UPLOAD_MAX_BYTES",
+)
+
+# How a serve container reaches a service that listens on the host's loopback.
+HOST_ALIAS = "host.docker.internal"
 
 
 def _redact_cmd(cmd: list[str]) -> str:
@@ -122,16 +147,79 @@ def _random_port() -> int:
     return random.randint(*PORT_RANGE)
 
 
-def _env_args(env_file: Path | None) -> list[str]:
-    args: list[str] = []
+def _env_values(
+    env_file: Path | None,
+    exclude: tuple[str, ...] = (),
+    extra_env: tuple[str, ...] = (),
+) -> dict[str, str]:
+    """A container's environment: every ``env_file`` entry not in ``exclude``,
+    then every ``PASSTHROUGH_ENV`` (+ ``extra_env``) var set in this process,
+    which wins over the file. ``exclude`` keeps a var out even when the
+    ``.env`` file defines it (build_image uses it for ``SERVE_ONLY_ENV`` — S3
+    credentials must never reach a container that runs arbitrary repository
+    code)."""
+    values: dict[str, str] = {}
     if env_file and env_file.exists():
         for k, v in dotenv_values(env_file).items():
-            if v is not None:
-                args += ["-e", f"{k}={v}"]
-    for var in PASSTHROUGH_ENV:
+            if v is not None and k not in exclude:
+                values[k] = v
+    for var in (*PASSTHROUGH_ENV, *extra_env):
         if var in os.environ:
-            args += ["-e", f"{var}={os.environ[var]}"]
-    return args
+            values[var] = os.environ[var]
+    return values
+
+
+def _env_args(
+    env_file: Path | None,
+    exclude: tuple[str, ...] = (),
+    extra_env: tuple[str, ...] = (),
+    overrides: dict[str, str] | None = None,
+) -> list[str]:
+    """``-e`` args for ``_env_values``, one per name. A repeated ``-e`` for the
+    same name would leave both entries in the container, so ``overrides``
+    replace values here rather than being appended."""
+    values = {**_env_values(env_file, exclude, extra_env), **(overrides or {})}
+    return [arg for k, v in values.items() for arg in ("-e", f"{k}={v}")]
+
+
+def _is_loopback(host: str | None) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        addr = ipaddress.ip_address(host or "")
+    except ValueError:
+        return False
+    return addr.is_loopback or addr.is_unspecified
+
+
+def _s3_endpoint_args(ns: argparse.Namespace) -> tuple[list[str], dict[str, str]]:
+    """Docker args and env overrides that let a serve container reach an S3
+    endpoint configured on the host's loopback (a local MinIO).
+
+    Inside the container ``localhost`` and ``0.0.0.0`` are the container itself,
+    so every s3:// input would fail and every output would stay local. The
+    container gets the endpoint through ``host.docker.internal`` instead, and
+    presigned links keep the configured address through
+    ``S3__EXTERNAL_ENDPOINT_URL``, since the caller opens them from the host.
+    MinIO has to listen on the docker bridge for this, not only on 127.0.0.1.
+    """
+    values = _env_values(ns.env_file, extra_env=SERVE_ONLY_ENV)
+    name = next((n for n in ("S3__ENDPOINT_URL", "ENDPOINT_URL") if values.get(n)), None)
+    if name is None:
+        return [], {}
+    endpoint = values[name]
+    parsed = urlparse(endpoint)
+    if not _is_loopback(parsed.hostname):
+        return [], {}
+    if host_from_endpoint(context_endpoint(ns.context)) is not None:
+        print(f"[start-chain] warning: {name}={endpoint} is a loopback address, "
+              f"which on the remote daemon means that machine, not this one.", flush=True)
+        return [], {}
+    netloc = f"{HOST_ALIAS}:{parsed.port}" if parsed.port else HOST_ALIAS
+    overrides = {name: parsed._replace(netloc=netloc).geturl()}
+    if not values.get("S3__EXTERNAL_ENDPOINT_URL"):
+        overrides["S3__EXTERNAL_ENDPOINT_URL"] = endpoint
+    return ["--add-host", f"{HOST_ALIAS}:host-gateway"], overrides
 
 
 def _volume_exists(context: str | None, volume: str) -> bool:
@@ -178,7 +266,15 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
     if ns.gpus:
         cmd += ["--gpus", ns.gpus]
     cmd += _mount_args(repo, ns)
-    cmd += _env_args(ns.env_file)
+    # Bind-mount a host-side workdir into the container's ALEMBIC_WORKDIR so
+    # the web UI can render the pipeline's artifacts while the build runs.
+    # Opt-in via env. A bind mount resolves on the daemon's filesystem, so the
+    # local path exists only for the local daemon.
+    host_workdir = None if ns.context else os.environ.get("ALEMBIC_HOST_WORKDIR")
+    if host_workdir:
+        Path(host_workdir).mkdir(parents=True, exist_ok=True)
+        cmd += ["-v", f"{host_workdir}:/work/.alembic"]
+    cmd += _env_args(ns.env_file, exclude=SERVE_ONLY_ENV)
     # A soft hint reaches the pipeline through the environment, like the rest of
     # the ALEMBIC_* settings.
     if getattr(ns, "hints", None):
@@ -190,6 +286,8 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
         cmd += ["--until", ns.until]
 
     r = _run(cmd)
+    if host_workdir:
+        _return_to_host_user(ns, host_workdir)
     if r.returncode != 0:
         sys.stderr.write(
             f"\n[start-chain] pipeline failed (exit {r.returncode}).\n"
@@ -215,7 +313,11 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
     #    `docker inspect <image>` exposes every key passed via -e or
     #    --env-file during build. Serve container still gets real
     #    values at run-time via its own --env-file.
-    keys_to_scrub: set[str] = set(PASSTHROUGH_ENV)
+    #    SERVE_ONLY_ENV is included too (defense in depth): _env_args(exclude=
+    #    SERVE_ONLY_ENV) already keeps these out of this container's actual
+    #    env, but a committed image's Config.Env should not expose the names
+    #    of S3 vars if they happen to already be blank/absent-but-set.
+    keys_to_scrub: set[str] = set(PASSTHROUGH_ENV) | set(SERVE_ONLY_ENV)
     if ns.env_file and Path(ns.env_file).exists():
         for line in Path(ns.env_file).read_text().splitlines():
             line = line.strip()
@@ -231,7 +333,76 @@ def build_image(repo_url: str, ns: argparse.Namespace) -> str:
         sys.exit(c.returncode)
     _run([*docker_cli(context=ns.context), "rm", cname],
          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if host_workdir:
+        _bake_workdir(ns, tool_image, host_workdir)
+    job_id = os.environ.get("ALEMBIC_JOB_ID")
+    if job_id:
+        # alembic-tool:<repo> (what the benchmark reads) moves to every newer
+        # build of the repo; the job tag keeps pointing at this one.
+        job_image = f"{TOOL_REPO}:{job_id}"
+        if _run([*docker_cli(context=ns.context), "tag", tool_image, job_image]).returncode == 0:
+            return job_image
     return tool_image
+
+
+def _return_to_host_user(ns: argparse.Namespace, host_workdir: str) -> None:
+    """Give the bind-mounted workdir back to the invoking user.
+
+    The build container runs as root, so everything it wrote through the mount
+    is root-owned on the host, and the user cannot delete it without sudo.
+    """
+    if not hasattr(os, "getuid"):
+        return
+    _run([*docker_cli(context=ns.context), "run", "--rm",
+          "-v", f"{host_workdir}:/w", "--entrypoint", "chown", BASE_IMAGE,
+          "-R", f"{os.getuid()}:{os.getgid()}", "/w"],
+         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _bake_workdir(ns: argparse.Namespace, tool_image: str, host_workdir: str) -> None:
+    """Copy the bind-mounted workdir into the tool image, at the same path.
+
+    ``docker commit`` leaves bind mounts out, so the committed image has an
+    empty /work/.alembic and the serve container finds no server.py. The path
+    stays the same, so venv shebangs and setup.sh paths remain valid.
+    pipeline.log stays out: agent stderr in it may echo API keys.
+    """
+    docker = docker_cli(context=ns.context)
+    tmp = f"alembic-bake-{secrets.token_hex(3)}"
+    print(f"[start-chain] baking {host_workdir} into {tool_image}", flush=True)
+    if _run([*docker, "create", "--name", tmp, tool_image]).returncode != 0:
+        sys.exit(1)
+    try:
+        tar = subprocess.Popen(
+            ["tar", "-C", host_workdir, "--exclude=pipeline.log", "-cf", "-", "."],
+            stdout=subprocess.PIPE,
+        )
+        cp = _run([*docker, "cp", "-", f"{tmp}:/work/.alembic"], stdin=tar.stdout)
+        tar.stdout.close()
+        if tar.wait() != 0 or cp.returncode != 0:
+            sys.exit(cp.returncode or 1)
+        if _run([*docker, "commit", tmp, tool_image]).returncode != 0:
+            sys.exit(1)
+    finally:
+        _run([*docker, "rm", tmp], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+# A server that cannot start (no server.py, broken venv) exits within a second
+# or two. A container still running after this long has got past that.
+SERVE_SETTLE_SECONDS = 8
+
+
+def _stays_up(ns: argparse.Namespace, cname: str) -> bool:
+    deadline = time.monotonic() + SERVE_SETTLE_SECONDS
+    while time.monotonic() < deadline:
+        r = subprocess.run(
+            [*docker_cli(context=ns.context), "inspect", "-f", "{{.State.Running}}", cname],
+            capture_output=True, text=True, env=docker_env(api_version=_API_VERSION),
+        )
+        if r.returncode != 0 or r.stdout.strip() != "true":
+            return False
+        time.sleep(1)
+    return True
 
 
 def serve_image(repo_url: str, tool_image: str, ns: argparse.Namespace) -> None:
@@ -246,12 +417,20 @@ def serve_image(repo_url: str, tool_image: str, ns: argparse.Namespace) -> None:
     if ns.gpus:
         cmd += ["--gpus", ns.gpus]
     cmd += _mount_args(repo, ns)
-    cmd += _env_args(ns.env_file)
+    s3_net, s3_env = _s3_endpoint_args(ns)
+    cmd += s3_net
+    cmd += _env_args(ns.env_file, extra_env=SERVE_ONLY_ENV, overrides=s3_env)
     cmd += [tool_image, "serve", repo_url]
 
     r = _run(cmd)
     if r.returncode != 0:
         sys.exit(r.returncode)
+    if not _stays_up(ns, cname):
+        _run([*docker_cli(context=ns.context), "logs", "--tail", "30", cname])
+        sys.stderr.write(
+            f"\n[start-chain] MCP server container {cname} exited right after start.\n"
+        )
+        sys.exit(1)
 
     host = resolve_advertise_host(
         explicit=ns.advertise_host,
@@ -302,6 +481,13 @@ def parse_args() -> argparse.Namespace:
                          "inside the build container (TM-Bench input data).")
     ap.add_argument("--no-serve", action="store_true",
                     help="Build and commit only; do not launch the MCP server")
+    ap.add_argument("--serve-only", action="store_true",
+                    help="Skip the pipeline entirely and serve an already-committed "
+                         "image. Fails if that image does not exist on the target "
+                         "daemon.")
+    ap.add_argument("--image", default=None,
+                    help="Image to serve with --serve-only. Default: "
+                         "alembic-tool:<repo>.")
     ap.add_argument("--context", default=None,
                     help="Docker context to build and serve on (a remote daemon). "
                          "Default: the local daemon.")
@@ -339,6 +525,18 @@ def main() -> None:
         ns.gpus = "all"
         where = f" on {ns.context}" if ns.context else ""
         print(f"[start-chain] GPU detected{where} — passing --gpus all.")
+    if ns.serve_only:
+        image = ns.image or f"{TOOL_REPO}:{get_repo_name(ns.repo_url)}"
+        check = _run([*docker_cli(context=ns.context), "image", "inspect", image],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        if check.returncode != 0:
+            sys.stderr.write(
+                f"[start-chain] --serve-only: image {image} not found on "
+                f"{ns.context or 'the local daemon'}; run a full build first.\n"
+            )
+            sys.exit(1)
+        serve_image(ns.repo_url, image, ns)
+        return
     ensure_base_image(BASE_DOCKERFILE, PROJECT_ROOT,
                       platform=ns.platform, rebuild=ns.rebuild_base,
                       context=ns.context)

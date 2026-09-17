@@ -53,6 +53,10 @@ _RETRYABLE_TYPES = (
 )
 _LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 
+# Seconds a single model call may take, and — separately — the longest silence
+# tolerated between streamed chunks. A provider that goes quiet raises nothing
+# on its own, so without this the agent waits forever.
+REQUEST_TIMEOUT = settings.llm.request_timeout
 # Provider-side throttles clear on their own, but on the provider's clock, not
 # ours: OpenRouter's 402 "in_flight_budget_exhausted" (a cap on concurrent spend
 # — NOT an empty balance) ships a Retry-After of a minute or two. The generic
@@ -242,21 +246,77 @@ class RetryingLiteLlm(LiteLlm):
                 f"and proxy is accessible: {err}"
             ) from err
 
+    async def _stream(self, llm_request: LlmRequest, stream: bool):
+        """Yield the upstream response, bounding the wait between chunks.
+
+        `deadline_s` below covers time-to-first-response and is disarmed the
+        moment the provider answers, and litellm's own `timeout` covers getting
+        the request away. Neither bounds the silence *after* the stream opens: a
+        provider that sends one chunk and then stops leaves `async for` waiting
+        on a chunk that never comes — socket established, nothing raised, the
+        agent parked for good.
+
+        Timing each chunk separately closes that gap without re-arming a whole
+        stream deadline: the clock measures only the wait for the next chunk, so
+        a legitimately long generation is safe and — unlike a deadline left
+        armed across the `yield` — the consumer's own work is never timed.
+        """
+        source = super().generate_content_async(llm_request, stream=stream)
+        try:
+            while True:
+                try:
+                    chunk = await asyncio.wait_for(
+                        source.__anext__(), timeout=REQUEST_TIMEOUT
+                    )
+                except StopAsyncIteration:
+                    return
+                except asyncio.TimeoutError:
+                    # Bare TimeoutError carries no message; say what happened so
+                    # `_is_transient` recognises it and the log names the cause.
+                    raise TimeoutError(
+                        f"model sent nothing for {REQUEST_TIMEOUT}s — request timed out"
+                    ) from None
+                yield chunk
+        finally:
+            # Drop the stalled HTTP response rather than leaking the connection.
+            await source.aclose()
+
+    def _apply_dynamic_openrouter_provider(self, effective_model: str) -> None:
+        """Dynamically sync provider routing from settings.web without breaking custom kwargs."""
+        if not effective_model or not (effective_model.startswith("openrouter/") or effective_model.startswith("~")):
+            return
+        extra = _openrouter_provider_kwargs(effective_model)
+        if extra and "extra_body" in extra:
+            if not isinstance(getattr(self, "_additional_args", None), dict):
+                self._additional_args = {}
+            extra_body = self._additional_args.setdefault("extra_body", {})
+            if isinstance(extra_body, dict):
+                extra_body["provider"] = extra["extra_body"]["provider"]
+        else:
+            if isinstance(getattr(self, "_additional_args", None), dict):
+                extra_body = self._additional_args.get("extra_body")
+                if isinstance(extra_body, dict):
+                    extra_body.pop("provider", None)
+                    if not extra_body:
+                        self._additional_args.pop("extra_body", None)
+
     async def generate_content_async(
         self, llm_request: LlmRequest, stream: bool = False
     ) -> AsyncGenerator[LlmResponse, None]:
         await self._verify_proxy_reachable()
+        effective_model = getattr(llm_request, "model", None) or getattr(self, "model", "") or ""
+        self._apply_dynamic_openrouter_provider(effective_model)
         attempt = throttle_attempt = 0
         while True:
             yielded = False
             try:
                 if self._deadline_s is None:
-                    async for resp in super().generate_content_async(llm_request, stream=stream):
+                    async for resp in self._stream(llm_request, stream=stream):
                         yielded = True
                         yield resp
                 else:
                     async with asyncio.timeout(self._deadline_s) as deadline:
-                        async for resp in super().generate_content_async(
+                        async for resp in self._stream(
                             llm_request, stream=stream
                         ):
                             # The provider answered, so stop the clock. The budget
@@ -437,6 +497,48 @@ def _reasoning_kwargs(model: str, spec: Optional[Any]) -> dict:
     )
 
 
+def _openrouter_provider_kwargs(model: str) -> dict:
+    """litellm kwargs implementing OpenRouter provider routing for *model*.
+
+    Returns an empty dict if the model is not routed through OpenRouter,
+    or if default routing is active with no specific provider ordering.
+    """
+    if not (model.startswith("openrouter/") or model.startswith("~")):
+        return {}
+    web = settings.web
+    sort_val = (getattr(web, "openrouter_provider_sort", None) or "default").strip().lower()
+    order_val = getattr(web, "openrouter_provider_order", None)
+
+    provider_cfg = {}
+    if sort_val in ("price", "throughput", "latency"):
+        provider_cfg["sort"] = sort_val
+    if order_val:
+        if isinstance(order_val, str):
+            providers = [p.strip() for p in order_val.split(",") if p.strip()]
+        elif isinstance(order_val, (list, tuple)):
+            providers = [str(p).strip() for p in order_val if str(p).strip()]
+        else:
+            providers = []
+        if providers:
+            provider_cfg["order"] = providers
+
+    if not provider_cfg:
+        return {}
+    return {"extra_body": {"provider": provider_cfg}}
+
+
+def _combine_llm_kwargs(*kwarg_dicts: dict) -> dict:
+    """Merge multiple kwargs dicts for LiteLlm, combining extra_body cleanly."""
+    merged = {}
+    for d in kwarg_dicts:
+        for k, v in d.items():
+            if k == "extra_body" and isinstance(v, dict) and isinstance(merged.get("extra_body"), dict):
+                merged["extra_body"] = {**merged["extra_body"], **v}
+            else:
+                merged[k] = v
+    return merged
+
+
 def make_llm(
     model: str = MODEL,
     *,
@@ -444,8 +546,13 @@ def make_llm(
     reasoning: Optional[Any] = None,
 ) -> LiteLlm:
     """Return a (retry-wrapped) LiteLlm for the main model (or an override)."""
+    kwargs = _combine_llm_kwargs(
+        _reasoning_kwargs(model, reasoning),
+        _openrouter_provider_kwargs(model),
+    )
     return RetryingLiteLlm(
-        model=model, deadline_s=deadline_s, **_reasoning_kwargs(model, reasoning)
+        model=model, deadline_s=deadline_s, timeout=REQUEST_TIMEOUT,
+        **kwargs
     )
 
 
@@ -453,8 +560,13 @@ def make_coder_llm(
     *, deadline_s: Optional[float] = None, reasoning: Optional[Any] = None
 ) -> LiteLlm:
     """Return a (retry-wrapped) LiteLlm for the dedicated coder model."""
+    kwargs = _combine_llm_kwargs(
+        _reasoning_kwargs(CODER_MODEL, reasoning),
+        _openrouter_provider_kwargs(CODER_MODEL),
+    )
     return RetryingLiteLlm(
         model=CODER_MODEL,
         deadline_s=deadline_s,
-        **_reasoning_kwargs(CODER_MODEL, reasoning),
+        timeout=REQUEST_TIMEOUT,
+        **kwargs
     )

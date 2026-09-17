@@ -87,6 +87,11 @@ def _alembic():
     from CoScientist.tools.alembic_tools import ALEMBIC_TOOLS
     return ALEMBIC_TOOLS
 
+def _verify():
+    from CoScientist.verify.tools import verify_toolset
+    return verify_toolset.get_tools(None)
+
+
 def _sandbox():
     """OpenHands sandbox tools — absent when no sandbox URL is configured."""
     from CoScientist.tools.coder_tools.sandbox_tools import get_sandbox_tools
@@ -372,21 +377,6 @@ _GRAPH_DOCS = (
         signature="get_agents_info()",
         purpose="Structured info about all agents in the system.",
     ),
-    ToolDoc(
-        name="search_knowledge_memory",
-        signature="search_knowledge_memory(query)",
-        purpose="Search globally accumulated facts relevant to a query.",
-    ),
-    ToolDoc(
-        name="get_entity_neighbors",
-        signature="get_entity_neighbors(entity)",
-        purpose="Walk the graph: an entity's 1-hop facts (search then traverse).",
-    ),
-    ToolDoc(
-        name="get_knowledge_memory",
-        signature="get_knowledge_memory()",
-        purpose="Global knowledge memory shared across users and sessions.",
-    ),
 )
 
 REGISTRY.register_tool(ToolEntry(
@@ -450,6 +440,14 @@ _RESEARCH_ORCH_DOCS = _RESEARCH_WORKER_DOCS + (
                  "context star. Call once at the start; archives any active graph."),
     ),
     ToolDoc(
+        name="research_prior",
+        signature="research_prior(query, limit)",
+        purpose=("Search PAST researches (previous runs) related to a question: "
+                 "their hypotheses with verdicts, the methods/tools used and the "
+                 "conclusions. Consult BEFORE planning so settled work is reused "
+                 "instead of re-derived; each hit reports why it matched."),
+    ),
+    ToolDoc(
         name="research_triggers",
         signature="research_triggers()",
         purpose=("Evaluate the decision triggers (READY / BLOCKED / REFUTE / "
@@ -487,6 +485,30 @@ REGISTRY.register_tool(ToolEntry(
     optional=True,
     runtime_resolved=True,
     docs=(_RESEARCH_OVERVIEW_DOC, _RESEARCH_SLICE_DOC, _RESEARCH_PROVENANCE_DOC),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="verify",
+    factory=_verify,
+    docs=(
+        ToolDoc(
+            name="validate_dataset",
+            signature="validate_dataset(path)",
+            purpose=(
+                "Deterministically check that a dataset file holds REAL, diverse "
+                "molecules (RDKit-valid SMILES + a fitness/SA column). Call it on "
+                "your training dataset BEFORE training — training is BLOCKED until a "
+                "real dataset validates; toy/placeholder data (integers, one "
+                "repeated molecule, a synthetic fallback) is rejected."),
+        ),
+        ToolDoc(
+            name="validate_training",
+            signature="validate_training(checkpoint_path, loss_log)",
+            purpose=(
+                "Deterministically check a training result: a real saved checkpoint "
+                "and a loss that actually decreased over >=1 epoch."),
+        ),
+    ),
 ))
 
 REGISTRY.register_tool(ToolEntry(
@@ -997,6 +1019,39 @@ HITL_TOOL_DOCS = (
     ),
 )
 
+# Attached the same way, by the per-agent `work_order: true` flag.
+WORK_ORDER_TOOL_DOCS = (
+    ToolDoc(
+        name="declare_work_order",
+        signature=(
+            "declare_work_order(goal, done_criteria, assumptions, steps, planned_tools, "
+            "expected_outcome, fallback)"
+        ),
+        purpose=(
+            "(Work Order) Declare your contract BEFORE your first external action: "
+            "goal, assumptions (a list of strings), "
+            "steps, tools, expected outcome. "
+            "Returns status approved / revise / rejected."
+        ),
+    ),
+    ToolDoc(
+        name="update_work_order",
+        signature="update_work_order(reason, add_tools, add_steps)",
+        purpose=(
+            "(Work Order) Amend the approved contract when you need a tool or step "
+            "it does not cover. The human reviews the diff."
+        ),
+    ),
+    ToolDoc(
+        name="update_work_step",
+        signature="update_work_step(step_id, status, note)",
+        purpose=(
+            "(Work Order) Mark a step in_progress / done / skipped as you go, so the "
+            "human can follow the plan live."
+        ),
+    ),
+)
+
 
 # ── Callbacks ────────────────────────────────────────────────────────────────
 
@@ -1204,6 +1259,12 @@ def _hitl_before_model():
     return make_hitl_before_callback(hitl_handler)
 
 
+def _hitl_before_tool():
+    from CoScientist.agents.common import hitl_handler
+    from CoScientist.hitl.callbacks import make_hitl_before_tool_callback
+    return make_hitl_before_tool_callback(hitl_handler, target_tools=("run_sandbox_task",))
+
+
 # Plain callbacks are registered through tiny lazy factories that ignore the
 # context — so importing bindings never drags in S3/opik/etc. transitively.
 _cb("save_uploaded_artifacts", "before_model", factory=lambda ctx: _save_uploaded_artifacts())
@@ -1240,9 +1301,10 @@ _cb("redact_link_urls", "before_model", factory=lambda ctx: _redact_link_urls())
 _cb("resolve_link_refs", "before_tool", factory=lambda ctx: _resolve_link_refs())
 _cb("register_tool_result_links", "after_tool", factory=lambda ctx: _register_tool_result_links())
 _cb("expand_link_refs", "after_model", factory=lambda ctx: _expand_link_refs())
-# Human-In-The-Loop approval callback before model/agent execution.
+# Human-In-The-Loop approval callback before model/agent/tool execution.
 _cb("hitl_before_model", "before_model", factory=lambda ctx: _hitl_before_model())
 _cb("hitl_before_agent", "before_agent", factory=lambda ctx: _hitl_before_model())
+_cb("hitl_before_tool", "before_tool", factory=lambda ctx: _hitl_before_tool())
 # Limit web search calls per agent turn.
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
 # Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.

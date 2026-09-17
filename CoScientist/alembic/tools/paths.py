@@ -17,6 +17,7 @@ WORKDIR = Path(os.environ.get("ALEMBIC_WORKDIR", ".alembic"))
 _SCRIPTS_DIR = Path(__file__).resolve().parent / "scripts"
 COMPAT_CHECK_SCRIPT = _SCRIPTS_DIR / "compat_check.py"
 RUN_FUNCTION_SCRIPT = _SCRIPTS_DIR / "run_function.py"
+S3_TRANSFER_SCRIPT = _SCRIPTS_DIR / "s3_transfer.py"
 
 # Where TM-Bench-style input data lands inside the container (R4).
 MOUNT_DATA  = Path("/mount/data")    # host benchmark/data, bind-mounted ro

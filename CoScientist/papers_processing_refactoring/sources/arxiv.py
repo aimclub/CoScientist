@@ -59,7 +59,7 @@ class ArxivSource(ArticleSource):
                     "published": entry.published,
                     "updated": entry.updated,
                     "authors": [a.name for a in entry.authors],
-                    "summary": entry.summary,
+                    # "summary": entry.summary,  # Disabled: summaries are not stored.
                     "categories": entry.tags if hasattr(entry, "tags") else [],
                 },
             )

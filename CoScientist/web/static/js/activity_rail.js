@@ -3,11 +3,14 @@
 // =========================================================================
     const AGENTS = [
       { name: "OrchestratorAgent", icon: "hub", desc: "Master Orchestrator" },
-      // The microfluidics ТЗ panel sits where the roadmap planner was.
+      { name: "PlannerAgent", icon: "map", desc: "Roadmap Planner" },
+      // The microfluidics pipeline plans through a ТЗ rather than a roadmap.
       { name: "TZSpecAgent", icon: "assignment", desc: "Technical Spec" },
       { name: "ToolsViewer", icon: "science", desc: "Tools Viewer" },
-      { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Knowledge Graph", id: "graph-link", href: "/graph" },
-      { name: "MCPBuilds", icon: "build", desc: "MCP Builds", href: "/builds" },
+      // The knowledge memory is gone; this graph is the research record.
+      { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Research Graph", id: "graph-link", href: "/graph" },
+      { name: "SessionTrace", icon: "schedule", desc: "Session Trace", id: "trace-link", href: "/trace" },
+      { name: "MCPBuilder", icon: "build", desc: "MCP Builder", href: "/alembic/" },
       { name: "CoderSandbox", icon: "terminal", desc: "CoderSandbox", id: "coder-sandbox-link", href: "http://localhost:8884/" },
       { name: "__settings__", icon: "settings", desc: "Settings" },
     ];
@@ -32,10 +35,7 @@
         return `
           <div ${elemIdAttr} ${hrefAttr} onclick="onAgentClick('${a.name}')" class="flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100">
             <span class="material-symbols-outlined ${iconColorClass} text-lg">${a.icon}</span>
-            <div class="flex flex-col">
-              <span class="text-sm ${textColorClass}" data-i18n="agent.${a.name}.desc">${a.desc}</span>
-              <span class="text-[8px] text-outline-variant font-mono uppercase">${a.name}</span>
-            </div>
+            <span class="text-sm ${textColorClass}" data-i18n="agent.${a.name}.desc">${a.desc}</span>
             ${extraDot}
           </div>
         `;
@@ -46,21 +46,23 @@
     function onAgentClick(name) {
       if (name === "__settings__") {
         openSettings();
+      } else if (name === "PlannerAgent") {
+        openRoadmapEditor();
       } else if (name === "TZSpecAgent") {
         openTzPanel();
       } else if (name === "ToolsViewer") {
         openToolsViewer();
-      } else if (name === "KnowledgeGraph") {
-        const link = document.getElementById('graph-link');
-        if (link && link.href) {
-          window.open(link.href, '_blank');
-        } else if (activeUser && activeSession) {
-          window.open(`/graph?user_id=${encodeURIComponent(activeUser.id)}&session_id=${encodeURIComponent(activeSession.id)}`, '_blank');
-        } else {
-          window.open('/graph', '_blank');
-        }
-      } else if (name === "MCPBuilds") {
-        window.open('/builds', '_blank');
+      } else if (name === "KnowledgeGraph" || name === "SessionTrace") {
+        // Scope to the open session FIRST. The rail's own href carries no
+        // session, so preferring it opened whichever session the page happened
+        // to fall back to — the graph of a different run.
+        const page = name === "SessionTrace" ? '/trace' : '/graph';
+        const scoped = (activeUser && activeSession)
+          ? `${page}?user_id=${encodeURIComponent(activeUser.id)}&session_id=${encodeURIComponent(activeSession.id)}`
+          : page;
+        window.open(scoped, '_blank');
+      } else if (name === "MCPBuilder") {
+        window.open('/alembic/', '_blank');
       } else if (name === "CoderSandbox") {
         const link = document.getElementById('coder-sandbox-link');
         const url = (link && link.href) ? link.href : (activeSandboxWatchUrl || getBaseSandboxUrl());
@@ -75,21 +77,20 @@
         if (!el) return;
         if (a.name === name) {
           el.className = "flex items-center gap-3 py-3 px-4 bg-[#272a31] rounded-lg transition-all duration-200 border-l-2 border-[#00daf3] cursor-pointer";
-          el.querySelector('.material-symbols-outlined').className = "material-symbols-outlined text-primary text-lg animate-pulse";
-          el.querySelectorAll('span:not(.material-symbols-outlined)').forEach(s => s.classList.remove('text-outline-variant', 'opacity-50'));
+          const icon = el.querySelector('.material-symbols-outlined');
+          if (icon) icon.className = "material-symbols-outlined text-primary text-lg animate-pulse";
+          const label = el.querySelector('[data-i18n]');
+          if (label) label.className = "text-sm text-on-surface font-semibold";
         } else {
           const highlighted = isAgentHighlightedByDefault(a.name);
           const opacityClass = highlighted ? "opacity-100" : "opacity-80";
           el.className = `flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100`;
 
           const icon = el.querySelector('.material-symbols-outlined');
-          icon.className = `material-symbols-outlined ${highlighted ? 'text-primary' : 'text-outline-variant'} text-lg`;
+          if (icon) icon.className = `material-symbols-outlined ${highlighted ? 'text-primary' : 'text-outline-variant'} text-lg`;
 
-          el.querySelectorAll('span:not(.material-symbols-outlined)').forEach(s => {
-            if (!s.classList.contains('font-mono')) {
-              s.className = `text-sm ${highlighted ? 'text-on-surface font-semibold' : 'text-on-surface-variant font-medium'}`;
-            }
-          });
+          const label = el.querySelector('[data-i18n]');
+          if (label) label.className = `text-sm ${highlighted ? 'text-on-surface font-semibold' : 'text-on-surface-variant font-medium'}`;
         }
       });
     }
@@ -104,13 +105,10 @@
           el.className = `flex items-center gap-3 py-3 px-4 transition-all duration-200 ${opacityClass} cursor-pointer hover:bg-surface-variant/20 hover:opacity-100`;
 
           const icon = el.querySelector('.material-symbols-outlined');
-          icon.className = `material-symbols-outlined ${highlighted ? 'text-primary' : 'text-outline-variant'} text-lg`;
+          if (icon) icon.className = `material-symbols-outlined ${highlighted ? 'text-primary' : 'text-outline-variant'} text-lg`;
 
-          el.querySelectorAll('span:not(.material-symbols-outlined)').forEach(s => {
-            if (!s.classList.contains('font-mono')) {
-              s.className = `text-sm ${highlighted ? 'text-on-surface font-semibold' : 'text-on-surface-variant font-medium'}`;
-            }
-          });
+          const label = el.querySelector('[data-i18n]');
+          if (label) label.className = `text-sm ${highlighted ? 'text-on-surface font-semibold' : 'text-on-surface-variant font-medium'}`;
         }
       });
     }
@@ -136,6 +134,7 @@
       OrchestratorAgent: 'hub',
       InitAgent: 'flag',
       PlannerAgent: 'map',
+      PlanCriticAgent: 'rate_review',
       TZSpecAgent: 'assignment',
       HypothesesAgent: 'lightbulb',
       ResearchAgent: 'travel_explore',
@@ -161,6 +160,58 @@
     };
 
     const KNOWN_AGENTS = new Set(Object.keys(AGENT_ICONS));
+
+    // Which agents are plumbing is declared in the system YAML (`internal:`)
+    // and served by /api/agents. Only the pseudo-authors that are not agents
+    // at all live here — they stay hidden even when internal agents are shown.
+    const PSEUDO_AUTHORS = new Set(['system', 'user', 'unknown']);
+    const INTERNAL_AGENTS = new Set(PSEUDO_AUTHORS);
+
+    function isInternalAgent(name) {
+      if (!name) return true;
+      const n = String(name).trim();
+      if (PSEUDO_AUTHORS.has(n)) return true;
+      return !showInternal && INTERNAL_AGENTS.has(n);
+    }
+
+    // The rail and the trace tree drop internal agents as events arrive, so
+    // flipping the switch replays the session from a fresh snapshot.
+    // remember=false applies the server default without recording a choice.
+    function setShowInternal(value, { remember = true } = {}) {
+      const next = !!value;
+      if (remember) {
+        // A choice equal to the default is no choice: keep following the env.
+        showInternalStored = next === !!appSettings.general.showInternal ? null : next;
+        try {
+          if (showInternalStored === null) localStorage.removeItem(SHOW_INTERNAL_KEY);
+          else localStorage.setItem(SHOW_INTERNAL_KEY, String(next));
+        } catch (_) { }
+      }
+      if (next === showInternal) return;
+      showInternal = next;
+      document.documentElement.classList.toggle('show-internal', showInternal);
+      if (typeof activateSession === 'function' && activeUser && activeSession) {
+        activateSession(activeUser, activeSession);
+      }
+    }
+    window.setShowInternal = setShowInternal;
+    window.isInternalAgent = isInternalAgent;
+    window.INTERNAL_AGENTS = INTERNAL_AGENTS;
+
+    async function loadInternalAgents() {
+      try {
+        const resp = await fetch('/api/agents');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        (data.internal_agents || []).forEach(name => INTERNAL_AGENTS.add(name));
+        // Events that arrived before the list did may have recorded internal
+        // agents; the render filter drops them now.
+        renderActivityRail();
+      } catch {
+        // keep the pseudo-authors only
+      }
+    }
+    loadInternalAgents();
 
     function agentIcon(name) {
       if (AGENT_ICONS[name]) return AGENT_ICONS[name];
@@ -219,10 +270,12 @@
     }
 
     function activityTouchAgent(name, timestamp = null) {
-      if (!name) return;
+      if (!name || isInternalAgent(name)) return;
       const entry = activityAgent(name);
       entry.lastSeen = timestamp ? new Date(timestamp).getTime() : Date.now();
-      if (!activityPinned) activitySelected = name;
+      if (!activityPinned && (entry.calls > 0 || activityBusy(entry) > 0)) {
+        activitySelected = name;
+      }
       renderActivityRail();
     }
 
@@ -237,7 +290,7 @@
 
     function activityRecordCall(author, tc, timestamp = null) {
       const name = tc && tc.name;
-      if (!name) return;
+      if (!name || isInternalAgent(author)) return;
       const entry = activityAgent(author);
       entry.lastSeen = timestamp ? new Date(timestamp).getTime() : Date.now();
 
@@ -247,11 +300,15 @@
         ? (tc.args && (tc.args.agent_name || tc.args.agentName))
         : (KNOWN_AGENTS.has(name) || /Agent$/.test(name) ? name : null));
       if (transferred) {
-        const next = activityAgent(String(transferred));
-        next.transferred = true;
-        next.lastSeen = entry.lastSeen;
-        if (!activityPinned) activitySelected = next.name;
-        renderActivityRail();
+        if (!isInternalAgent(String(transferred))) {
+          const next = activityAgent(String(transferred));
+          next.transferred = true;
+          next.lastSeen = entry.lastSeen;
+          if (!activityPinned && (next.calls > 0 || activityBusy(next) > 0)) {
+            activitySelected = next.name;
+          }
+          renderActivityRail();
+        }
         return;
       }
 
@@ -270,7 +327,7 @@
 
     function activityRecordResponse(author, tr, timestamp = null) {
       const name = tr && tr.name;
-      if (!name || name === 'transfer_to_agent') return;
+      if (!name || name === 'transfer_to_agent' || isInternalAgent(author)) return;
       const isDelegation = tr.is_delegation || KNOWN_AGENTS.has(name) || /Agent$/.test(name);
       if (isDelegation) {
         activityCloseAgent(name);
@@ -296,6 +353,7 @@
       const author = data.author || 'system';
 
       if (data.phase === 'agent_start' || data.phase === 'agent_end') {
+        if (isInternalAgent(author)) return;
         activityTouchAgent(author, data.timestamp);
         if (data.phase === 'agent_end') {
           activityCloseAgent(author);
@@ -452,9 +510,21 @@
       if (!enabled || activityAgents.size === 0) return;
 
       const now = Date.now();
-      const agents = [...activityAgents.values()].sort((a, b) => a.lastSeen - b.lastSeen);
-      if (activitySelected && !activityAgents.has(activitySelected)) activitySelected = null;
-      if (!activitySelected && agents.length) activitySelected = agents[agents.length - 1].name;
+      // Filter out internal pipelines or idle agents that have no tool calls and are not running
+      const agents = [...activityAgents.values()]
+        .filter(entry => !isInternalAgent(entry.name) && (entry.calls > 0 || activityBusy(entry) > 0))
+        .sort((a, b) => a.lastSeen - b.lastSeen);
+
+      rail.classList.toggle('hidden', !enabled || agents.length === 0);
+      if (!enabled || agents.length === 0) return;
+
+      if (activitySelected && !agents.some(a => a.name === activitySelected)) {
+        activitySelected = null;
+      }
+      if (!activitySelected && agents.length) {
+        const withCalls = agents.filter(a => a.calls > 0);
+        activitySelected = withCalls.length ? withCalls[withCalls.length - 1].name : agents[agents.length - 1].name;
+      }
 
       const countEl = document.getElementById('activity-agents-count');
       if (countEl) countEl.textContent = agents.length;

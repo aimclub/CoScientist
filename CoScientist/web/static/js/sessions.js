@@ -41,20 +41,32 @@
       return knownSessions;
     }
 
-    async function ensureUserSession(user, preferredSessionId = null) {
+    async function createBlankSession(user) {
+      const created = await apiJson(`/api/users/${encodeURIComponent(user.id)}/sessions`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: 'New session' })
+      });
+      knownSessions.unshift(created.session);
+      return created.session;
+    }
+
+    // startFresh: the remembered session belongs to a previous server run, so
+    // do not reopen it. Prefer a session that is running right now, then an
+    // untouched one (so restarts do not pile up empty sessions), else create.
+    async function ensureUserSession(user, preferredSessionId = null, { startFresh = false } = {}) {
       activeUser = user;
-      let sessions = await loadSessions(user);
-      if (!sessions.length) {
-        const created = await apiJson(`/api/users/${encodeURIComponent(user.id)}/sessions`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: 'New session' })
-        });
-        sessions = [created.session];
-        knownSessions = sessions;
+      const sessions = await loadSessions(user);
+      let selected = sessions.find(item => item.id === preferredSessionId);
+      if (!selected && startFresh) {
+        selected = sessions.find(item => item.status === 'processing')
+          || sessions.find(item => item.empty)
+          || await createBlankSession(user);
       }
-      const selected = sessions.find(item => item.id === preferredSessionId)
-        || sessions.find(item => item.id === user.last_session_id)
-        || sessions[0];
+      if (!selected) {
+        selected = sessions.find(item => item.id === user.last_session_id)
+          || sessions[0]
+          || await createBlankSession(user);
+      }
       await activateSession(user, selected);
       closeIdentityModal();
     }
@@ -186,6 +198,7 @@
       knownUsers = knownUsers.map(item => item.id === user.id ? activeUser : item);
       localStorage.setItem(USER_STORAGE_KEY, user.id);
       localStorage.setItem(SESSION_STORAGE_KEY, session.id);
+      if (serverBootId) localStorage.setItem(BOOT_STORAGE_KEY, serverBootId);
       localStorage.setItem(NICK_STORAGE_KEY, user.nickname);
       document.getElementById('active-nickname').textContent = user.nickname;
       document.getElementById('graph-link').href =
@@ -203,6 +216,7 @@
       updateCoderSandboxButton(null);
       try {
         const data = await apiJson('/api/users');
+        serverBootId = data.serverBootId || null;
         knownUsers = data.users || [];
         populateUserSelectors();
         const savedUserId = localStorage.getItem(USER_STORAGE_KEY);
@@ -226,7 +240,14 @@
           openIdentityModal();
           return;
         }
-        await ensureUserSession(savedUser, localStorage.getItem(SESSION_STORAGE_KEY));
+        // Reopen the remembered session only if it was opened under this
+        // server process (a plain page reload); after a restart start fresh.
+        const sameServerRun = !!serverBootId && localStorage.getItem(BOOT_STORAGE_KEY) === serverBootId;
+        await ensureUserSession(
+          savedUser,
+          sameServerRun ? localStorage.getItem(SESSION_STORAGE_KEY) : null,
+          { startFresh: true },
+        );
       } catch (error) {
         addSystemMsg('Failed to initialize local sessions: ' + error.message);
         openIdentityModal();
@@ -246,6 +267,7 @@
       document.getElementById('stop-btn').classList.toggle('hidden', !processing);
       if (processing) {
         showTyping();
+        if (typeof RunTimer !== 'undefined') RunTimer.start();
       } else {
         hideTyping();
         resetAgents();
@@ -253,6 +275,7 @@
         document.getElementById('hitl-panel').classList.add('hidden');
         currentPlannerHitlRequest = null;
         updateRoadmapModalButtons();
+        if (typeof RunTimer !== 'undefined') RunTimer.finish();
       }
     }
 
@@ -326,6 +349,14 @@
           addAgentOutputMsg(message.agent, message.content, message.timestamp, message.caller);
         } else if (message.type === 'tool_activity') {
           applyToolActivity(message, true);
+        } else if (message.type === 'hitl_request') {
+          // Drawn locked; a request that is still open is redelivered by the
+          // server right after the snapshot and unlocks its card in place.
+          showHITL(message, { history: true });
+        } else if (['hitl_response', 'hitl_timeout', 'hitl_cancelled'].includes(message.type)) {
+          applyHitlOutcome(message);
+        } else if (message.type === 'work_order_notice') {
+          renderWorkOrderNotice(message);
         } else if (message.type === 'error') {
           addSystemMsg('Error: ' + message.message, message.timestamp);
         }
@@ -335,6 +366,9 @@
       document.getElementById('event-count').textContent = 'Events: ' + eventCount;
 
       applyRunStatus(snapshot.status, snapshot.run_status_version);
+      if (typeof RunTimer !== 'undefined') {
+        RunTimer.restoreFromSnapshot(snapshot);
+      }
       StatusIndicator.feed({ type: 'status', status: snapshot.status });
       populateUserSelectors();
       populateSessionSelector();

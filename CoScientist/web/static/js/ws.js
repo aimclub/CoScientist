@@ -71,6 +71,10 @@
             break;
           case 'status':
             applyRunStatus(data.status, data.run_status_version);
+            if (typeof RunTimer !== 'undefined') {
+              if (data.status === 'processing') RunTimer.start(data.started_at);
+              else RunTimer.finish(data.finished_at);
+            }
             addTelemetry('STATUS :: ' + data.message);
             break;
           case 'user_message':
@@ -127,6 +131,7 @@
             activityMarkIdle();
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();
+            if (typeof RunTimer !== 'undefined') RunTimer.finish();
             addTelemetry('COMPLETE :: Final response received');
             break;
           case 'hitl_request':
@@ -144,8 +149,16 @@
             document.getElementById('hitl-panel').classList.add('hidden');
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();
-            addSystemMsg('⏱ HITL: нет ответа ' + (data.timeout_seconds || 300) + ' с — предложение агента ' + (data.agent_name || '') + ' авто-подтверждено, пайплайн продолжен.');
+            addSystemMsg(hitlTimeoutSummary(data));
             addTelemetry('HITL :: auto-approve on timeout (' + (data.agent_name || '?') + ')');
+            break;
+          case 'hitl_hold':
+            applyWorkOrderHold(data.request_id);
+            addTelemetry('HITL :: countdown paused');
+            break;
+          case 'work_order_notice':
+            renderWorkOrderNotice(data);
+            addTelemetry('WORK ORDER :: ' + (data.agent_name || '?') + ' ' + (data.kind || ''));
             break;
           case 'hitl_cancelled':
             disableHitlControls(data.request_id);
@@ -192,6 +205,7 @@
             addTelemetry('ERROR :: ' + data.message);
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();
+            if (typeof RunTimer !== 'undefined') RunTimer.finish();
             break;
           case 'pong':
             break;

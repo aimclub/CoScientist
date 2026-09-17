@@ -120,6 +120,7 @@
     RootOrchestrator: { ru: 'агент-координатор', en: 'orchestrator agent' },
     PlannerAgent: { ru: 'агент-планировщик', en: 'planner agent' },
     PlanningPipelineAgent: { ru: 'агент-планировщик', en: 'planner agent' },
+    PlanCriticAgent: { ru: 'агент-критик', en: 'plan critic agent' },
     ContextInitAgent: { ru: 'агент рамки исследования', en: 'research frame agent' },
     ContextInitSessionAgent: { ru: 'агент рамки исследования', en: 'research frame agent' },
     HypothesesAgent: { ru: 'агент генерации гипотез', en: 'hypotheses agent' },

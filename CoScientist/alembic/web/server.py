@@ -36,4 +36,6 @@ if __name__ == "__main__":
         port=8100,
         reload=False,
         log_level="info",
+        # Above the 5 s polling of the builds page; see run_web in CoScientist/cli.py.
+        timeout_keep_alive=30,
     )

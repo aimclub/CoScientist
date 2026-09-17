@@ -17,6 +17,7 @@ FieldStatus = Literal[
     "задано заказчиком",
     "автоподбор",
     "уточнено оператором",
+    "предложено агентом",
     "не задано",
     "не требуется",
     "свободный комментарий",
@@ -31,8 +32,10 @@ OPEN_STATUSES = ("не задано", "рассчитывается агенто
 # customer did not name it and no human has confirmed it yet.
 AUTO_STATUS = "автоподбор"
 
-# A human set or corrected this value when reviewing (a HITL form, or
-# corrections the agent applied on the human's word).
+# The operator set this value by hand in a HITL form. ONLY apply_form_values may
+# write this: it is what makes a node count as human-sourced downstream
+# (context_init/commit.py::_HUMAN_STATUSES), so an agent stamping its own guess
+# with it would forge the provenance the operator badge relies on.
 OPERATOR_STATUS = "уточнено оператором"
 
 # Deliberately left unconstrained: the parameter does not matter, any value
@@ -46,6 +49,9 @@ NOT_REQUIRED_VALUE = "Не требуется — без ограничения"
 # only, never by the model on its own.
 AGENT_FILLED_STATUS = "заполнено агентом"
 
+# A working value the agent proposed from domain context — usable, but NOT human.
+AGENT_PROPOSED_STATUS = "предложено агентом"
+
 
 def is_open(status: str) -> bool:
     """True when the field still needs a value (drives the HITL form)."""
@@ -54,6 +60,7 @@ def is_open(status: str) -> bool:
 
 __all__ = [
     "AGENT_FILLED_STATUS",
+    "AGENT_PROPOSED_STATUS",
     "AUTO_STATUS",
     "FieldStatus",
     "NOT_REQUIRED_STATUS",
