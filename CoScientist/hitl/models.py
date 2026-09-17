@@ -28,6 +28,12 @@ class HITLRequest(BaseModel):
                     "intake. When present, the web UI renders a form instead of "
                     "the free-text review; the answer comes back as form_values.")
     invoked_via: str = Field(default="unspecified", description="Source of the request: callback, tool or internal_loop.")
+    trigger: Optional[str] = Field(
+        default=None,
+        description="Concrete trigger within invoked_via: the callback kind "
+                    "(before_tool, after_agent, before_agent, bash_command) or the "
+                    "HITL tool name (request_approval, request_selection). The web UI "
+                    "builds a localized header from it.")
     timeout_seconds: Optional[float] = Field(default=None, description="Timeout for the request")
 
 

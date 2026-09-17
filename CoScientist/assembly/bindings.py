@@ -28,24 +28,6 @@ def _websearch():
     return websearch_toolset_instance
 
 
-def _hypothesis_generate():
-    """Factory for the generate_via_moosechem FunctionTool.
-
-    Returns a list so the assembler's _flatten() works uniformly."""
-    from CoScientist.hypothesis_subsystem.generator_agent import generate_via_moosechem
-    from google.adk.tools import FunctionTool
-    return [FunctionTool(generate_via_moosechem)]
-
-
-def _hypothesis_critic_loop():
-    """Factory for the run_critic_loop FunctionTool.
-
-    Returns a list so the assembler's _flatten() works uniformly."""
-    from CoScientist.hypothesis_subsystem.generator_agent import run_critic_loop
-    from google.adk.tools import FunctionTool
-    return [FunctionTool(run_critic_loop)]
-
-
 def _paper_analysis():
     from CoScientist.tools import paper_analysis_toolset_instance
     return paper_analysis_toolset_instance
@@ -522,35 +504,6 @@ REGISTRY.register_tool(ToolEntry(
     docs=(_RESEARCH_OVERVIEW_DOC, _RESEARCH_SLICE_DOC, _RESEARCH_PROVENANCE_DOC),
 ))
 
-# ── Hypothesis subsystem internal tools ────────────────────────────────────────
-# The hypothesis subsystem's internal strategy tools. They are declared in
-# system.yaml so the assembler attaches them — keeping guard_unknown_tools'
-# whitelist populated and making the generator + critic loop visible to the
-# ADK runtime as regular tools.
-REGISTRY.register_tool(ToolEntry(
-    key="generate_via_moosechem",
-    factory=_hypothesis_generate,
-    docs=(
-        ToolDoc(
-            name="generate_via_moosechem",
-            signature="generate_via_moosechem(research_question, background_survey, domain_constraints, max_hypotheses, temperature)",
-            purpose="Generate hypotheses via the MooseChem MCP pipeline (PubMed+OpenAlex corpus → LLM generation → scoring).",
-        ),
-    ),
-))
-
-REGISTRY.register_tool(ToolEntry(
-    key="run_critic_loop",
-    factory=_hypothesis_critic_loop,
-    docs=(
-        ToolDoc(
-            name="run_critic_loop",
-            signature="run_critic_loop(hypotheses_json, research_question)",
-            purpose="Run the Critic review loop on generated hypotheses — evaluates each for rigor and falsifiability, refines or defers as needed.",
-        ),
-    ),
-))
-
 REGISTRY.register_tool(ToolEntry(
     key="verify",
     factory=_verify,
@@ -920,6 +873,39 @@ HITL_TOOL_DOCS = (
     ),
 )
 
+# Attached the same way, by the per-agent `work_order: true` flag.
+WORK_ORDER_TOOL_DOCS = (
+    ToolDoc(
+        name="declare_work_order",
+        signature=(
+            "declare_work_order(goal, done_criteria, assumptions, steps, planned_tools, "
+            "expected_outcome, fallback)"
+        ),
+        purpose=(
+            "(Work Order) Declare your contract BEFORE your first external action: "
+            "goal, assumptions (a list of strings), "
+            "steps, tools, expected outcome. "
+            "Returns status approved / revise / rejected."
+        ),
+    ),
+    ToolDoc(
+        name="update_work_order",
+        signature="update_work_order(reason, add_tools, add_steps)",
+        purpose=(
+            "(Work Order) Amend the approved contract when you need a tool or step "
+            "it does not cover. The human reviews the diff."
+        ),
+    ),
+    ToolDoc(
+        name="update_work_step",
+        signature="update_work_step(step_id, status, note)",
+        purpose=(
+            "(Work Order) Mark a step in_progress / done / skipped as you go, so the "
+            "human can follow the plan live."
+        ),
+    ),
+)
+
 
 # ── Callbacks ────────────────────────────────────────────────────────────────
 
@@ -1169,6 +1155,10 @@ def _enforce_pipeline_scope_hops():
 def _mark_pipeline_scope_lane():
     from CoScientist.hitl.pipeline_scope import mark_pipeline_scope_lane
     return mark_pipeline_scope_lane
+def _hitl_before_tool():
+    from CoScientist.agents.common import hitl_handler
+    from CoScientist.hitl.callbacks import make_hitl_before_tool_callback
+    return make_hitl_before_tool_callback(hitl_handler, target_tools=("run_sandbox_task",))
 
 
 # Plain callbacks are registered through tiny lazy factories that ignore the
@@ -1226,7 +1216,7 @@ _cb("redact_link_urls", "before_model", factory=lambda ctx: _redact_link_urls())
 _cb("resolve_link_refs", "before_tool", factory=lambda ctx: _resolve_link_refs())
 _cb("register_tool_result_links", "after_tool", factory=lambda ctx: _register_tool_result_links())
 _cb("expand_link_refs", "after_model", factory=lambda ctx: _expand_link_refs())
-# Human-In-The-Loop approval callback before model/agent execution.
+# Human-In-The-Loop approval callback before model/agent/tool execution.
 _cb("hitl_before_model", "before_model", factory=lambda ctx: _hitl_before_model())
 _cb("hitl_before_agent", "before_agent", factory=lambda ctx: _hitl_before_model())
 _cb("ask_pipeline_scope", "before_agent", factory=lambda ctx: _ask_pipeline_scope())
@@ -1240,6 +1230,7 @@ _cb(
     "after_tool",
     factory=lambda ctx: _mark_pipeline_scope_lane(),
 )
+_cb("hitl_before_tool", "before_tool", factory=lambda ctx: _hitl_before_tool())
 # Limit web search calls per agent turn.
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
 _cb("count_research_searches", "after_tool", factory=lambda ctx: _count_research_searches())
@@ -1322,14 +1313,12 @@ def _register_classes() -> None:
         WebToolsDeployerAgent,
     )
     from CoScientist.hitl.session_agent import SessionAgent
-    from CoScientist.hypothesis_subsystem import HypothesisSubsystemAgent
     from CoScientist.microfluidics.tz_agent import TZSessionAgent
     from CoScientist.context_init.agent import ContextInitSessionAgent
     from CoScientist.experiments.review import ExperimentReviewSessionAgent
 
     REGISTRY.register_agent_class("session", SessionAgent)
     REGISTRY.register_agent_class("web_tools_deployer", WebToolsDeployerAgent)
-    REGISTRY.register_agent_class("hypothesis_subsystem", HypothesisSubsystemAgent)
     # Runs ONE of its children: the normal executor, or the reranker fallback.
     REGISTRY.register_agent_class("executor_switch", ExecutorSwitchAgent)
     # Microfluidics ТЗ stage: the review loop shows the RENDERED ТЗ document.

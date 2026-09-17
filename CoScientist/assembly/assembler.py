@@ -39,10 +39,15 @@ import CoScientist.assembly.bindings  # noqa: F401  (registration side effect)
 import CoScientist.agents.prompts.templates  # noqa: F401  (registration side effect)
 import CoScientist.experiments.prompts.templates  # noqa: F401  (profile prompts)
 
-from CoScientist.assembly.bindings import HITL_TOOL_DOCS, make_plan_critic
+from CoScientist.assembly.bindings import (
+    HITL_TOOL_DOCS,
+    WORK_ORDER_TOOL_DOCS,
+    make_plan_critic,
+)
 from CoScientist.assembly.prompting import PromptContext
 from CoScientist.assembly.registry import REGISTRY, ToolEntry
 from CoScientist.assembly.schema import (
+    PIPELINE_ROOT_NAME,
     AgentConfig,
     SystemConfig,
     get_config,
@@ -84,7 +89,7 @@ class AgentSystem:
             from google.adk.agents.sequential_agent import SequentialAgent
 
             self._run_root = SequentialAgent(
-                name="ResearchPipeline",
+                name=PIPELINE_ROOT_NAME,
                 description=(
                     "Full research lifecycle: orchestrator run then report"
                     " synthesis."
@@ -159,6 +164,46 @@ def _callback_kwargs(cfg: AgentConfig, ctx: PromptContext) -> dict:
     return kwargs
 
 
+def _work_order_tool_names(
+    cfg: AgentConfig, system: SystemConfig, tool_entries: List[ToolEntry]
+) -> Optional[Set[str]]:
+    """The tool names a Work Order may plan: the agent's documented tools plus
+    its subordinate AgentTools. None when the surface is resolved at runtime (a
+    placeholder doc such as "<dynamic MCP tools>") — names can't be checked."""
+    docs = [d for e in tool_entries for d in e.resolved_docs()]
+    if any(d.name.startswith("<") for d in docs):
+        return None
+    names = {d.name for d in docs}
+    names |= {s.name for s in system.enabled_subordinates(cfg.name)}
+    return names
+
+
+def _attach_work_order_callbacks(
+    kwargs: dict, agent_name: str, internal_tools: List[str]
+) -> None:
+    """Reset the contract and enforce it FIRST: on agent start, before anything
+    reads the state; before a tool, so a call the contract blocks never reaches
+    the other callbacks (a WebSearchLimiter would count it against the quota).
+    Link refs are not resolved yet then, which does not matter: the guard keys
+    on tool names and shell verbs, not on URLs."""
+    from CoScientist.hitl.work_order_guard import (
+        make_reset_work_order,
+        make_work_order_guard,
+    )
+
+    def as_list(value) -> list:
+        if value is None:
+            return []
+        return list(value) if isinstance(value, list) else [value]
+
+    kwargs["before_agent_callback"] = (
+        [make_reset_work_order(agent_name)] + as_list(kwargs.get("before_agent_callback"))
+    )
+    kwargs["before_tool_callback"] = (
+        [make_work_order_guard(agent_name, internal_tools=internal_tools)] + as_list(kwargs.get("before_tool_callback"))
+    )
+
+
 def _render_instruction(cfg: AgentConfig, ctx: PromptContext) -> str:
     instruction = REGISTRY.prompt(cfg.prompt)(ctx)
     leftover = _PLACEHOLDER_RE.findall(instruction)
@@ -205,10 +250,18 @@ def _build_llm_agent(
 ) -> LlmAgent:
     tool_entries = _resolve_tools(cfg)
     hitl_attached = bool(cfg.hitl and _hitl_enabled())
+    work_order_attached = bool(cfg.work_order and hitl_attached)
 
     tools: list = []
     for entry in tool_entries:
         tools.extend(_flatten(entry.factory()))
+
+    if work_order_attached:
+        from CoScientist.hitl.work_order_tools import make_work_order_tools
+        tools.extend(make_work_order_tools(
+            cfg.name, _work_order_tool_names(cfg, system, tool_entries),
+            internal_tools=system.internal_tools,
+        ))
 
     if hitl_attached:
         from CoScientist.hitl.tool import get_hitl_tools
@@ -218,12 +271,17 @@ def _build_llm_agent(
         tool_entries = tool_entries + [
             ToolEntry(key="hitl", factory=lambda: None, docs=HITL_TOOL_DOCS)
         ]
+    if work_order_attached:
+        tool_entries = tool_entries + [
+            ToolEntry(key="work_order", factory=lambda: None, docs=WORK_ORDER_TOOL_DOCS)
+        ]
 
     ctx = PromptContext(
         config=cfg,
         system=system,
         tool_entries=tool_entries,
         hitl_attached=hitl_attached,
+        work_order_attached=work_order_attached,
     )
 
     for sub in ctx.subordinates:
@@ -231,12 +289,16 @@ def _build_llm_agent(
 
     _check_tool_consistency(cfg, ctx, tools)
 
+    callbacks = _callback_kwargs(cfg, ctx)
+    if work_order_attached:
+        _attach_work_order_callbacks(callbacks, cfg.name, system.internal_tools)
+
     kwargs = dict(
         name=cfg.name,
         model=_resolve_model(cfg, system),
         description=cfg.description,
         tools=tools,
-        **_callback_kwargs(cfg, ctx),
+        **callbacks,
     )
     if cfg.prompt:
         kwargs["instruction"] = _render_instruction(cfg, ctx)
@@ -390,6 +452,8 @@ def load_config_cli() -> None:  # pragma: no cover — `python -m` helper
             bits.append(f"children={cfg.children}")
         if cfg.hitl:
             bits.append("hitl")
+        if cfg.work_order:
+            bits.append("work_order")
         if cfg.uses_critic():
             bits.append("critic")
         if cfg.a2a:

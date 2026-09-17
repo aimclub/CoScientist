@@ -1,77 +1,182 @@
 // =========================================================================
 // HITL UI
 // =========================================================================
-    // =========================================================================
-    // HITL UI
-    // =========================================================================
-    // Internal-loop HITL requests arrive with a fixed English message
-    // ("Agent 'X' proposes its result. Please review.", legacy ones carry an
-    // "[INTERNAL_LOOP: ...]" prefix). Show a localized version instead.
-    const INTERNAL_LOOP_RE = /^(?:\[INTERNAL_LOOP:[^\]]*\]\s*)?Agent '([^']+)' proposes its result\. Please review\.?\s*$/;
-    function localizeHitlMessage(message) {
-      const m = INTERNAL_LOOP_RE.exec(message || '');
-      if (!m) return message;
-      return t('hitl.internalLoop').replace('{agent}', m[1]);
-    }
+// =========================================================================
+// HITL UI
+// =========================================================================
+// The card header is built on the client from agent_name / invoked_via /
+// trigger, so it follows the UI language. Older requests (and replays of
+// them) carry the trigger only as an English "[CALLBACK: X]" message prefix;
+// internal-loop ones as a fixed English message.
+const INTERNAL_LOOP_RE = /^(?:\[INTERNAL_LOOP:[^\]]*\]\s*)?Agent '([^']+)' proposes its result\. Please review\.?\s*$/;
+const LEGACY_PREFIX_RE = /^\[(CALLBACK|INTERNAL_LOOP):\s*([A-Z_]*)[^\]]*\]\s*/;
+const TRIGGER_KEYS = {
+  before_tool: 'beforeTool',
+  after_agent: 'afterAgent',
+  before_agent: 'beforeAgent',
+  bash_command: 'bashCommand',
+  work_order: 'workOrder',
+  work_order_amendment: 'workOrderAmendment',
+};
+const hitlCards = new Map();  // request_id -> payload, re-rendered on language switch
 
-    function showHITL(data) {
-      const panel = document.getElementById('hitl-panel');
-      const feed = document.getElementById('chat-feed');
+function fillHitl(key, params) {
+  return t(key).replace(/\{(\w+)\}/g, (m, k) => (params[k] != null ? params[k] : m));
+}
 
-      // Structured intake (e.g. the research frame): render a per-field form
-      // instead of the free-text review, then stop — the other HITL points keep
-      // the free-text / option path below.
-      if (data.form && Array.isArray(data.form.blocks)) {
-        renderHitlForm(panel, feed, data);
-        scrollChat();
-        return;
-      }
+function hitlTrigger(data) {
+  if (data.trigger) return data.trigger;
+  const m = LEGACY_PREFIX_RE.exec(data.message || '');
+  return m && m[1] === 'CALLBACK' ? m[2].toLowerCase() : null;
+}
 
-      // An experiment plan is not a paragraph to skim: it is a design matrix
-      // and a task list, and it is what the human is being asked to approve.
-      // The backend ships it structured next to the rendered Markdown, so it
-      // gets a view of its own rather than a <pre> of pipe-separated rows.
-      const plan = data.context && data.context.experiment_plan;
-      if (plan && Array.isArray(plan.tasks)) {
-        renderExperimentPlanReview(panel, data, plan);
-        scrollChat();
-        return;
-      }
+function hitlParams(data) {
+  const ctx = data.context || {};
+  return {
+    agent: data.agent_name || '?',
+    tool: ctx.tool || data.trigger || '?',
+    rule: ctx.matched_rule || '?',
+  };
+}
 
-      let openRoadmapSidebarBtn = '';
-      let openRoadmapChatBtn = '';
-      if (data.agent_name === 'PlannerAgent') {
-        openRoadmapSidebarBtn = `
+function localizeHitlMessage(data) {
+  const trigger = hitlTrigger(data);
+  const key = TRIGGER_KEYS[trigger];
+  // A legacy before_agent message embeds the user query, which the template would drop.
+  if (key && !(trigger === 'before_agent' && !data.trigger)) {
+    return fillHitl('hitl.msg.' + key, hitlParams(data));
+  }
+  const message = data.message || '';
+  const m = INTERNAL_LOOP_RE.exec(message);
+  if (m) return t('hitl.internalLoop').replace('{agent}', m[1]);
+  return message.replace(LEGACY_PREFIX_RE, '');
+}
+
+function describeHitlVia(data) {
+  const params = hitlParams(data);
+  const key = TRIGGER_KEYS[hitlTrigger(data)];
+  if (key) return fillHitl('hitl.via.' + key, params);
+  switch (data.invoked_via) {
+    case 'tool': return fillHitl('hitl.via.tool', params);
+    case 'callback': return t('hitl.via.callback');
+    case 'internal_loop': return t('hitl.via.internalLoop');
+    case 'request_input': return t('hitl.via.requestInput');
+    case 'sandbox_download_cancel': return t('hitl.via.downloadCancel');
+  }
+  if (INTERNAL_LOOP_RE.test(data.message || '')) return t('hitl.via.internalLoop');
+  return data.invoked_via && data.invoked_via !== 'unspecified' ? data.invoked_via : t('hitl.via.unknown');
+}
+
+// The single place the request details (tool arguments, output, command) are shown.
+function hitlDetailBlock(data) {
+  const ctx = data.context || {};
+  if (ctx.output) {
+    const isToolCall = hitlTrigger(data) === 'before_tool';
+    return { labelKey: isToolCall ? 'hitl.block.toolCall' : 'hitl.block.output', text: String(ctx.output) };
+  }
+  if (ctx.command) return { labelKey: 'hitl.block.command', text: String(ctx.command) };
+  if (ctx.user_query) return { labelKey: 'hitl.block.userQuery', text: String(ctx.user_query) };
+  return null;
+}
+
+function hitlDynamic(data, part, text) {
+  return `<span data-hitl-part="${part}" data-hitl-rid="${escHtml(data.request_id || '')}">${escHtml(text)}</span>`;
+}
+
+function hitlLabel(key) {
+  return `<span data-i18n="${key}">${escHtml(t(key))}</span>`;
+}
+
+function relocalizeHitlCards() {
+  document.querySelectorAll('[data-hitl-part]').forEach(el => {
+    const data = hitlCards.get(el.dataset.hitlRid);
+    if (!data) return;
+    el.textContent = el.dataset.hitlPart === 'via' ? describeHitlVia(data) : localizeHitlMessage(data);
+  });
+}
+window.relocalizeHitlCards = relocalizeHitlCards;
+
+// A card is keyed by its request id: a request the server redelivers (a
+// reconnect while it is still open) replaces its disabled history copy in
+// place instead of appearing twice.
+function placeHitlCard(rid, html) {
+  const existing = rid ? document.querySelector(`[data-hitl-card="${CSS.escape(rid)}"]`) : null;
+  if (existing) {
+    existing.outerHTML = html;
+  } else {
+    appendMsgToFeed(html);
+  }
+}
+
+// history=true renders a card from the session transcript (reload, import):
+// no sidebar panel, no countdown, controls disabled until the server
+// redelivers the request as still open.
+function showHITL(data, { history = false } = {}) {
+  const panel = history ? null : document.getElementById('hitl-panel');
+  hitlCards.set(data.request_id || '', data);
+
+  // Structured intake (e.g. the research frame): render a per-field form
+  // instead of the free-text review, then stop — the other HITL points keep
+  // the free-text / option path below.
+  if (data.form && Array.isArray(data.form.blocks)) {
+    renderHitlForm(panel, data);
+  } else if (((data.context || {}).experiment_plan || {}).tasks) {
+    // An experiment plan is not a paragraph to skim: it is a design matrix and
+    // a task list, and it is what the human is being asked to approve. The
+    // backend ships it structured next to the rendered Markdown, so it gets a
+    // view of its own rather than a <pre> of pipe-separated rows.
+    renderExperimentPlanReview(panel, data);
+  } else if (String(data.trigger || '').startsWith('work_order')) {
+    // Work Order (the agent's contract before it acts): its own card with
+    // assumptions to uncheck, a veto countdown and a Pause button.
+    renderWorkOrderCard(panel, data);
+  } else {
+    renderHitlCard(panel, data);
+  }
+  if (history) disableHitlControls(data.request_id);
+  scrollChat();
+}
+
+function renderHitlCard(panel, data) {
+  const messageHtml = hitlDynamic(data, 'message', localizeHitlMessage(data));
+  const viaHtml = hitlDynamic(data, 'via', describeHitlVia(data));
+  const agentHtml = `<span class="font-bold text-on-surface">${escHtml(data.agent_name || '—')}</span>`;
+
+  let openRoadmapSidebarBtn = '';
+  let openRoadmapChatBtn = '';
+  if (data.agent_name === 'PlannerAgent') {
+    openRoadmapSidebarBtn = `
       <button onclick="openRoadmapEditor()" class="w-full mt-2 flex items-center justify-center gap-2 bg-surface-variant border border-outline-variant/20 text-on-surface py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-high transition-all">
-        <span class="material-symbols-outlined text-sm">map</span> Open Roadmap
+        <span class="material-symbols-outlined text-sm">map</span> ${hitlLabel('hitl.btn.openRoadmap')}
       </button>
     `;
-        openRoadmapChatBtn = `
+    openRoadmapChatBtn = `
       <div class="mt-4 pl-11">
         <button onclick="openRoadmapEditor()" class="flex items-center justify-center gap-2 bg-surface-variant border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-wider hover:bg-surface-container-high transition-all">
-          <span class="material-symbols-outlined text-sm">map</span> Open Roadmap
+          <span class="material-symbols-outlined text-sm">map</span> ${hitlLabel('hitl.btn.openRoadmap')}
         </button>
       </div>
     `;
-      }
+  }
 
-      const isProvideInput = data.action_type === 'provide_input';
-      const hasOptions = !!(data.options && data.options.length);
+  const isProvideInput = data.action_type === 'provide_input';
+  const hasOptions = !!(data.options && data.options.length);
 
-      // Show in sidebar. For question windows (options present) or input requests the sidebar is
-      // informational only — answer directly in the chat card.
-      const sidebarButtons = (hasOptions || isProvideInput) ? `
-        <p class="text-[10px] text-outline-variant leading-relaxed">Ответьте в карточке в чате.</p>` : `
+  // Show in sidebar. For question windows (options present) or input requests the sidebar is
+  // informational only — answer directly in the chat card.
+  const sidebarButtons = (hasOptions || isProvideInput) ? `
+        <p class="text-[10px] text-outline-variant leading-relaxed">${hitlLabel('hitl.answerInChat')}</p>` : `
         <div class="flex gap-3">
           <button onclick="respondHITL('${data.request_id}', true)" class="flex-1 flex items-center justify-center gap-2 bg-primary text-on-primary py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-            <span class="material-symbols-outlined text-base">check_circle</span> Accept
+            <span class="material-symbols-outlined text-base">check_circle</span> ${hitlLabel('hitl.btn.accept')}
           </button>
           <button onclick="respondHITL('${data.request_id}', false)" class="flex-1 flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
-            <span class="material-symbols-outlined text-base">close</span> Reject
+            <span class="material-symbols-outlined text-base">close</span> ${hitlLabel('hitl.btn.reject')}
           </button>
         </div>`;
-      panel.classList.remove('hidden');
-      panel.innerHTML = `
+  if (panel) {
+    panel.classList.remove('hidden');
+    panel.innerHTML = `
     <div class="relative">
       <div class="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 blur-2xl opacity-40"></div>
       <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-4">
@@ -79,199 +184,264 @@
           <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
             <span class="material-symbols-outlined text-on-primary text-sm">ads_click</span>
           </div>
-          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">HITL Required</h3>
+          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${hitlLabel('hitl.titleShort')}</h3>
         </div>
-        <p class="text-xs text-on-surface-variant leading-relaxed">${escHtml(localizeHitlMessage(data.message))}</p>
+        <p class="text-xs text-on-surface-variant leading-relaxed">${messageHtml}</p>
+        <div class="flex flex-col gap-1 text-[11px] leading-relaxed">
+          <p><span class="text-outline-variant">${hitlLabel('hitl.viaLabel')}:</span> <span class="text-primary">${viaHtml}</span></p>
+        </div>
         ${sidebarButtons}
         ${openRoadmapSidebarBtn}
       </div>
     </div>`;
+  }
 
-      // Also show in chat: the proposed output itself + Accept / Revise controls.
-      const proposedOutput = (data.context && data.context.output) ? String(data.context.output) : '';
-      const outputBlock = proposedOutput ? `
+  // Also show in chat: the request details + Accept / Revise controls.
+  const detail = hitlDetailBlock(data);
+  const outputBlock = detail ? `
         <div class="mt-3 pl-11">
-          <p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">Proposed output</p>
-          <pre class="font-mono text-[11px] leading-relaxed text-on-surface-variant whitespace-pre-wrap bg-surface-container-high p-3 rounded-lg border border-outline-variant/10 max-h-96 overflow-auto">${escHtml(proposedOutput)}</pre>
+          <p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${hitlLabel(detail.labelKey)}</p>
+          <pre class="font-mono text-[11px] leading-relaxed text-on-surface-variant whitespace-pre-wrap bg-surface-container-high p-3 rounded-lg border border-outline-variant/10 max-h-96 overflow-auto">${escHtml(detail.text)}</pre>
         </div>` : '';
-      appendMsgToFeed(`
-    <div class="my-6 relative msg-enter">
+  placeHitlCard(data.request_id, `
+    <div class="my-6 relative msg-enter" data-hitl-card="${escHtml(data.request_id || '')}">
       <div class="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 blur-2xl opacity-40"></div>
       <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
         <div class="flex items-center gap-3 mb-3">
           <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
             <span class="material-symbols-outlined text-on-primary text-sm">ads_click</span>
           </div>
-          <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">Human-In-The-Loop Required</h3>
+          <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${hitlLabel('hitl.title')}</h3>
         </div>
-        <p class="text-sm text-on-surface-variant leading-relaxed pl-11">${escHtml(localizeHitlMessage(data.message))}</p>
-        <p class="text-[10px] text-outline-variant font-mono mt-2 pl-11">CTX: ${data.request_id.slice(0, 8)} · ${escHtml(data.agent_name || '')}</p>
+        <p class="text-sm text-on-surface-variant leading-relaxed pl-11">${messageHtml}</p>
+        <div class="mt-2 pl-11 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-[11px]">
+          <span><span class="text-outline-variant">${hitlLabel('hitl.viaLabel')}:</span> <span class="text-primary">${viaHtml}</span></span>
+        </div>
         ${outputBlock}
         ${isProvideInput ? `
         <div id="hitl-controls-${data.request_id}" class="mt-4 pl-11 flex flex-col gap-2">
-          <textarea id="hitl-feedback-${data.request_id}" rows="2" placeholder="Введите инструкции для агента..."
+          <textarea id="hitl-feedback-${data.request_id}" rows="2" data-i18n-placeholder="hitl.ph.input" placeholder="${escHtml(t('hitl.ph.input'))}"
             class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
           <div class="flex">
             <button onclick="respondHITLInput('${data.request_id}')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-              <span class="material-symbols-outlined text-base">send</span> Отправить
+              <span class="material-symbols-outlined text-base">send</span> ${hitlLabel('hitl.btn.send')}
             </button>
           </div>
         </div>` : hasOptions ? `
         <div id="hitl-controls-${data.request_id}" class="mt-4 pl-11 flex flex-col gap-2">
-          <textarea id="hitl-feedback-${data.request_id}" rows="2" placeholder="Ваш ответ на вопрос — затем «Ответить»"
+          <textarea id="hitl-feedback-${data.request_id}" rows="2" data-i18n-placeholder="hitl.ph.reply" placeholder="${escHtml(t('hitl.ph.reply'))}"
             class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
           <div class="flex flex-wrap gap-2">
             <button onclick="respondHITLEdit('${data.request_id}')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-              <span class="material-symbols-outlined text-base">reply</span> Ответить
+              <span class="material-symbols-outlined text-base">reply</span> ${hitlLabel('hitl.btn.reply')}
             </button>
             ${data.options.map(o => `
             <button onclick="respondHITLOption('${data.request_id}', '${escJs(o)}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">${escHtml(o)}</button>`).join('')}
           </div>
         </div>` : `
         <div id="hitl-controls-${data.request_id}" class="mt-4 pl-11 flex flex-col gap-2">
-          <textarea id="hitl-feedback-${data.request_id}" rows="2" placeholder="Правки для агента — затем Revise"
+          <textarea id="hitl-feedback-${data.request_id}" rows="2" data-i18n-placeholder="hitl.ph.revise" placeholder="${escHtml(t('hitl.ph.revise'))}"
             class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
           <div class="flex gap-3">
             <button onclick="respondHITL('${data.request_id}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-              <span class="material-symbols-outlined text-base">check_circle</span> Accept
+              <span class="material-symbols-outlined text-base">check_circle</span> ${hitlLabel('hitl.btn.accept')}
             </button>
             <button onclick="respondHITLEdit('${data.request_id}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
-              <span class="material-symbols-outlined text-base">edit_note</span> Revise
+              <span class="material-symbols-outlined text-base">edit_note</span> ${hitlLabel('hitl.btn.revise')}
             </button>
             <button onclick="respondHITL('${data.request_id}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
-              <span class="material-symbols-outlined text-base">close</span> Reject
+              <span class="material-symbols-outlined text-base">close</span> ${hitlLabel('hitl.btn.reject')}
             </button>
           </div>
         </div>`}
         ${openRoadmapChatBtn}
       </div>
     </div>`);
-    }
+}
 
-    function disableHitlControls(requestId) {
-      const box = document.getElementById('hitl-controls-' + requestId);
-      if (!box) return;
-      box.querySelectorAll('button, textarea').forEach(el => {
+function disableHitlControls(requestId) {
+  stopWorkOrderCountdown(requestId);
+  const box = document.getElementById('hitl-controls-' + requestId);
+  if (!box) return;
+  box.querySelectorAll('button, textarea').forEach(el => {
+    el.disabled = true;
+    el.classList.add('opacity-40', 'pointer-events-none');
+  });
+}
+
+let currentPlannerHitlRequest = null;
+
+// The chat line recording an answer. One place for both the live click and
+// the transcript replay, so a reloaded session reads the same as the live one.
+function hitlResponseSummary(response) {
+  const request = hitlCards.get(response.request_id || '') || {};
+  const feedback = String(response.instructions || response.free_input || '').trim();
+  const action = response.action;
+  if (request.form && Array.isArray(request.form.blocks)) {
+    const values = response.form_values;
+    const n = values ? Object.values(values).reduce((s, o) => s + Object.keys(o || {}).length, 0) : 0;
+    return values ? t('hitl.form.saved').replace('{n}', n) : t('hitl.form.skipped');
+  }
+  if (String(request.trigger || '').startsWith('work_order') && action === 'approve') {
+    const rejected = ((response.form_values || {}).rejected_assumption_ids || []).length;
+    return t('workOrder.approved')
+      + (rejected ? ' — ' + t('workOrder.rejectedAssumptions').replace('{n}', rejected) : '')
+      + (feedback ? ': ' + feedback : '');
+  }
+  if (action === 'provide_input') return '💬 HITL Input: ' + (feedback || '(empty)');
+  if (action === 'select') return '☑ ' + (response.selected_option || feedback);
+  if (action === 'edit') return '✎ HITL Revision requested: ' + feedback;
+  return response.approved ? '✓ HITL Approved' : '✗ HITL Rejected' + (feedback ? ': ' + feedback : '');
+}
+
+function hitlTimeoutSummary(data) {
+  return '⏱ HITL: нет ответа ' + (data.timeout_seconds || 300) + ' с — предложение агента ' + (data.agent_name || '') + ' авто-подтверждено, пайплайн продолжен.';
+}
+window.hitlTimeoutSummary = hitlTimeoutSummary;
+
+// Replay of a recorded outcome onto its card: what the operator typed or
+// unchecked is put back, then the card is locked.
+function applyHitlOutcome(event) {
+  const rid = event.request_id || '';
+  if (event.type === 'hitl_response') {
+    const card = rid ? document.querySelector(`[data-hitl-card="${CSS.escape(rid)}"]`) : null;
+    const feedbackEl = document.getElementById('hitl-feedback-' + rid);
+    const feedback = event.instructions || event.free_input;
+    if (feedbackEl && feedback && event.action !== 'select') feedbackEl.value = feedback;
+    const values = event.form_values || {};
+    if (card) {
+      card.querySelectorAll('textarea[data-field]').forEach(el => {
+        const block = values[el.getAttribute('data-block')];
+        const value = block && block[el.getAttribute('data-field')];
+        if (value != null) el.value = value;
+      });
+      const rejected = values.rejected_assumption_ids || [];
+      card.querySelectorAll('input[data-wo-assumption]').forEach(el => {
+        el.checked = !rejected.includes(el.dataset.woAssumption);
         el.disabled = true;
-        el.classList.add('opacity-40', 'pointer-events-none');
       });
     }
+    disableHitlControls(rid);
+    addSystemMsg(hitlResponseSummary(event), event.timestamp);
+  } else if (event.type === 'hitl_timeout') {
+    disableHitlControls(rid);
+    addSystemMsg(hitlTimeoutSummary(event), event.timestamp);
+  } else if (event.type === 'hitl_cancelled') {
+    disableHitlControls(rid);
+  }
+}
+window.applyHitlOutcome = applyHitlOutcome;
 
-    let currentPlannerHitlRequest = null;
+function sendHitlResponse(payload) {
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify(payload));
+  }
+  if (window.StatusIndicator) {
+    StatusIndicator.feed({ type: 'hitl_response', request_id: payload.request_id });
+  }
+  addSystemMsg(hitlResponseSummary(payload));
+}
 
-    function sendHitlResponse(payload) {
-      if (ws && ws.readyState === 1) {
-        ws.send(JSON.stringify(payload));
-      }
-      if (window.StatusIndicator) {
-        StatusIndicator.feed({ type: 'hitl_response', request_id: payload.request_id });
-      }
-    }
+function respondHITLInput(requestId) {
+  const feedbackEl = document.getElementById('hitl-feedback-' + requestId);
+  const feedback = feedbackEl ? feedbackEl.value.trim() : '';
+  sendHitlResponse({
+    type: 'hitl_response',
+    request_id: requestId,
+    action: 'provide_input',
+    approved: true,
+    instructions: feedback,
+    free_input: feedback,
+  });
+  document.getElementById('hitl-panel').classList.add('hidden');
+  disableHitlControls(requestId);
 
-    function respondHITLInput(requestId) {
-      const feedbackEl = document.getElementById('hitl-feedback-' + requestId);
-      const feedback = feedbackEl ? feedbackEl.value.trim() : '';
-      sendHitlResponse({
-        type: 'hitl_response',
-        request_id: requestId,
-        action: 'provide_input',
-        approved: true,
-        instructions: feedback,
-        free_input: feedback,
-      });
-      document.getElementById('hitl-panel').classList.add('hidden');
-      disableHitlControls(requestId);
-      addSystemMsg('💬 HITL Input: ' + (feedback || '(empty)'));
+  if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
+    currentPlannerHitlRequest = null;
+    updateRoadmapModalButtons();
+  }
+}
 
-      if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
-        currentPlannerHitlRequest = null;
-        updateRoadmapModalButtons();
-      }
-    }
+function respondHITL(requestId, approved) {
+  const feedbackEl = document.getElementById('hitl-feedback-' + requestId);
+  const feedback = feedbackEl ? feedbackEl.value.trim() : '';
+  sendHitlResponse({
+    type: 'hitl_response',
+    request_id: requestId,
+    action: approved ? 'approve' : 'reject',
+    approved: approved,
+    instructions: feedback || null,
+    free_input: feedback || null,
+  });
+  document.getElementById('hitl-panel').classList.add('hidden');
+  disableHitlControls(requestId);
 
-    function respondHITL(requestId, approved) {
-      const feedbackEl = document.getElementById('hitl-feedback-' + requestId);
-      const feedback = feedbackEl ? feedbackEl.value.trim() : '';
-      sendHitlResponse({
-        type: 'hitl_response',
-        request_id: requestId,
-        action: approved ? 'approve' : 'reject',
-        approved: approved,
-        instructions: feedback || null,
-        free_input: feedback || null,
-      });
-      document.getElementById('hitl-panel').classList.add('hidden');
-      disableHitlControls(requestId);
-      addSystemMsg(approved ? '✓ HITL Approved' : '✗ HITL Rejected' + (feedback ? ': ' + feedback : ''));
+  if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
+    currentPlannerHitlRequest = null;
+    updateRoadmapModalButtons();
+  }
+}
 
-      if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
-        currentPlannerHitlRequest = null;
-        updateRoadmapModalButtons();
-      }
-    }
+function respondHITLOption(requestId, option) {
+  // A question-window option button: a complete answer by itself.
+  sendHitlResponse({
+    type: 'hitl_response',
+    request_id: requestId,
+    action: 'select',
+    approved: true,
+    selected_option: option,
+    instructions: option,
+    free_input: option,
+  });
+  document.getElementById('hitl-panel').classList.add('hidden');
+  disableHitlControls(requestId);
+}
 
-    function respondHITLOption(requestId, option) {
-      // A question-window option button: a complete answer by itself.
-      sendHitlResponse({
-        type: 'hitl_response',
-        request_id: requestId,
-        action: 'select',
-        approved: true,
-        selected_option: option,
-        instructions: option,
-        free_input: option,
-      });
-      document.getElementById('hitl-panel').classList.add('hidden');
-      disableHitlControls(requestId);
-      addSystemMsg('☑ ' + option);
-    }
+function respondHITLEdit(requestId) {
+  // Send the operator's corrections: the agent rewrites its output with them.
+  const feedbackEl = document.getElementById('hitl-feedback-' + requestId);
+  const feedback = feedbackEl ? feedbackEl.value.trim() : '';
+  if (!feedback) {
+    addSystemMsg(t('hitl.reviseEmpty'));
+    if (feedbackEl) feedbackEl.focus();
+    return;
+  }
+  sendHitlResponse({
+    type: 'hitl_response',
+    request_id: requestId,
+    action: 'edit',
+    approved: false,
+    instructions: feedback,
+    free_input: feedback,
+  });
+  document.getElementById('hitl-panel').classList.add('hidden');
+  disableHitlControls(requestId);
 
-    function respondHITLEdit(requestId) {
-      // Send the operator's corrections: the agent rewrites its output with them.
-      const feedbackEl = document.getElementById('hitl-feedback-' + requestId);
-      const feedback = feedbackEl ? feedbackEl.value.trim() : '';
-      if (!feedback) {
-        addSystemMsg('Введите правки в поле выше, затем нажмите Revise.');
-        if (feedbackEl) feedbackEl.focus();
-        return;
-      }
-      sendHitlResponse({
-        type: 'hitl_response',
-        request_id: requestId,
-        action: 'edit',
-        approved: false,
-        instructions: feedback,
-        free_input: feedback,
-      });
-      document.getElementById('hitl-panel').classList.add('hidden');
-      disableHitlControls(requestId);
-      addSystemMsg('✎ HITL Revision requested: ' + feedback);
+  if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
+    currentPlannerHitlRequest = null;
+    updateRoadmapModalButtons();
+  }
+}
 
-      if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
-        currentPlannerHitlRequest = null;
-        updateRoadmapModalButtons();
-      }
-    }
-
-    // ── Structured frame form (research frame intake) ────────────────────────
-    function renderHitlForm(panel, feed, data) {
-      const form = data.form;
-      const rid = data.request_id;
-      // The backend sends {en, ru} dicts for the display strings. The canonical
-      // Russian `title` / `name` stay the round-trip keys in data-block / data-field.
-      const loc = (v, fallback) => {
-        if (v && typeof v === 'object') return v[currentLang] || v.ru || v.en || fallback;
-        return v || fallback;
-      };
-      const blocksHtml = form.blocks.map((b, bi) => {
-        const fieldsHtml = (b.fields || []).map((f, fi) => {
-          const openTag = f.open
-            ? `<span class="text-[9px] text-error uppercase tracking-wider">${escHtml(t('hitl.form.notSet'))}</span>`
-            : `<span class="text-[9px] text-outline-variant uppercase tracking-wider">${escHtml(f.status || '')}</span>`;
-          const val = f.open ? '' : String(f.value || '');
-          const label = loc(f.label, f.name);
-          const placeholder = loc(f.placeholder, t('hitl.form.placeholderFallback'));
-          return `
+// ── Structured frame form (research frame intake) ────────────────────────
+function renderHitlForm(panel, data) {
+  const form = data.form;
+  const rid = data.request_id;
+  // The backend sends {en, ru} dicts for the display strings. The canonical
+  // Russian `title` / `name` stay the round-trip keys in data-block / data-field.
+  const loc = (v, fallback) => {
+    if (v && typeof v === 'object') return v[currentLang] || v.ru || v.en || fallback;
+    return v || fallback;
+  };
+  const blocksHtml = form.blocks.map((b, bi) => {
+    const fieldsHtml = (b.fields || []).map((f, fi) => {
+      const openTag = f.open
+        ? `<span class="text-[9px] text-error uppercase tracking-wider">${escHtml(t('hitl.form.notSet'))}</span>`
+        : `<span class="text-[9px] text-outline-variant uppercase tracking-wider">${escHtml(f.status || '')}</span>`;
+      const val = f.open ? '' : String(f.value || '');
+      const label = loc(f.label, f.name);
+      const placeholder = loc(f.placeholder, t('hitl.form.placeholderFallback'));
+      return `
             <div class="flex flex-col gap-1">
               <div class="flex items-center justify-between">
                 <label class="text-[11px] font-mono text-on-surface-variant">${escHtml(label)}</label>
@@ -281,28 +451,32 @@
                 rows="2" placeholder="${escHtml(placeholder)}"
                 class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50">${escHtml(val)}</textarea>
             </div>`;
-        }).join('');
-        const blockTitle = loc(b.title_i18n, b.title);
-        const blockUsage = loc(b.usage_i18n, b.usage);
-        return `
+    }).join('');
+    const blockTitle = loc(b.title_i18n, b.title);
+    const blockUsage = loc(b.usage_i18n, b.usage);
+    return `
           <div class="mt-3 border border-outline-variant/10 rounded-lg p-3 bg-surface-container-high/40">
             <p class="text-[11px] font-bold text-on-surface uppercase tracking-wider">${escHtml(blockTitle)}</p>
             ${blockUsage ? `<p class="text-[10px] text-outline-variant mb-2">${escHtml(blockUsage)}</p>` : '<div class="mb-2"></div>'}
             <div class="flex flex-col gap-2">${fieldsHtml}</div>
           </div>`;
-      }).join('');
+  }).join('');
 
-      panel.classList.remove('hidden');
-      panel.innerHTML = `
+  if (panel) {
+    panel.classList.remove('hidden');
+    panel.innerHTML = `
         <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-2">
           <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${escHtml(t('hitl.form.sidebarTitle'))}</h3>
           <p class="text-[11px] text-on-surface-variant">${escHtml(t('hitl.form.sidebarHint'))}</p>
         </div>`;
+  }
 
-      const formTitle = loc(form.title_i18n, form.title || t('hitl.form.title'));
-      const formIntro = loc(form.intro_i18n, form.intro || data.message || '');
-      feed.innerHTML += `
-        <div id="hitl-controls-${rid}" class="my-6 relative msg-enter">
+  const formTitle = loc(form.title_i18n, form.title || t('hitl.form.title'));
+  const formIntro = loc(form.intro_i18n, form.intro || data.message || '');
+  // insertAdjacentHTML, not `innerHTML +=`: re-parsing the whole feed would
+  // wipe whatever the operator is typing into the earlier cards.
+  placeHitlCard(rid, `
+        <div id="hitl-controls-${rid}" data-hitl-card="${escHtml(rid || '')}" class="my-6 relative msg-enter">
           <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
             <div class="flex items-center gap-3 mb-2">
               <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
@@ -321,338 +495,631 @@
               </button>
             </div>
           </div>
-        </div>`;
-    }
-
-    function respondHITLForm(requestId, collect) {
-      // collect=true: gather every non-empty field into form_values so the agent
-      // marks them operator-set; collect=false: submit nothing (soft gate — the
-      // run proceeds with the agent's drafted values).
-      let formValues = null;
-      if (collect) {
-        formValues = {};
-        document.querySelectorAll(`#hitl-controls-${requestId} textarea[data-field]`).forEach(el => {
-          const v = el.value.trim();
-          if (!v) return;
-          const block = el.getAttribute('data-block');
-          const field = el.getAttribute('data-field');
-          (formValues[block] = formValues[block] || {})[field] = v;
-        });
-      }
-      sendHitlResponse({
-        type: 'hitl_response',
-        request_id: requestId,
-        action: 'approve',
-        approved: true,
-        form_values: formValues,
-      });
-      document.getElementById('hitl-panel').classList.add('hidden');
-      disableHitlControls(requestId);
-      const n = formValues ? Object.values(formValues).reduce((s, o) => s + Object.keys(o).length, 0) : 0;
-      addSystemMsg(collect ? t('hitl.form.saved').replace('{n}', n) : t('hitl.form.skipped'));
-    }
-
-
-    // ── Experiment plan review ───────────────────────────────────────────────
-    // The plan the Experiment Module builds during a run is the one thing the
-    // human is asked to approve, and it used to arrive as Markdown in a <pre>:
-    // a design matrix written as pipe-separated rows, ten task sections under
-    // it, the whole thing in a 24rem scroll box. Nobody approves that; they
-    // approve whatever they can see in the first screen of it.
-    //
-    // The backend now ships the plan structured (context.experiment_plan, see
-    // CoScientist/experiments/plan_view.py), so it is drawn as what it is: a
-    // header with the goal and the totals, the design matrix as a real table,
-    // and one foldable card per task carrying that task's whole design. The
-    // answer is unchanged — Accept / Revise / Reject through the same handlers
-    // as any other review — so nothing downstream has to know about this view.
-
-    const planOpenTasks = new Set();   // "<request_id>:<task_id>" of unfolded cards
-    // The plan a card was drawn from, so folding a task re-renders from data
-    // rather than from the DOM it is about to replace.
-    const planByRequest = new Map();
-
-    const PLAN_ROUTE_TONE = {
-      fedot_mas: 'text-primary border-primary/30 bg-primary/5',
-      react_tools: 'text-primary border-primary/30 bg-primary/5',
-      coder: 'text-tertiary border-tertiary/30 bg-tertiary/5',
-      alembic_build: 'text-secondary border-secondary/30 bg-secondary/5',
-      research: 'text-outline-variant border-outline-variant/30 bg-outline-variant/5',
-      medical: 'text-outline-variant border-outline-variant/30 bg-outline-variant/5',
-    };
-    const PLAN_CHIP_TONE = 'text-on-surface-variant border-outline-variant/20 bg-surface-container-high';
-
-    // A slot the planner left empty is shown as empty. Printing its placeholder
-    // text ("unspecified", "n/a") made an unfilled design look filled in.
-    function planDash() { return '<span class="text-outline-variant/60">—</span>'; }
-
-    function planText(value) {
-      const text = (value === 0 || value) ? String(value).trim() : '';
-      return text ? escHtml(text) : planDash();
-    }
-
-    // A list reads as a list, not as one comma-glued line: a task's metrics,
-    // baselines and tools are each several short names and run together badly.
-    function planItems(items, empty) {
-      const rows = (items || []).filter(x => x !== null && x !== undefined && String(x).trim());
-      if (!rows.length) return empty === undefined ? planDash() : escHtml(empty);
-      return rows.map(x => `<span class="inline-block bg-surface-container-high border border-outline-variant/10 rounded px-1.5 py-0.5 mr-1 mb-1 text-[10px] font-mono">${escHtml(String(x))}</span>`).join('');
-    }
-
-    function planChip(label, value, tone) {
-      const name = label ? `<span class="opacity-60 uppercase tracking-wider">${escHtml(label)}</span>` : '';
-      return `<span class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-mono ${tone || PLAN_CHIP_TONE}">${name}${escHtml(String(value))}</span>`;
-    }
-
-    function planRouteChip(route) {
-      return `<span class="inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-mono ${PLAN_ROUTE_TONE[route] || PLAN_CHIP_TONE}">${escHtml(route || '')}</span>`;
-    }
-
-    function planField(label, valueHtml) {
-      return `<div class="grid grid-cols-[minmax(92px,max-content)_1fr] gap-x-3 py-1 border-b border-outline-variant/5 last:border-0">
-        <span class="text-[10px] uppercase tracking-wider text-outline-variant pt-0.5">${escHtml(label)}</span>
-        <span class="text-[11px] text-on-surface-variant leading-relaxed break-words min-w-0">${valueHtml}</span>
-      </div>`;
-    }
-
-    function planSection(title, bodyHtml) {
-      if (!bodyHtml) return '';
-      return `<div class="mt-3">
-        <p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${escHtml(title)}</p>
-        ${bodyHtml}</div>`;
-    }
-
-    const PLAN_MATRIX_COLUMNS = [
-      'plan.col.task', 'plan.col.hypothesis', 'plan.col.question', 'plan.col.dataset',
-      'plan.col.baselines', 'plan.col.metrics', 'plan.col.tools', 'plan.col.artifacts',
-      'plan.col.route',
-    ];
-
-    function planMatrix(plan) {
-      if (!Array.isArray(plan.matrix) || !plan.matrix.length) return '';
-      const head = PLAN_MATRIX_COLUMNS
-        .map(key => `<th class="text-left font-bold uppercase tracking-wider text-[9px] text-outline-variant px-2 py-1.5 whitespace-nowrap">${escHtml(t(key))}</th>`)
-        .join('');
-      const rows = plan.matrix.map(r => `
-        <tr class="border-t border-outline-variant/10 align-top">
-          <td class="px-2 py-1.5 font-mono text-[10px] text-primary whitespace-nowrap">${escHtml(r.task_id || '')}</td>
-          <td class="px-2 py-1.5 font-mono text-[10px] whitespace-nowrap">${planText(r.hypothesis)}</td>
-          <td class="px-2 py-1.5 text-[11px] min-w-[220px]">${planText(r.question)}</td>
-          <td class="px-2 py-1.5 text-[11px]">${planText(r.dataset)}</td>
-          <td class="px-2 py-1.5">${planItems(r.baselines)}</td>
-          <td class="px-2 py-1.5">${planItems(r.metrics)}</td>
-          <td class="px-2 py-1.5">${planItems(r.tools)}</td>
-          <td class="px-2 py-1.5">${planItems(r.artifacts)}</td>
-          <td class="px-2 py-1.5 whitespace-nowrap">${planRouteChip(r.route)}</td>
-        </tr>`).join('');
-      return planSection(t('plan.matrix'), `
-        <div class="overflow-x-auto rounded-lg border border-outline-variant/10 bg-surface-container-high/30">
-          <table class="w-full border-collapse text-on-surface-variant"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>
         </div>`);
-    }
+}
 
-    function planTools(task) {
-      const servers = task.mcp_servers || [];
-      if (!servers.length) return planItems([], t('plan.noTools'));
-      return servers.map(s => {
-        const where = s.url ? ` <span class="text-outline-variant/70 break-all">${escHtml(s.url)}</span>` : '';
-        const names = (s.tools || []).map(x => x.name + (x.required ? '' : ' (' + t('plan.optionalTool') + ')'));
-        return `<div class="mb-1"><span class="font-mono text-[11px] text-on-surface">${escHtml(s.name || '')}</span>${where}
-          <div class="mt-0.5">${planItems(names)}</div></div>`;
-      }).join('');
-    }
+function respondHITLForm(requestId, collect) {
+  // collect=true: gather every non-empty field into form_values so the agent
+  // marks them operator-set; collect=false: submit nothing (soft gate — the
+  // run proceeds with the agent's drafted values).
+  let formValues = null;
+  if (collect) {
+    formValues = {};
+    document.querySelectorAll(`#hitl-controls-${requestId} textarea[data-field]`).forEach(el => {
+      const v = el.value.trim();
+      if (!v) return;
+      const block = el.getAttribute('data-block');
+      const field = el.getAttribute('data-field');
+      (formValues[block] = formValues[block] || {})[field] = v;
+    });
+  }
+  sendHitlResponse({
+    type: 'hitl_response',
+    request_id: requestId,
+    action: 'approve',
+    approved: true,
+    form_values: formValues,
+  });
+  document.getElementById('hitl-panel').classList.add('hidden');
+  disableHitlControls(requestId);
+}
 
-    function planCriteria(task) {
-      const rows = task.success_criteria || [];
-      if (!rows.length) return planDash();
-      return rows.map(c => `<div class="mb-1.5">
-        <span class="font-mono text-[10px] text-primary">${escHtml(c.criterion_id || '')}</span>
-        <span class="text-[9px] uppercase tracking-wider text-outline-variant ml-1">${escHtml(c.kind || '')}</span>
-        ${c.threshold ? `<span class="ml-1 font-mono text-[10px] text-tertiary">${escHtml(c.threshold)}</span>` : ''}
-        <div class="text-[11px]">${planText(c.description)}</div>
-        ${c.verification ? `<div class="text-[10px] text-outline-variant">${escHtml(c.verification)}</div>` : ''}
-      </div>`).join('');
-    }
+// ── Work Order cards ─────────────────────────────────────────────────────
+const WO_TIER_STYLE = {
+  read: 'text-primary border-primary/30 bg-primary/10',
+  compute: 'text-tertiary border-tertiary/30 bg-tertiary/10',
+  side_effect: 'text-error border-error/30 bg-error/10',
+};
+const WO_STEP_MARK = { pending: '○', in_progress: '◐', done: '✓', skipped: '–' };
+const woTimers = new Map();  // request_id -> interval id
 
-    function planInputs(task) {
-      const rows = task.input_data || [];
-      if (!rows.length) return `<span class="text-outline-variant/60">${escHtml(t('plan.noInputs'))}</span>`;
-      return rows.map(d => `<div class="mb-1">
-        <span class="font-mono text-[10px] text-on-surface">${escHtml(d.data_id || '')}</span>
-        <span class="text-[9px] uppercase tracking-wider text-outline-variant ml-1">${escHtml(d.kind || '')}</span>
-        ${d.location ? `<div class="font-mono text-[10px] text-outline-variant break-all">${escHtml(d.location)}</div>` : ''}
-        ${d.description ? `<div class="text-[11px]">${escHtml(d.description)}</div>` : ''}
-      </div>`).join('');
-    }
+function woChip(text, cls = 'text-on-surface-variant border-outline-variant/20 bg-surface-container-high') {
+  return `<span class="inline-block text-[10px] font-mono px-2 py-0.5 rounded border ${cls}">${escHtml(text)}</span>`;
+}
 
-    function planDatasetCell(dataset) {
-      if (!dataset || !dataset.name) return planDash();
-      const ref = dataset.ref ? ` <span class="font-mono text-[10px] text-outline-variant break-all">${escHtml(dataset.ref)}</span>` : '';
-      const notes = dataset.notes ? `<div class="text-[10px] text-outline-variant">${escHtml(dataset.notes)}</div>` : '';
-      return escHtml(dataset.name) + ref + notes;
-    }
+// Internal tools the agent named: always rendered, shown only while the viewer
+// has "Show internal agents and tools" on (CSS on .wo-internal).
+const WO_INTERNAL_CHIP = 'wo-internal text-outline-variant border-dashed border-outline-variant/30 bg-transparent';
 
-    function planTaskCard(rid, task, index) {
-      const open = planOpenTasks.has(rid + ':' + task.id);
-      const design = task.design || {};
-      const params = Object.entries(task.launch_params || {});
-      const body = !open ? '' : `
-        <div class="px-3 pb-3">
-          ${planField(t('plan.task.question'), planText(design.question))}
-          ${planField(t('plan.task.dataset'), planDatasetCell(design.dataset))}
-          ${planField(t('plan.task.baselines'), planItems((design.baselines || []).map(b => b.name + ' (' + b.kind + ')')))}
-          ${planField(t('plan.task.metrics'), planItems((design.metrics || []).map(m =>
-            m.name + ' ' + m.direction + (m.threshold ? ' ' + m.threshold : '') + (m.test ? ' [' + m.test + ']' : ''))))}
-          ${planField(t('plan.task.analysis'), planItems((design.analysis_artifacts || []).map(a => a.name + ' [' + a.role + '/' + a.prepare_via + ']')))}
-          ${planField(t('plan.task.description'), planText(task.description))}
-          ${task.rationale ? planField(t('plan.task.rationale'), planText(task.rationale)) : ''}
-          ${planField(t('plan.task.tools'), planTools(task))}
-          ${task.repo_url ? planField(t('plan.task.repo'), `<span class="font-mono text-[10px] break-all">${escHtml(task.repo_url)}</span>`) : ''}
-          ${params.length ? planField(t('plan.task.params'), planItems(params.map(p => p[0] + '=' + p[1]))) : ''}
-          ${planField(t('plan.task.inputs'), planInputs(task))}
-          ${planField(t('plan.task.criteria'), planCriteria(task))}
-          ${planField(t('plan.task.expected'), planItems((task.expected_artifacts || []).map(a => a.name + ' [' + a.role + ']')))}
-          ${(task.warnings || []).length ? planField(t('plan.task.warnings'),
-            `<span class="text-tertiary">${escHtml(task.warnings.join(' · '))}</span>`) : ''}
+function woToolChips(tools, internal) {
+  return [
+    ...(tools || []).map(tn => woChip(tn)),
+    ...(internal || []).map(tn => woChip(tn, WO_INTERNAL_CHIP)),
+  ].join(' ');
+}
+
+function woSection(labelKey, inner) {
+  if (!inner) return '';
+  return `
+        <div class="mt-3">
+          <p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${hitlLabel(labelKey)}</p>
+          ${inner}
         </div>`;
-      return `<div class="rounded-lg border border-outline-variant/10 bg-surface-container-high/30 mb-2">
-        <button type="button" onclick="togglePlanTask('${escJs(rid)}','${escJs(task.id)}')"
-          class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-surface-container-high/60 rounded-lg transition-colors">
-          <span class="material-symbols-outlined text-sm text-outline-variant">${open ? 'expand_more' : 'chevron_right'}</span>
-          <span class="font-mono text-[10px] text-primary">${escHtml(task.id || ('#' + (index + 1)))}</span>
-          <span class="text-[11px] text-on-surface truncate flex-1">${escHtml(task.name || '')}</span>
-          ${task.optional ? planChip('', t('plan.task.optional')) : ''}
-          ${(task.depends_on || []).length ? planChip(t('plan.task.after'), task.depends_on.join(', ')) : ''}
-          ${planChip('', (task.est_duration_min || 0) + ' ' + t('plan.min'))}
-          ${planRouteChip(task.route)}
-        </button>
-        ${body}</div>`;
-    }
+}
 
-    function repaintPlanTasks(rid) {
-      const box = document.getElementById('plan-tasks-' + rid);
-      const plan = planByRequest.get(rid);
-      if (!box || !plan) return;
-      box.innerHTML = plan.tasks.map((task, i) => planTaskCard(rid, task, i)).join('');
-      const toggle = document.getElementById('plan-toggle-all-' + rid);
-      if (toggle) {
-        const allOpen = plan.tasks.every(task => planOpenTasks.has(rid + ':' + task.id));
-        toggle.textContent = allOpen ? t('plan.collapseAll') : t('plan.expandAll');
-      }
-    }
-
-    function togglePlanTask(rid, taskId) {
-      const key = rid + ':' + taskId;
-      if (planOpenTasks.has(key)) planOpenTasks.delete(key); else planOpenTasks.add(key);
-      repaintPlanTasks(rid);
-    }
-
-    function togglePlanAllTasks(rid) {
-      const plan = planByRequest.get(rid);
-      if (!plan) return;
-      const allOpen = plan.tasks.every(task => planOpenTasks.has(rid + ':' + task.id));
-      plan.tasks.forEach(task => {
-        if (allOpen) planOpenTasks.delete(rid + ':' + task.id);
-        else planOpenTasks.add(rid + ':' + task.id);
-      });
-      repaintPlanTasks(rid);
-    }
-
-    function planCritiqueBlock(plan) {
-      const critique = plan.critique;
-      if (!critique) return '';
-      const approved = critique.verdict === 'approve';
-      const issues = (critique.issues || []).map(i => `<div class="mb-1">
-        <span class="text-[9px] uppercase tracking-wider ${i.severity === 'blocker' ? 'text-error' : 'text-tertiary'}">${escHtml(i.severity || '')}</span>
-        <span class="text-[9px] uppercase tracking-wider text-outline-variant ml-1">${escHtml(i.category || '')}</span>
-        ${i.task_id ? `<span class="font-mono text-[10px] text-primary ml-1">${escHtml(i.task_id)}</span>` : ''}
-        <div class="text-[11px]">${planText(i.message)}</div>
-        ${i.suggestion ? `<div class="text-[10px] text-outline-variant">${escHtml(i.suggestion)}</div>` : ''}
-      </div>`).join('');
-      return planSection(t('plan.critique'),
-        `<p class="text-[11px] ${approved ? 'text-secondary' : 'text-tertiary'} mb-1">${escHtml(approved ? t('plan.critique.approve') : t('plan.critique.revise'))}</p>${issues}`);
-    }
-
-    function planBullets(list) {
-      return (list || []).length
-        ? `<ul class="list-disc list-inside text-[11px] text-on-surface-variant space-y-0.5">${list.map(x => `<li>${escHtml(x)}</li>`).join('')}</ul>`
-        : '';
-    }
-
-    function renderExperimentPlanReview(panel, data, plan) {
-      const rid = data.request_id;
-      planByRequest.set(rid, plan);
-
-      panel.classList.remove('hidden');
-      panel.innerHTML = `
-        <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-3">
-          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${escHtml(t('plan.sidebarTitle'))}</h3>
-          <p class="text-[11px] text-on-surface-variant">${escHtml(t('plan.revision').replace('{n}', plan.revision))} · ${escHtml(t('plan.tasks').replace('{n}', plan.task_count))}</p>
-          <p class="text-[10px] text-outline-variant leading-relaxed">${escHtml(t('plan.sidebarHint'))}</p>
-          <div class="flex gap-3">
-            <button onclick="respondHITL('${escJs(rid)}', true)" class="flex-1 flex items-center justify-center gap-2 bg-primary text-on-primary py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-              <span class="material-symbols-outlined text-base">check_circle</span> ${escHtml(t('plan.accept'))}
-            </button>
-            <button onclick="respondHITL('${escJs(rid)}', false)" class="flex-1 flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
-              <span class="material-symbols-outlined text-base">close</span> ${escHtml(t('plan.reject'))}
-            </button>
+function woStepRow(step) {
+  const status = step.status || 'pending';
+  const tools = woToolChips(step.tools, step.internal_tools);
+  return `
+        <li data-wo-step="${escHtml(step.id)}" data-wo-status="${escHtml(status)}" class="flex flex-col gap-0.5">
+          <div class="flex items-baseline gap-2">
+            <span data-wo-mark class="font-mono text-primary w-4 text-center">${WO_STEP_MARK[status] || '○'}</span>
+            <span class="font-mono text-[10px] text-outline-variant">${escHtml(step.id)}</span>
+            <span class="text-on-surface">${escHtml(step.title || '')}</span>
+            <span class="flex flex-wrap gap-1">${tools}</span>
           </div>
+          ${step.expected_outcome ? `<p class="pl-6 text-[11px] text-outline-variant">→ ${escHtml(step.expected_outcome)}</p>` : ''}
+          <p data-wo-note class="pl-6 text-[11px] text-on-surface-variant italic">${escHtml(step.note || '')}</p>
+        </li>`;
+}
+
+// The contract itself. interactive=true renders assumptions as checkboxes.
+function workOrderBody(order, rid, interactive) {
+  const assumptions = (order.assumptions || []).map(a => {
+    if (interactive) {
+      return `
+            <label class="flex items-start gap-2 cursor-pointer">
+              <input type="checkbox" checked data-wo-assumption="${escHtml(a.id)}" class="mt-0.5 accent-primary" />
+              <span><span class="font-mono text-[10px] text-outline-variant">${escHtml(a.id)}</span> ${escHtml(a.text)}</span>
+            </label>`;
+    }
+    const struck = a.rejected ? 'line-through text-outline-variant' : '';
+    return `<p class="${struck}"><span class="font-mono text-[10px] text-outline-variant">${escHtml(a.id)}</span> ${escHtml(a.text)}</p>`;
+  }).join('');
+  const effects = (order.side_effects || []).map(e =>
+    woChip((e.kind || e) + (e.detail ? ': ' + e.detail : ''), WO_TIER_STYLE.side_effect)).join(' ');
+  const tools = woToolChips(order.planned_tools, order.internal_tools);
+  // Only internal tools: the whole section hides with them.
+  const toolsOnlyInternal = !(order.planned_tools || []).length;
+  return `
+        <div class="text-xs text-on-surface-variant leading-relaxed">
+          ${woSection('workOrder.goal', `<p class="text-on-surface">${escHtml(order.goal || '')}</p>`)}
+          ${woSection('workOrder.done', order.done_criteria ? `<p>${escHtml(order.done_criteria)}</p>` : '')}
+          ${woSection('workOrder.assumptions', assumptions
+    ? (interactive ? `<p class="text-[10px] text-outline-variant mb-1">${hitlLabel('workOrder.assumptionsHint')}</p>` : '')
+    + `<div class="flex flex-col gap-1">${assumptions}</div>`
+    : '')}
+          ${woSection('workOrder.steps', (order.steps || []).length
+      ? `<ol data-wo-steps class="flex flex-col gap-1.5">${order.steps.map(woStepRow).join('')}</ol>` : '')}
+          ${tools ? `<div class="${toolsOnlyInternal ? 'wo-internal' : ''}">${woSection('workOrder.tools', `<div class="flex flex-wrap gap-1">${tools}</div>`)}</div>` : ''}
+          ${woSection('workOrder.sideEffects', effects ? `<div class="flex flex-wrap gap-1">${effects}</div>` : '')}
+          ${woSection('workOrder.expected', order.expected_outcome ? `<p>${escHtml(order.expected_outcome)}</p>` : '')}
+          ${woSection('workOrder.fallback', order.fallback ? `<p>${escHtml(order.fallback)}</p>` : '')}
+          <div data-wo-deviations class="mt-2 flex flex-col gap-1"></div>
         </div>`;
+}
 
-      const hypotheses = (plan.hypotheses || []).map(h =>
-        `<div class="mb-1"><span class="font-mono text-[10px] text-primary">${escHtml(h.id || '')}</span>
-          <span class="text-[11px] ml-1">${planText(h.statement)}</span></div>`).join('');
+function workOrderDiff(ctx) {
+  const diff = ctx.diff || {};
+  const rows = [];
+  (diff.added_tools || []).forEach(tn => rows.push('+ ' + tn));
+  (diff.added_side_effects || []).forEach(e => rows.push('+ ' + e.kind + (e.detail ? ': ' + e.detail : '')));
+  (diff.added_steps || []).forEach(st => rows.push('+ ' + st.id + '. ' + st.title));
+  const reason = ctx.reason ? woSection('workOrder.reason', `<p class="text-on-surface">${escHtml(ctx.reason)}</p>`) : '';
+  const changes = rows.length ? woSection('workOrder.added',
+    `<pre class="font-mono text-[11px] text-secondary whitespace-pre-wrap bg-surface-container-high p-2 rounded border border-outline-variant/10">${escHtml(rows.join('\n'))}</pre>`) : '';
+  return reason + changes;
+}
 
-      appendMsgToFeed(`
-    <div class="my-6 relative msg-enter">
-      <div class="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 blur-2xl opacity-40"></div>
-      <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
-        <div class="flex items-center gap-3 mb-2">
+function woHeader(icon, titleKey, tier, agent, revision) {
+  const tierCls = WO_TIER_STYLE[tier] || WO_TIER_STYLE.compute;
+  return `
+        <div class="flex items-center gap-3 flex-wrap">
           <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
-            <span class="material-symbols-outlined text-on-primary text-sm">science</span>
+            <span class="material-symbols-outlined text-on-primary text-sm">${icon}</span>
           </div>
-          <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${escHtml(t('plan.title'))}</h3>
-        </div>
-        <p class="text-[10px] text-outline-variant font-mono mb-2">CTX: ${escHtml(String(rid).slice(0, 8))} · ${escHtml(data.agent_name || '')}</p>
-        <div class="flex flex-wrap gap-1.5 mb-3">
-          ${planChip('', t('plan.revision').replace('{n}', plan.revision), 'text-primary border-primary/30 bg-primary/5')}
-          ${planChip('', t('plan.tasks').replace('{n}', plan.task_count))}
-          ${planChip('', (plan.total_est_duration_min || 0) + ' ' + t('plan.min'))}
-          ${(plan.routes || []).map(planRouteChip).join('')}
-          ${plan.plan_id ? planChip('id', plan.plan_id) : ''}
-        </div>
-        ${planField(t('plan.goal'), planText(plan.goal))}
-        ${plan.hypothesis ? planField(t('plan.hypothesis'), planText(plan.hypothesis)) : ''}
-        ${planField(t('plan.methods'), planItems(plan.methods))}
-        ${hypotheses ? planSection(t('plan.hypotheses'), hypotheses) : ''}
-        ${planCritiqueBlock(plan)}
-        ${planMatrix(plan)}
-        <div class="mt-3 flex items-center justify-between">
-          <p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider">${escHtml(t('plan.tasksTitle'))}</p>
-          <button type="button" id="plan-toggle-all-${escHtml(rid)}" onclick="togglePlanAllTasks('${escJs(rid)}')"
-            class="text-[10px] uppercase tracking-wider text-primary hover:underline">${escHtml(t('plan.expandAll'))}</button>
-        </div>
-        <div id="plan-tasks-${escHtml(rid)}" class="mt-1">${plan.tasks.map((task, i) => planTaskCard(rid, task, i)).join('')}</div>
-        ${planSection(t('plan.risks'), planBullets(plan.risks))}
-        ${planSection(t('plan.assumptions'), planBullets(plan.assumptions))}
-        <!-- Only the answer is disabled once this review is over (timeout, or
-             the operator has answered): the plan stays readable and its task
-             cards stay foldable, which is the whole point of drawing it. -->
-        <div id="hitl-controls-${escHtml(rid)}" class="mt-4 flex flex-col gap-2">
-          <textarea id="hitl-feedback-${escHtml(rid)}" rows="2" placeholder="${escHtml(t('plan.feedbackPlaceholder'))}"
-            class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
-          <div class="flex flex-wrap gap-3">
-            <button onclick="respondHITL('${escJs(rid)}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-              <span class="material-symbols-outlined text-base">check_circle</span> ${escHtml(t('plan.accept'))}
-            </button>
-            <button onclick="respondHITLEdit('${escJs(rid)}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
-              <span class="material-symbols-outlined text-base">edit_note</span> ${escHtml(t('plan.revise'))}
-            </button>
-            <button onclick="respondHITL('${escJs(rid)}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
-              <span class="material-symbols-outlined text-base">close</span> ${escHtml(t('plan.reject'))}
-            </button>
+          <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${hitlLabel(titleKey)}</h3>
+          ${tier ? `<span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${tierCls}">${hitlLabel('workOrder.tier.' + tier)}</span>` : ''}
+          <span class="text-[11px] font-bold text-on-surface">${escHtml(agent || '—')}</span>
+          <span class="font-mono text-[10px] text-outline-variant">rev ${escHtml(String(revision || 1))}</span>
+        </div>`;
+}
+
+function renderWorkOrderCard(panel, data) {
+  const rid = data.request_id;
+  const ctx = data.context || {};
+  const order = ctx.work_order || {};
+  const tier = ctx.tier || order.tier || 'compute';
+  const isAmendment = data.trigger === 'work_order_amendment';
+  // A history card (no panel) never counts down: its window has closed.
+  const timeout = panel ? (Number(data.timeout_seconds) || 0) : 0;
+  const messageHtml = hitlDynamic(data, 'message', localizeHitlMessage(data));
+
+  if (panel) {
+    panel.classList.remove('hidden');
+    panel.innerHTML = `
+        <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-2">
+          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${hitlLabel(isAmendment ? 'workOrder.amendTitle' : 'workOrder.title')}</h3>
+          <p class="text-[11px] text-on-surface-variant">${messageHtml}</p>
+          <p class="text-[10px] text-outline-variant leading-relaxed">${hitlLabel('hitl.answerInChat')}</p>
+        </div>`;
+  }
+
+  const countdown = !panel ? '' : timeout > 0 && !data.held ? `
+        <div id="wo-countdown-${rid}" class="mt-4 flex flex-col gap-1">
+          <p class="text-[11px] text-tertiary" data-wo-countdown-text>${escHtml(t('workOrder.countdown').replace('{s}', Math.ceil(timeout)))}</p>
+          <div class="h-1 w-full bg-surface-container-high rounded overflow-hidden">
+            <div data-wo-countdown-bar class="h-full bg-tertiary transition-[width] duration-1000 ease-linear" style="width:100%"></div>
           </div>
-        </div>
-      </div>
-    </div>`);
+        </div>` : `
+        <p id="wo-countdown-${rid}" class="mt-4 text-[11px] text-outline-variant">${hitlLabel(data.held ? 'workOrder.paused' : 'workOrder.blocking')}</p>`;
+
+  placeHitlCard(rid, `
+        <div class="my-6 relative msg-enter" data-hitl-card="${escHtml(rid || '')}" data-wo-agent="${escHtml(data.agent_name || '')}" data-wo-rev="${escHtml(String(order.revision || 1))}">
+          <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
+            ${woHeader(isAmendment ? 'edit_note' : 'assignment', isAmendment ? 'workOrder.amendTitle' : 'workOrder.title',
+    tier, data.agent_name, order.revision)}
+            <p class="text-sm text-on-surface-variant leading-relaxed mt-2">${messageHtml}</p>
+            ${isAmendment ? workOrderDiff(ctx) : ''}
+            ${workOrderBody(order, rid, !isAmendment)}
+            ${countdown}
+            <div id="hitl-controls-${rid}" class="mt-4 flex flex-col gap-2">
+              <textarea id="hitl-feedback-${rid}" rows="2" data-i18n-placeholder="workOrder.ph.notes" placeholder="${escHtml(t('workOrder.ph.notes'))}"
+                class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
+              <div class="flex flex-wrap gap-3">
+                <button onclick="respondWorkOrder('${rid}', 'approve')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+                  <span class="material-symbols-outlined text-base">check_circle</span> ${hitlLabel('hitl.btn.accept')}
+                </button>
+                ${timeout > 0 && !data.held ? `
+                <button id="wo-pause-${rid}" onclick="holdWorkOrder('${rid}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-tertiary/30 text-tertiary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-tertiary/10 transition-all">
+                  <span class="material-symbols-outlined text-base">pause</span> ${hitlLabel('workOrder.btn.pause')}
+                </button>` : ''}
+                <button onclick="respondWorkOrder('${rid}', 'edit')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
+                  <span class="material-symbols-outlined text-base">edit_note</span> ${hitlLabel('hitl.btn.revise')}
+                </button>
+                <button onclick="respondWorkOrder('${rid}', 'reject')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
+                  <span class="material-symbols-outlined text-base">close</span> ${hitlLabel('hitl.btn.reject')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>`);
+
+  if (timeout > 0 && !data.held) startWorkOrderCountdown(rid, timeout);
+}
+
+function startWorkOrderCountdown(rid, timeout) {
+  stopWorkOrderCountdown(rid);
+  const deadline = Date.now() + timeout * 1000;
+  const tick = () => {
+    const box = document.getElementById('wo-countdown-' + rid);
+    if (!box) return stopWorkOrderCountdown(rid);
+    const left = Math.max(0, (deadline - Date.now()) / 1000);
+    const text = box.querySelector('[data-wo-countdown-text]');
+    const bar = box.querySelector('[data-wo-countdown-bar]');
+    if (text) text.textContent = t('workOrder.countdown').replace('{s}', Math.ceil(left));
+    if (bar) bar.style.width = (100 * left / timeout) + '%';
+    if (left <= 0) stopWorkOrderCountdown(rid);
+  };
+  tick();
+  woTimers.set(rid, setInterval(tick, 1000));
+}
+
+function stopWorkOrderCountdown(rid) {
+  const timer = woTimers.get(rid);
+  if (timer) clearInterval(timer);
+  woTimers.delete(rid);
+}
+
+// Local effect of a hold (this tab pressed Pause, or another tab did).
+function applyWorkOrderHold(rid) {
+  stopWorkOrderCountdown(rid);
+  const box = document.getElementById('wo-countdown-' + rid);
+  if (box) {
+    box.className = 'mt-4 text-[11px] text-outline-variant';
+    box.innerHTML = hitlLabel('workOrder.paused');
+  }
+  const pause = document.getElementById('wo-pause-' + rid);
+  if (pause) pause.remove();
+}
+window.applyWorkOrderHold = applyWorkOrderHold;
+
+function holdWorkOrder(rid) {
+  if (ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'hitl_hold', request_id: rid }));
+  }
+  applyWorkOrderHold(rid);
+}
+
+function respondWorkOrder(rid, action) {
+  const feedbackEl = document.getElementById('hitl-feedback-' + rid);
+  const feedback = feedbackEl ? feedbackEl.value.trim() : '';
+  if (action === 'edit' && !feedback) {
+    addSystemMsg(t('hitl.reviseEmpty'));
+    if (feedbackEl) feedbackEl.focus();
+    return;
+  }
+  const card = feedbackEl ? feedbackEl.closest('[data-wo-agent]') : null;
+  const rejectedIds = card
+    ? [...card.querySelectorAll('input[data-wo-assumption]')].filter(el => !el.checked).map(el => el.dataset.woAssumption)
+    : [];
+  if (card) card.querySelectorAll('input[data-wo-assumption]').forEach(el => { el.disabled = true; });
+  sendHitlResponse({
+    type: 'hitl_response',
+    request_id: rid,
+    action: action,
+    approved: action === 'approve',
+    instructions: feedback || null,
+    free_input: feedback || null,
+    form_values: action === 'approve' ? { rejected_assumption_ids: rejectedIds } : null,
+  });
+  document.getElementById('hitl-panel').classList.add('hidden');
+  disableHitlControls(rid);
+  const box = document.getElementById('wo-countdown-' + rid);
+  if (box) box.remove();
+}
+
+function latestWorkOrderCard(agent) {
+  const cards = document.querySelectorAll(`[data-wo-agent="${CSS.escape(agent || '')}"]`);
+  return cards.length ? cards[cards.length - 1] : null;
+}
+
+// Non-blocking notices: a read-tier contract, step progress, a deviation.
+function renderWorkOrderNotice(data) {
+  const kind = data.kind;
+  if (kind === 'declared' || kind === 'amended') {
+    const order = data.work_order || {};
+    const amended = kind === 'amended';
+    appendMsgToFeed(`
+          <div class="my-4 relative msg-enter" data-wo-agent="${escHtml(data.agent_name || '')}" data-wo-rev="${escHtml(String(order.revision || 1))}">
+            <div class="relative bg-surface-container-lowest p-5 rounded-xl border border-outline-variant/20">
+              ${woHeader(amended ? 'edit_note' : 'assignment', amended ? 'workOrder.amendTitle' : 'workOrder.noticeTitle',
+      data.tier || order.tier, data.agent_name, order.revision)}
+              ${amended ? workOrderDiff(data) : ''}
+              ${workOrderBody(order, '', false)}
+            </div>
+          </div>`);
+    scrollChat();
+    return;
+  }
+  const card = latestWorkOrderCard(data.agent_name);
+  if (kind === 'progress' && data.step) {
+    if (!card) return;
+    let row = card.querySelector(`[data-wo-step="${CSS.escape(data.step.id)}"]`);
+    const html = woStepRow(data.step);
+    if (row) {
+      row.outerHTML = html;
+    } else {
+      const list = card.querySelector('[data-wo-steps]');
+      if (list) list.insertAdjacentHTML('beforeend', html);
     }
+    return;
+  }
+  if (kind === 'deviation' && data.deviation) {
+    const dev = data.deviation;
+    const line = `⚠ ${t('workOrder.deviation')}: ${dev.tool} — ${t('workOrder.reason.' + dev.reason, dev.reason)}`;
+    const box = card ? card.querySelector('[data-wo-deviations]') : null;
+    if (box) {
+      box.insertAdjacentHTML('beforeend', `<p class="text-[11px] text-tertiary font-mono">${escHtml(line)}</p>`);
+    }
+    addTelemetry('WORK ORDER :: ' + (data.agent_name || '?') + ' ' + line);
+  }
+}
+
+
+// ── Experiment plan review ───────────────────────────────────────────────
+// The plan the Experiment Module builds during a run is the one thing the
+// human is asked to approve, and it used to arrive as Markdown in a <pre>:
+// a design matrix written as pipe-separated rows, ten task sections under
+// it, the whole thing in a 24rem scroll box. Nobody approves that; they
+// approve whatever they can see in the first screen of it.
+//
+// The backend now ships the plan structured (context.experiment_plan, see
+// CoScientist/experiments/plan_view.py), so it is drawn as what it is: a
+// header with the goal and the totals, the design matrix as a real table,
+// and one foldable card per task carrying that task's whole design. The
+// answer is unchanged — Accept / Revise / Reject through the same handlers
+// as any other review — so nothing downstream has to know about this view.
+
+const planOpenTasks = new Set();   // "<request_id>:<task_id>" of unfolded cards
+// The plan a card was drawn from, so folding a task re-renders from data
+// rather than from the DOM it is about to replace.
+const planByRequest = new Map();
+
+const PLAN_ROUTE_TONE = {
+  fedot_mas: 'text-primary border-primary/30 bg-primary/5',
+  react_tools: 'text-primary border-primary/30 bg-primary/5',
+  coder: 'text-tertiary border-tertiary/30 bg-tertiary/5',
+  alembic_build: 'text-secondary border-secondary/30 bg-secondary/5',
+  research: 'text-outline-variant border-outline-variant/30 bg-outline-variant/5',
+  medical: 'text-outline-variant border-outline-variant/30 bg-outline-variant/5',
+};
+const PLAN_CHIP_TONE = 'text-on-surface-variant border-outline-variant/20 bg-surface-container-high';
+
+// A slot the planner left empty is shown as empty. Printing its placeholder
+// text ("unspecified", "n/a") made an unfilled design look filled in.
+function planDash() { return '<span class="text-outline-variant/60">—</span>'; }
+
+function planText(value) {
+  const text = (value === 0 || value) ? String(value).trim() : '';
+  return text ? escHtml(text) : planDash();
+}
+
+// A list reads as a list, not as one comma-glued line: a task's metrics,
+// baselines and tools are each several short names and run together badly.
+function planItems(items, empty) {
+  const rows = (items || []).filter(x => x !== null && x !== undefined && String(x).trim());
+  if (!rows.length) return empty === undefined ? planDash() : escHtml(empty);
+  return rows.map(x => `<span class="inline-block bg-surface-container-high border border-outline-variant/10 rounded px-1.5 py-0.5 mr-1 mb-1 text-[10px] font-mono">${escHtml(String(x))}</span>`).join('');
+}
+
+function planChip(label, value, tone) {
+  const name = label ? `<span class="opacity-60 uppercase tracking-wider">${escHtml(label)}</span>` : '';
+  return `<span class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-mono ${tone || PLAN_CHIP_TONE}">${name}${escHtml(String(value))}</span>`;
+}
+
+function planRouteChip(route) {
+  return `<span class="inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-mono ${PLAN_ROUTE_TONE[route] || PLAN_CHIP_TONE}">${escHtml(route || '')}</span>`;
+}
+
+function planField(label, valueHtml) {
+  return `<div class="grid grid-cols-[minmax(92px,max-content)_1fr] gap-x-3 py-1 border-b border-outline-variant/5 last:border-0">
+    <span class="text-[10px] uppercase tracking-wider text-outline-variant pt-0.5">${escHtml(label)}</span>
+    <span class="text-[11px] text-on-surface-variant leading-relaxed break-words min-w-0">${valueHtml}</span>
+  </div>`;
+}
+
+function planSection(title, bodyHtml) {
+  if (!bodyHtml) return '';
+  return `<div class="mt-3">
+    <p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${escHtml(title)}</p>
+    ${bodyHtml}</div>`;
+}
+
+const PLAN_MATRIX_COLUMNS = [
+  'plan.col.task', 'plan.col.hypothesis', 'plan.col.question', 'plan.col.dataset',
+  'plan.col.baselines', 'plan.col.metrics', 'plan.col.tools', 'plan.col.artifacts',
+  'plan.col.route',
+];
+
+function planMatrix(plan) {
+  if (!Array.isArray(plan.matrix) || !plan.matrix.length) return '';
+  const head = PLAN_MATRIX_COLUMNS
+    .map(key => `<th class="text-left font-bold uppercase tracking-wider text-[9px] text-outline-variant px-2 py-1.5 whitespace-nowrap">${escHtml(t(key))}</th>`)
+    .join('');
+  const rows = plan.matrix.map(r => `
+    <tr class="border-t border-outline-variant/10 align-top">
+      <td class="px-2 py-1.5 font-mono text-[10px] text-primary whitespace-nowrap">${escHtml(r.task_id || '')}</td>
+      <td class="px-2 py-1.5 font-mono text-[10px] whitespace-nowrap">${planText(r.hypothesis)}</td>
+      <td class="px-2 py-1.5 text-[11px] min-w-[220px]">${planText(r.question)}</td>
+      <td class="px-2 py-1.5 text-[11px]">${planText(r.dataset)}</td>
+      <td class="px-2 py-1.5">${planItems(r.baselines)}</td>
+      <td class="px-2 py-1.5">${planItems(r.metrics)}</td>
+      <td class="px-2 py-1.5">${planItems(r.tools)}</td>
+      <td class="px-2 py-1.5">${planItems(r.artifacts)}</td>
+      <td class="px-2 py-1.5 whitespace-nowrap">${planRouteChip(r.route)}</td>
+    </tr>`).join('');
+  return planSection(t('plan.matrix'), `
+    <div class="overflow-x-auto rounded-lg border border-outline-variant/10 bg-surface-container-high/30">
+      <table class="w-full border-collapse text-on-surface-variant"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>
+    </div>`);
+}
+
+function planTools(task) {
+  const servers = task.mcp_servers || [];
+  if (!servers.length) return planItems([], t('plan.noTools'));
+  return servers.map(s => {
+    const where = s.url ? ` <span class="text-outline-variant/70 break-all">${escHtml(s.url)}</span>` : '';
+    const names = (s.tools || []).map(x => x.name + (x.required ? '' : ' (' + t('plan.optionalTool') + ')'));
+    return `<div class="mb-1"><span class="font-mono text-[11px] text-on-surface">${escHtml(s.name || '')}</span>${where}
+      <div class="mt-0.5">${planItems(names)}</div></div>`;
+  }).join('');
+}
+
+function planCriteria(task) {
+  const rows = task.success_criteria || [];
+  if (!rows.length) return planDash();
+  return rows.map(c => `<div class="mb-1.5">
+    <span class="font-mono text-[10px] text-primary">${escHtml(c.criterion_id || '')}</span>
+    <span class="text-[9px] uppercase tracking-wider text-outline-variant ml-1">${escHtml(c.kind || '')}</span>
+    ${c.threshold ? `<span class="ml-1 font-mono text-[10px] text-tertiary">${escHtml(c.threshold)}</span>` : ''}
+    <div class="text-[11px]">${planText(c.description)}</div>
+    ${c.verification ? `<div class="text-[10px] text-outline-variant">${escHtml(c.verification)}</div>` : ''}
+  </div>`).join('');
+}
+
+function planInputs(task) {
+  const rows = task.input_data || [];
+  if (!rows.length) return `<span class="text-outline-variant/60">${escHtml(t('plan.noInputs'))}</span>`;
+  return rows.map(d => `<div class="mb-1">
+    <span class="font-mono text-[10px] text-on-surface">${escHtml(d.data_id || '')}</span>
+    <span class="text-[9px] uppercase tracking-wider text-outline-variant ml-1">${escHtml(d.kind || '')}</span>
+    ${d.location ? `<div class="font-mono text-[10px] text-outline-variant break-all">${escHtml(d.location)}</div>` : ''}
+    ${d.description ? `<div class="text-[11px]">${escHtml(d.description)}</div>` : ''}
+  </div>`).join('');
+}
+
+function planDatasetCell(dataset) {
+  if (!dataset || !dataset.name) return planDash();
+  const ref = dataset.ref ? ` <span class="font-mono text-[10px] text-outline-variant break-all">${escHtml(dataset.ref)}</span>` : '';
+  const notes = dataset.notes ? `<div class="text-[10px] text-outline-variant">${escHtml(dataset.notes)}</div>` : '';
+  return escHtml(dataset.name) + ref + notes;
+}
+
+function planTaskCard(rid, task, index) {
+  const open = planOpenTasks.has(rid + ':' + task.id);
+  const design = task.design || {};
+  const params = Object.entries(task.launch_params || {});
+  const body = !open ? '' : `
+    <div class="px-3 pb-3">
+      ${planField(t('plan.task.question'), planText(design.question))}
+      ${planField(t('plan.task.dataset'), planDatasetCell(design.dataset))}
+      ${planField(t('plan.task.baselines'), planItems((design.baselines || []).map(b => b.name + ' (' + b.kind + ')')))}
+      ${planField(t('plan.task.metrics'), planItems((design.metrics || []).map(m =>
+        m.name + ' ' + m.direction + (m.threshold ? ' ' + m.threshold : '') + (m.test ? ' [' + m.test + ']' : ''))))}
+      ${planField(t('plan.task.analysis'), planItems((design.analysis_artifacts || []).map(a => a.name + ' [' + a.role + '/' + a.prepare_via + ']')))}
+      ${planField(t('plan.task.description'), planText(task.description))}
+      ${task.rationale ? planField(t('plan.task.rationale'), planText(task.rationale)) : ''}
+      ${planField(t('plan.task.tools'), planTools(task))}
+      ${task.repo_url ? planField(t('plan.task.repo'), `<span class="font-mono text-[10px] break-all">${escHtml(task.repo_url)}</span>`) : ''}
+      ${params.length ? planField(t('plan.task.params'), planItems(params.map(p => p[0] + '=' + p[1]))) : ''}
+      ${planField(t('plan.task.inputs'), planInputs(task))}
+      ${planField(t('plan.task.criteria'), planCriteria(task))}
+      ${planField(t('plan.task.expected'), planItems((task.expected_artifacts || []).map(a => a.name + ' [' + a.role + ']')))}
+      ${(task.warnings || []).length ? planField(t('plan.task.warnings'),
+        `<span class="text-tertiary">${escHtml(task.warnings.join(' · '))}</span>`) : ''}
+    </div>`;
+  return `<div class="rounded-lg border border-outline-variant/10 bg-surface-container-high/30 mb-2">
+    <button type="button" onclick="togglePlanTask('${escJs(rid)}','${escJs(task.id)}')"
+      class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-surface-container-high/60 rounded-lg transition-colors">
+      <span class="material-symbols-outlined text-sm text-outline-variant">${open ? 'expand_more' : 'chevron_right'}</span>
+      <span class="font-mono text-[10px] text-primary">${escHtml(task.id || ('#' + (index + 1)))}</span>
+      <span class="text-[11px] text-on-surface truncate flex-1">${escHtml(task.name || '')}</span>
+      ${task.optional ? planChip('', t('plan.task.optional')) : ''}
+      ${(task.depends_on || []).length ? planChip(t('plan.task.after'), task.depends_on.join(', ')) : ''}
+      ${planChip('', (task.est_duration_min || 0) + ' ' + t('plan.min'))}
+      ${planRouteChip(task.route)}
+    </button>
+    ${body}</div>`;
+}
+
+function repaintPlanTasks(rid) {
+  const box = document.getElementById('plan-tasks-' + rid);
+  const plan = planByRequest.get(rid);
+  if (!box || !plan) return;
+  box.innerHTML = plan.tasks.map((task, i) => planTaskCard(rid, task, i)).join('');
+  const toggle = document.getElementById('plan-toggle-all-' + rid);
+  if (toggle) {
+    const allOpen = plan.tasks.every(task => planOpenTasks.has(rid + ':' + task.id));
+    toggle.textContent = allOpen ? t('plan.collapseAll') : t('plan.expandAll');
+  }
+}
+
+function togglePlanTask(rid, taskId) {
+  const key = rid + ':' + taskId;
+  if (planOpenTasks.has(key)) planOpenTasks.delete(key); else planOpenTasks.add(key);
+  repaintPlanTasks(rid);
+}
+
+function togglePlanAllTasks(rid) {
+  const plan = planByRequest.get(rid);
+  if (!plan) return;
+  const allOpen = plan.tasks.every(task => planOpenTasks.has(rid + ':' + task.id));
+  plan.tasks.forEach(task => {
+    if (allOpen) planOpenTasks.delete(rid + ':' + task.id);
+    else planOpenTasks.add(rid + ':' + task.id);
+  });
+  repaintPlanTasks(rid);
+}
+
+function planCritiqueBlock(plan) {
+  const critique = plan.critique;
+  if (!critique) return '';
+  const approved = critique.verdict === 'approve';
+  const issues = (critique.issues || []).map(i => `<div class="mb-1">
+    <span class="text-[9px] uppercase tracking-wider ${i.severity === 'blocker' ? 'text-error' : 'text-tertiary'}">${escHtml(i.severity || '')}</span>
+    <span class="text-[9px] uppercase tracking-wider text-outline-variant ml-1">${escHtml(i.category || '')}</span>
+    ${i.task_id ? `<span class="font-mono text-[10px] text-primary ml-1">${escHtml(i.task_id)}</span>` : ''}
+    <div class="text-[11px]">${planText(i.message)}</div>
+    ${i.suggestion ? `<div class="text-[10px] text-outline-variant">${escHtml(i.suggestion)}</div>` : ''}
+  </div>`).join('');
+  return planSection(t('plan.critique'),
+    `<p class="text-[11px] ${approved ? 'text-secondary' : 'text-tertiary'} mb-1">${escHtml(approved ? t('plan.critique.approve') : t('plan.critique.revise'))}</p>${issues}`);
+}
+
+function planBullets(list) {
+  return (list || []).length
+    ? `<ul class="list-disc list-inside text-[11px] text-on-surface-variant space-y-0.5">${list.map(x => `<li>${escHtml(x)}</li>`).join('')}</ul>`
+    : '';
+}
+
+function renderExperimentPlanReview(panel, data) {
+  const plan = (data.context || {}).experiment_plan;
+  const rid = data.request_id;
+  planByRequest.set(rid, plan);
+
+  if (panel) {
+    panel.classList.remove('hidden');
+    panel.innerHTML = `
+    <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-3">
+      <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${escHtml(t('plan.sidebarTitle'))}</h3>
+      <p class="text-[11px] text-on-surface-variant">${escHtml(t('plan.revision').replace('{n}', plan.revision))} · ${escHtml(t('plan.tasks').replace('{n}', plan.task_count))}</p>
+      <p class="text-[10px] text-outline-variant leading-relaxed">${escHtml(t('plan.sidebarHint'))}</p>
+      <div class="flex gap-3">
+        <button onclick="respondHITL('${escJs(rid)}', true)" class="flex-1 flex items-center justify-center gap-2 bg-primary text-on-primary py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+          <span class="material-symbols-outlined text-base">check_circle</span> ${escHtml(t('plan.accept'))}
+        </button>
+        <button onclick="respondHITL('${escJs(rid)}', false)" class="flex-1 flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
+          <span class="material-symbols-outlined text-base">close</span> ${escHtml(t('plan.reject'))}
+        </button>
+      </div>
+    </div>`;
+  }
+
+  const hypotheses = (plan.hypotheses || []).map(h =>
+    `<div class="mb-1"><span class="font-mono text-[10px] text-primary">${escHtml(h.id || '')}</span>
+      <span class="text-[11px] ml-1">${planText(h.statement)}</span></div>`).join('');
+
+  placeHitlCard(rid, `
+<div data-hitl-card="${escHtml(rid || '')}" class="my-6 relative msg-enter">
+  <div class="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 blur-2xl opacity-40"></div>
+  <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
+    <div class="flex items-center gap-3 mb-2">
+      <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
+        <span class="material-symbols-outlined text-on-primary text-sm">science</span>
+      </div>
+      <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${escHtml(t('plan.title'))}</h3>
+    </div>
+    <p class="text-[10px] text-outline-variant font-mono mb-2">CTX: ${escHtml(String(rid).slice(0, 8))} · ${escHtml(data.agent_name || '')}</p>
+    <div class="flex flex-wrap gap-1.5 mb-3">
+      ${planChip('', t('plan.revision').replace('{n}', plan.revision), 'text-primary border-primary/30 bg-primary/5')}
+      ${planChip('', t('plan.tasks').replace('{n}', plan.task_count))}
+      ${planChip('', (plan.total_est_duration_min || 0) + ' ' + t('plan.min'))}
+      ${(plan.routes || []).map(planRouteChip).join('')}
+      ${plan.plan_id ? planChip('id', plan.plan_id) : ''}
+    </div>
+    ${planField(t('plan.goal'), planText(plan.goal))}
+    ${plan.hypothesis ? planField(t('plan.hypothesis'), planText(plan.hypothesis)) : ''}
+    ${planField(t('plan.methods'), planItems(plan.methods))}
+    ${hypotheses ? planSection(t('plan.hypotheses'), hypotheses) : ''}
+    ${planCritiqueBlock(plan)}
+    ${planMatrix(plan)}
+    <div class="mt-3 flex items-center justify-between">
+      <p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider">${escHtml(t('plan.tasksTitle'))}</p>
+      <button type="button" id="plan-toggle-all-${escHtml(rid)}" onclick="togglePlanAllTasks('${escJs(rid)}')"
+        class="text-[10px] uppercase tracking-wider text-primary hover:underline">${escHtml(t('plan.expandAll'))}</button>
+    </div>
+    <div id="plan-tasks-${escHtml(rid)}" class="mt-1">${plan.tasks.map((task, i) => planTaskCard(rid, task, i)).join('')}</div>
+    ${planSection(t('plan.risks'), planBullets(plan.risks))}
+    ${planSection(t('plan.assumptions'), planBullets(plan.assumptions))}
+    <!-- Only the answer is disabled once this review is over (timeout, or
+         the operator has answered): the plan stays readable and its task
+         cards stay foldable, which is the whole point of drawing it. -->
+    <div id="hitl-controls-${escHtml(rid)}" class="mt-4 flex flex-col gap-2">
+      <textarea id="hitl-feedback-${escHtml(rid)}" rows="2" placeholder="${escHtml(t('plan.feedbackPlaceholder'))}"
+        class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
+      <div class="flex flex-wrap gap-3">
+        <button onclick="respondHITL('${escJs(rid)}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+          <span class="material-symbols-outlined text-base">check_circle</span> ${escHtml(t('plan.accept'))}
+        </button>
+        <button onclick="respondHITLEdit('${escJs(rid)}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
+          <span class="material-symbols-outlined text-base">edit_note</span> ${escHtml(t('plan.revise'))}
+        </button>
+        <button onclick="respondHITL('${escJs(rid)}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
+          <span class="material-symbols-outlined text-base">close</span> ${escHtml(t('plan.reject'))}
+        </button>
+      </div>
+    </div>
+  </div>
+</div>`);
+}
