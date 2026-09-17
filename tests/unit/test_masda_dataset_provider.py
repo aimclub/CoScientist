@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import json
+import re
 from types import SimpleNamespace
 
 import httpx
@@ -34,6 +35,25 @@ def _state():
 
 def _attached(agent):
     return [tool.agent for tool in agent.tools if hasattr(tool, "agent")]
+
+
+@pytest.fixture
+def masda_system(monkeypatch):
+    dataset = get_settings().dataset
+    monkeypatch.setattr(dataset, "provider", "masda")
+    monkeypatch.setattr(dataset, "masda_a2a_rpc_url", RPC_URL)
+    monkeypatch.setattr(dataset, "masda_a2a_card_url", None)
+    return build_system(load_config())
+
+
+def _masda_routing_step(system):
+    match = re.search(
+        r"\d+\. When an external tabular dataset.*?(?=\n\d+\. |\Z)",
+        system.root.instruction,
+        flags=re.DOTALL,
+    )
+    assert match, "MASDA acquisition step missing from Orchestrator instruction"
+    return " ".join(match.group().lower().split())
 
 
 def _completed_response(*, include_csv=True, csv_raw=None, state="TASK_STATE_COMPLETED"):
@@ -115,8 +135,41 @@ def test_masda_assembly_uses_deterministic_agent_without_builtin_fallback(monkey
         child.name for child in _attached(system.agent("CoderAgent"))
     ]
     assert not config.agent("DatasetCollectorAgent").is_enabled()
-    assert "do not silently retry" in system.root.instruction
+    assert "without silent builtin fallback" in system.root.instruction
     assert "DatasetCollectorAgent" not in system.agent("CoderAgent").instruction
+
+
+def test_masda_route_is_for_external_csv_acquisition_only(masda_system):
+    step = _masda_routing_step(masda_system)
+    assert "external tabular dataset needs acquisition" in step
+    assert "exact direct csv url is the validated v1 path" in step
+    assert "returned coscientist workspace path" in step
+    assert "provider selection comes from configuration" in step
+    route = masda_system.config.agent("MasdaDatasetsAgent")
+    assert "acquisition provider" in route.description.lower()
+    assert "processes" not in route.description.lower()
+    assert "exact direct csv urls are validated v1" in route.routing.lower()
+
+
+def test_masda_route_excludes_local_uploads_and_downstream_work(masda_system):
+    step = _masda_routing_step(masda_system)
+    assert "not already available locally" in step
+    assert "workspace files and user uploads" in step
+    for activity in (
+        "analysis", "preprocessing", "feature engineering", "ml",
+        "visualization", "synthetic-data generation", "unrelated computation",
+    ):
+        assert activity in step
+    assert "route those to execution" in step
+
+
+def test_masda_description_discovery_is_experimental(masda_system):
+    step = _masda_routing_step(masda_system)
+    assert "description-only or ambiguous discovery is experimental" in step
+    assert "task_state_completed does not prove semantic correctness" in step
+    assert "description-only discovery is experimental" in (
+        masda_system.config.agent("MasdaDatasetsAgent").routing.lower()
+    )
 
 
 def test_masda_requires_rpc_or_card_url(monkeypatch):

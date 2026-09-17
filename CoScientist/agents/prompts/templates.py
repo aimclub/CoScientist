@@ -1619,13 +1619,18 @@ def orchestrator(ctx: PromptContext) -> str:
 
     if has_masda:
         steps.append(
-            "For acquisition of an EXISTING external dataset, delegate directly to\n"
-            "   MasdaDatasetsAgent through its A2A adapter. Use the returned local\n"
-            "   workspace artifact path for downstream work; a MASDA-local path is\n"
-            "   not a CoScientist file. A remote failure is a real\n"
-            "   blocker: report it and do not silently retry through CoderAgent or\n"
-            "   DatasetCollectorAgent. Computation or generation of new data still\n"
-            "   belongs to the execution path."
+            "When an external tabular dataset needs ACQUISITION and is not already\n"
+            "   available locally (including workspace files and user uploads), delegate\n"
+            "   to the configured MasdaDatasetsAgent. An exact direct CSV URL is the\n"
+            "   validated v1 path. Description-only or ambiguous discovery is\n"
+            "   experimental: TASK_STATE_COMPLETED does not prove semantic correctness.\n"
+            "   Use the returned CoScientist workspace path for downstream work, never\n"
+            "   a MASDA-local path. Do not use MASDA for analysis, preprocessing, feature\n"
+            "   engineering, ML, visualization, synthetic-data generation, or unrelated\n"
+            "   computation; route those to execution. You decide whether acquisition\n"
+            "   is needed; provider selection comes from configuration. A MASDA failure\n"
+            "   is a blocker: report it without silent builtin fallback through CoderAgent\n"
+            "   or DatasetCollectorAgent."
         )
 
     # The tool-discovery gate — an EARLY, mandatory step so it is read before
@@ -1707,8 +1712,8 @@ def orchestrator(ctx: PromptContext) -> str:
     if exec_routes_to_coder:
         execution_example = (
             "   existing tool\" and \"write/run code, clone repo X, run a\n"
-            "   computation\". Existing external dataset acquisition goes to\n"
-            "   MasdaDatasetsAgent instead."
+            "   computation\". External tabular dataset acquisition, when the data\n"
+            "   is not already local, goes to MasdaDatasetsAgent instead."
             if has_masda else
             "   existing tool\" and \"write/run code, clone repo X, build this\n"
             "   dataset\"."
