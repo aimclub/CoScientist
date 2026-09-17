@@ -134,10 +134,18 @@ def test_unreachable_agent_is_left_alone():
 
 
 def _truncated_response(parts):
-    """A response the provider cut off at the output limit."""
+    """A response the provider cut off at the output limit.
+
+    Shaped the way LiteLLM delivers it: any non-STOP finish reason also sets
+    error_code and error_message on the SAME response that carries the content
+    (google/adk/models/lite_llm.py). Leaving those out would make the assertions
+    below pass on a response that never had the flag in the first place.
+    """
     return SimpleNamespace(
         content=types.Content(role="model", parts=parts),
         finish_reason=types.FinishReason.MAX_TOKENS,
+        error_code=types.FinishReason.MAX_TOKENS,
+        error_message="Maximum tokens reached",
     )
 
 
@@ -187,3 +195,40 @@ def test_a_recoverable_answer_is_still_recovered_when_truncated():
 
     assert out is not None
     assert plugin.repaired == ["pool_generator"]
+
+
+def test_a_recovered_config_does_not_still_carry_the_error_flag():
+    """The repair has to survive the runner that reads it.
+
+    LiteLLM sets error_code for ANY non-STOP finish reason, and
+    fedotmas/meta/_adk_runner.py raises on any error_code at all — no MAX_TOKENS
+    carve-out, unlike its own sibling fedotmas/core/runner.py. So a config we
+    rebuilt in full still killed the run on the flag alone. Observed on
+    2026-09-17: recovery fired inside two of the three failing fedot_tool
+    windows of EXP-3 and the calls failed anyway.
+    """
+    plugin = MetaJsonRecoveryPlugin()
+    response = _truncated_response([
+        types.Part(text=json.dumps(CONFIG), thought=True),
+    ])
+    assert response.finish_reason == types.FinishReason.MAX_TOKENS
+
+    out = _run(plugin, response)
+
+    assert out is not None
+    assert json.loads(out.content.parts[0].text) == CONFIG
+    assert getattr(out, "error_code", None) is None, "the runner would raise on this"
+    assert getattr(out, "error_message", None) is None
+    # The original is untouched — the plugin works on a copy.
+    assert response.finish_reason == types.FinishReason.MAX_TOKENS
+
+
+def test_a_narrow_escape_is_reported_as_one(caplog):
+    """A config that arrived complete but flagged MAX_TOKENS is one token away
+    from the failure mode, and the operator should hear about it."""
+    plugin = MetaJsonRecoveryPlugin()
+
+    with caplog.at_level("WARNING"):
+        _run(plugin, _truncated_response([types.Part(text=json.dumps(CONFIG), thought=True)]))
+
+    assert "FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS" in caplog.text

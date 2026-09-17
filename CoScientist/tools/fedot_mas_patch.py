@@ -524,10 +524,16 @@ class MetaJsonRecoveryPlugin(BasePlugin):
 
         agent = _agent_name_of(callback_context)
         self.repaired.append(agent)
+        cut_off = (
+            " — the answer was also flagged MAX_TOKENS, so the config arrived "
+            "complete but only just; consider raising "
+            "FEDOTMAS_META_AGENT_MAX_OUTPUT_TOKENS"
+            if _finished_truncated(llm_response) else ""
+        )
         _log.warning(
             "MetaJsonRecovery: rebuilt %s config from the %s part "
-            "(model returned it outside a clean JSON text part)",
-            agent, source,
+            "(model returned it outside a clean JSON text part)%s",
+            agent, source, cut_off,
         )
         return _rewritten_json_response(llm_response, payload)
 
@@ -556,7 +562,21 @@ def _agent_name_of(callback_context: Any) -> str:
 
 
 def _rewritten_json_response(llm_response: Any, payload: dict) -> Any:
-    """Same response, with one plain text part holding exactly the JSON object."""
+    """Same response, with one plain text part holding exactly the JSON object.
+
+    The error flag is cleared with it, and that is the point. LiteLLM sets
+    ``error_code`` for ANY non-STOP finish reason, content or not
+    (``google/adk/models/lite_llm.py``), and the meta runner raises on any
+    ``error_code`` at all (``fedotmas/meta/_adk_runner.py``) — with no carve-out,
+    unlike its own sibling ``fedotmas/core/runner.py``, which continues on
+    MAX_TOKENS whenever the step still produced content.
+
+    So a config recovered in full still killed the run on the flag alone: the
+    repair was real and the error stood anyway. Observed on 2026-09-17, when
+    recovery fired inside two of the three failing fedot_tool windows of EXP-3
+    and the calls failed regardless. If a complete object came back, the answer
+    is usable whatever made the provider stop.
+    """
     import copy as _copy
     import json as _json
 
@@ -567,6 +587,12 @@ def _rewritten_json_response(llm_response: Any, payload: dict) -> Any:
         role=getattr(getattr(llm_response, "content", None), "role", "model") or "model",
         parts=[_types.Part(text=_json.dumps(payload, ensure_ascii=False))],
     )
+    for field in ("error_code", "error_message"):
+        if getattr(out, field, None) is not None:
+            try:
+                setattr(out, field, None)
+            except Exception:  # noqa: BLE001 - a frozen response is still repaired
+                pass
     return out
 
 
