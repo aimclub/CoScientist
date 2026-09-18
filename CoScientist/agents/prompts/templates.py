@@ -421,9 +421,9 @@ def research(ctx: PromptContext) -> str:
             "have actual S3 keys — never invent S3 keys."
         )
         n += 1
-        # 2) Otherwise (or if no uploaded papers) always call explore_chemistry_database first
+        # 2) Otherwise (or if no uploaded papers) always call explore_scientific_database first
         steps.append(
-            f"{n}. If there are NO user-uploaded papers, ALWAYS call `explore_chemistry_database` before other literature tools. "
+            f"{n}. If there are NO user-uploaded papers, ALWAYS call `explore_scientific_database` before other literature tools. "
             "Do this even if you plan to use `search_papers` or `download_papers_from_search` afterwards."
         )
     n += 1
