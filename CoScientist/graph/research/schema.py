@@ -359,6 +359,14 @@ class AgentPerm:
     update_attrs: FrozenSet[str]
     transitions: FrozenSet[Tuple[str, str, str]]
     edges: FrozenSet[Tuple[str, str, str]]
+    #: Single (type, attribute) pairs an agent may write on a node it may not
+    #: otherwise touch. The protocol asks for reasons — why a branch was left
+    #: untested, what the evidence failed to settle — from the role that knows
+    #: them, and that role is rarely the owner of the node. Without this the
+    #: instruction is one no agent can carry out: the triggers told the
+    #: orchestrator to commit `attrs.not_tested_reason` and the store refused
+    #: it, so the study stayed open and the agent learned to shrug.
+    update_fields: FrozenSet[Tuple[str, str]] = frozenset()
 
 
 def _edges(*specs) -> FrozenSet[Tuple[str, str, str]]:
@@ -430,6 +438,10 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
                      "motivates", "regulates", "constrains",
                      "relates_to", "supports", "refutes", "refines",
                      ("produces", "Conclusion", "ResearchQuestion")),
+        # It decides what gets tested, so it is the one that can say why a
+        # branch was not. Only that: the formulation and the verdict stay with
+        # the agents that own them.
+        update_fields=frozenset({("Hypothesis", "not_tested_reason")}),
     ),
     # Spec Module 4 — the judge. Given ONE hypothesis's evidence slice it weighs
     # the evidence against the criteria, sets the verdict, and writes the
@@ -449,6 +461,10 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         # that reached the hypothesis only as relates_to (focus auto-link).
         edges=_edges("based_on", "determines_sufficiency",
                      "supports", "refutes", "refines"),
+        # It writes the inconclusive verdict, so it writes what the evidence
+        # failed to settle — the schema asks for that reason and nobody could
+        # supply it.
+        update_fields=frozenset({("Hypothesis", "inconclusive_reason")}),
     ),
     "HypothesesAgent": AgentPerm(
         # May also declare the Tools its methods need (as needs_adaptation — a
@@ -656,9 +672,14 @@ def permitted_summary(agent: str) -> Dict[str, List[str]]:
     for typ, f, t in sorted(perm.transitions):
         trans_by_type.setdefault(typ, []).append(f"{f}→{t}")
     transitions = [f"{typ}: {', '.join(pairs)}" for typ, pairs in trans_by_type.items()]
+    fields_by_type: Dict[str, List[str]] = {}
+    for typ, attr in sorted(perm.update_fields):
+        fields_by_type.setdefault(typ, []).append(f"attrs.{attr}")
     return {
         "create": create,
         "edges": edges,
         "transitions": transitions,
-        "update_attrs": sorted(perm.update_attrs),
+        "update_attrs": sorted(perm.update_attrs)
+        + [f"{typ} ({', '.join(attrs)} only)"
+           for typ, attrs in sorted(fields_by_type.items())],
     }

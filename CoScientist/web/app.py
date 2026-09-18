@@ -3,6 +3,7 @@ import asyncio
 import json
 import logging
 import os
+import time
 from collections import defaultdict, OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -13,7 +14,13 @@ from uuid import uuid4
 from weakref import WeakKeyDictionary
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.staticfiles import StaticFiles
 
 from CoScientist.agents.callbacks.tool_callbacks import DATASET_URL_STATE_KEY
@@ -22,15 +29,18 @@ from CoScientist.agents.callbacks.report_language import (
     REPORT_LANGUAGE_STATE_KEY,
 )
 from CoScientist.main import CoScientistManager
-from CoScientist.web.handler import WebHITLHandler
+from CoScientist.web.handler import WebHITLHandler, hitl_response_event
 from CoScientist.web.session_registry import LocalSessionRegistry
 from CoScientist.agents import agent_system, planner_agent
 from CoScientist.config import ReportConfig
 from CoScientist.reporting import finalize_report
 from CoScientist.hitl.tool import hitl_toolset
 from CoScientist.config import get_settings
+from CoScientist.paper_parser.s3_connection import s3_service
 from CoScientist.tools.coder_tools.coder_tools import coder_toolset
+from CoScientist.tools.vault_client import call_vault_sync, vault_url
 from CoScientist.agents.common import sync_proxy_session
+from CoScientist.utils.report_links import remint_report_urls
 from CoScientist.utils.text import strip_thinking
 
 from google.adk.events.event import Event
@@ -85,6 +95,34 @@ DATASET_URL_MAX_LENGTH = 2048
 # Graph stores the Settings modal can wipe. The derived ``knowledge`` view is
 # absent on purpose: it is a projection of ``execution`` plus ``memory``.
 GRAPH_DELETE_TARGETS = ("execution", "research")
+# Freshly minted artifact download URLs, so a burst of clicks on one report
+# does not mint on every request. The URLs are minted for one hour; the cache
+# lets go of them ten minutes earlier.
+ARTIFACT_URL_CACHE_TTL_SECONDS = 50 * 60
+_ARTIFACT_URL_CACHE: dict[tuple[str, str], tuple[str, float]] = {}
+_ARTIFACT_URL_CACHE_MAX = 1000
+
+
+def _mint_artifact_url(bucket: str, key: str) -> str | None:
+    """Mint a fresh download URL for one object. Runs in a worker thread.
+
+    Vault objects (``ephemeral/`` and ``permanent/`` keys in the vault bucket)
+    go through the vault so its key rules and external signing endpoint apply.
+    Every other bucket is signed directly with the shared credentials.
+    """
+    vault_bucket = os.getenv("S3__BUCKET_NAME", "")
+    if (
+        bucket == vault_bucket
+        and key.startswith(("ephemeral/", "permanent/"))
+        and vault_url()
+    ):
+        payload = call_vault_sync("get_download_link", s3_key=key)
+        if payload is None:
+            return None
+        return payload.get("presigned_url") or payload.get("url")
+    return s3_service.generate_presigned_url(
+        key, "get_object", expiration=3600, bucket_name=bucket
+    )
 
 
 def _validated_dataset_url(raw: Any) -> str:
@@ -132,9 +170,14 @@ def _apply_frontend_settings(frontend: dict) -> None:
     is always up-to-date when the system is (re)built.
     """
     from CoScientist.config import get_settings
+    _startup_settings()  # pin the launch values before the first write
     web = get_settings().web
 
     general = frontend.get("general", {})
+    if "openrouterProviderSort" in general:
+        web.openrouter_provider_sort = str(general["openrouterProviderSort"]).strip().lower()
+    if "openrouterProviderOrder" in general:
+        web.openrouter_provider_order = str(general["openrouterProviderOrder"]).strip()
     if "startMode" in general:
         web.start_mode = general["startMode"]
     if "maxRetries" in general:
@@ -145,6 +188,11 @@ def _apply_frontend_settings(frontend: dict) -> None:
         get_settings().hitl.enabled = val
     if "hitlAutoApproveTimeout" in general:
         web.hitl_auto_approve_timeout = int(general["hitlAutoApproveTimeout"])
+    if "workOrderEnabled" in general:
+        web.work_order_enabled = bool(general["workOrderEnabled"])
+    if "workOrderVetoSeconds" in general:
+        val = int(general["workOrderVetoSeconds"])
+        web.work_order_veto_seconds = val if val > 0 else -1
     if "usePlanner" in general:
         web.use_planner = bool(general["usePlanner"])
     if "useProxy" in general:
@@ -222,25 +270,51 @@ def _apply_frontend_settings(frontend: dict) -> None:
         web.alembic_agent_build_enabled = bool(hub["agentBuildEnabled"])
 
 
+_startup_settings_snapshot: dict | None = None
+
+
+def _startup_settings() -> dict:
+    """The settings the server was launched with (.env and settings.py).
+
+    Captured before the UI writes anything, so "reset to defaults" in the
+    settings modal restores the launch values rather than the last save.
+    """
+    global _startup_settings_snapshot
+    if _startup_settings_snapshot is None:
+        _startup_settings_snapshot = _current_settings()
+    return _startup_settings_snapshot
+
+
 def _settings_payload() -> dict:
-    """The frontend ``appSettings`` shape, read back off the config singleton.
+    """The frontend ``appSettings`` shape plus the launch values as ``defaults``.
 
     Both /api/settings endpoints answer with it, so a GET and the echo of a
     POST can never drift apart.
     """
+    return {**_current_settings(), "defaults": _startup_settings()}
+
+
+def _current_settings() -> dict:
+    """The frontend ``appSettings`` shape, read back off the config singleton."""
     from CoScientist.config import get_settings
     settings = get_settings()
     web = settings.web
     return {
         "general": {
+            "openrouterProviderSort": web.openrouter_provider_sort,
+            "openrouterProviderOrder": web.openrouter_provider_order,
             "startMode": web.start_mode,
             "maxRetries": web.max_retries,
             "hitlEnabled": web.hitl_enabled,
             "hitlAutoApproveTimeout": web.hitl_auto_approve_timeout,
+            "workOrderEnabled": web.work_order_enabled,
+            "workOrderVetoSeconds": web.work_order_veto_seconds,
             "usePlanner": web.use_planner,
             "useProxy": web.use_proxy,
             "opikEnabled": web.opik_enabled,
             "autoNamingEnabled": web.auto_naming_enabled,
+            # Read-only here: the browser stores its own choice over this default.
+            "showInternal": web.show_internal_enabled,
             "coscientistUsername": web.coscientist_username or "",
             "contextInitEnabled": settings.context_init.enabled,
             "knowledgeGraphEnabled": web.knowledge_graph_enabled,
@@ -280,6 +354,10 @@ class WebRuntime:
     """Process-local users, ADK sessions, managers, sockets, and event logs."""
 
     def __init__(self) -> None:
+        # Identifies this server process. A tab whose remembered session was
+        # opened under a different boot id is looking at a previous run, and
+        # starts fresh instead of reopening it.
+        self.boot_id = uuid4().hex
         self.session_service = InMemorySessionService()
         self.registry = LocalSessionRegistry()
         self.managers: dict[SessionKey, CoScientistManager] = {}
@@ -303,15 +381,19 @@ class WebRuntime:
         # here as well as in ADK state so a reconnecting tab and a session whose
         # manager has not been built yet both see the same link.
         self.dataset_urls: dict[SessionKey, str] = {}
-        # Report language chosen for a session from the chat composer. Holds
-        # ONLY explicit choices — an absent key means the browser has not spoken
-        # yet, which is what lets the UI default follow its interface language.
+        # Report language chosen for a session from the settings language
+        # toggle. Holds ONLY explicit choices — an absent key means the browser
+        # has not spoken yet, which is what lets the UI default follow its
+        # interface language.
         self.report_languages: dict[SessionKey, str] = {}
         self.pending_hitl: dict[str, dict[str, Any]] = {}
         self.hitl_handler = WebHITLHandler()
         self.hitl_handler.set_sender(self.send_socket)
+        self.hitl_handler.set_recorder(self.record_event)
         self.sockets: dict[SessionKey, list[WebSocket]] = defaultdict(list)
         self.active_runs: dict[SessionKey, asyncio.Task] = {}
+        # Run execution times (start to finish) per session
+        self.run_times: dict[SessionKey, dict[str, Any]] = {}
 
     def record_event(self, key: SessionKey, event: dict[str, Any]) -> None:
         """Append a UI event to memory and to the session's on-disk transcript,
@@ -343,6 +425,7 @@ class WebRuntime:
         *,
         version: int | None = None,
     ) -> dict[str, Any]:
+        timing = self.run_times.get(key)
         return {
             "type": "status",
             "status": status,
@@ -350,6 +433,8 @@ class WebRuntime:
             "run_status_version": (
                 self.run_versions[key] if version is None else version
             ),
+            "started_at": timing.get("started_at") if timing else None,
+            "finished_at": timing.get("finished_at") if timing else None,
         }
 
     async def start_run(self, key: SessionKey, data: dict[str, Any]) -> bool:
@@ -362,6 +447,10 @@ class WebRuntime:
                 return False
 
             version = self._next_run_version(key)
+            self.run_times[key] = {
+                "started_at": datetime.now().isoformat(),
+                "finished_at": None,
+            }
             run_data = dict(data)
             run_data["_run_status_version"] = version
             task = asyncio.create_task(_handle_chat(self, key, run_data))
@@ -389,6 +478,9 @@ class WebRuntime:
                 return False
             self.active_runs.pop(key, None)
             version = self._next_run_version(key)
+            timing = self.run_times.get(key)
+            if timing and timing.get("finished_at") is None:
+                timing["finished_at"] = datetime.now().isoformat()
         await self.send(key, self.status_payload(
             key,
             "idle",
@@ -423,6 +515,9 @@ class WebRuntime:
                 self.active_runs.pop(key, None)
             self.stopping_runs.discard(key)
             version = self._next_run_version(key)
+            timing = self.run_times.get(key)
+            if timing and timing.get("finished_at") is None:
+                timing["finished_at"] = datetime.now().isoformat()
 
         # Network I/O happens outside the ownership lock so a slow browser
         # cannot block future control operations for the session.
@@ -543,6 +638,7 @@ class WebRuntime:
                     "status": status,
                     "run_status_version": version,
                     "metrics": self.metrics.get(key),
+                    "run_times": self.run_times.get(key),
                     "dataset_url": self.dataset_urls.get(key, ""),
                     "report_language": self.report_languages.get(key, ""),
                 })
@@ -691,6 +787,10 @@ def _wire_hitl(runtime: WebRuntime) -> None:
     from CoScientist.tools.coder_tools import coder_toolset
     if coder_toolset._hitl_handler is not None:
         coder_toolset._hitl_handler = runtime.hitl_handler
+
+    from CoScientist.agents.common import hitl_handler as common_hitl_handler
+    if hasattr(common_hitl_handler, "set_delegate"):
+        common_hitl_handler.set_delegate(runtime.hitl_handler)
 
     logging.getLogger("CoScientist.web").info(
         "Session-routing WebHITLHandler wired into: %s", wired,
@@ -942,6 +1042,7 @@ def _esc(text: str) -> str:
 
 def create_app() -> FastAPI:
     os.environ["COSCIENTIST_WEB_MODE"] = "true"
+    _startup_settings()
     runtime = WebRuntime()
     _wire_hitl(runtime)
     _wire_sandbox_links(runtime)
@@ -1044,6 +1145,40 @@ def create_app() -> FastAPI:
             )
             return JSONResponse({"status": "cancelled", "detail": str(exc)}, status_code=200)
 
+    # --- Artifact delivery (report links) ---
+    @app.get("/api/artifact/{bucket}/{key:path}")
+    async def get_artifact(bucket: str, key: str):
+        """Redirect the browser to a fresh download URL for one S3 object.
+
+        Report markdown carries these local links instead of raw presigned
+        URLs (see ``utils/report_links.py``), so a link in an old report still
+        works and the internal S3 endpoint never reaches the browser.
+        """
+        if not bucket or not key or ".." in key.split("/"):
+            raise HTTPException(status_code=404, detail="Invalid artifact reference.")
+        cache_key = (bucket, key)
+        now = time.monotonic()
+        cached = _ARTIFACT_URL_CACHE.get(cache_key)
+        if cached is not None and cached[1] > now:
+            return RedirectResponse(cached[0], status_code=302)
+        try:
+            url = await asyncio.to_thread(_mint_artifact_url, bucket, key)
+        except Exception as exc:
+            logging.getLogger("CoScientist.web").warning(
+                "Artifact minting failed for %s/%s: %s", bucket, key, exc
+            )
+            raise HTTPException(
+                status_code=502, detail="Artifact storage is unreachable."
+            ) from exc
+        if not url:
+            raise HTTPException(
+                status_code=404, detail="Artifact not found or no longer available."
+            )
+        if len(_ARTIFACT_URL_CACHE) >= _ARTIFACT_URL_CACHE_MAX:
+            _ARTIFACT_URL_CACHE.clear()
+        _ARTIFACT_URL_CACHE[cache_key] = (url, now + ARTIFACT_URL_CACHE_TTL_SECONDS)
+        return RedirectResponse(url, status_code=302)
+
     # --- Local users and sessions (process lifetime only) ---
     @app.get("/api/users")
     async def list_users():
@@ -1062,6 +1197,7 @@ def create_app() -> FastAPI:
         return JSONResponse({
             "users": runtime.registry.list_users(),
             "defaultUsername": default_username,
+            "serverBootId": runtime.boot_id,
         })
 
     @app.post("/api/users")
@@ -1079,6 +1215,10 @@ def create_app() -> FastAPI:
             sessions = runtime.registry.list_sessions(user_id)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        from CoScientist.web.session_store import has_events
+        for session in sessions:
+            key = (user_id, session["id"])
+            session["empty"] = not runtime.agent_events.get(key) and not has_events(*key)
         return JSONResponse({"sessions": sessions})
 
     @app.post("/api/users/{user_id}/sessions")
@@ -1722,6 +1862,7 @@ def create_app() -> FastAPI:
         from CoScientist.assembly.schema import get_config
         cfg = get_config()
         hierarchy = cfg.agent_hierarchy_map()
+        internal_names = cfg.internal_agent_names()
         agents_list = []
         for name in cfg.build_order():
             ac = cfg.agent(name)
@@ -1735,11 +1876,13 @@ def create_app() -> FastAPI:
                 "subordinates": list(ac.subordinates),
                 "children": list(ac.children),
                 "is_root": bool(ac.root),
+                "is_internal": name in internal_names,
             })
         return JSONResponse({
             "agents": agents_list,
             "hierarchy": hierarchy,
             "delegatable_names": list(cfg.delegatable_names()),
+            "internal_agents": sorted(internal_names),
         })
 
     # --- Events log ---
@@ -1837,6 +1980,16 @@ def create_app() -> FastAPI:
 
         key = (user_id, session_id)
         runtime.registry.touch_session(user_id, session_id)
+        if not runtime.agent_events.get(key):
+            # A session from an earlier process: its chat and HITL cards live
+            # only in the on-disk transcript until something reloads them.
+            try:
+                from CoScientist.web.session_store import load_events
+                events = load_events(user_id, session_id)
+                if events:
+                    runtime.agent_events[key] = list(events)
+            except Exception:  # noqa: BLE001
+                pass
         adk_session = await runtime.session_service.get_session(
             app_name=APP_NAME,
             user_id=user_id,
@@ -1919,6 +2072,19 @@ def create_app() -> FastAPI:
                             "message": str(exc),
                         }, key)
                         continue
+                    current_run = runtime.active_runs.get(key)
+                    if current_run is not None and not current_run.done():
+                        # A run reads the language when it starts. A mid-run
+                        # change would split the report between languages.
+                        await runtime.send_socket(ws, {
+                            "type": "report_language_rejected",
+                            "message": (
+                                "A run is in progress. "
+                                "Wait for it to finish before changing the language."
+                            ),
+                            "reason": "run_active",
+                        }, key)
+                        continue
                     await runtime.apply_report_language(key, lang)
                     # Broadcast: the report is one document, so every tab on the
                     # session agrees on its language, whichever one picked it.
@@ -1928,6 +2094,11 @@ def create_app() -> FastAPI:
                     })
                 elif msg_type == "hitl_response":
                     _handle_hitl_response(runtime, key, data)
+                elif msg_type == "hitl_hold":
+                    # "Pause" on a Work Order veto window: stop the countdown.
+                    request_id = data.get("request_id")
+                    if request_id:
+                        await runtime.hitl_handler.hold_request(request_id, key)
                 elif msg_type == "ping":
                     await runtime.send_socket(ws, {"type": "pong"}, key)
                 else:
@@ -1967,7 +2138,7 @@ def _cancel_pending_hitl(
 # ---------------------------------------------------------------------------
 async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
     """Run user query through the agent pipeline, streaming events.
-    
+
     Handles ADK RequestInput HITL: when the workflow pauses (interrupt event),
     this sends the HITL request to the browser, waits for the response, then
     resumes the workflow by calling run_async with a FunctionResponse message.
@@ -2175,17 +2346,17 @@ async def _run_chat_invocation(
                 if has_request_input_function_call(event):
                     hitl_interrupt_event = event
                     interrupt_ids = get_request_input_interrupt_ids(event)
-                    
+
                     # Extract the message and schema from the function call args
                     hitl_message = ""
                     hitl_schema = None
                     for part in event.content.parts:
-                        if (part.function_call 
+                        if (part.function_call
                             and part.function_call.name == REQUEST_INPUT_FUNCTION_CALL_NAME):
                             args = part.function_call.args or {}
                             hitl_message = args.get("message", "")
                             hitl_schema = args.get("responseSchema") or args.get("response_schema")
-                    
+
                     # Send HITL request to browser
                     hitl_payload = {
                         "type": "hitl_request",
@@ -2195,6 +2366,7 @@ async def _run_chat_invocation(
                         "message": hitl_message,
                         "response_schema": hitl_schema,
                         "agent_name": event.author or "system",
+                        "invoked_via": "request_input",
                         "timestamp": datetime.now().isoformat(),
                     }
                     event_data["hitl_request"] = hitl_payload
@@ -2208,6 +2380,7 @@ async def _run_chat_invocation(
                             "session_key": key,
                             "payload": hitl_payload,
                         }
+                    runtime.record_event(key, hitl_payload)
                     await runtime.send(key, hitl_payload)
 
                 runtime.record_event(key, event_data)
@@ -2224,7 +2397,7 @@ async def _run_chat_invocation(
             # If there was a HITL interrupt, wait for the browser response
             if hitl_interrupt_event:
                 interrupt_ids = get_request_input_interrupt_ids(hitl_interrupt_event)
-                
+
                 wait_event = pending_wait_event or asyncio.Event()
                 for iid in interrupt_ids:
                     runtime.pending_hitl.setdefault(iid, {
@@ -2232,9 +2405,9 @@ async def _run_chat_invocation(
                         "response": None,
                         "session_key": key,
                     })
-                
+
                 print(f"[HITL] Waiting for browser response for interrupts: {interrupt_ids}")
-                
+
                 # Wait for ALL interrupt responses (with timeout)
                 try:
                     await asyncio.wait_for(wait_event.wait(), timeout=600)
@@ -2243,13 +2416,16 @@ async def _run_chat_invocation(
                     for iid in interrupt_ids:
                         if iid in runtime.pending_hitl and runtime.pending_hitl[iid]["response"] is None:
                             runtime.pending_hitl[iid]["response"] = {"approved": True}
-                    await runtime.send(key, {
+                    timeout_event = {
                         "type": "hitl_timeout",
                         "request_id": interrupt_ids[0] if interrupt_ids else "",
                         "interrupt_ids": interrupt_ids,
                         "agent_name": hitl_interrupt_event.author or "system",
                         "timeout_seconds": 600,
-                    })
+                        "timestamp": datetime.now().isoformat(),
+                    }
+                    runtime.record_event(key, timeout_event)
+                    await runtime.send(key, timeout_event)
 
                 # Build FunctionResponse message for resume
                 response_parts = []
@@ -2265,14 +2441,14 @@ async def _run_chat_invocation(
                     role="user",
                     parts=response_parts,
                 )
-                
+
                 await runtime.send(key, runtime.status_payload(
                     key,
                     "processing",
                     "Resuming workflow after HITL response...",
                     version=run_status_version,
                 ))
-                
+
                 # Continue the while loop to call run_async again with the FR message
                 continue
             else:
@@ -2292,7 +2468,7 @@ async def _run_chat_invocation(
         runtime.registry.touch_session(user_id, session_id, status="idle")
         payload = {
             "type": "final_response",
-            "content": result.markdown,
+            "content": remint_report_urls(result.markdown),
             "timestamp": datetime.now().isoformat(),
         }
         if result.report_dir:
@@ -2319,11 +2495,11 @@ async def _run_chat_invocation(
 
 def _handle_hitl_response(runtime: WebRuntime, key: SessionKey, data: dict):
     """Resolve a pending HITL request from the browser.
-    
+
     Routes responses to either:
     1. WebHITLHandler (for SessionAgent's custom HITL, e.g. PlannerAgent)
     2. _pending_hitl dict (for ADK RequestInput workflow interrupts)
-    
+
     The browser sends back:
         {
             "type": "hitl_response",
@@ -2360,7 +2536,7 @@ def _handle_hitl_response(runtime: WebRuntime, key: SessionKey, data: dict):
             "Ignoring RequestInput response from the wrong session"
         )
         return
-    
+
     # Store the response data
     response = {
         "approved": data.get("approved", False),
@@ -2369,7 +2545,7 @@ def _handle_hitl_response(runtime: WebRuntime, key: SessionKey, data: dict):
         "free_input": data.get("free_input"),
     }
     info["response"] = response
-    
+
     # Check if all interrupt IDs sharing this wait_event have responses
     wait_event = info["event"]
     for pending in runtime.pending_hitl.values():
@@ -2381,4 +2557,5 @@ def _handle_hitl_response(runtime: WebRuntime, key: SessionKey, data: dict):
         if v["event"] is wait_event and v.get("session_key") == key
     )
     if all_resolved:
+        runtime.record_event(key, hitl_response_event(lookup_id, data))
         wait_event.set()  # Unblock the _handle_chat loop

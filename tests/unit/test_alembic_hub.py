@@ -13,17 +13,22 @@ import tarfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "CoScientist"))
-
-from alembic.hub import (  # noqa: E402
-    HubCreds,
-    bundle_name,
-    choose_strategy,
-    hub_image_ref,
-    pack_artifacts,
-    push_commands,
-    unpack_bundle,
-)
-from alembic.portable import ARTEFACT_PATHS, SERVE_DOCKERFILE  # noqa: E402
+try:
+    from alembic.hub import (  # noqa: E402
+        HubCreds,
+        bundle_name,
+        choose_strategy,
+        hub_image_ref,
+        pack_artifacts,
+        push_commands,
+        unpack_bundle,
+    )
+    from alembic.portable import ARTEFACT_PATHS, SERVE_DOCKERFILE  # noqa: E402
+finally:
+    # The insert makes the container's package layout importable, but leaving
+    # CoScientist/ on sys.path shadows site-packages names for every test that
+    # collects after this one (CoScientist/a2a hides the a2a-sdk package).
+    sys.path.pop(0)
 
 
 # ── credentials ──────────────────────────────────────────────────────────────

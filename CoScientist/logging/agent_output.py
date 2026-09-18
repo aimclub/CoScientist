@@ -180,6 +180,30 @@ def _rewrite_workspace_paths(text: str, tool_context: Any) -> str:
     return _WORKSPACE_PATH_RE.sub(_replace, text)
 
 
+async def report_output(context: Any, payload: dict) -> None:
+    """Post one message to the chat on behalf of ``context``'s session.
+
+    The plugin's own entry point (see ``AgentOutputPlugin._dispatch`` below),
+    and the one for an agent that produces a deliverable outside any
+    ``after_tool_callback`` — the planner's plan critic is a bare LLM call, not
+    an AgentTool delegation, so nothing would otherwise report its verdict.
+    ``payload`` is the ``agent_output`` shape: ``agent``, ``caller``,
+    ``content`` (Markdown), optional ``call_id``.
+    """
+    sink = _sink
+    if sink is None:
+        return
+    try:
+        key = session_key(context)
+    except Exception:  # noqa: BLE001 - context shapes vary across ADK paths
+        return
+    payload.setdefault("timestamp", datetime.now().isoformat())
+    try:
+        await sink(key, payload)
+    except Exception as exc:  # noqa: BLE001 - an observer must not fail a run
+        logger.warning("Agent output sink failed: %s", exc)
+
+
 class AgentOutputPlugin(BasePlugin):
     """Report the final answer of every agent flagged ``report_output``."""
 
@@ -187,18 +211,7 @@ class AgentOutputPlugin(BasePlugin):
         super().__init__(name=name)
 
     async def _dispatch(self, tool_context: Any, payload: dict) -> None:
-        sink = _sink
-        if sink is None:
-            return
-        try:
-            key = session_key(tool_context)
-        except Exception:  # noqa: BLE001 - context shapes vary across ADK paths
-            return
-        payload.setdefault("timestamp", datetime.now().isoformat())
-        try:
-            await sink(key, payload)
-        except Exception as exc:  # noqa: BLE001 - an observer must not fail a run
-            logger.warning("Agent output sink failed: %s", exc)
+        await report_output(tool_context, payload)
 
     async def after_tool_callback(self, *, tool, tool_args, tool_context, result) -> None:
         # An AgentTool is named after the agent it wraps, so the tool name IS

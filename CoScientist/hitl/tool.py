@@ -105,7 +105,8 @@ class HITLToolset(BaseToolset):
             action_type=HITLAction.APPROVE,
             message=f"Agent '{agent_name}' requests approval for the following action: {message}",
             context=request_context,
-            invoked_via="tool"
+            invoked_via="tool",
+            trigger="request_approval",
         )
         response = await self._handler.handle_request(request)
         return {
@@ -145,7 +146,8 @@ class HITLToolset(BaseToolset):
                     "session_id": session_id,
                 }
             },
-            invoked_via="tool"
+            invoked_via="tool",
+            trigger="request_selection",
         )
         response = await self._handler.handle_request(request)
         return {

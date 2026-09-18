@@ -331,9 +331,11 @@ my_agent = LlmAgent(
 
 ### Adding New Tools
 
-1. Implement the tool in the appropriate module
-2. Create a toolset class if needed
-3. Export in `CoScientist/tools/__init__.py`
+Tools are wired by name through `CoScientist/assembly/bindings.py` (factory +
+prompt docs) and `CoScientist/agents/system.yaml` (which agent gets them), and a
+tool name is also keyed in several other tables (Work Order risk tiers,
+`internal_tools`, loop guard, web UI status rules). The full checklist is in
+[CoScientist/docs/development.md §4.1](CoScientist/docs/development.md#41-add-a-new-tool).
 
 ## Documentation
 

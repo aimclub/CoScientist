@@ -1,0 +1,39 @@
+services:
+  coscientist-facade:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.a2a
+    image: coscientist-codesynapse-facade:latest
+    command: ["python", "-m", "CoScientist.integrations.codesynapse"]
+    env_file:
+      - ../.env
+    environment:
+      PYTHONPATH: /app
+      CODESYNAPSE_ENABLED: "true"
+      CODESYNAPSE_MONGO_URI: ${CODESYNAPSE_MONGO_URI:?set the dedicated CoScientist MongoDB URI}
+      CODESYNAPSE_MONGO_DATABASE: ${CODESYNAPSE_MONGO_DATABASE:-coscientist}
+      CODESYNAPSE_A2A_PUBLIC_URL: ${CODESYNAPSE_A2A_PUBLIC_URL:-http://coscientist-facade:8010}
+      MCP__PAPERS_SEARCH_URL: http://papers-search-mcp-server:7331/mcp
+      MCP__PAPER_ANALYSIS_URL: http://paper-analysis-mcp-server:7331/mcp
+      MCP__CHEMICAL_URL: http://chemical-mcp-server:7331/mcp
+      MCP__DATASET_COLLECTION_URL: http://dataset-collection-mcp-server:7331/mcp
+      # The manager receives a Codesynapse-backed handler, never ConsoleHITLHandler.
+      HITL__ENABLED: "true"
+      A2A_DISABLE_OPIK: ${A2A_DISABLE_OPIK:-1}
+    networks:
+      - codesynapse-internal
+    expose:
+      - "8010"
+    ports:
+      - "${CODESYNAPSE_A2A_PORT:-8010}:8010"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent --show-error http://localhost:8010/readyz > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+networks:
+  codesynapse-internal:
+    external: true
+    name: ${CODESYNAPSE_INTERNAL_NETWORK:-codesynapse-internal}

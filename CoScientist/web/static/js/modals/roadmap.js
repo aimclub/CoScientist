@@ -15,25 +15,23 @@
   const KNOWN_AGENTS = [
     'ResearchAgent',
     'PlannerAgent',
-    'PlanningPipelineAgent',
     'CoderAgent',
     'TaskExecutorAgent',
     'DatasetCollectorAgent',
     'HypothesesAgent',
     'MedicalAgent',
     'McpBuilderAgent',
-    'ToolPipelineAgent',
-    'ToolPreparerAgent',
+    'ExperimentAgent',
+    'ContextInitAgent',
     'ResultAggregatorAgent',
     'FedotAgent',
     'OrchestratorAgent',
-    'system',
   ];
 
   const AGENT_ICONS = {
     OrchestratorAgent: 'hub',
     PlannerAgent: 'map',
-    PlanningPipelineAgent: 'map',
+    ContextInitAgent: 'assignment',
     HypothesesAgent: 'lightbulb',
     ResearchAgent: 'travel_explore',
     TaskExecutorAgent: 'alt_route',
@@ -41,37 +39,35 @@
     DatasetCollectorAgent: 'dataset',
     MedicalAgent: 'medical_services',
     McpBuilderAgent: 'construction',
-    ToolPipelineAgent: 'checklist',
-    ToolPreparerAgent: 'precision_manufacturing',
+    ExperimentAgent: 'science',
     ResultAggregatorAgent: 'summarize',
     FedotAgent: 'auto_graph',
-    system: 'settings_suggest',
   };
 
   const STATUS_CONFIG = {
     done: {
-      label: 'Completed',
+      labelKey: 'roadmap.status.done',
       icon: 'check_circle',
       badgeClass: 'text-secondary bg-secondary/10 border-secondary/30',
       barClass: 'bg-secondary',
       spin: false,
     },
     in_progress: {
-      label: 'In Progress',
+      labelKey: 'roadmap.status.in_progress',
       icon: 'autorenew',
       badgeClass: 'text-primary bg-primary/10 border-primary/40 animate-pulse',
       barClass: 'bg-primary shadow-[0_0_8px_rgba(0,218,243,0.5)]',
       spin: true,
     },
     error: {
-      label: 'Failed',
+      labelKey: 'roadmap.status.error',
       icon: 'error',
       badgeClass: 'text-error bg-error/10 border-error/30',
       barClass: 'bg-error',
       spin: false,
     },
     todo: {
-      label: 'Pending',
+      labelKey: 'roadmap.status.todo',
       icon: 'schedule',
       badgeClass: 'text-outline-variant bg-surface-container-high border-outline-variant/20',
       barClass: 'bg-outline-variant/40',
@@ -123,7 +119,7 @@
 
     if (status) {
       status.classList.remove('hidden');
-      status.textContent = 'Syncing roadmap…';
+      status.textContent = t('roadmap.syncing');
       status.className = 'text-[10px] font-mono text-primary/70 animate-pulse';
     }
     if (saveBtn) saveBtn.disabled = true;
@@ -150,14 +146,14 @@
       }
 
       if (status) {
-        status.textContent = 'Roadmap synced.';
+        status.textContent = t('roadmap.synced');
         status.className = 'text-[10px] font-mono text-secondary';
         setTimeout(() => { if (status) status.classList.add('hidden'); }, 1800);
       }
     } catch (error) {
       console.error('Failed to load roadmap:', error);
       if (status) {
-        status.textContent = 'Error syncing roadmap: ' + error.message;
+        status.textContent = t('roadmap.syncError', { error: error.message });
         status.className = 'text-[10px] font-mono text-error';
       }
     } finally {
@@ -201,8 +197,8 @@
     const cBadge = document.getElementById('roadmap-counter-badge');
 
     if (pBar) pBar.style.width = percent + '%';
-    if (pText) pText.textContent = `${done} of ${total} completed (${percent}%)`;
-    if (cBadge) cBadge.textContent = `${total} task${total === 1 ? '' : 's'}`;
+    if (pText) pText.textContent = t('roadmap.progress', { done, total, percent });
+    if (cBadge) cBadge.textContent = t('roadmap.tasksCount', { count: total });
 
     // Filter counts
     const fAll = document.getElementById('rf-all-count');
@@ -218,13 +214,17 @@
     const sTotal = document.getElementById('roadmap-stat-total');
     const sActive = document.getElementById('roadmap-stat-active');
     const sDone = document.getElementById('roadmap-stat-done');
-    if (sTotal) sTotal.textContent = `Total: ${total}`;
-    if (sActive) sActive.textContent = `In progress: ${active}`;
-    if (sDone) sDone.textContent = `Done: ${done}`;
+    if (sTotal) sTotal.textContent = t('roadmap.statTotal', { count: total });
+    if (sActive) sActive.textContent = t('roadmap.statActive', { count: active });
+    if (sDone) sDone.textContent = t('roadmap.statDone', { count: done });
   }
 
   // ── Visual View Rendering ────────────────────────────────────────────────
   function renderRoadmapVisual() {
+    // Every change to the task list ends in this render, so the sidebar
+    // tracker is refreshed here too — even while the modal is closed.
+    if (window.PlanTracker) window.PlanTracker.render(currentTasks);
+
     const listEl = document.getElementById('roadmap-tasks-list');
     const emptyEl = document.getElementById('roadmap-empty-state');
     if (!listEl) return;
@@ -253,8 +253,8 @@
         const emptyMsg = emptyEl.querySelector('p.text-sm');
         if (emptyMsg) {
           emptyMsg.textContent = currentTasks.length === 0
-            ? 'No tasks found in roadmap'
-            : 'No tasks match current filter/search';
+            ? t('roadmap.empty.none')
+            : t('roadmap.empty.noMatch');
         }
       }
       return;
@@ -296,10 +296,10 @@
                   <div class="relative">
                     <select id="edit-status-${escHtml(taskId)}"
                       class="text-[10px] font-semibold rounded-full bg-surface-container-highest border border-outline-variant/30 text-on-surface px-2.5 py-1 pr-6 focus:border-primary focus:ring-1 focus:ring-primary outline-none cursor-pointer">
-                      <option value="TODO" ${norm === 'todo' ? 'selected' : ''}>Pending</option>
-                      <option value="IN_PROGRESS" ${norm === 'in_progress' ? 'selected' : ''}>In Progress</option>
-                      <option value="DONE" ${norm === 'done' ? 'selected' : ''}>Completed</option>
-                      <option value="ERROR" ${norm === 'error' ? 'selected' : ''}>Failed</option>
+                      <option value="TODO" ${norm === 'todo' ? 'selected' : ''}>${t('roadmap.status.todo')}</option>
+                      <option value="IN_PROGRESS" ${norm === 'in_progress' ? 'selected' : ''}>${t('roadmap.status.in_progress')}</option>
+                      <option value="DONE" ${norm === 'done' ? 'selected' : ''}>${t('roadmap.status.done')}</option>
+                      <option value="ERROR" ${norm === 'error' ? 'selected' : ''}>${t('roadmap.status.error')}</option>
                     </select>
                   </div>
 
@@ -317,9 +317,9 @@
                   <div class="relative">
                     <select id="edit-parent-${escHtml(taskId)}"
                       class="text-[10px] font-mono rounded-full bg-surface-container-highest border border-outline-variant/30 text-on-surface px-2.5 py-1 pr-6 focus:border-primary focus:ring-1 focus:ring-primary outline-none cursor-pointer">
-                      <option value="">No prerequisite</option>
+                      <option value="">${t('roadmap.noPrereq')}</option>
                       ${otherTasks.map(ot => `
-                        <option value="${escHtml(ot.id || '')}" ${task.parent_id === ot.id ? 'selected' : ''}>Depends on: ${escHtml(ot.id || '')}</option>
+                        <option value="${escHtml(ot.id || '')}" ${task.parent_id === ot.id ? 'selected' : ''}>${t('roadmap.dependsOn', { id: ot.id || '' })}</option>
                       `).join('')}
                     </select>
                   </div>
@@ -328,7 +328,7 @@
                 <div class="flex items-center gap-1">
                   <button type="button" onclick="deleteRoadmapTask('${escHtml(taskId)}')"
                     class="p-1 rounded text-outline-variant hover:text-error hover:bg-error/10 transition-colors"
-                    title="Delete task">
+                    title="${t('roadmap.deleteTask')}">
                     <span class="material-symbols-outlined text-sm">delete</span>
                   </button>
                 </div>
@@ -336,26 +336,26 @@
 
               <!-- Title Input -->
               <div class="flex flex-col gap-1">
-                <label class="text-[9px] font-bold font-mono text-outline-variant uppercase tracking-wider">Task Title</label>
+                <label class="text-[9px] font-bold font-mono text-outline-variant uppercase tracking-wider">${t('roadmap.fieldTitle')}</label>
                 <input type="text" id="edit-title-${escHtml(taskId)}" value="${escHtml(task.title || '')}"
-                  placeholder="Enter task title…"
+                  placeholder="${t('roadmap.titlePlaceholder')}"
                   onkeydown="if(event.key==='Enter') saveEditTask('${escHtml(taskId)}')"
                   class="w-full text-xs font-semibold bg-surface-container-lowest border border-outline-variant/25 rounded-md px-3 py-1.5 text-on-surface placeholder:text-outline-variant/40 focus:border-primary/60 focus:ring-1 focus:ring-primary/40 outline-none transition-all" />
               </div>
 
               <!-- Description Textarea -->
               <div class="flex flex-col gap-1">
-                <label class="text-[9px] font-bold font-mono text-outline-variant uppercase tracking-wider">Description</label>
+                <label class="text-[9px] font-bold font-mono text-outline-variant uppercase tracking-wider">${t('roadmap.fieldDesc')}</label>
                 <textarea id="edit-desc-${escHtml(taskId)}" rows="3"
-                  placeholder="Specific instructions or details for this task…"
+                  placeholder="${t('roadmap.descPlaceholder')}"
                   class="w-full text-xs font-sans bg-surface-container-lowest border border-outline-variant/25 rounded-md px-3 py-1.5 text-on-surface placeholder:text-outline-variant/40 focus:border-primary/60 focus:ring-1 focus:ring-primary/40 outline-none resize-y leading-relaxed transition-all">${escHtml(task.description || '')}</textarea>
               </div>
 
               <!-- Notes Input -->
               <div class="flex flex-col gap-1">
-                <label class="text-[9px] font-bold font-mono text-outline-variant uppercase tracking-wider">Notes / Parameters (Optional)</label>
+                <label class="text-[9px] font-bold font-mono text-outline-variant uppercase tracking-wider">${t('roadmap.fieldNotes')}</label>
                 <input type="text" id="edit-notes-${escHtml(taskId)}" value="${escHtml(task.notes || '')}"
-                  placeholder="e.g. Max iterations: 3, temperature: 0.2"
+                  placeholder="${t('roadmap.notesPlaceholder')}"
                   onkeydown="if(event.key==='Enter') saveEditTask('${escHtml(taskId)}')"
                   class="w-full text-[11px] font-sans bg-surface-container-lowest border border-outline-variant/25 rounded-md px-3 py-1 text-on-surface placeholder:text-outline-variant/40 focus:border-primary/60 focus:ring-1 focus:ring-primary/40 outline-none transition-all" />
               </div>
@@ -364,12 +364,12 @@
               <div class="flex items-center justify-end gap-2 pt-1 border-t border-outline-variant/10">
                 <button type="button" onclick="cancelEditTask('${escHtml(taskId)}')"
                   class="px-3 py-1 rounded-md text-[11px] font-medium text-outline-variant hover:text-on-surface hover:bg-surface-container-high transition-colors">
-                  Cancel
+                  ${t('settings.cancel')}
                 </button>
                 <button type="button" onclick="saveEditTask('${escHtml(taskId)}')"
                   class="flex items-center gap-1 px-3.5 py-1 rounded-md text-[11px] font-semibold bg-primary text-on-primary shadow-sm hover:brightness-110 active:scale-95 transition-all">
                   <span class="material-symbols-outlined text-xs">check</span>
-                  <span>Done</span>
+                  <span>${t('roadmap.doneEditing')}</span>
                 </button>
               </div>
             </div>
@@ -395,10 +395,10 @@
 
                 <!-- Status Badge (Clickable cycle) -->
                 <button type="button" onclick="cycleTaskStatus('${escHtml(taskId)}')"
-                  title="Click to toggle status"
+                  title="${t('roadmap.toggleStatus')}"
                   class="flex items-center gap-1.5 text-[10px] font-semibold px-2 py-0.5 rounded-full border transition-all hover:scale-105 ${cfg.badgeClass}">
                   <span class="material-symbols-outlined text-[13px] ${cfg.spin ? 'animate-spin' : ''}">${cfg.icon}</span>
-                  <span>${cfg.label}</span>
+                  <span>${t(cfg.labelKey)}</span>
                 </button>
 
                 <!-- Assignee Agent Chip -->
@@ -410,10 +410,10 @@
                 <!-- Parent Dependency -->
                 ${task.parent_id ? `
                   <button type="button" onclick="highlightParentTask('${escHtml(task.parent_id)}')"
-                    title="Jump to prerequisite task"
+                    title="${t('roadmap.jumpToPrereq')}"
                     class="flex items-center gap-1 text-[9px] font-mono px-2 py-0.5 rounded-full bg-primary/5 text-primary border border-primary/20 hover:bg-primary/10 transition-colors">
                     <span class="material-symbols-outlined text-[11px]">arrow_upward</span>
-                    <span>Depends on: ${escHtml(task.parent_id)}</span>
+                    <span>${t('roadmap.dependsOn', { id: task.parent_id })}</span>
                   </button>
                 ` : ''}
               </div>
@@ -423,25 +423,25 @@
                 ${idx > 0 ? `
                   <button type="button" onclick="moveRoadmapTask('${escHtml(taskId)}', 'up')"
                     class="p-1 rounded text-outline-variant hover:text-primary hover:bg-surface-container-high transition-colors"
-                    title="Move up">
+                    title="${t('roadmap.moveUp')}">
                     <span class="material-symbols-outlined text-xs">arrow_upward</span>
                   </button>
                 ` : ''}
                 ${idx < currentTasks.length - 1 ? `
                   <button type="button" onclick="moveRoadmapTask('${escHtml(taskId)}', 'down')"
                     class="p-1 rounded text-outline-variant hover:text-primary hover:bg-surface-container-high transition-colors"
-                    title="Move down">
+                    title="${t('roadmap.moveDown')}">
                     <span class="material-symbols-outlined text-xs">arrow_downward</span>
                   </button>
                 ` : ''}
                 <button type="button" onclick="startEditTask('${escHtml(taskId)}')"
                   class="p-1 rounded text-outline-variant hover:text-primary hover:bg-surface-container-high transition-colors"
-                  title="Edit task">
+                  title="${t('roadmap.editTask')}">
                   <span class="material-symbols-outlined text-sm">edit</span>
                 </button>
                 <button type="button" onclick="deleteRoadmapTask('${escHtml(taskId)}')"
                   class="p-1 rounded text-outline-variant hover:text-error hover:bg-error/10 transition-colors"
-                  title="Delete task">
+                  title="${t('roadmap.deleteTask')}">
                   <span class="material-symbols-outlined text-sm">delete</span>
                 </button>
               </div>
@@ -449,7 +449,7 @@
 
             <!-- Task Title -->
             <div class="text-sm font-semibold text-on-surface leading-snug tracking-tight">
-              ${escHtml(task.title || 'Untitled task')}
+              ${escHtml(task.title || t('roadmap.untitled'))}
             </div>
 
             <!-- Task Description -->
@@ -461,7 +461,7 @@
                 ${isLongDesc ? `
                   <button type="button" onclick="toggleDescExpand('${escHtml(taskId)}', this)"
                     class="mt-1 text-[10px] font-semibold text-primary hover:underline flex items-center gap-0.5">
-                    <span>${isExpanded ? 'Show less' : 'Show more'}</span>
+                    <span>${isExpanded ? t('common.showLess') : t('common.showMore')}</span>
                     <span class="material-symbols-outlined text-xs">${isExpanded ? 'expand_less' : 'expand_more'}</span>
                   </button>
                 ` : ''}
@@ -577,7 +577,7 @@
         titleEl.focus();
         titleEl.classList.add('border-error');
       }
-      alert('Task title cannot be empty.');
+      alert(t('roadmap.errEmptyTitle'));
       return false;
     }
 
@@ -656,8 +656,8 @@
     const button = btn || (descEl && descEl.parentElement ? descEl.parentElement.querySelector('button') : null);
     if (button) {
       button.innerHTML = isExp
-        ? `<span>Show less</span><span class="material-symbols-outlined text-xs">expand_less</span>`
-        : `<span>Show more</span><span class="material-symbols-outlined text-xs">expand_more</span>`;
+        ? `<span>${t('common.showLess')}</span><span class="material-symbols-outlined text-xs">expand_less</span>`
+        : `<span>${t('common.showMore')}</span><span class="material-symbols-outlined text-xs">expand_more</span>`;
     }
   }
 
@@ -680,12 +680,12 @@
       void targetCard.offsetWidth; // trigger reflow
       targetCard.classList.add('highlighted');
     } else {
-      alert(`Prerequisite task '${parentId}' not found in the plan.`);
+      alert(t('roadmap.errNoPrereq', { id: parentId }));
     }
   }
 
   function deleteRoadmapTask(taskId) {
-    if (!confirm(`Delete task ${taskId}?`)) return;
+    if (!confirm(t('roadmap.confirmDelete', { id: taskId }))) return;
     if (editingTaskId === taskId) {
       editingTaskId = null;
       isNewTaskDraft = false;
@@ -737,7 +737,7 @@
 
       if (status) {
         status.classList.remove('hidden');
-        status.textContent = 'Saving changes…';
+        status.textContent = t('roadmap.savingChanges');
         status.className = 'text-[10px] font-mono text-primary/70 animate-pulse';
       }
 
@@ -752,7 +752,7 @@
 
       if (data.status === 'success') {
         if (status) {
-          status.textContent = 'Roadmap saved successfully.';
+          status.textContent = t('roadmap.savedOk');
           status.className = 'text-[10px] font-mono text-secondary';
         }
         addTelemetry('ROADMAP :: saved successfully');
@@ -764,12 +764,12 @@
 
         setTimeout(closeRoadmapEditor, 800);
       } else {
-        throw new Error(data.error || 'Failed to save roadmap');
+        throw new Error(data.error || t('roadmap.errSave'));
       }
     } catch (error) {
       console.error('Failed to save roadmap:', error);
       if (status) {
-        status.textContent = 'Error saving roadmap: ' + error.message;
+        status.textContent = t('roadmap.saveError', { error: error.message });
         status.className = 'text-[10px] font-mono text-error';
       }
     } finally {
@@ -796,7 +796,7 @@
 
   async function reviseRoadmap() {
     if (!window.currentPlannerHitlRequest) {
-      alert('No pending roadmap confirmation request found.');
+      alert(t('roadmap.errNoPending'));
       return;
     }
 
@@ -806,7 +806,7 @@
 
     if (status) {
       status.classList.remove('hidden');
-      status.textContent = 'Sending revision request…';
+      status.textContent = t('roadmap.sendingRevision');
       status.className = 'text-[10px] font-mono text-primary/70 animate-pulse';
     }
 
@@ -837,12 +837,12 @@
 
         const hitlPanel = document.getElementById('hitl-panel');
         if (hitlPanel) hitlPanel.classList.add('hidden');
-        addSystemMsg('✗ HITL Sent for Revision' + (feedback ? ': ' + feedback : ''));
+        addSystemMsg(t('roadmap.sentForRevision') + (feedback ? ': ' + feedback : ''));
 
         window.currentPlannerHitlRequest = null;
         updateRoadmapModalButtons();
         if (status) {
-          status.textContent = 'Revision requested.';
+          status.textContent = t('roadmap.revisionSent');
           status.className = 'text-[10px] font-mono text-error';
         }
         setTimeout(closeRoadmapEditor, 900);
@@ -850,7 +850,7 @@
     } catch (error) {
       console.error('Error revising roadmap:', error);
       if (status) {
-        status.textContent = 'Error: ' + error.message;
+        status.textContent = t('common.errorPrefix', { error: error.message });
         status.className = 'text-[10px] font-mono text-error';
       }
     }
@@ -858,7 +858,7 @@
 
   async function saveAndConfirmRoadmap() {
     if (!window.currentPlannerHitlRequest) {
-      alert('No pending roadmap confirmation request found.');
+      alert(t('roadmap.errNoPending'));
       return;
     }
 
@@ -868,7 +868,7 @@
 
     if (status) {
       status.classList.remove('hidden');
-      status.textContent = 'Saving and confirming plan…';
+      status.textContent = t('roadmap.savingConfirming');
       status.className = 'text-[10px] font-mono text-primary/70 animate-pulse';
     }
     if (saveBtn) saveBtn.disabled = true;
@@ -887,7 +887,7 @@
 
       if (data.status === 'success') {
         if (status) {
-          status.textContent = 'Roadmap saved and confirmed.';
+          status.textContent = t('roadmap.savedConfirmed');
           status.className = 'text-[10px] font-mono text-secondary';
         }
         addTelemetry('ROADMAP :: saved successfully');
@@ -901,12 +901,12 @@
 
         setTimeout(closeRoadmapEditor, 900);
       } else {
-        throw new Error(data.error || 'Unknown error');
+        throw new Error(data.error || t('roadmap.errUnknown'));
       }
     } catch (error) {
       console.error('Failed to save and confirm roadmap:', error);
       if (status) {
-        status.textContent = 'Error: ' + error.message;
+        status.textContent = t('common.errorPrefix', { error: error.message });
         status.className = 'text-[10px] font-mono text-error';
       }
     } finally {
@@ -1025,9 +1025,9 @@
         }
       }
     } else if (data.type === 'session_snapshot') {
-      if (Array.isArray(data.active_tasks)) {
-        updateTasks(data.active_tasks, false);
-      }
+      // The snapshot describes the whole session: no task list means no plan,
+      // not "keep the previous session's one".
+      updateTasks(Array.isArray(data.active_tasks) ? data.active_tasks : [], false);
     } else if (data.type === 'tasks_updated') {
       if (Array.isArray(data.tasks)) {
         updateTasks(data.tasks, false);
@@ -1041,6 +1041,7 @@
     updateTasks: updateTasks,
     handleSingleTaskUpdate: handleSingleTaskUpdate,
     getTasks: () => currentTasks,
+    normalizeStatus: normalizeStatus,
   };
   window.openRoadmapEditor = openRoadmapEditor;
   window.closeRoadmapEditor = closeRoadmapEditor;
