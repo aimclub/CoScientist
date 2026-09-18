@@ -1,0 +1,105 @@
+{
+ "user_id": "user_c4200a62aabd4610ae00955785eb219c",
+ "session_id": "session_b668b82f8f5441ae84c71ebd07700f54",
+ "wall_seconds": 258.4,
+ "finished": true,
+ "agents": {
+  "ResearchPipeline": {
+   "starts": 1,
+   "seconds": 258
+  },
+  "ContextInitAgent": {
+   "starts": 1,
+   "seconds": 1
+  },
+  "OrchestratorAgent": {
+   "starts": 1,
+   "seconds": 250
+  },
+  "TaskExecutorAgent": {
+   "starts": 1,
+   "seconds": 214
+  },
+  "ToolPipelineAgent": {
+   "starts": 1,
+   "seconds": 195
+  },
+  "ToolPreparerAgent": {
+   "starts": 1,
+   "seconds": 187
+  },
+  "ParallelToolSearcherAgent": {
+   "starts": 1,
+   "seconds": 186
+  },
+  "LocalToolsExtractorAgent": {
+   "starts": 1,
+   "seconds": 7
+  },
+  "ToolWebSearcherAgent": {
+   "starts": 1,
+   "seconds": 186
+  },
+  "ToolRetrieverAgent": {
+   "starts": 1,
+   "seconds": 6
+  },
+  "ToolReranker": {
+   "starts": 1,
+   "seconds": 1
+  },
+  "FullSetToolReranker": {
+   "starts": 1,
+   "seconds": 1
+  },
+  "WebToolsDeployerAgent": {
+   "starts": 1,
+   "seconds": 0
+  },
+  "ExecutorSwitchAgent": {
+   "starts": 1,
+   "seconds": 8
+  },
+  "ExperimentAgent": {
+   "starts": 1,
+   "seconds": 8
+  },
+  "ResultAggregatorAgent": {
+   "starts": 1,
+   "seconds": 7
+  }
+ },
+ "tool_calls_total": 17,
+ "mcp_tool_calls": {
+  "ExperimentAgent:predict_strength": 1,
+  "ExperimentAgent:predict_elongation": 1
+ },
+ "alembic_calls": {},
+ "sandbox_commands": 0,
+ "searches": 0,
+ "llm_errors": 0,
+ "no_matching_tool": 0,
+ "graph": {
+  "nodes": 2,
+  "edges": 1,
+  "by_type": {
+   "ResearchQuestion": 1,
+   "Evidence": 1
+  },
+  "hypotheses": []
+ },
+ "execution_graph_nodes": 29,
+ "llm": {
+  "calls": 20,
+  "prompt_tokens": 116948,
+  "completion_tokens": 5483,
+  "cached_tokens": 41536,
+  "reasoning_tokens": 618,
+  "total_tokens": 122431,
+  "cost_usd": 0.135516
+ },
+ "export": {
+  "file": "tyre-followup-1_07700f54.cossession.zip",
+  "bytes": 307700695
+ }
+}

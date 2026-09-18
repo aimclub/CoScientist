@@ -15,7 +15,7 @@
 | `papers/emnlp26-submitted/` | Поданная EMNLP-версия: секции, таблицы, рисунки (из `coscientist-aaai`, ветка `chore/sync-upstream-main`, `docs-dev/paper-emnlp26`) |
 | `papers/aaai27-main-draft/` | Черновик AAAI-27 Main (не подан): `OUTLINE.md`, `main.tex`, секции, `research/` с обзором работ и бенчмарков |
 | `tyre-case/project_plan_gdoc.txt` | Экспорт Google-дока «План работ по проекту» (ссылка из переписки) |
-| `runs/TRAJECTORIES.md` | Три траектории решения кейса (Наргиза, opencode, CoScientist) со сводкой и интерпретацией |
+| `TYRES_TRAJECTORIES.md` | Три траектории решения кейса (Наргиза, opencode, CoScientist) со сводкой и интерпретацией |
 | `tyre-case/tires_2.csv` | Датасет Наргизы из патентов. Файлы `*.csv` в `.gitignore`, для коммита нужен `git add -f` |
 | `benchmarks/alembic-tmbench-junit/*.xml` | Оценка Alembic по gold TM-Bench, 15 junit-файлов (GLM-5.2, 10–11 июля) |
 | `benchmarks/toolmaker-glm52/` | ToolMaker на GLM-5.2, 19 июля: `summary_final.tsv` с заметками по задачам, `benchmark.xml` (до правки gold), `benchmark_final.xml` (после) |

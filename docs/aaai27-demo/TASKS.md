@@ -33,7 +33,7 @@
 
 ## E. Бейзлайн
 - [x] E1. Бейзлайн opencode завершён: 103 шага, ~60 мин, 6,28 $, отчёт `runs/baseline-opencode/work/REPORT.md`; разбор в `runs/NOTES.md`. По глубине анализа сильнее `tyre-main-1`
-- [x] E2. Сравнение трёх траекторий (Наргиза, opencode, CoScientist): `runs/TRAJECTORIES.md`; таблица в статье (Table 1)
+- [x] E2. Сравнение трёх траекторий (Наргиза, opencode, CoScientist): `TYRES_TRAJECTORIES.md`; таблица в статье (Table 1)
 
 ## F. Статья и видео
 - [x] F1. Рисунок архитектуры: `paper/figures/architecture.tex` (TikZ, собирается в PDF), вставлен в статью

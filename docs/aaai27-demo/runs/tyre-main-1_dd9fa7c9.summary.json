@@ -1,0 +1,154 @@
+{
+ "user_id": "user_c4200a62aabd4610ae00955785eb219c",
+ "session_id": "session_6930406aee54430da8249973dd9fa7c9",
+ "wall_seconds": 2480.5,
+ "finished": true,
+ "agents": {
+  "ResearchPipeline": {
+   "starts": 1,
+   "seconds": 2480
+  },
+  "ContextInitAgent": {
+   "starts": 1,
+   "seconds": 17
+  },
+  "OrchestratorAgent": {
+   "starts": 1,
+   "seconds": 2423
+  },
+  "HypothesesAgent": {
+   "starts": 1,
+   "seconds": 68
+  },
+  "TaskExecutorAgent": {
+   "starts": 3,
+   "seconds": 2275
+  },
+  "ToolPipelineAgent": {
+   "starts": 3,
+   "seconds": 418
+  },
+  "CoderAgent": {
+   "starts": 4,
+   "seconds": 1799
+  },
+  "ToolPreparerAgent": {
+   "starts": 3,
+   "seconds": 101
+  },
+  "ParallelToolSearcherAgent": {
+   "starts": 3,
+   "seconds": 94
+  },
+  "LocalToolsExtractorAgent": {
+   "starts": 3,
+   "seconds": 87
+  },
+  "ToolWebSearcherAgent": {
+   "starts": 3,
+   "seconds": 55
+  },
+  "ToolRetrieverAgent": {
+   "starts": 3,
+   "seconds": 67
+  },
+  "DatasetCollectorAgent": {
+   "starts": 1,
+   "seconds": 13
+  },
+  "ToolReranker": {
+   "starts": 3,
+   "seconds": 19
+  },
+  "FullSetToolReranker": {
+   "starts": 3,
+   "seconds": 7
+  },
+  "WebToolsDeployerAgent": {
+   "starts": 3,
+   "seconds": 0
+  },
+  "ExecutorSwitchAgent": {
+   "starts": 3,
+   "seconds": 317
+  },
+  "ExperimentAgent": {
+   "starts": 3,
+   "seconds": 317
+  },
+  "ResultAggregatorAgent": {
+   "starts": 1,
+   "seconds": 40
+  }
+ },
+ "tool_calls_total": 223,
+ "mcp_tool_calls": {
+  "ExperimentAgent:embed_blend": 7,
+  "ExperimentAgent:embed_psmiles": 1
+ },
+ "alembic_calls": {},
+ "sandbox_commands": 104,
+ "searches": 0,
+ "llm_errors": 0,
+ "no_matching_tool": 0,
+ "graph": {
+  "nodes": 49,
+  "edges": 73,
+  "by_type": {
+   "ResearchQuestion": 1,
+   "Constraint": 6,
+   "Tool": 4,
+   "Resource": 1,
+   "EmpiricalBase": 2,
+   "ConfirmationCriteria": 5,
+   "CostModel": 1,
+   "Hypothesis": 5,
+   "VerificationMethod": 3,
+   "GeneratedData": 3,
+   "Evidence": 9,
+   "Conclusion": 4,
+   "CodeArtifact": 5
+  },
+  "hypotheses": [
+   {
+    "id": "H1",
+    "status": "inconclusive",
+    "text": "A usable subset of the listed published polymer-ML methods (polyBERT, PolymerGNN, TransPolymer) has runnable public code/weights that can either directly predict properties or provide featurization (e"
+   },
+   {
+    "id": "H2",
+    "status": "inconclusive",
+    "text": "Forward models built on plain composition (phr) features with standard regressors (gradient boosting / random forest / ridge) achieve positive R2 and competitive accuracy for Mooney viscosity and M300"
+   },
+   {
+    "id": "H3",
+    "status": "inconclusive",
+    "text": "Because rows within one patent are near-duplicates, random-split metrics substantially overestimate generalization to genuinely new recipes: on held-out-patent (group) splits, R2 drops by ≥0.1 (possib"
+   },
+   {
+    "id": "H4",
+    "status": "inconclusive",
+    "text": "Once a forward model with acceptable group-split accuracy exists, constrained inverse design (optimization/search over phr space within realistic formulation bounds) can propose 5 distinct candidate r"
+   },
+   {
+    "id": "H5",
+    "status": "postponed",
+    "text": "Adding process parameters and ingredient grade/type descriptors on top of plain phr materially improves forward accuracy (≥0.03 R2 or ≥10% MAE reduction) on patent-group splits for Mooney and M300."
+   }
+  ]
+ },
+ "execution_graph_nodes": 228,
+ "llm": {
+  "calls": 241,
+  "prompt_tokens": 6172761,
+  "completion_tokens": 137767,
+  "cached_tokens": 4811680,
+  "reasoning_tokens": 54701,
+  "total_tokens": 6310528,
+  "cost_usd": 3.170773
+ },
+ "export": {
+  "file": "tyre-main-1_dd9fa7c9.cossession.zip",
+  "bytes": 469616
+ }
+}
