@@ -767,3 +767,25 @@ def test_mcp_endpoint_links_are_not_artifacts():
     assert not any(uri.rstrip("/").endswith("/mcp") for uri in uris)
     assert any(uri.endswith("table.csv") for uri in uris)
     assert any("fig.png" in uri for uri in uris)
+
+
+def test_a_refused_write_is_drawn_as_a_failure():
+    """A transactional write that saved NOTHING used to be drawn as a success.
+
+    `research_commit` answers a rejected commit with {"ok": false, "errors":
+    [...]} and carries neither `status` nor `error`, so the log said the call
+    went fine. In one real session three of ten commits were refused that way:
+    whole steps never reached the graph, and nothing anywhere said so.
+    """
+    from CoScientist.graph.emitter import _is_error as emitter_is_error
+    from CoScientist.graph.plugin import _is_error as plugin_is_error
+
+    refused = {"ok": False, "errors": ["nodes[0]: missing attrs.subtype"]}
+    for is_error in (emitter_is_error, plugin_is_error):
+        assert is_error(refused) is True
+        assert is_error({"ok": True, "message": "committed 2 node(s)"}) is False
+        # A tool that simply has no `ok` key is not a failure — which is why
+        # this tests `is False` and not a falsy `ok`.
+        assert is_error({"result": "success", "plan": []}) is False
+        assert is_error({"status": "error"}) is True
+        assert is_error("plain text") is False

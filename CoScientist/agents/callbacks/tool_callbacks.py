@@ -814,3 +814,134 @@ def inject_original_query(
                 "[OrchestratorAgent] Replaced planner messages with original user query"
             )
             return
+
+# ── the plan, mirrored into the research graph ───────────────────────────────
+# The middle layer of the story — what each hypothesis is actually checked BY —
+# existed only if a model remembered to commit it. In a run whose agents all
+# skipped research_commit the graph drew a question with nothing underneath, and
+# no amount of work on the viewer can draw a method that was never recorded. A
+# registered plan is already a deterministic, ordered list of steps: deriving
+# one planned VerificationMethod per step costs no LLM call and cannot be
+# forgotten. Written as "plan-mirror" rather than as an agent, so a reader can
+# see at a glance that no model chose these.
+
+#: normalized task title -> the VerificationMethod id created for it.
+_VM_BY_TASK_KEY = "_research_vm_by_task"
+_PLAN_SOURCE = "plan-mirror"
+
+
+def _task_key(task: Dict[str, Any]) -> str:
+    return " ".join(str(task.get("title") or "").split()).lower()[:120]
+
+
+def _active_hypothesis(graph: Any) -> Optional[str]:
+    """The branch being worked on, if there is exactly one obvious candidate."""
+    try:
+        nodes = graph.full().get("nodes") or []
+    except Exception:  # noqa: BLE001
+        return None
+    live = [n for n in nodes if n.get("type") == "Hypothesis"
+            and n.get("status") in ("under_verification", "formulated")]
+    if not live:
+        return None
+    live.sort(key=lambda n: (n.get("status") != "under_verification",
+                             str(n.get("id"))))
+    return live[0].get("id")
+
+
+def sync_plan_to_research_graph(tasks: Iterable[Dict[str, Any]], graph: Any,
+                                state: Any, question: str = "") -> Optional[Any]:
+    """Mirror a registered plan into the graph as one planned method per step.
+
+    Idempotent: every task title it has already mirrored is remembered in
+    session state, so a re-plan adds only what is new instead of doubling the
+    column. Attaches to the live hypothesis when there is one, and to the root
+    question otherwise — a plan usually arrives before any hypothesis is
+    written, and a method attached to nothing reads as a bug.
+    """
+    tasks = [t for t in (tasks or []) if isinstance(t, dict)]
+    if not tasks:
+        return None
+    root = graph.root_id()
+    if not root:
+        root = (graph.ensure_root(question or tasks[0].get("title", "")) or {}).get("root_id")
+    if not root:
+        return None
+    try:
+        seen = dict(state.get(_VM_BY_TASK_KEY) or {})
+    except Exception:  # noqa: BLE001 — a stateless caller still gets the mirror
+        seen = {}
+    parent = _active_hypothesis(graph) or root
+
+    nodes, edges, keys = [], [], []
+    for i, task in enumerate(tasks):
+        key = _task_key(task)
+        if not key or key in seen:
+            continue
+        ref = f"vm{i}"
+        keys.append(key)
+        nodes.append({
+            "type": "VerificationMethod", "ref": ref, "status": "planned",
+            "attrs": {k: v for k, v in {
+                "description": task.get("title", ""),
+                "procedure": task.get("description", ""),
+                "inputs": task.get("notes", ""),
+                "plan_task_id": task.get("id", ""),
+                "assignee": task.get("assignee", ""),
+            }.items() if v},
+        })
+        edges.append({"type": "tested_by", "from": parent, "to": f"#{ref}"})
+    if not nodes:
+        return None
+
+    # partial_edges: one stale parent id must not cost a dozen good methods.
+    result = graph.commit(source=_PLAN_SOURCE, nodes=nodes, edges=edges,
+                          partial_edges=True)
+    if not result.ok:
+        logger.warning("plan → research graph refused: %s", result.errors[:3])
+        return result
+    for key, echo in zip(keys, result.committed.get("nodes", [])):
+        seen[key] = echo.get("id")
+    try:
+        state[_VM_BY_TASK_KEY] = seen
+    except Exception:  # noqa: BLE001
+        pass
+    return result
+
+
+def mirror_plan_after_create(tool: BaseTool, args: Dict[str, Any],
+                             tool_context: ToolContext,
+                             tool_response: Any) -> None:
+    """after_tool on create_plan: the roadmap becomes the method column."""
+    if getattr(tool, "name", "") != "create_plan" or not isinstance(tool_response, dict):
+        return
+    try:
+        from CoScientist.graph.research.store import get_research_graph
+        sync_plan_to_research_graph(
+            tool_response.get("plan") or [], get_research_graph(tool_context),
+            tool_context.state,
+            str((tool_context.state or {}).get("user_query", "")),
+        )
+    except Exception as exc:  # noqa: BLE001 — mirroring must never break a tool
+        logger.warning("plan mirror failed: %s", exc)
+
+
+def mirror_plan_before_agent(callback_context: CallbackContext):
+    """before_agent: mirror the plan even when `create_plan` never fired.
+
+    `create_plan` belongs to PlannerAgent, which ships disabled, and an operator
+    can register a roadmap straight into state from the web UI — so the after_tool
+    hook alone would be dead code in the default configuration. This reads the
+    same list the executors read (`_master_active_tasks`), which every one of
+    those paths writes. Idempotent, so both hooks may fire for one plan.
+    """
+    try:
+        from CoScientist.graph.research.store import get_research_graph
+        sync_plan_to_research_graph(
+            callback_context.state.get("_master_active_tasks") or [],
+            get_research_graph(callback_context), callback_context.state,
+            str(callback_context.state.get("user_query", "")),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("plan mirror failed: %s", exc)
+    return None

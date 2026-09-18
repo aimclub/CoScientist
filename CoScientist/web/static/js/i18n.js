@@ -1174,7 +1174,6 @@ const i18n = {
   'graph.backTrace': { en: '← session trace', ru: '← трасса сессии' },
   'graph.view.label': { en: 'view', ru: 'вид' },
   'graph.view.research': { en: 'research', ru: 'исследования' },
-  'graph.view.slide': { en: 'research · slide', ru: 'исследования · слайд' },
   'graph.view.execution': { en: 'execution log', ru: 'лог выполнения' },
   'graph.turn.study': { en: 'study', ru: 'исследование' },
   'graph.turn.request': { en: 'request', ru: 'запрос' },
@@ -1212,6 +1211,8 @@ const i18n = {
   'graph.type.efficiencyjustification': { en: 'Efficiency', ru: 'Эффективность' },
   'graph.type.costmodel': { en: 'Cost model', ru: 'Модель стоимости' },
   'graph.type.efficiencymetric': { en: 'Metric', ru: 'Метрика' },
+  'graph.type.framing': { en: 'Framing', ru: 'Постановка' },
+  'graph.type.outcome': { en: 'Outcome', ru: 'Итог' },
   // Research edge labels
   'graph.edge.motivates': { en: 'motivates', ru: 'мотивирует' },
   'graph.edge.tested_by': { en: 'tested by', ru: 'проверяется' },
@@ -1288,6 +1289,74 @@ const i18n = {
   'graph.detail.empty': { en: 'nothing recorded yet', ru: 'пока ничего не записано' },
   'graph.detail.runOf': { en: 'run {run} of {runs}', ru: 'запуск {run} из {runs}' },
   'graph.detail.started': { en: 'started {at}', ru: 'начат в {at}' },
+
+  // ── Research graph: the story a card tells ──
+  // Everything below is written into the page by JS after load, so each one is
+  // fetched with t(...) rather than data-i18n (applyLanguage runs once, on
+  // DOMContentLoaded). The server sends CODES for these, never sentences —
+  // otherwise an English reader gets Russian banners.
+  'graph.why.title': { en: 'why', ru: 'почему' },
+  'graph.why.missing': {
+    en: 'no reason was recorded for this outcome',
+    ru: 'причина этого исхода не записана'
+  },
+  'graph.card.criterion': { en: 'criterion:', ru: 'критерий:' },
+  'graph.origin.question': { en: 'the question as first stated', ru: 'исходная формулировка вопроса' },
+  'graph.origin.modified': { en: 'modified: {reason}', ru: 'модификация: {reason}' },
+  'graph.origin.refined': { en: 'refined: {reason}', ru: 'уточнение: {reason}' },
+  'graph.origin.retried': { en: 'retried: {reason}', ru: 'повторная проверка: {reason}' },
+  'graph.origin.other': { en: 'replaces an earlier hypothesis', ru: 'заменяет прежнюю гипотезу' },
+  'graph.count.attached': { en: '{count} attached', ru: 'вложений: {count}' },
+  'graph.chips.tools': { en: 'tools', ru: 'инструменты' },
+  'graph.attach.title': { en: 'attached', ru: 'вложения' },
+  'graph.history.title': { en: 'how it got here', ru: 'как дошло до этого' },
+  'graph.history.initial': { en: 'created as {status}', ru: 'создан(а) как {status}' },
+  'graph.history.entry': { en: '{from} → {to} · {source}', ru: '{from} → {to} · {source}' },
+  'graph.links.title': { en: 'connections', ru: 'связи' },
+  'graph.links.in': { en: 'comes from', ru: 'приходит из' },
+  'graph.links.out': { en: 'leads to', ru: 'ведёт к' },
+  'graph.edge.supersedes.refuted': { en: '✗ refuted → modified', ru: '✗ опровергнута → модифицирована' },
+  'graph.edge.supersedes.confirmed': { en: '✓ confirmed → refined', ru: '✓ подтверждена → уточнена' },
+  'graph.edge.supersedes.inconclusive': { en: '≈ unsettled → retried', ru: '≈ без ответа → перепроверена' },
+  'graph.edge.supersedes.other': { en: 'superseded by', ru: 'заменена на' },
+  'graph.edge.frames': { en: 'frames', ru: 'задаёт рамку' },
+  'graph.edge.concludes': { en: 'sums up', ru: 'подводит итог' },
+  'graph.edge.via': { en: 'via {node}', ru: 'через {node}' },
+  'graph.counters.confirmed': { en: 'confirmed', ru: 'подтверждено' },
+  'graph.counters.refuted': { en: 'refuted', ru: 'опровергнуто' },
+  'graph.counters.under_verification': { en: 'under verification', ru: 'на проверке' },
+  'graph.counters.formulated': { en: 'formulated', ru: 'сформулировано' },
+  'graph.counters.inconclusive': { en: 'inconclusive', ru: 'без ответа' },
+  'graph.counters.postponed': { en: 'postponed', ru: 'отложено' },
+  'graph.header.meta': {
+    en: '{branches} branch(es) · {iterations} iteration(s)',
+    ru: 'веток: {branches} · итераций: {iterations}'
+  },
+  // Shown instead of the branch tally while a study has no hypotheses to
+  // branch: when the record was written, and over how long.
+  'graph.header.span': {
+    en: 'recorded from {from}, over {mins} min',
+    ru: 'записано с {from}, за {mins} мин'
+  },
+  // The four bands the research canvas is read down, top to bottom. A card sits
+  // in the band of the stage that produced it, so the picture says where the
+  // study has got to before any card is read.
+  'graph.stage.framing': { en: 'Framing', ru: 'Постановка' },
+  'graph.stage.literature': { en: 'Literature review', ru: 'Анализ литературы' },
+  'graph.stage.hypotheses': { en: 'Hypotheses', ru: 'Гипотезы' },
+  'graph.stage.report': { en: 'Report', ru: 'Отчёт' },
+  'graph.stage.empty': { en: '— not reached yet', ru: '— этап не начат' },
+  // What the record is missing — said out loud, because an empty canvas looked
+  // the same whether nobody wrote anything or every write was refused.
+  'graph.gap.no_root': { en: 'no root question', ru: 'нет корневого вопроса' },
+  'graph.gap.no_frame': { en: 'the research frame was never set', ru: 'рамка исследования не задана' },
+  'graph.gap.no_hypotheses': { en: 'no hypotheses yet', ru: 'гипотез пока нет' },
+  'graph.gap.no_methods': { en: '{count} hypothesis(es) with no method', ru: 'гипотез без метода: {count}' },
+  'graph.gap.no_evidence': { en: 'methods ran, no observations recorded', ru: 'методы есть, наблюдений нет' },
+  'graph.gap.unreasoned_failures': { en: '{count} outcome(s) with no reason', ru: 'исходов без причины: {count}' },
+  'graph.gap.rejected_commits': { en: '{count} write(s) refused', ru: 'записей отклонено: {count}' },
+  'graph.error.http': { en: 'HTTP {status}', ru: 'HTTP {status}' },
+  'graph.error.server': { en: 'server: {error}', ru: 'сервер: {error}' },
 };
 
 /** Применяет текущий язык ко всем элементам с data-i18n / data-i18n-placeholder */

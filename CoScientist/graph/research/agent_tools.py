@@ -128,9 +128,14 @@ def _context_budget() -> int:
 
 def _orchestrator_digest(research_graph) -> str:
     """Overview index + active-trigger digest — what the orchestrator sees."""
-    if research_graph.is_empty():
-        return ("Research graph is EMPTY. If this is a research task, call "
-                "research_init(question=...) before delegating.")
+    # Not `is_empty()`: the FIRST worker write — one Evidence, one Tool — makes
+    # the graph non-empty and used to silence this line for the rest of the run,
+    # so a study that never got a root question stopped being told it has none.
+    # Everything downstream needs the root: the frame card, the provenance
+    # chain, and the guarantee that nothing floats unattached.
+    if research_graph.root_id() is None:
+        return ("Research graph has NO ROOT QUESTION. If this is a research "
+                "task, call research_init(question=...) before delegating.")
     budget = _context_budget()
     overview = research_graph.overview().get("rendered", "")
     triggers = queries.trigger_report(research_graph, char_budget=budget).get("rendered", "")
@@ -147,7 +152,16 @@ def _worker_context(research_graph, state: Any) -> str:
     """A worker's slice of the graph: the focus node's neighborhood if the
     orchestrator set one, else the compact overview so the worker can find ids."""
     if research_graph.is_empty():
-        return ""
+        # An empty string said nothing at all — not that the graph is empty, not
+        # that the worker may write to it. Read as "there is no graph here", and
+        # a worker that had been shown H-ids in its protocol example went on to
+        # reference a hypothesis that did not exist, which rejected its whole
+        # commit and lost the finding with it.
+        return ("The research graph is EMPTY — nothing has been recorded yet. "
+                "Record YOUR results in it (see your RESEARCH GRAPH section). "
+                "Do NOT reference any node id: there are none yet. Create only "
+                "what you are allowed to create, and link it with your own "
+                "edges using \"#ref\" handles from the same commit.")
     focus = None
     try:
         focus = (state or {}).get(FOCUS_STATE_KEY)
@@ -282,6 +296,11 @@ class ResearchGraphToolset(BaseToolset):
                             "the payload and call research_commit again"}
         if result.ok:
             _refresh_context_state(tool_context, self._is_root)
+        else:
+            # The store logs the refusal too; this line names the agent whose
+            # step was lost, which is what a reader of the run log needs.
+            logger.warning("research_commit refused for %s: %s",
+                           agent, "; ".join(result.errors[:3]))
         return result.model_dump(exclude_none=True)
 
     def research_init(

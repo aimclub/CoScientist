@@ -546,8 +546,15 @@ class WebRuntime:
         async with self.manager_lock:
             manager = self.managers.get(key)
             if manager is None:
-                if get_settings().web.auto_clear_graph_enabled:
-                    _clear_session_graphs(user_id, session_id, view="all")
+                # NOT the place to wipe the session's graphs. A missing manager
+                # means "no manager since this process started", which is a very
+                # different thing from "a new session": continuing yesterday's
+                # study after a server restart came through here too, and
+                # archived the whole record before the first message of the day.
+                # A session starts clean where it is CREATED (create_user_session),
+                # and the research graph is explicitly meant to accumulate across
+                # every prompt in one session — that is what makes it readable as
+                # one investigation rather than a pile of single turns.
                 manager = CoScientistManager(
                     app_name=APP_NAME,
                     user_id=user_id,
@@ -2254,6 +2261,9 @@ async def _run_chat_invocation(
     # (report_language) and reaches the prompt through inject_report_language.
     report_config = ReportConfig()
     await manager._set_state("report_config", report_config.to_state())
+    # The question the user just asked is the root of the research graph, and
+    # nothing else guarantees it exists — see seed_research_context.
+    await manager.seed_research_context(query)
     # Prompt templates read {report_language?} from session state. An explicit
     # per-message choice overrides the per-session mirror for this run; a
     # message without one leaves the mirror (and the callback default) alone.

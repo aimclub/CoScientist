@@ -65,11 +65,13 @@ def test_permissions_reference_known_types_edges_transitions():
 
 def test_permission_agents_exist_in_system(request):
     """Every AGENT_PERMISSIONS key must be a real agent in system.yaml, EXCEPT
-    the virtual write-sources: 'human' (writes via HITL) and 'ValidatorAgent'
-    (writes via the fully-async background validator plugin, not a sub-agent)."""
+    the virtual write-sources: 'human' (writes via HITL), 'ValidatorAgent'
+    (writes via the fully-async background validator plugin, not a sub-agent)
+    and 'plan-mirror' (deterministic code that mirrors the registered plan into
+    planned methods — deliberately not attributed to a model)."""
     from CoScientist.assembly.schema import get_config
     agents = set(get_config().agents)
-    virtual = {"human", "ValidatorAgent"}
+    virtual = {"human", "ValidatorAgent", "plan-mirror"}
     for name in schema.AGENT_PERMISSIONS:
         if name in virtual:
             continue
@@ -1056,8 +1058,11 @@ def test_the_graph_page_sends_a_tool_call_to_its_own_tab():
 
     assert 'window.open("/graph?"' in page and '"_blank"' in page
     assert "openTurnHolding" in page, "a deep link must locate the request itself"
-    # And the canvas keeps the scientific record, not the engineering around it.
-    assert "RESEARCH_SHOWN" in page
+    # What the canvas draws is the SERVER's call now. The client-side allow-list
+    # dropped whole node kinds AND every edge that touched one, which in a real
+    # session was every edge there was; the store folds them into the card that
+    # carries them instead, so nothing loses its links.
+    assert "RESEARCH_SHOWN" not in page
     for gone in ('id="legend"', 'id="tiles"', 'id="pbar"'):
         assert gone not in page, gone
 
@@ -1171,3 +1176,505 @@ def test_the_prompt_tells_the_agent_about_the_field_it_may_write():
     assert any("not_tested_reason" in line for line in summary["update_attrs"]), summary
     validator = schema.permitted_summary("ValidatorAgent")
     assert any("inconclusive_reason" in line for line in validator["update_attrs"])
+
+
+# ── the drawing: folding, connectedness, and the reason a step ended ──────────
+
+def _drawn_components(view):
+    import networkx as nx
+
+    g = nx.Graph()
+    g.add_nodes_from(n["id"] for n in view["nodes"])
+    g.add_edges_from((e["src"], e["dst"]) for e in view["edges"])
+    return nx.number_connected_components(g)
+
+
+def test_the_drawing_never_falls_apart_into_islands(store):
+    """One picture, or the reader cannot follow the study through it.
+
+    The viewer used to drop whole node kinds and, with them, every edge that
+    touched one. In a real session the entire structure hung off GeneratedData,
+    which was on that list — so the server sent five edges, the canvas drew
+    none, and eleven findings sat unconnected. Folding has to preserve reach:
+    whatever is not drawn is absorbed by the card that carries it, and its
+    links come along.
+    """
+    _build_verifiable(store)
+    r = store.commit(
+        source="ExperimentAgent",
+        nodes=[{"type": "Evidence", "ref": "e",
+                "attrs": {"subtype": "computational", "measured_on": "docking",
+                          "content": "score -9.1"}},
+               {"type": "GeneratedData", "ref": "gd",
+                "attrs": {"content": "poses", "path": "runs/poses.sdf"}}],
+        edges=[{"type": "produces", "from": "VM1", "to": "#e"},
+               {"type": "derived_from", "from": "#gd", "to": "#e"},
+               {"type": "supports", "from": "#e", "to": "H1"}],
+    )
+    assert r.ok, r.errors
+    view = store.to_view()
+    assert _drawn_components(view) == 1, view["edges"]
+
+
+@pytest.mark.parametrize("broken", ["orphan_tool", "orphan_artifact", "loose_evidence"])
+def test_nothing_floats_however_the_agents_left_it(store, broken):
+    """Whatever an agent forgot to link still reaches the question."""
+    _build_verifiable(store)
+    if broken == "orphan_tool":
+        store.commit(source="CoderAgent",
+                     nodes=[{"type": "Tool", "attrs": {"name": "lonely"}}])
+    elif broken == "orphan_artifact":
+        store.commit(source="CoderAgent",
+                     nodes=[{"type": "CodeArtifact", "attrs": {"path": "x.py"}}])
+    else:
+        store.commit(source="ExperimentAgent",
+                     nodes=[{"type": "Evidence",
+                             "attrs": {"subtype": "literature", "content": "loose"}}])
+    assert _drawn_components(store.to_view()) == 1
+
+
+def test_a_folded_artifact_keeps_the_link_it_carried(store):
+    """A dataset is not a card, and is not a hole either.
+
+    It travels on the finding it produced — with the path it lives at, so the
+    reader can open it — and the method that produced that finding keeps its
+    arrow.
+    """
+    _build_verifiable(store)
+    store.commit(
+        source="ExperimentAgent",
+        nodes=[{"type": "Evidence", "ref": "e",
+                "attrs": {"subtype": "computational", "measured_on": "docking",
+                          "content": "score -9.1"}},
+               {"type": "GeneratedData", "ref": "gd",
+                "attrs": {"content": "225 SMILES", "path": "data/smiles.csv"}}],
+        edges=[{"type": "produces", "from": "VM1", "to": "#e"},
+               {"type": "derived_from", "from": "#gd", "to": "#e"}],
+    )
+    view = store.to_view()
+    drawn = {n["id"]: n for n in view["nodes"]}
+    assert "GD1" not in drawn, "an engineering product is not a card"
+    assert ("VM1", "E1") in {(e["src"], e["dst"]) for e in view["edges"]}
+    attached = {a["id"]: a for a in drawn["E1"]["attachments"]}
+    assert "GD1" in attached
+    assert attached["GD1"]["href"] == "data/smiles.csv", "openable, or it is lost"
+
+
+def test_a_tool_rides_on_the_method_that_uses_it(store):
+    """The instrument is a chip on the method, and the bar a line under it."""
+    _build_verifiable(store)
+    drawn = {n["id"]: n for n in store.to_view()["nodes"]}
+    assert "T1" not in drawn
+    assert [c["id"] for c in drawn["VM1"]["chips"]] == ["T1"]
+    assert drawn["VM1"]["criterion"] == "<-8"
+
+
+def test_a_folded_node_never_invents_a_link_between_its_hosts(store):
+    """One dataset feeding two findings does not make one derive from the other.
+
+    Re-pointing that edge at the hosts would read as ancestry between siblings —
+    a relation the record never claimed.
+    """
+    _build_verifiable(store)
+    store.commit(
+        source="ExperimentAgent",
+        nodes=[{"type": "Evidence", "ref": "e1",
+                "attrs": {"subtype": "computational", "measured_on": "a", "content": "A"}},
+               {"type": "Evidence", "ref": "e2",
+                "attrs": {"subtype": "computational", "measured_on": "b", "content": "B"}},
+               {"type": "GeneratedData", "ref": "gd", "attrs": {"content": "shared"}}],
+        edges=[{"type": "produces", "from": "VM1", "to": "#e1"},
+               {"type": "produces", "from": "VM1", "to": "#e2"},
+               {"type": "derived_from", "from": "#gd", "to": "#e1"},
+               {"type": "derived_from", "from": "#gd", "to": "#e2"}],
+    )
+    view = store.to_view()
+    pairs = {(e["src"], e["dst"], e["type"]) for e in view["edges"]}
+    assert ("E1", "E2", "derived_from") not in pairs
+    assert ("E2", "E1", "derived_from") not in pairs
+    drawn = {n["id"]: n for n in view["nodes"]}
+    for eid in ("E1", "E2"):
+        assert "GD1" in {a["id"] for a in drawn[eid]["attachments"]}
+
+
+def test_the_frame_is_one_card_beside_the_question(store):
+    """The setup a study starts from is a card, not five scattered boxes."""
+    _init(store)
+    view = store.to_view()
+    drawn = {n["id"]: n for n in view["nodes"]}
+    assert "FRAME" in drawn, "the framing must be readable somewhere"
+    for folded in ("C1", "T1", "R1", "EB1"):
+        assert folded not in drawn, f"{folded} belongs on the frame card"
+    assert {a["id"] for a in drawn["FRAME"]["attachments"]} >= {"C1", "R1", "EB1"}
+    assert ("FRAME", "Q1", "frames") in {
+        (e["src"], e["dst"], e["type"]) for e in view["edges"]}
+
+
+def test_an_unseeded_frame_is_a_gap_and_not_an_empty_box(store):
+    """With the pre-stage off nothing seeds the framing. Say so, don't draw it."""
+    store.ensure_root("Does compound X inhibit target Y?")
+    view = store.to_view()
+    assert "FRAME" not in {n["id"] for n in view["nodes"]}
+    assert "no_frame" in {g["code"] for g in view["gaps"]}
+
+
+# ── ensure_root: a question, without wiping the study ─────────────────────────
+
+def test_ensure_root_is_idempotent_and_keeps_the_generation(store):
+    """Called on every message, so it must be free the second time.
+
+    And it must not rotate `_research_id`: the background validator keys its
+    dedup and its discard-stale-verdict check on that id, so a new generation
+    mid-run makes every in-flight judgment throw itself away.
+    """
+    first = store.ensure_root("Does compound X inhibit target Y?")
+    generation = store._research_id
+    assert first == {"ok": True, "created": True, "root_id": "Q1"}
+
+    second = store.ensure_root("Some entirely different question")
+    assert second == {"ok": True, "created": False, "root_id": "Q1"}
+    assert store._research_id == generation, "a re-seed is not a new research"
+
+    store.commit(source="ResearchAgent",
+                 nodes=[{"type": "Evidence",
+                         "attrs": {"subtype": "literature", "content": "c"}}])
+    assert store.ensure_root("x")["created"] is False
+    assert store.ensure_root("   ")["ok"] is False, "an empty question is not a root"
+
+
+def test_ensure_root_does_not_archive_the_study_in_progress(store, tmp_path):
+    """init_research wipes and archives; seeding a root must do neither."""
+    _build_verifiable(store)
+    before = len(store.full()["nodes"])
+
+    store.ensure_root("A different question entirely")
+
+    assert len(store.full()["nodes"]) == before, "nothing was thrown away"
+    archives = [p for p in tmp_path.glob("research_*.json")
+                if p.name != "research_active.json"]
+    assert not archives, "nothing was archived"
+    assert store.root_id() == "Q1"
+
+
+def test_a_root_written_by_a_plain_commit_still_names_its_archive(store, tmp_path):
+    """`_root_id` is set by init_research and by loading — not by commit.
+
+    A question written straight through commit left it unset, and the archive
+    was then filed as `research_graph_*` instead of under the question's id.
+    """
+    store.commit(source="OrchestratorAgent",
+                 nodes=[{"type": "ResearchQuestion",
+                         "attrs": {"formulation": "First question"}}])
+    assert store.full()["root_id"] is None
+
+    store.ensure_root("First question")
+    assert store.full()["root_id"] == "Q1"
+
+    store.reset(archive=True)
+    assert list(tmp_path.glob("research_Q1_*.json"))
+
+
+# ── why a step ended where it did ────────────────────────────────────────────
+
+def test_why_a_step_failed_reaches_the_reader(store):
+    """The reason was always recorded, and never left the store.
+
+    A failed method drew as its status word and stopped there, which is the one
+    question a reader of a failed step actually has.
+    """
+    _build_verifiable(store)
+    store.commit(source="ExperimentAgent",
+                 status_updates=[{"id": "VM1", "status": "running"}])
+    r = store.commit(source="ExperimentAgent",
+                     status_updates=[{"id": "VM1", "status": "failed",
+                                      "reason": "sandbox ran out of memory"}])
+    assert r.ok, r.errors
+
+    vm = next(n for n in store.to_view()["nodes"] if n["id"] == "VM1")
+    assert vm["why"] == "sandbox ran out of memory"
+    assert vm["why_missing"] is False
+    assert vm["status_history"][-1]["reason"] == "sandbox ran out of memory"
+    assert vm["status_history"][-1]["to_word"] == "не удался"
+
+
+def test_a_failure_can_also_explain_itself_in_its_attrs(store):
+    """The executor that hit the error may name it on the node itself."""
+    _build_verifiable(store)
+    store.commit(source="ExperimentAgent",
+                 status_updates=[{"id": "VM1", "status": "running"}])
+    store.commit(source="ExperimentAgent",
+                 status_updates=[{"id": "VM1", "status": "failed"}],
+                 nodes=[{"id": "VM1", "attrs": {"failure_reason": "no CUDA device"}}])
+    vm = next(n for n in store.to_view()["nodes"] if n["id"] == "VM1")
+    assert vm["why"] == "no CUDA device"
+
+
+def test_a_postponed_branch_says_why_it_was_postponed(store, monkeypatch):
+    """The store writes the backlog reason itself — and used to hide it."""
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 1)
+    _init(store)
+    r = store.commit(
+        source="HypothesesAgent",
+        nodes=[{"type": "Hypothesis", "ref": "a",
+                "attrs": {"formulation": "first", "priority": "high"}},
+               {"type": "Hypothesis", "ref": "b",
+                "attrs": {"formulation": "second", "priority": "low"}}],
+    )
+    assert r.ok, r.errors
+    parked = next(n for n in store.to_view()["nodes"]
+                  if n["status"] == "postponed")
+    assert parked["why"], "a card saying only 'postponed' explains nothing"
+
+
+def test_a_failure_with_no_reason_is_reported_as_a_gap(store):
+    """A hole in the record is named, not quietly rendered as a colour."""
+    _build_verifiable(store)
+    store.commit(source="ExperimentAgent",
+                 status_updates=[{"id": "VM1", "status": "failed"}])
+    view = store.to_view()
+    gaps = {g["code"]: g for g in view["gaps"]}
+    assert "unreasoned_failures" in gaps
+    assert "VM1" in gaps["unreasoned_failures"]["ids"]
+    vm = next(n for n in view["nodes"] if n["id"] == "VM1")
+    assert vm["why_missing"] is True
+
+
+def test_the_view_counts_the_writes_it_refused(store):
+    """A refused commit saves nothing, and used to say so to nobody."""
+    _init(store)
+    bad = store.commit(source="HypothesesAgent",
+                       nodes=[{"type": "Evidence",
+                               "attrs": {"subtype": "literature", "content": "x"}}])
+    assert not bad.ok
+    counted = {g["code"]: g["count"] for g in store.to_view()["gaps"]}
+    assert counted.get("rejected_commits") == 1
+
+    good = store.commit(source="ResearchAgent",
+                        nodes=[{"type": "Evidence",
+                                "attrs": {"subtype": "literature", "content": "x"}}])
+    assert good.ok, good.errors
+    assert "rejected_commits" not in {g["code"] for g in store.to_view()["gaps"]}
+
+
+# ── how the study moved: iteration and outcome ───────────────────────────────
+
+def test_supersedes_carries_its_verdict_to_the_view(store):
+    """An unlabelled arrow between two look-alike cards explains nothing."""
+    _build_verifiable(store)
+    r = store.commit(
+        source="HypothesesAgent",
+        nodes=[{"type": "Hypothesis", "ref": "h2",
+                "attrs": {"formulation": "X binds Y only above 35% anchors"}}],
+        edges=[{"type": "supersedes", "from": "H1", "to": "#h2",
+                "attrs": {"verdict": "refuted", "reason": "anchor fraction added"}},
+               {"type": "motivates", "from": "Q1", "to": "#h2"}],
+    )
+    assert r.ok, r.errors
+    view = store.to_view()
+    edge = next(e for e in view["edges"] if e["type"] == "supersedes")
+    assert edge["attrs"]["verdict"] == "refuted"
+    assert edge["attrs"]["reason"] == "anchor fraction added"
+    h2 = next(n for n in view["nodes"] if n["id"] == "H2")
+    assert h2["origin"]["code"] == "modified", "a card says where it came from"
+
+
+def test_the_outcome_is_the_story_of_the_verdicts(store):
+    """What it all added up to — assembled from the record, with no model call."""
+    _build_verifiable(store)
+    store.commit(source="ExperimentAgent",
+                 nodes=[{"type": "Evidence", "ref": "e",
+                         "attrs": {"subtype": "computational", "measured_on": "d",
+                                   "content": "score -9.1"}}],
+                 edges=[{"type": "refutes", "from": "#e", "to": "H1"}])
+    store.commit(source="ValidatorAgent",
+                 status_updates=[{"id": "H1", "status": "refuted",
+                                  "reason": "the bar was never cleared"}])
+    view = store.to_view()
+    outcome = next(n for n in view["nodes"] if n["id"] == "OUTCOME")
+    assert "X binds Y" in outcome["label"]
+    assert "опровергнута" in outcome["label"]
+    assert "the bar was never cleared" in outcome["label"]
+    assert _drawn_components(view) == 1
+
+
+# ── the deterministic middle layer ───────────────────────────────────────────
+
+_PLAN = [{"id": "TASK-1", "title": "Collect the metabolites", "assignee": "ResearchAgent"},
+         {"id": "TASK-2", "title": "Cluster by Tanimoto", "description": "Butina t=0.6",
+          "assignee": "ExperimentAgent"},
+         {"id": "TASK-3", "title": "Estimate LD50 per cluster", "assignee": "ExperimentAgent"}]
+
+
+def test_the_plan_becomes_one_method_per_task(store):
+    """The middle layer stops depending on a model remembering to write it.
+
+    A run whose agents all skipped research_commit drew a question with nothing
+    underneath it. The roadmap is already an ordered list of steps.
+    """
+    from CoScientist.agents.callbacks.tool_callbacks import sync_plan_to_research_graph
+
+    state = {}
+    r = sync_plan_to_research_graph(_PLAN, store, state, question="How toxic is it?")
+    assert r.ok, r.errors
+    methods = [n for n in store.to_view()["nodes"]
+               if n["kind"] == "verificationmethod"]
+    assert [m["status"] for m in methods] == ["planned"] * 3
+    assert {m["label"] for m in methods} == {t["title"] for t in _PLAN}
+    assert all(m["executor_agent"] == "plan-mirror" for m in methods), \
+        "no model chose these, and the card should not imply one did"
+    assert _drawn_components(store.to_view()) == 1
+
+    # A re-plan must not double the column.
+    assert sync_plan_to_research_graph(_PLAN, store, state) is None
+
+
+def test_the_plan_mirror_attaches_to_the_live_hypothesis(store):
+    """When there is a branch being worked on, the methods belong to it."""
+    from CoScientist.agents.callbacks.tool_callbacks import sync_plan_to_research_graph
+
+    _build_verifiable(store)
+    sync_plan_to_research_graph(_PLAN, store, {})
+    tested_by = {(e["src"], e["dst"]) for e in store.to_view()["edges"]
+                 if e["type"] == "tested_by"}
+    assert ("H1", "VM2") in tested_by, tested_by
+
+
+def test_experiment_agent_can_open_the_method_it_runs(store):
+    """It owned the whole lifecycle of a method and could not create one."""
+    _init(store)
+    r = store.commit(source="ExperimentAgent",
+                     nodes=[{"type": "VerificationMethod",
+                             "attrs": {"method_type": "computational"}}])
+    assert r.ok, r.errors
+
+    # Creating a type carries the right to enrich it, so the executor that ran
+    # the method can also say why it failed — no separate grant needed.
+    ok = store.commit(source="ExperimentAgent",
+                      nodes=[{"id": "VM1", "attrs": {"failure_reason": "OOM"}}])
+    assert ok.ok, ok.errors
+    # A role that does not own methods still may not touch one. Not the
+    # ResearchAgent any more — a literature review IS a verification method, so
+    # it owns the type now (see the test below); the collector does not.
+    nope = store.commit(source="DatasetCollectorAgent",
+                        nodes=[{"id": "VM1", "attrs": {"failure_reason": "mine now"}}])
+    assert not nope.ok, "ownership is per type, not per field name"
+
+
+def test_the_literature_agent_can_open_the_search_it_ran(store):
+    """Evidence from a paper belongs to the search that found it.
+
+    The ResearchAgent could create Evidence but neither open a
+    VerificationMethod nor write `produces`, so a literature finding could only
+    hang off the question by `relates_to` — and before the first hypothesis
+    exists, that was its ONLY legal attachment. Meanwhile the "collect the
+    literature" method the plan mirror had written stayed `planned` forever,
+    with the evidence it produced floating unattached beside it.
+    """
+    _init(store)
+    root = store.root_id()
+    r = store.commit(
+        source="ResearchAgent",
+        nodes=[{"type": "VerificationMethod", "ref": "vm",
+                "attrs": {"method_type": "literature_review",
+                          "procedure": "Collect the metabolite list from the literature"}},
+               {"type": "Evidence", "ref": "e",
+                "attrs": {"subtype": "literature", "content": "225 metabolites",
+                          "source_ref": "DOI 10.3390/plants14213253"}}],
+        edges=[{"type": "tested_by", "from": root, "to": "#vm"},
+               {"type": "produces", "from": "#vm", "to": "#e"}],
+    )
+    assert r.ok, r.errors
+
+    view = store.view_of(None)
+    links = {(e["src"], e["type"], e["dst"]) for e in view["edges"]}
+    assert ("VM1", "produces", "E1") in links, \
+        "the finding must point at the search that produced it"
+
+    # And both land in the reading band, not among the experiments.
+    stages = {n["id"]: n.get("stage") for n in view["nodes"]}
+    assert stages["VM1"] == "literature"
+    assert stages["E1"] == "literature"
+
+
+def test_a_card_carries_the_stage_its_band_is_drawn_from(store):
+    """The viewer bands a study by stage, and a stage is not an epistemic level.
+
+    The same Evidence type belongs to the reading band when it came out of a
+    paper and to the hypothesis band when an experiment produced it, so the
+    projection has to say which — the type alone cannot.
+    """
+    _init(store)
+    root = store.root_id()
+    store.commit(source="ResearchAgent",
+                 nodes=[{"type": "Evidence", "ref": "lit",
+                         "attrs": {"subtype": "literature", "content": "from a paper"}}],
+                 edges=[{"type": "relates_to", "from": "#lit", "to": root}])
+    store.commit(source="ExperimentAgent",
+                 nodes=[{"type": "VerificationMethod", "ref": "vm",
+                         "attrs": {"method_type": "computational"}},
+                        {"type": "Evidence", "ref": "run",
+                         "attrs": {"subtype": "computational", "content": "AUC=0.91",
+                                   "measured_on": "repo@abc123, dataset v2"}}],
+                 edges=[{"type": "tested_by", "from": root, "to": "#vm"},
+                        {"type": "produces", "from": "#vm", "to": "#run"}])
+
+    stages = {n["id"]: n.get("stage") for n in store.view_of(None)["nodes"]}
+    assert stages[root] == "framing"
+    assert stages["E1"] == "literature", "a finding read out of a paper"
+    assert stages["E2"] == "hypotheses", "the same type, produced by a run"
+    assert stages["VM1"] == "hypotheses", "placed by what it produced"
+    # The derived cards are banded too. The outcome card is only projected once
+    # the study has something to sum up, so it is checked where it appears.
+    assert stages.get("FRAME") == "framing"
+    assert stages.get("OUTCOME", "report") == "report"
+
+
+def test_a_metabolomics_method_is_not_mistaken_for_a_meta_analysis(store):
+    """`meta` is a legal Evidence subtype and `metabolomics` is this domain's
+    bread and butter, so the reading test matches whole tokens, never
+    substrings."""
+    from CoScientist.graph.research.store import _is_reading, _reads_like_review
+
+    assert _is_reading("literature") and _is_reading("meta")
+    assert not _is_reading("metabolomics")
+    assert not _is_reading("computational")
+    # Free text: the plan mirror writes its step as prose, and "dataset
+    # overview" must not read as a literature review.
+    assert _reads_like_review({"procedure": "По литературе собрать метаболиты"})
+    assert not _reads_like_review(
+        {"procedure": "dataset_overview and chemical_space_clustering, как в статье"})
+
+
+# ── the page ─────────────────────────────────────────────────────────────────
+
+def test_a_card_label_can_never_take_the_page_down():
+    """vis compiles a multi:"html" label as a regexp the moment it sees '&'.
+
+    One unbalanced bracket left by the length cut then threw out of the render
+    loop, and the canvas stayed blank until a reload. Agents write plain '&'
+    themselves, so escaping is not the fix — the character must not reach the
+    label at all.
+    """
+    from starlette.testclient import TestClient
+
+    from CoScientist.web.app import create_app
+
+    with TestClient(create_app()) as client:
+        page = client.get("/graph").text
+
+    assert "function visSafe" in page
+    assert "replace(/&/g" in page
+    assert 'multi: "html"' in page, "the card keeps its bold head and italic foot"
+
+
+def test_the_page_stopped_offering_a_view_it_no_longer_draws():
+    """One graph, one canvas. The slide renderer stays, for reports."""
+    from starlette.testclient import TestClient
+
+    from CoScientist.web.app import create_app
+
+    with TestClient(create_app()) as client:
+        page = client.get("/graph").text
+
+    assert 'value="slide"' not in page
+    assert "pollSlide" not in page
