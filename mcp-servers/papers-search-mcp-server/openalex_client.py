@@ -4,6 +4,7 @@ import time
 import logging
 import os
 from urllib.parse import urljoin
+from urllib.parse import urlparse
 import requests
 from pprint import pprint
 
@@ -19,9 +20,11 @@ class OpenAlexClient:
     def __init__(
         self,
         email: str = None,
+        api_key: str = None,
         s3_service: S3BucketService = None,
     ) -> None:
         self.email = email
+        self.api_key = api_key
 
     def request_with_retry(
         self,
@@ -33,9 +36,21 @@ class OpenAlexClient:
     ) -> requests.Response:
         """Make an HTTP GET request with retry logic for rate limits and server errors."""
         url = endpoint if endpoint.startswith("http") else urljoin(self.BASE_URL, endpoint)
+        request_params = dict(params or {})
+        if urlparse(url).netloc in {"api.openalex.org", "content.openalex.org"}:
+            if self.email:
+                request_params.setdefault("mailto", self.email)
+            if self.api_key:
+                request_params.setdefault("api_key", self.api_key)
+
         for attempt in range(max_retries):
             try:
-                response = requests.get(url, params=params, timeout=timeout, stream=stream)
+                response = requests.get(
+                    url,
+                    params=request_params,
+                    timeout=timeout,
+                    stream=stream,
+                )
                 if response.status_code == 200:
                     return response
                 if response.status_code == 403 or response.status_code >= 500:
@@ -113,7 +128,7 @@ class OpenAlexClient:
         self,
         entity_type: str,
         entity_name: str
-    ) -> dict:
+    ) -> dict | None:
         """
         Search for an entity ID (author, source, institution) by its name in OpenAlex.
 
@@ -122,7 +137,7 @@ class OpenAlexClient:
             entity_name: Name of the entity to search for, e.g., author name, journal name,
             or institution name
         Returns:
-            Dictionary containing the most relevant search result for the specified entity
+            Dictionary containing the most relevant search result, or None if no match is found.
         """
         endpoint_map = {
             "author": "authors",
@@ -137,7 +152,8 @@ class OpenAlexClient:
             endpoint=endpoint_map[entity_type],
             params=params
         ).json()
-        return response.get("results", [])[0]
+        results = response.get("results") or []
+        return results[0] if results else None
 
 
 if __name__ == "__main__":
