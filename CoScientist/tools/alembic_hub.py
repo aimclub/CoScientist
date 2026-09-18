@@ -163,7 +163,7 @@ def summarise_repository(reports: Path, repo_name: str) -> Optional[str]:
     first = _COPULA_RE.sub("", first.strip())
     first = _LEAD_RE.sub("", first.strip())
     words = _trim(first.split()[:_SUMMARY_WORDS])
-    while words and len(" ".join(words)) > _SHORT_MAX:
+    while words and len(" ".join(words).encode()) > _SHORT_MAX:
         words = _trim(words[:-1])
     if len(words) < 2:
         return None
@@ -194,7 +194,8 @@ def render_description(namespace: str, repository: str, meta: Dict[str, Any]) ->
     source = normalize_repo_url(repo_url).removeprefix("github.com/") or "an unknown repository"
     tools = meta.get("tools") or []
     counts = meta.get("tool_counts") or {}
-    short = (meta.get("summary") or f"MCP server for {source}")[:_SHORT_MAX]
+    # Docker Hub counts the limit in bytes: a dash or a non-Latin letter costs more than one.
+    short = (meta.get("summary") or f"MCP server for {source}").encode()[:_SHORT_MAX].decode(errors="ignore").rstrip()
 
     def full_text(meta_out: Dict[str, Any], with_descriptions: bool) -> str:
         lines = [f"# {repository}", "",

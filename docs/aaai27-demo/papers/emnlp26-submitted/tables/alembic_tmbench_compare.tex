@@ -1,0 +1,61 @@
+\documentclass{article}
+% Standalone preview of the alembic-vs-ToolMaker TM-Bench-validated table.
+% Compile: pdflatex alembic_tmbench_compare. The `table` environment can be
+% \input into the main paper as-is (drop the \documentclass ... \end{document}).
+\usepackage[a4paper,margin=1.2cm,landscape]{geometry}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{makecell}
+\usepackage[table]{xcolor}
+\usepackage{amssymb}
+\usepackage{pifont}
+\usepackage{graphicx}  % \rotatebox
+
+% ---- cell colours (all pass / partial / none) ----
+\definecolor{okgreen}{RGB}{198,239,206}
+\definecolor{midyellow}{RGB}{255,235,156}
+\definecolor{badred}{RGB}{255,199,206}
+\newcommand{\G}[1]{\cellcolor{okgreen}#1}
+\newcommand{\Y}[1]{\cellcolor{midyellow}#1}
+\newcommand{\R}[1]{\cellcolor{badred}#1}
+
+\begin{document}
+\pagestyle{empty}
+
+\begin{table}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4.5pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{@{}ll rrr rrr@{}}
+\toprule
+& & \multicolumn{3}{c}{\textbf{alembic (ours)}} & \multicolumn{3}{c}{\textbf{ToolMaker} \small(W\"olflein et al., 2025)} \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-8}
+& Task & Invoc. & Tests & Tokens & Invoc. & Tests & Tokens \\
+\midrule
+\multirow{6}{*}{\rotatebox[origin=c]{90}{Pathology}} & conch\_extract\_features & \G{3/3} & \G{9/9} & 1,206,593 & \G{3/3} & \G{9/9} & 171,226 \\
+ & musk\_extract\_features & \G{3/3} & \G{6/6} & 1,098,224 & \G{3/3} & \G{6/6} & 696,386 \\
+ & pathfinder\_verify\_biomarker & \R{0/2} & \Y{4/6} & 956,298 & \R{0/2} & \Y{4/6} & 356,825 \\
+ & stamp\_extract\_features & \G{3/3} & \G{12/12} & 1,758,210$^\dagger$ & \G{3/3} & \G{12/12} & 631,138 \\
+ & stamp\_train\_classification\_model & \R{0/3} & \R{0/9} & 1,758,210$^\dagger$ & \G{3/3} & \G{9/9} & 1,249,521 \\
+ & uni\_extract\_features & \G{3/3} & \G{9/9} & 1,683,079 & \G{3/3} & \G{9/9} & 326,806 \\
+\midrule
+\multirow{2}{*}{\rotatebox[origin=c]{90}{Rad.}} & medsam\_inference & \G{3/3} & \G{6/6} & 3,442,100 & \G{3/3} & \G{6/6} & 508,954 \\
+ & nnunet\_train\_model & \R{0/2} & \Y{2/4} & 5,350,444 & \R{0/2} & \R{0/4} & 1,792,291 \\
+\midrule
+\multirow{2}{*}{\rotatebox[origin=c]{90}{Omics}} & cytopus\_db & \G{3/3} & \G{12/12} & 1,967,988 & \G{3/3} & \G{12/12} & 185,912 \\
+ & esm\_fold\_predict & \G{3/3} & \G{15/15} & 8,735,809 & \Y{2/3} & \Y{13/15} & 336,754 \\
+\midrule
+\multirow{5}{*}{\rotatebox[origin=c]{90}{Other}} & flowmap\_overfit\_scene & \R{0/2} & \R{0/6} & 1,704,245 & \G{2/2} & \G{6/6} & 358,552 \\
+ & medsss\_generate & \R{0/3} & \R{0/6} & 3,970,326 & \G{3/3} & \G{6/6} & 282,771 \\
+ & modernbert\_predict\_masked & \G{3/3} & \G{9/9} & 2,909,347 & \G{3/3} & \G{9/9} & 356,228 \\
+ & retfound\_feature\_vector & \R{0/3} & \R{0/6} & 721,849 & \G{3/3} & \G{6/6} & 561,936 \\
+ & tabpfn\_predict & \G{3/3} & \G{9/9} & 1,550,724 & \G{3/3} & \G{9/9} & 95,257 \\
+\midrule
+ & \textbf{Total} & \textbf{27/42} & \textbf{93/124} & \textbf{37,055,236} & \textbf{37/42} & \textbf{116/124} & \textbf{7,910,557} \\
+\bottomrule
+\end{tabular}
+\caption{TM-Bench-validated comparison against the published \textsc{ToolMaker} baseline, per task, scored on the shared pytest suite; green/yellow/red mark all/some/none passing. $^\dagger$STAMP's two tasks share one Alembic run (tokens counted once).}
+\label{tab:alembic-tmbench-compare}
+\end{table}
+\end{document}

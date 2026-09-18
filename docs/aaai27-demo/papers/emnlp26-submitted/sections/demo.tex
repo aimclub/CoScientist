@@ -1,0 +1,31 @@
+\section{Demonstration}
+\label{sec:demo}
+
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=0.88\textwidth]{alembic_interface.png}
+  \caption{The Alembic web dashboard. The top bar accepts a source repository URL
+  and controls execution; the stage rail beneath it visualizes progress through
+  the explorer $\rightarrow$ environment $\rightarrow$ coder $\rightarrow$
+  validator $\rightarrow$ wrapper stages. The left panel shows the exploration
+  report, the generated output files, how to run them (the recorded
+  \texttt{setup.sh}), and per-tool invocation examples; the right panel shows the
+  generated MCP server together with its validation badges. A collapsible
+  activity feed at the bottom streams individual steps in real time, and
+  completed tools can be invoked interactively with user-supplied arguments.}
+  \label{fig:dashboard}
+\end{figure*}
+
+Alembic targets engineers building agent-based scientific assistants who need a
+growing tool library without hand-writing a wrapper per repository, and
+maintainers wanting a low-effort path to agent-accessible software. To make the
+pipeline observable, we provide a lightweight web dashboard
+(Figure~\ref{fig:dashboard}) that streams execution in real time and exposes the
+synthesized MCP server. As the five stages unfold live, a stage rail tracks the
+active agent's success or failure and a feed logs each step. Rather than raw
+output, the dashboard shows pass/fail badges for static checks and test runs,
+and tool invocations annotated with inputs, outputs, and errors; any generated
+tool can be invoked with custom arguments and its result seen immediately. The
+screencast (Section~\ref{sec:availability}) walks a full run from a bare GitHub
+URL to a served MCP, and shows the \texttt{--resume <stage>} flag and batch mode
+(\texttt{run\_benchmark.py}) over many repositories.

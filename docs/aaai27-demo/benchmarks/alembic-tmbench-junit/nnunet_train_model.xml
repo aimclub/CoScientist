@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="4" time="0.919" timestamp="2026-07-11T01:53:09.835115+03:00" hostname="pop-os"><testcase classname="test_nnunet_train_model" name="test_status[prostate-alembic/nnunet_train_model]" time="0.006"><properties><property name="prefix" value="alembic" /><property name="tool" value="nnunet_train_model" /><property name="invocation" value="prostate" /></properties><failure message="AssertionError: assert 'error' == 'success'&#10;  &#10;  - success&#10;  + error">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Dataset805_Prostate\nUsing &lt;class \'...t_train_model/run/9937b8c345b111d2537360a1de93b57bf3d99426f7fb05dbd5565a0371c527ca/output', elapsed=193.12988805770874)
+
+    @parametrize_invocation("prostate", "spleen")
+    def test_status(invocation: ToolRunResult):
+&gt;       assert invocation.status == "success"
+E       AssertionError: assert 'error' == 'success'
+E         
+E         - success
+E         + error
+
+benchmark/tests/test_nnunet_train_model.py:15: AssertionError</failure></testcase><testcase classname="test_nnunet_train_model" name="test_trained_model_exists[prostate-alembic/nnunet_train_model]" time="0.002"><properties><property name="prefix" value="alembic" /><property name="tool" value="nnunet_train_model" /><property name="invocation" value="prostate" /></properties></testcase><testcase classname="test_nnunet_train_model" name="test_status[spleen-alembic/nnunet_train_model]" time="0.004"><properties><property name="prefix" value="alembic" /><property name="tool" value="nnunet_train_model" /><property name="invocation" value="spleen" /></properties><failure message="AssertionError: assert 'error' == 'success'&#10;  &#10;  - success&#10;  + error">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Dataset809_Spleen\nUsing &lt;class \'nn...et_train_model/run/fdce2c4817791488f949983ddd2d919b087ae201257981f2d7f1d858f92248d7/output', elapsed=889.5077540874481)
+
+    @parametrize_invocation("prostate", "spleen")
+    def test_status(invocation: ToolRunResult):
+&gt;       assert invocation.status == "success"
+E       AssertionError: assert 'error' == 'success'
+E         
+E         - success
+E         + error
+
+benchmark/tests/test_nnunet_train_model.py:15: AssertionError</failure></testcase><testcase classname="test_nnunet_train_model" name="test_trained_model_exists[spleen-alembic/nnunet_train_model]" time="0.001"><properties><property name="prefix" value="alembic" /><property name="tool" value="nnunet_train_model" /><property name="invocation" value="spleen" /></properties></testcase></testsuite></testsuites>

@@ -1,0 +1,66 @@
+\section{Related Work}
+
+\paragraph{Autonomous scientists.}
+Systems such as Coscientist~\citep{boiko2023coscientist},
+ChemCrow~\citep{bran2024chemcrow}, the AI
+Scientist~\citep{lu2024aiscientist}, Google's AI
+co-scientist~\citep{google2025coscientist} and the Virtual
+Lab~\citep{swanson2025virtuallab} plan and run scientific work end to end. Their
+experiment layers are exactly the two regimes we target: a small fixed toolset
+(18 hand-built tools in ChemCrow; a bespoke pipeline in the Virtual Lab) or an
+open-ended coding agent that regenerates code per run. We keep the planning
+apparatus and replace the experiment layer with a growing, verified catalogue.
+
+\paragraph{Coding agents on research repositories.}
+Benchmarks that ask agents to set up and run real repositories report low
+success---SUPER~\citep{super2024}, CORE-Bench~\citep{corebench2024} and
+PaperBench~\citep{starace2025paperbench}---motivating a mechanism that pays the
+setup cost once. Separately, LLM execution is non-deterministic even at
+temperature~0~\citep{he2025nondeterminism}, and computational-science artefacts
+reproduce poorly~\citep{pimentel2024notebooks}; agentic pass$^k$ degrades over
+repeated runs~\citep{yao2024taubench}. We lead with this
+\emph{reproducibility} argument rather than cost, since inference cost is falling
+rapidly and is a weaker long-run differentiator.
+
+\paragraph{Tool-making and skill libraries.}
+Making a reusable tool once and calling it thereafter reduces cost and
+variance~\citep{cai2024latm}; CRAFT curates a validated, retrievable
+toolset~\citep{yuan2024craft}; Voyager grows a library of verified executable
+skills~\citep{wang2023voyager}; Toolformer learns API use~\citep{schick2023toolformer}.
+We apply this principle at the granularity of whole scientific repositories and
+under code-enforced verification.
+
+\paragraph{Repository/paper-to-MCP conversion (closest work).}
+The mechanism of converting code into a served tool is now well populated.
+\textbf{ToolMaker}~\citep{wolflein2025toolmaker_acl} turns a repository and task
+into a tool via closed-loop unit-test self-correction and ships the TM-Bench
+gold suite we evaluate on. \textbf{Paper2Agent}~\citep{miao2025paper2agent}
+builds an MCP server from a paper plus code and locks tools to reproduce
+reference results. \textbf{ToolUniverse}~\citep{gao2025tooluniverse} assembles a
+600+ tool scientific ecosystem and synthesises tools from natural-language
+descriptions. Code2MCP~\citep{code2mcp2025} and
+ToolRosella~\citep{toolrosella2026} convert repositories at scale but validate by
+import-smoke or an LLM judge rather than held-out gold. Our delta is threefold:
+(i) we \emph{consume} a growing catalogue inside a general planner--executor
+system across domains and studies, rather than producing tools as an end in
+itself; (ii) our validation is live invocation against held-out gold with a
+guard against hollow/mocked tests, stronger than import-smoke or LLM-judge; and
+(iii) our always-split environments and subprocess invocation contract make
+catalogue entries reproducible by construction. We position \emph{hybrid}
+(catalogue-first, coding-agent fallback), not tools-versus-code---consistent with
+evidence that code actions can beat rigid tool-calling.
+
+\paragraph{Scientific benchmarks.}
+Many benchmarks pair scientific code with tasks, but few provide strict,
+reproducible gold on \emph{tool} outputs. TM-Bench~\citep{wolflein2025toolmaker_acl}
+validates converted tools by \texttt{allclose} against reference arrays over
+multiple input cases---the closest fit to our setting. ML-Bench~\citep{tang2024mlbench}
+and CORE-Bench~\citep{corebench2024} add scale and reproducibility of diverse
+repositories; ScienceAgentBench~\citep{chen2025scienceagentbench},
+SciCode~\citep{tian2024scicode}, BioCoder~\citep{tang2024biocoder} and
+ResearchCodeBench evaluate scientific code generation but at function or program
+granularity. ToolRosella~\citep{toolrosella2026} offers the broadest repository
+coverage (122 repositories) but ships no gold answers---its downstream scores
+come from execution success plus an LLM judge---so we use it for coverage
+breadth, not correctness. We adopt TM-Bench as our primary gold benchmark and
+draw on the others for breadth.

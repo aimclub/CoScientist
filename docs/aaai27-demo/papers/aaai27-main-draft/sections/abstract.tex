@@ -1,0 +1,18 @@
+\begin{abstract}
+% ~135 words. Leads with reproducibility, not cost (cost is falling -> a live
+% counterargument; determinism is architectural, cf. he2025nondeterminism).
+AI4Science systems run their experiments in one of two limiting ways: a costly
+coding agent that re-writes a solution on every call---so repeated runs can
+differ in output \emph{format} and \emph{value}---or a small, fixed set of tools
+that cannot cover the long tail of scientific software. We instead grow a
+\emph{verified, reusable catalogue} of tools built from scientists' own code. Our
+system's experiment module converts any scientific repository into a served,
+verified Model Context Protocol (MCP) tool and reuses it across studies. The
+converter is a five-agent pipeline with four code-enforced gates that build
+isolated environments and validate each tool by live invocation on held-out
+inputs. On
+a gold-validated benchmark we show \emph{when} the catalogue helps---reproducible
+repeated calls, wider coverage, and cost amortised over many calls---and, in the
+interest of honesty, where it does not: modern coding agents already match its
+per-task accuracy. We release all code, tools, and runs.
+\end{abstract}

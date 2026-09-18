@@ -1,0 +1,19 @@
+% Auto-generated fragment — \input this into the paper; do not edit by hand.
+
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Reason & Env. & Coder & Total \\
+\midrule
+max\_steps & 2 & 3 & 5 \\
+tool\_cycle & 4 & 0 & 4 \\
+tool\_repeat & 0 & 3 & 3 \\
+\midrule
+\textbf{Total} & \textbf{6} & \textbf{6} & \textbf{12} \\
+\bottomrule
+\end{tabular}
+\caption{Cycle-guard aborts by stage (12 total): the reason each stage's inner agent loop was force-stopped, recorded once per stage, distinct from the stage-gate retries, which count separately.}
+\label{tab:alembic-aborts}
+\end{table}

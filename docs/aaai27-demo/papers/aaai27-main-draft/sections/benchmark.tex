@@ -1,0 +1,45 @@
+\section{Experimental Setup}
+
+\paragraph{Benchmark.}
+We evaluate on \textbf{TM-Bench}~\citep{wolflein2025toolmaker_acl}, the only
+public benchmark whose design mirrors ours: each task pins a real scientific
+repository, specifies a typed tool signature in a \texttt{task.yaml}, and
+validates the built tool by \emph{live invocation against held-out gold}. Gold
+is a mix of strict array value equivalence
+(\texttt{np.testing.assert\_allclose}, \texttt{atol}$=$$10^{-3}$, against
+precomputed reference arrays), tighter exact-scalar match (p-values to six
+decimal places, parameter counts),
+shape/type contracts, and output-artefact checks; crucially, the \emph{same
+tool} is exercised over multiple named input cases with per-case references. The
+suite spans 15 tasks across 7 domains (pathology, radiology, genomics/proteomics,
+imaging, 3D vision, tabular, LLMs) with 43 multi-input invocations and roughly
+95 assertions. We note honestly that gold strictness is uneven: only about half
+the tasks enforce strict value equivalence (allclose arrays or exact scalars
+such as p-values and parameter counts), while the rest---such as \texttt{musk},
+\texttt{retfound}, \texttt{nnunet}, \texttt{medsss}, and \texttt{medsam}---rely
+only on type, shape, existence, or content checks; we report per-task strictness. For breadth beyond
+TM-Bench's biomedical lean we draw repositories from
+ML-Bench~\citep{tang2024mlbench} and the ToolRosella
+inventory~\citep{toolrosella2026} (the latter for coverage only, as it ships no
+gold).
+
+\paragraph{Systems compared.}
+We compare (i) the \textbf{frozen catalogue}: tools converted once by
+\textsc{Alembic} and invoked deterministically, against (ii) a same-model
+\textbf{coding agent} (OpenHands with GLM-5.2) that re-derives each task from
+scratch. Both use the identical held-out TM-Bench tests with matched
+denominators; all conversions and solves use the same underlying model.
+
+\paragraph{Metrics.}
+We report four families aligned with the thesis:
+(1)~\emph{coverage / adequacy}---how many repositories convert to gold-passing
+tools, plus a tool-adequacy audit (are any catalogue tools hollow or
+hallucinated?);
+(2)~\emph{reproducibility}---determinism of the frozen tool versus the agent's
+pass$^k$ and run-to-run \emph{contract drift} (do repeated re-derivations agree
+in output format and value?);
+(3)~\emph{economy}---per-invocation cost and the break-even number of calls that
+amortises the one-time conversion across a many-call system;
+(4)~\emph{verification quality}---the fraction of ``passing'' tools rejected by
+our mock-guard relative to import-smoke or LLM-judge validation.
+Operational limits and all runs are released for reproducibility.

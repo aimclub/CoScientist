@@ -1,0 +1,158 @@
+{
+ "mooney_viscosity": {
+  "phr_random": {
+   "n": 1282,
+   "patents": 120,
+   "r2": 0.58,
+   "mae": 9.585
+  },
+  "phr_by_patent": {
+   "n": 1282,
+   "patents": 120,
+   "r2": -0.063,
+   "mae": 17.722
+  },
+  "all_numeric_random": {
+   "n": 1282,
+   "patents": 120,
+   "r2": 0.757,
+   "mae": 7.448
+  },
+  "all_numeric_by_patent": {
+   "n": 1282,
+   "patents": 120,
+   "r2": -0.204,
+   "mae": 20.171
+  }
+ },
+ "tensile_strength_MPa": {
+  "phr_random": {
+   "n": 1757,
+   "patents": 189,
+   "r2": 0.301,
+   "mae": 4.44
+  },
+  "phr_by_patent": {
+   "n": 1757,
+   "patents": 189,
+   "r2": -0.515,
+   "mae": 8.424
+  },
+  "all_numeric_random": {
+   "n": 1757,
+   "patents": 189,
+   "r2": 0.788,
+   "mae": 2.488
+  },
+  "all_numeric_by_patent": {
+   "n": 1757,
+   "patents": 189,
+   "r2": -0.062,
+   "mae": 6.086
+  }
+ },
+ "elongation_at_break_percent": {
+  "phr_random": {
+   "n": 1580,
+   "patents": 188,
+   "r2": 0.592,
+   "mae": 54.7
+  },
+  "phr_by_patent": {
+   "n": 1580,
+   "patents": 188,
+   "r2": -0.257,
+   "mae": 107.401
+  },
+  "all_numeric_random": {
+   "n": 1580,
+   "patents": 188,
+   "r2": 0.724,
+   "mae": 46.855
+  },
+  "all_numeric_by_patent": {
+   "n": 1580,
+   "patents": 188,
+   "r2": -0.074,
+   "mae": 101.53
+  }
+ },
+ "M300_MPa": {
+  "phr_random": {
+   "n": 1517,
+   "patents": 177,
+   "r2": 0.835,
+   "mae": 1.207
+  },
+  "phr_by_patent": {
+   "n": 1517,
+   "patents": 177,
+   "r2": 0.311,
+   "mae": 2.801
+  },
+  "all_numeric_random": {
+   "n": 1517,
+   "patents": 177,
+   "r2": 0.862,
+   "mae": 1.115
+  },
+  "all_numeric_by_patent": {
+   "n": 1517,
+   "patents": 177,
+   "r2": 0.222,
+   "mae": 3.108
+  }
+ },
+ "hardness_shore_A": {
+  "phr_random": {
+   "n": 1070,
+   "patents": 127,
+   "r2": 0.796,
+   "mae": 2.973
+  },
+  "phr_by_patent": {
+   "n": 1070,
+   "patents": 127,
+   "r2": -0.104,
+   "mae": 8.176
+  },
+  "all_numeric_random": {
+   "n": 1070,
+   "patents": 127,
+   "r2": 0.814,
+   "mae": 2.786
+  },
+  "all_numeric_by_patent": {
+   "n": 1070,
+   "patents": 127,
+   "r2": -0.046,
+   "mae": 8.127
+  }
+ },
+ "tan_delta_60C": {
+  "phr_random": {
+   "n": 710,
+   "patents": 89,
+   "r2": 0.938,
+   "mae": 1.26
+  },
+  "phr_by_patent": {
+   "n": 710,
+   "patents": 89,
+   "r2": -0.274,
+   "mae": 7.503
+  },
+  "all_numeric_random": {
+   "n": 710,
+   "patents": 89,
+   "r2": 0.909,
+   "mae": 1.65
+  },
+  "all_numeric_by_patent": {
+   "n": 710,
+   "patents": 89,
+   "r2": -0.479,
+   "mae": 8.307
+  }
+ }
+}

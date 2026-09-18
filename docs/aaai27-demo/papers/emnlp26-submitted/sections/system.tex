@@ -1,0 +1,59 @@
+\section{The Alembic Framework}
+\label{sec:system}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.78\columnwidth]{the_alembic.png}
+  \caption{Structure of alembic: five LLM stages are
+  interleaved with four deterministic gates that distill a raw
+  repository, top to bottom, into a served MCP tool. Each stage runs inside a
+  reset-from-checkpoint loop, and a structured \texttt{plan.json} contract flows
+  to every downstream stage.}
+  \label{fig:pipeline}
+\end{figure}
+
+Alembic is built on Google's Agent Development Kit and LiteLLM, so every agent
+shares one configurable model. Its organizing principle is that \emph{the LLM
+proposes and code disposes}: agents do the creative work (understanding the
+repository, choosing what to wrap, writing tool bodies, diagnosing failures)
+while every mechanical, correctness-bearing decision is moved out of the prompt
+into a deterministic gate enforced by code, and stages hand off through a small
+typed \texttt{plan.json} contract rather than free-text markdown. This keeps the
+pipeline model-agnostic: a weaker model cannot slip an unchecked artifact past a
+gate, and a stronger one is not slowed by hand-holding it does not need. Each
+stage also runs inside a reset loop: on a gate failure the files it owns roll
+back to a checkpoint and the stage reruns with a short note on what went wrong.
+
+\subsection{Pipeline}
+The pipeline (Figure~\ref{fig:pipeline}) alternates five agents with four gates.
+The \emph{Explorer} clones the repository and proposes tool candidates as a typed
+block (target symbol, sample and held-out arguments, a returns schema, and the
+evidence grounding each test); a plan gate verifies every target against an AST
+symbol table, drops hallucinated symbols, injects real parameter names, and fixes
+the venv layout, producing the authoritative \texttt{plan.json}. The
+\emph{Environment} agent builds the venv(s) with \texttt{uv} and \texttt{apt-get}
+and downloads weights, recording every successful command into a reproducible
+\texttt{setup.sh}; an environment gate runs a compatibility check and a
+repo-import smoke test, so the Coder never writes against a broken venv.
+
+Rather than emit the server directly, the \emph{Coder} writes each tool as a
+plain, self-contained function with two kinds of tests (quick smoke checks and
+evidence-based invocation checks), and an artefact gate statically confirms
+each function compiles, imports, and carries its tests before any live run. The
+\emph{Validator} invokes every tool, runs the suite, and batches failures into
+one debugger call with problem-summary memory to keep fixes from oscillating;
+each tool earns a two-level verdict: \emph{passed} when it runs and its unit
+tests pass, \emph{perfect} when it also passes live invocation. Finally the
+\emph{Wrapper} renders the FastMCP server deterministically from the verified
+signatures (the LLM runs only if it fails to compile), after which the container
+is committed to a versioned image served over MCP, exporting the tool functions,
+tests, and \texttt{setup.sh} for reuse.
+
+\subsection{Always-split environments}
+The served server is two-layer: a FastMCP process on a modern Python (3.11+,
+required by the MCP libraries) dispatches each call to a helper subprocess
+running in the repository's own environment. Alembic therefore always keeps the
+repository environment separate from the server environment, letting an older,
+unmaintained repository run against the exact interpreter and pinned dependencies
+its code was written for while the server layer stays current, avoiding the
+package conflicts a single forced interpreter would introduce.

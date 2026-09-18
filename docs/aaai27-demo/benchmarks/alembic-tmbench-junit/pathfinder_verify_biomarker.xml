@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="2" skipped="0" tests="6" time="0.713" timestamp="2026-07-10T21:34:37.368157+03:00" hostname="pop-os"><testcase classname="test_pathfinder_verify_biomarker" name="test_status[crc_tum_fraction_score-alembic/pathfinder_verify_biomarker]" time="0.007"><properties><property name="prefix" value="alembic" /><property name="tool" value="pathfinder_verify_biomarker" /><property name="invocation" value="crc_tum_fraction_score" /></properties></testcase><testcase classname="test_pathfinder_verify_biomarker" name="test_types[crc_tum_fraction_score-alembic/pathfinder_verify_biomarker]" time="0.000"><properties><property name="prefix" value="alembic" /><property name="tool" value="pathfinder_verify_biomarker" /><property name="invocation" value="crc_tum_fraction_score" /></properties></testcase><testcase classname="test_pathfinder_verify_biomarker" name="test_pvalue_crc_tum[alembic/pathfinder_verify_biomarker]" time="0.002"><properties><property name="prefix" value="alembic" /><property name="tool" value="pathfinder_verify_biomarker" /><property name="invocation" value="crc_tum_fraction_score" /></properties><failure message="AssertionError: &#10;Arrays are not almost equal to 7 decimals&#10; ACTUAL: 0.18432679054464357&#10; DESIRED: 0.181042">crc_tum_fraction_score = ToolRunResult(status='success', result={'p_value': 0.18432679054464357, 'hazard_ratio': 1.4877723218413264}, stdout='C...ify_biomarker/run/7af3b745d7ff923513931e797b2700c2018e1aef1382f6c8307dcaf06f584702/output', elapsed=182.72732257843018)
+
+    def test_pvalue_crc_tum(crc_tum_fraction_score: ToolRunResult):
+&gt;       np.testing.assert_almost_equal(crc_tum_fraction_score.result["p_value"], 0.181042)
+E       AssertionError: 
+E       Arrays are not almost equal to 7 decimals
+E        ACTUAL: 0.18432679054464357
+E        DESIRED: 0.181042
+
+benchmark/tests/test_pathfinder_verify_biomarker.py:23: AssertionError</failure></testcase><testcase classname="test_pathfinder_verify_biomarker" name="test_status[crc_str_fraction_score-alembic/pathfinder_verify_biomarker]" time="0.005"><properties><property name="prefix" value="alembic" /><property name="tool" value="pathfinder_verify_biomarker" /><property name="invocation" value="crc_str_fraction_score" /></properties></testcase><testcase classname="test_pathfinder_verify_biomarker" name="test_types[crc_str_fraction_score-alembic/pathfinder_verify_biomarker]" time="0.000"><properties><property name="prefix" value="alembic" /><property name="tool" value="pathfinder_verify_biomarker" /><property name="invocation" value="crc_str_fraction_score" /></properties></testcase><testcase classname="test_pathfinder_verify_biomarker" name="test_pvalue_crc_str[alembic/pathfinder_verify_biomarker]" time="0.000"><properties><property name="prefix" value="alembic" /><property name="tool" value="pathfinder_verify_biomarker" /><property name="invocation" value="crc_str_fraction_score" /></properties><failure message="AssertionError: &#10;Arrays are not almost equal to 7 decimals&#10; ACTUAL: 0.02926796281691304&#10; DESIRED: 0.005885">crc_str_fraction_score = ToolRunResult(status='success', result={'p_value': 0.02926796281691304, 'hazard_ratio': 1.9499237543392596}, stdout='C...ify_biomarker/run/2a34613e6849add0e4330f86c33fdbe70b2023d89c5a19cececbc2d67410acee/output', elapsed=181.20698022842407)
+
+    def test_pvalue_crc_str(crc_str_fraction_score: ToolRunResult):
+&gt;       np.testing.assert_almost_equal(crc_str_fraction_score.result["p_value"], 0.005885)
+E       AssertionError: 
+E       Arrays are not almost equal to 7 decimals
+E        ACTUAL: 0.02926796281691304
+E        DESIRED: 0.005885
+
+benchmark/tests/test_pathfinder_verify_biomarker.py:27: AssertionError</failure></testcase></testsuite></testsuites>

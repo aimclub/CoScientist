@@ -1,0 +1,100 @@
+\section{Experiments}
+\label{sec:experiments}
+
+Evaluating repository-to-tool conversion against \emph{unknown} objectives is
+hard: the richest signal about what a repository can do comes from its authors.
+We therefore adopt \textbf{TM-Bench}, released with ToolMaker
+\citep{toolmaker2025}, one of the few tool-/MCP-creation benchmarks with
+objectives known to be achievable and human-authored tests for the tools
+themselves, a repository's own test suite would not cover tool usage beyond
+what the authors happened to test. Its fifteen tasks were curated with medical
+and life-science researchers to reflect realistic problems, concentrated in
+pathology, radiology, and omics, and rounded out with 3D vision, imaging,
+tabular analysis, and NLP for broader coverage.
+
+\paragraph{Setup.} Alembic runs on \texttt{openrouter/z-ai/glm-5.2} in
+\emph{known-target} mode (it still discovers every workflow it can, but is also
+told to expose a tool matching each TM-Bench task) and exports self-contained
+artefacts (\texttt{code.py} and the recorded \texttt{setup.sh}) scored inside
+ToolMaker's harness on the same held-out pytest suite. For the ToolMaker
+baseline we quote the published GPT-4o figures; a matched GLM-5.2 re-run did not
+yet reproduce them, so, as a system demonstration, we report those numbers for
+context and leave a controlled same-model comparison to future work. The
+reference harness needed only peripheral fixes (download-command flags,
+container leakage on failure, importing Alembic's Python-3.11 artefacts into the
+harness's Python-3.12 scoring environment, cost-untracked models); our fork:
+\url{https://github.com/stas1f1/ToolMaker}.
+
+\paragraph{Data.} Two STAMP tasks run over TCGA whole-slide cohorts whose
+reference CSVs list $\approx$1.5\,TB of slides, though the tests need only ten
+CRC and two named slides; since that subset cannot be guessed beforehand, we
+follow the TM-Bench authors in disabling dataset downloads here while still
+allowing weight downloads and in-container cloning of the task data. Both tasks
+ride a \emph{single} Alembic run (the Explorer scopes both tools, the Coder
+implements both), falling back to separate runs only on failure.
+
+\section{Results and Discussion}
+\label{sec:results}
+
+\input{tables/alembic_tmbench_compare_body}
+\input{tables/alembic_error_stats_a_body}
+\input{tables/alembic_error_stats_b_body}
+\input{tables/alembic_selfmetrics_body}
+
+Table~\ref{tab:alembic-tmbench-compare} reports the TM-Bench-validated
+comparison, per task, against the ToolMaker baseline. \emph{Invoc.} is the
+fraction of invocation examples whose every unit test passes and \emph{Tests}
+the fraction of unit tests that pass, both on the identical TM-Bench pytest
+suite, so the denominators match ToolMaker's. Alembic matches or exceeds the
+baseline on the pathology and omics tasks and wins outright on \texttt{esm} and
+\texttt{nnunet}, while the external suite also exposes tasks that pass Alembic's
+own validation but not TM-Bench's held-out checks.
+
+\paragraph{Failure analysis.} Tables~\ref{tab:alembic-failures}
+and~\ref{tab:alembic-aborts} break the run down by error type and by cycle-guard
+aborts (an agent loop force-stopped for exhausting its step budget or repeating a
+tool call). Runtime failures are dominated by missing files and attribute/value
+errors rather than by hallucinated symbols (the class the plan gate eliminates
+by construction), and the guard aborts fall entirely in the environment and
+coder stages, where dependency resolution is hardest. Tasks split in two: clean
+or one-slip tasks (\texttt{cytopus}, \texttt{conch}, \texttt{uni}, \texttt{esm},
+\texttt{tabpfn}) resolve in a single pass, while deep-cascade tasks hit a chain of
+Python-3.11$\to$3.12 dependency conflicts, the failure mode of transcribing a
+dependency set that only resolved under the repository's original interpreter,
+which is why Alembic preserves that interpreter in a split environment.
+
+Table~\ref{tab:alembic-selfmetrics} reports Alembic's own, richer metrics, one
+row per repository. It splits the tools each run emits into \emph{stable} (builds,
+imports, passes unit tests) and \emph{perfect} (also passes live invocation),
+records passed/attempted \emph{tests}, executions (\emph{exec}) and invocation
+checks (\emph{invoc}), and adds wall-clock time, guard-triggered stage retries,
+and total token usage. Alembic delivers a served MCP for all fourteen
+repositories; only TabPFN needs a soft dependency-conflict resolution.
+
+\subsection{Case study: MedSAM}
+\label{sec:casestudy}
+
+MedSAM \citep{ma2024medsam} adapts the Segment Anything model to medical images.
+From the URL alone, Alembic's Explorer discovered five tools (inference,
+training, preprocessing, scoring, conversion), all passing and four perfectly.
+Consider the inference tool (Figure~\ref{fig:casestudy}).
+
+\begin{figure}[!ht]
+  \centering
+  \includegraphics[width=0.82\columnwidth]{medsam_casestudy.pdf}
+  \caption{The synthesized \texttt{medsam\_inference} on the repository's own
+  \texttt{img\_demo.png}: scan and box are shelled into the repo environment
+  (ViT-B, CPU); the mask shown is the real MedSAM output.}
+  \label{fig:casestudy}
+\end{figure}
+
+The Explorer grounded it in the repository's ``Get Started'' walkthrough
+(\texttt{MedSAM\_Inference.py} on the bundled \texttt{img\_demo.png}, writing a
+\texttt{uint8} mask), and the plan gate confirmed the script and its sample
+arguments. The Coder wrote a thin
+\texttt{def medsam\_inference(...) -> dict} that shells into the repo environment
+(headless Matplotlib, CPU, ViT-B); as the mask is a side-effect, it returns
+\texttt{\{\}}. Validation invoked it on the demo and a held-out PNG, got
+expected-shape masks, and marked it \emph{perfect} (3/3 invocations, 6/6 tests,
+no debugger rounds): a published inference script rendered a validated,
+callable MCP tool.

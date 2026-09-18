@@ -1,0 +1,50 @@
+\documentclass{article}
+% Standalone preview of the alembic error-statistics table. Compile:
+%   pdflatex alembic_error_stats
+% The two `tabular`s can be \input into the main paper individually.
+\usepackage[a4paper,margin=1.5cm]{geometry}
+\usepackage{booktabs}
+
+\begin{document}
+\pagestyle{empty}
+
+\begin{table}[t]
+\centering
+\footnotesize
+\begin{minipage}[t]{0.42\linewidth}\centering
+\textbf{(a) Failure classes}\\[2pt]
+\begin{tabular}{@{}lr@{}}
+\toprule
+Error class & Count \\
+\midrule
+Other & 8 \\
+FileNotFound & 7 \\
+AttributeError & 4 \\
+ValueError & 4 \\
+KeyError & 3 \\
+ModuleNotFound & 2 \\
+Import & 1 \\
+Runtime & 1 \\
+\midrule
+\textbf{Total} & \textbf{30} \\
+\bottomrule
+\end{tabular}
+\end{minipage}\hfill
+\begin{minipage}[t]{0.50\linewidth}\centering
+\textbf{(b) Guard aborts by stage}\\[2pt]
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Reason & Environment & Coder & Total \\
+\midrule
+max\_steps & 2 & 3 & 5 \\
+tool\_cycle & 4 & 0 & 4 \\
+tool\_repeat & 0 & 3 & 3 \\
+\midrule
+\textbf{Total} & \textbf{6} & \textbf{6} & \textbf{12} \\
+\bottomrule
+\end{tabular}
+\end{minipage}
+\caption{Error statistics across the 14 repositories. \textbf{(a)} runtime exceptions by class (30 total). \textbf{(b)} cycle-guard aborts (12 total): the reason each stage's inner agent loop was force-stopped, recorded once per stage, distinct from the stage-gate retries, which count separately.}
+\label{tab:alembic-error-stats}
+\end{table}
+\end{document}

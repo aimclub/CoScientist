@@ -1,0 +1,112 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="9" skipped="0" tests="9" time="0.805" timestamp="2026-07-11T09:05:12.785858+03:00" hostname="pop-os"><testcase classname="test_stamp_train_classification_model" name="test_status[crc_msi-alembic/stamp_train_classification_model]" time="0.005"><properties><property name="prefix" value="alembic" /><property name="tool" value="stamp_train_classification_model" /><property name="invocation" value="crc_msi" /></properties><failure message="AssertionError: assert 'error' == 'success'&#10;  &#10;  - success&#10;  + error">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...ication_model/run/bbf3c5d60a675401dd94df2d10412bded3dbc7dfdcbe3baa9062ae9beb81f506/output', elapsed=135.47195887565613)
+
+    @parametrize_invocation("crc_msi", "crc_braf", "crc_kras")
+    def test_status(invocation: ToolRunResult):
+&gt;       assert invocation.status == "success"
+E       AssertionError: assert 'error' == 'success'
+E         
+E         - success
+E         + error
+
+benchmark/tests/test_stamp_train_classification_model.py:12: AssertionError</failure></testcase><testcase classname="test_stamp_train_classification_model" name="test_num_params[crc_msi-alembic/stamp_train_classification_model]" time="0.000"><properties><property name="prefix" value="alembic" /><property name="tool" value="stamp_train_classification_model" /><property name="invocation" value="crc_msi" /></properties><failure message="TypeError: string indices must be integers, not 'str'">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...ication_model/run/bbf3c5d60a675401dd94df2d10412bded3dbc7dfdcbe3baa9062ae9beb81f506/output', elapsed=135.47195887565613)
+
+    @parametrize_invocation("crc_msi", "crc_braf", "crc_kras")
+    def test_num_params(invocation: ToolRunResult):
+&gt;       assert invocation.result["num_params"] == 3552258
+E       TypeError: string indices must be integers, not 'str'
+
+benchmark/tests/test_stamp_train_classification_model.py:17: TypeError</failure></testcase><testcase classname="test_stamp_train_classification_model" name="test_trained_model_exists[crc_msi-STAMP-CRC-MSI-model.pkl-alembic/stamp_train_classification_model]" time="0.000"><properties><property name="prefix" value="alembic" /><property name="tool" value="stamp_train_classification_model" /><property name="invocation" value="crc_msi" /></properties><failure message="AssertionError: assert False&#10; +  where False = exists()&#10; +    where exists = PosixPath('/home/stas/Documents/GitHub/ToolMaker/tool_output/tools/alembic/stamp_train_classification_model/run/bbf3c5d60a675401dd94df2d10412bded3dbc7dfdcbe3baa9062ae9beb81f506/output/STAMP-CRC-MSI-model.pkl').exists">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...ication_model/run/bbf3c5d60a675401dd94df2d10412bded3dbc7dfdcbe3baa9062ae9beb81f506/output', elapsed=135.47195887565613)
+expected_trained_model_path = 'STAMP-CRC-MSI-model.pkl'
+
+    @pytest.mark.parametrize(
+        "invocation,expected_trained_model_path",
+        [
+            (lf("crc_msi"), "STAMP-CRC-MSI-model.pkl"),
+            (lf("crc_braf"), "STAMP-CRC-BRAF-model.pkl"),
+            (lf("crc_kras"), "STAMP-CRC-KRAS-model.pkl"),
+        ],
+    )
+    def test_trained_model_exists(
+        invocation: ToolRunResult, expected_trained_model_path: str
+    ):
+        trained_model_path = invocation.resolved_output_path / expected_trained_model_path
+&gt;       assert trained_model_path.exists()
+E       AssertionError: assert False
+E        +  where False = exists()
+E        +    where exists = PosixPath('/home/stas/Documents/GitHub/ToolMaker/tool_output/tools/alembic/stamp_train_classification_model/run/bbf3c5d60a675401dd94df2d10412bded3dbc7dfdcbe3baa9062ae9beb81f506/output/STAMP-CRC-MSI-model.pkl').exists
+
+benchmark/tests/test_stamp_train_classification_model.py:32: AssertionError</failure></testcase><testcase classname="test_stamp_train_classification_model" name="test_status[crc_braf-alembic/stamp_train_classification_model]" time="0.004"><properties><property name="prefix" value="alembic" /><property name="tool" value="stamp_train_classification_model" /><property name="invocation" value="crc_braf" /></properties><failure message="AssertionError: assert 'error' == 'success'&#10;  &#10;  - success&#10;  + error">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...fication_model/run/b154916966828fdd1ce8cf08ec044100bb13477666d2b4bf95793f8618f97368/output', elapsed=135.4404594898224)
+
+    @parametrize_invocation("crc_msi", "crc_braf", "crc_kras")
+    def test_status(invocation: ToolRunResult):
+&gt;       assert invocation.status == "success"
+E       AssertionError: assert 'error' == 'success'
+E         
+E         - success
+E         + error
+
+benchmark/tests/test_stamp_train_classification_model.py:12: AssertionError</failure></testcase><testcase classname="test_stamp_train_classification_model" name="test_num_params[crc_braf-alembic/stamp_train_classification_model]" time="0.000"><properties><property name="prefix" value="alembic" /><property name="tool" value="stamp_train_classification_model" /><property name="invocation" value="crc_braf" /></properties><failure message="TypeError: string indices must be integers, not 'str'">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...fication_model/run/b154916966828fdd1ce8cf08ec044100bb13477666d2b4bf95793f8618f97368/output', elapsed=135.4404594898224)
+
+    @parametrize_invocation("crc_msi", "crc_braf", "crc_kras")
+    def test_num_params(invocation: ToolRunResult):
+&gt;       assert invocation.result["num_params"] == 3552258
+E       TypeError: string indices must be integers, not 'str'
+
+benchmark/tests/test_stamp_train_classification_model.py:17: TypeError</failure></testcase><testcase classname="test_stamp_train_classification_model" name="test_trained_model_exists[crc_braf-STAMP-CRC-BRAF-model.pkl-alembic/stamp_train_classification_model]" time="0.000"><properties><property name="prefix" value="alembic" /><property name="tool" value="stamp_train_classification_model" /><property name="invocation" value="crc_braf" /></properties><failure message="AssertionError: assert False&#10; +  where False = exists()&#10; +    where exists = PosixPath('/home/stas/Documents/GitHub/ToolMaker/tool_output/tools/alembic/stamp_train_classification_model/run/b154916966828fdd1ce8cf08ec044100bb13477666d2b4bf95793f8618f97368/output/STAMP-CRC-BRAF-model.pkl').exists">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...fication_model/run/b154916966828fdd1ce8cf08ec044100bb13477666d2b4bf95793f8618f97368/output', elapsed=135.4404594898224)
+expected_trained_model_path = 'STAMP-CRC-BRAF-model.pkl'
+
+    @pytest.mark.parametrize(
+        "invocation,expected_trained_model_path",
+        [
+            (lf("crc_msi"), "STAMP-CRC-MSI-model.pkl"),
+            (lf("crc_braf"), "STAMP-CRC-BRAF-model.pkl"),
+            (lf("crc_kras"), "STAMP-CRC-KRAS-model.pkl"),
+        ],
+    )
+    def test_trained_model_exists(
+        invocation: ToolRunResult, expected_trained_model_path: str
+    ):
+        trained_model_path = invocation.resolved_output_path / expected_trained_model_path
+&gt;       assert trained_model_path.exists()
+E       AssertionError: assert False
+E        +  where False = exists()
+E        +    where exists = PosixPath('/home/stas/Documents/GitHub/ToolMaker/tool_output/tools/alembic/stamp_train_classification_model/run/b154916966828fdd1ce8cf08ec044100bb13477666d2b4bf95793f8618f97368/output/STAMP-CRC-BRAF-model.pkl').exists
+
+benchmark/tests/test_stamp_train_classification_model.py:32: AssertionError</failure></testcase><testcase classname="test_stamp_train_classification_model" name="test_status[crc_kras-alembic/stamp_train_classification_model]" time="0.003"><properties><property name="prefix" value="alembic" /><property name="tool" value="stamp_train_classification_model" /><property name="invocation" value="crc_kras" /></properties><failure message="AssertionError: assert 'error' == 'success'&#10;  &#10;  - success&#10;  + error">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...fication_model/run/4300f962ed3a32b8de18d9a35b1805576e75bb595dad5fddbec5031ac5178bf6/output', elapsed=135.4778995513916)
+
+    @parametrize_invocation("crc_msi", "crc_braf", "crc_kras")
+    def test_status(invocation: ToolRunResult):
+&gt;       assert invocation.status == "success"
+E       AssertionError: assert 'error' == 'success'
+E         
+E         - success
+E         + error
+
+benchmark/tests/test_stamp_train_classification_model.py:12: AssertionError</failure></testcase><testcase classname="test_stamp_train_classification_model" name="test_num_params[crc_kras-alembic/stamp_train_classification_model]" time="0.000"><properties><property name="prefix" value="alembic" /><property name="tool" value="stamp_train_classification_model" /><property name="invocation" value="crc_kras" /></properties><failure message="TypeError: string indices must be integers, not 'str'">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...fication_model/run/4300f962ed3a32b8de18d9a35b1805576e75bb595dad5fddbec5031ac5178bf6/output', elapsed=135.4778995513916)
+
+    @parametrize_invocation("crc_msi", "crc_braf", "crc_kras")
+    def test_num_params(invocation: ToolRunResult):
+&gt;       assert invocation.result["num_params"] == 3552258
+E       TypeError: string indices must be integers, not 'str'
+
+benchmark/tests/test_stamp_train_classification_model.py:17: TypeError</failure></testcase><testcase classname="test_stamp_train_classification_model" name="test_trained_model_exists[crc_kras-STAMP-CRC-KRAS-model.pkl-alembic/stamp_train_classification_model]" time="0.001"><properties><property name="prefix" value="alembic" /><property name="tool" value="stamp_train_classification_model" /><property name="invocation" value="crc_kras" /></properties><failure message="AssertionError: assert False&#10; +  where False = exists()&#10; +    where exists = PosixPath('/home/stas/Documents/GitHub/ToolMaker/tool_output/tools/alembic/stamp_train_classification_model/run/4300f962ed3a32b8de18d9a35b1805576e75bb595dad5fddbec5031ac5178bf6/output/STAMP-CRC-KRAS-model.pkl').exists">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...fication_model/run/4300f962ed3a32b8de18d9a35b1805576e75bb595dad5fddbec5031ac5178bf6/output', elapsed=135.4778995513916)
+expected_trained_model_path = 'STAMP-CRC-KRAS-model.pkl'
+
+    @pytest.mark.parametrize(
+        "invocation,expected_trained_model_path",
+        [
+            (lf("crc_msi"), "STAMP-CRC-MSI-model.pkl"),
+            (lf("crc_braf"), "STAMP-CRC-BRAF-model.pkl"),
+            (lf("crc_kras"), "STAMP-CRC-KRAS-model.pkl"),
+        ],
+    )
+    def test_trained_model_exists(
+        invocation: ToolRunResult, expected_trained_model_path: str
+    ):
+        trained_model_path = invocation.resolved_output_path / expected_trained_model_path
+&gt;       assert trained_model_path.exists()
+E       AssertionError: assert False
+E        +  where False = exists()
+E        +    where exists = PosixPath('/home/stas/Documents/GitHub/ToolMaker/tool_output/tools/alembic/stamp_train_classification_model/run/4300f962ed3a32b8de18d9a35b1805576e75bb595dad5fddbec5031ac5178bf6/output/STAMP-CRC-KRAS-model.pkl').exists
+
+benchmark/tests/test_stamp_train_classification_model.py:32: AssertionError</failure></testcase></testsuite></testsuites>

@@ -1,0 +1,61 @@
+\section{Comparison with Existing Systems}
+\label{sec:related}
+
+Two recent systems address closely related problems. \textbf{ToolMaker} \citep{toolmaker2025} converts a repository into a single Python function given a human-authored task specification (target function name, argument list, and one example invocation), then closes an iterative implement–run–diagnose–rewrite loop around that one function inside a reproducible, \texttt{install.sh}-built Docker image. \textbf{ToolRosella} \citep{toolrosella2026} is closest in output format: its \texttt{code2mcp} conversion workflow, first introduced as a standalone system by \citet{code2mcp2025}, statically analyzes a repository via a LangGraph pipeline, generates an MCP scaffold, and repairs it through a review–revise–fix loop driven by traceback analysis, but validation stops at import-level smoke testing and the artifact is a local folder rather than a container image.
+
+Table~\ref{tab:comparison} summarizes the key differences.
+
+\begin{table*}[t]
+  \centering
+  \small
+  \begin{tabular}{@{}p{2.3cm}p{3.8cm}p{3.8cm}p{4.1cm}@{}}
+    \toprule
+    & \textbf{ToolMaker} & \textbf{ToolRosella} & \textbf{Alembic} \\
+    \midrule
+    Tool surface & human-specified, single function & auto-discovered, 3-tool target & auto-discovered (or known-target), 1--5 tools \\
+    Environment strategy & single editable install, forced Python 3.12 & uv $\to$ conda $\to$ venv & always split: repo venv + modern server venv \\
+    Correctness gates & none (prompt-only) & traceback-driven repair & four deterministic gates (AST, env, artefact, server) \\
+    End-to-end validation & LLM judge on 1 example & import smoke test only & live invocation of every tool; \emph{passed}/\emph{perfect} verdicts \\
+    Repair loop & implement--diagnose--rewrite ($\le$30) & review--revise--fix ($\le$5) & batched debugger with memory \\
+    External assets & weights/data (task-specified) & none & API keys, weights, and data downloads \\
+    Delivered artifact & reproducible Docker image, in-container function & local folder (\texttt{mcp\_output/}) & versioned Docker image, live MCP server \\
+    \bottomrule
+  \end{tabular}
+  \caption{Alembic against the two closest repo-to-tool systems.}
+  \label{tab:comparison}
+\end{table*}
+
+The systems are complementary rather than strictly ordered: ToolMaker trades
+autonomy for a tighter, human-specified target, whereas Alembic and ToolRosella
+decide the tool surface from the repository alone. Five theses separate Alembic
+from both:
+
+\begin{itemize}
+  \setlength{\itemsep}{2pt}\setlength{\parskip}{0pt}\setlength{\topsep}{3pt}
+  \item \textbf{Correctness by construction, not by prompt.} Every
+  correctness-bearing check is a deterministic code gate (AST/plan,
+  environment, artefact, and server-compile), so a weaker model cannot slip an
+  unchecked tool through and a stronger one is not slowed by hand-holding.
+  ToolMaker enforces correctness with an LLM judge over one example; ToolRosella
+  with traceback-driven repair.
+  \item \textbf{Live invocation, not import smoke tests.} Alembic calls every
+  tool on sample \emph{and} held-out inputs and records \emph{passed}/%
+  \emph{perfect} verdicts; ToolRosella stops at importing \texttt{create\_app()}
+  without ever invoking a tool, and ToolMaker judges a single in-loop example.
+  \item \textbf{Always-split environments for old repos.} ToolMaker forces every
+  repository into one editable install on Python 3.12 and ToolRosella hard-floors
+  a single environment at 3.10+, neither of which can satisfy both the MCP
+  libraries (3.10+) and interpreter-pinned scientific packages; Alembic runs the
+  repository at its own interpreter behind a modern server layer.
+  \item \textbf{A served, versioned endpoint, not a function or a folder.}
+  Alembic commits a portable, secret-scrubbed Docker image serving live MCP over
+  HTTP; ToolMaker emits an in-container Python function with no served interface,
+  and ToolRosella a local \texttt{mcp\_output/} folder scored by a vague ``three
+  exposed tools'' criterion.
+  \item \textbf{External assets as a first-class concern.} Alembic acquires API
+  keys, model weights, and in-container data; ToolRosella handles none of these,
+  and ToolMaker fetches models but leaves datasets to mounts and secrets to a
+  human declaration.
+\end{itemize}
+
+More broadly, LATM \citep{latm2024}, TroVE \citep{trove2024}, and ReGAL \citep{regal2024} also have LLMs write reusable tools, but they grow a Python function library \emph{across many solved tasks} from execution traces; Alembic performs a single, no-history pass over one repository and outputs a served MCP endpoint rather than an in-context callable.

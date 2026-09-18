@@ -57,6 +57,13 @@ _LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 # tolerated between streamed chunks. A provider that goes quiet raises nothing
 # on its own, so without this the agent waits forever.
 REQUEST_TIMEOUT = settings.llm.request_timeout
+# Upper bound on one model reply, in tokens; 0 sends no cap. Without it
+# OpenRouter providers size the reply to the whole context window and reject
+# the call ("Requested token count exceeds the model's maximum context length").
+# Passed as litellm's max_tokens on the model itself, so it reaches every agent,
+# custom agent classes included; ADK's max_output_tokens only reaches agents that
+# set a generate_content_config and arrives as max_completion_tokens.
+MAX_OUTPUT_TOKENS = int(os.getenv("LLM_MAX_OUTPUT_TOKENS", "16384"))
 # Provider-side throttles clear on their own, but on the provider's clock, not
 # ours: OpenRouter's 402 "in_flight_budget_exhausted" (a cap on concurrent spend
 # — NOT an empty balance) ships a Retry-After of a minute or two. The generic
@@ -402,7 +409,11 @@ class RetryingLiteLlm(LiteLlm):
 
 MODEL = settings.llm.main_model
 litellm.api_key = settings.llm.openai_api_key
-litellm.request_timeout = 45.0
+# 45s was too short for a reasoning model answering on a long tool result:
+# every attempt hit the deadline, so the retry budget burned three times
+# without a chance of succeeding. Still far from litellm's 6000s default,
+# which freezes the UI when a proxy hangs.
+litellm.request_timeout = float(os.getenv("LLM_REQUEST_TIMEOUT", "180"))
 # Silence litellm's "Provider List: https://docs.litellm.ai/docs/providers" spam.
 # It fires when litellm can't map a model prefix (e.g. "qwen/...") to a known
 # provider during cost/token bookkeeping — harmless, but it floods the console.
@@ -476,6 +487,10 @@ def _reasoning_kwargs(model: str, spec: Optional[Any]) -> dict:
     )
 
 
+def _max_tokens_kwargs() -> dict:
+    return {"max_tokens": MAX_OUTPUT_TOKENS} if MAX_OUTPUT_TOKENS else {}
+
+
 def make_llm(
     model: str = MODEL,
     *,
@@ -485,7 +500,7 @@ def make_llm(
     """Return a (retry-wrapped) LiteLlm for the main model (or an override)."""
     return RetryingLiteLlm(
         model=model, deadline_s=deadline_s, timeout=REQUEST_TIMEOUT,
-        **_reasoning_kwargs(model, reasoning)
+        **_max_tokens_kwargs(), **_reasoning_kwargs(model, reasoning)
     )
 
 
@@ -497,5 +512,6 @@ def make_coder_llm(
         model=CODER_MODEL,
         deadline_s=deadline_s,
         timeout=REQUEST_TIMEOUT,
+        **_max_tokens_kwargs(),
         **_reasoning_kwargs(CODER_MODEL, reasoning),
     )

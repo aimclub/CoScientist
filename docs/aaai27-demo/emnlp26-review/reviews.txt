@@ -1,0 +1,350 @@
+Paper Decision
+Copy URL of note efdJySeZQm
+Decision
+by
+Program Chairs
+22 Aug 2026, 18:02 (modified: 22 Aug 2026, 18:12)
+Program Chairs, Area Chairs, Reviewers, Authors
+Revisions
+Decision:
+Reject
+−
+＝
+≡
+Meta Review of Submission241 by Area Chair ZpCS
+Copy URL of note P5EpPlqNBe
+Meta Review
+by
+Area Chair ZpCS
+18 Aug 2026, 08:56 (modified: 22 Aug 2026, 18:12)
+Program Chairs, Area Chairs, Reviewers, Authors
+Revisions
+Metareview:
+This
+paper presents Alembic, an end-to-end system for converting scientific
+repositories into containerized MCP servers. Both reviewers recognize
+the importance of the problem and the system’s coherent end-to-end
+design. Reviewer fhxJ emphasizes its engineering quality, practical
+agent-gate architecture, and reproducibility, while Reviewer QhoV raises
+concerns about the semantic reliability of the generated tools. The
+reviews therefore differ primarily in whether the current validation is
+sufficient to support the paper’s central claims.
+As a system demonstration submission, Alembic benefits from a mature
+artifact, usable interface, and deployable output. However, the use of
+different underlying models in the baseline comparison and the absence
+of component ablations limit conclusions about the effectiveness of the
+proposed architecture. More importantly, the validation process is
+partly self-referential, and the weaker performance on externally
+defined TM-Bench tests suggests that passing the deterministic gates
+does not necessarily ensure semantic correctness. In addition, the
+known-target evaluation does not directly validate autonomous tool
+discovery.
+Overall, the submission demonstrates a complete and reproducible
+system with practical utility. However, the current evaluation does not
+adequately substantiate its central claims of semantic reliability and
+autonomous tool discovery. I therefore recommend rejection.
+Recommendation:
+Reject
+Confidence:
+4: The area chair is confident but not absolutely certain
+−
+＝
+≡
+Promising Architecture, Insufficient Evidence
+Copy URL of note XbR8xEqeiG
+Official Review
+by
+Reviewer fhxJ
+04 Aug 2026, 07:21 (modified: 22 Aug 2026, 18:13)
+Program Chairs, Area Chairs, Reviewers, Authors
+Revisions
+Review:
+Quality
+The engineering implementation is solid, the pipeline design is
+complete, and the authors provide open-source code, a screencast, and a
+web demo — reproducibility is commendable. The failure analysis is
+honest and transparent.
+However, the comparative evaluation is not conducted under fair
+conditions (different models), no ablation study is provided, the
+overall score (27/42 vs. 37/42) does not beat the baseline, and token
+consumption is 4.7× higher. Under the current evidence, it is difficult
+to determine whether the performance gap arises from methodological
+differences or model disparities. This reflects a common weakness of
+systems papers: substantial engineering effort accompanied by
+insufficient experimental depth.
+Clarity
+The paper is exceptionally well-written. The abstract accurately
+captures the problem, method, and results. The core design principle —
+"the LLM proposes, code disposes" — is articulated early and reinforced
+throughout. The seven-dimension comparison in Table 1 concisely
+positions Alembic against ToolMaker and ToolRosella. The pipeline
+architecture diagram (Figure 1) and the MedSAM case study (Section 7.1)
+are concrete and illustrative. Even readers unfamiliar with the MCP
+protocol can readily understand what the system accomplishes. Writing
+quality is a standout strength of this submission.
+Originality
+The primary contribution lies in the
+innovative combination of system architecture components
+rather than in fundamentally new algorithms. The interleaved agent–gate
+architecture, the always-split environment strategy, and the "code
+disposes" design philosophy collectively represent a non-trivial
+engineering advance over prior repo-to-tool systems.
+That said, the individual components are not novel in themselves —
+agent pipelines, AST-based verification, Docker isolation, and MCP
+serving all have precedent. The novelty resides in their specific
+orchestration and the principled separation of creative (LLM) and
+correctness (code) responsibilities. Furthermore, the system is
+evaluated in a "known-target" mode, which tempers the claim of fully
+autonomous tool-surface discovery.
+Significance
+The paper addresses a real problem: the vast accumulation of
+published scientific code is effectively inaccessible to LLM agents
+without per-repository manual engineering. As the concept of the AI
+co-scientist gains traction, a system that can automatically convert
+published repositories into callable, validated tools will only increase
+in value. Alembic fills an important gap in the emerging MCP-based
+agent tooling ecosystem.
+However, the experimental limitations (model mismatch, narrow domain
+coverage) and the currently prohibitive token cost constrain immediate
+practical deployment and weaken the paper's claim to transformative
+impact.
+Paper Summary:
+This paper presents
+Alembic
+,
+an end-to-end automated system that converts arbitrary scientific code
+repositories (given only a GitHub URL) into tools served over MCP (Model
+Context Protocol) inside Docker containers. The core design principle
+is five specialized agents (Explorer, Environment, Coder, Validator, and
+a deterministic Wrapper) interleaved with four deterministic
+code-enforced gates that assume all mechanical correctness decisions,
+thereby eliminating entire classes of failure arising from LLM
+hallucination. On the TM-Bench benchmark spanning 14 repositories,
+Alembic successfully delivers a running MCP service for all of them and
+matches or exceeds the ToolMaker baseline on several tasks.
+Strengths And Weaknesses:
+Strengths
+Well-conceived design philosophy — "LLM proposes, code disposes."
+Creative work (understanding repos, choosing what to wrap, writing tool
+bodies, diagnosing failures) is delegated to LLMs, while every
+correctness-bearing check is enforced by deterministic code gates. This
+is a principled engineering decision that eliminates
+hallucination-driven failures by construction rather than by post-hoc
+repair.
+High degree of end-to-end automation.
+Alembic
+requires nothing more than a repository URL; no human-authored task
+specification, target function name, argument list, or invocation
+example is needed. The Explorer autonomously discovers the tool surface
+from repository documentation, READMEs, and example scripts — a
+meaningful advance over systems that demand per-repository human
+annotation.
+Complete and deployable artifact.
+The output is a
+portable, versioned, secret-scrubbed Docker image serving live MCP over
+HTTP, rather than a local folder or an in-container function without a
+serving interface. This makes the generated tools genuinely ready for
+integration into agent workflows.
+Excellent engineering and reproducibility.
+The
+authors provide a web dashboard with real-time streaming, a screencast
+demonstration, an interactive Hugging Face demo, and a full open-source
+release under the MIT license. The level of artifact quality and
+documentation is exemplary.
+Weaknesses
+Limited experimental persuasiveness — the comparison is not fair.
+Alembic uses GLM-5.2 while the ToolMaker baseline is evaluated with
+GPT-4o. These are different model families with different capabilities.
+The overall Invocation score for Alembic (27/42) is considerably below
+ToolMaker (37/42). The authors acknowledge that a matched GLM-5.2 re-run
+of the baseline did not reproduce the published figures, yet present
+the cross-model comparison in the same table. As a system demonstration
+this is acceptable, but as evidence of methodological superiority it is
+insufficient. The authors should consider adopting a more capable and
+up-to-date model to strengthen the comparison.
+Missing stronger baselines.
+Contemporary agentic
+coding harnesses such as Claude Code, Codex CLI, and CodeBuddy have
+become widely adopted for repository-level code understanding and
+environment setup tasks. It would be highly informative to compare
+Alembic against a baseline where the same TM-Bench tasks are given
+directly to one of these harnesses as a plain prompt, measuring both
+success rate and token cost. This would contextualize how much value the
+Alembic pipeline adds over a general-purpose coding agent.
+Excessively decoupled module design without justification.
+The five-stage pipeline (Explorer → Environment → Coder → Validator →
+Wrapper) appears to follow an intuitive decomposition, but the paper
+provides no evidence that this particular split is optimal. An ablation
+study is needed to determine which components contribute most to
+performance. Could stages be merged or reordered? Could a simpler
+pipeline (e.g., a single agent with tool access) achieve comparable
+results at lower cost? Without component-level ablation, the
+architectural contribution remains speculative.
+Enormous token consumption.
+Alembic's total
+token usage (≈37M) is approximately 4.7× that of ToolMaker (≈7.9M). For
+results that largely match rather than exceed the baseline, this
+efficiency gap demands stronger justification. While the paper
+attributes the overhead to the difficulty of autonomous tool-surface
+discovery versus human specification, no ablation is provided to isolate
+per-stage token costs, making it impossible to identify where
+optimization efforts should be directed.
+Narrow task coverage.
+All 14 repositories are
+concentrated in biomedical, pathology, omics, and protein domains; only 4
+fall under the "Other" category (3D vision, NLP, tabular analysis).
+Generalization to broader scientific disciplines — physics simulation,
+computational chemistry, astronomy, social science statistics — remains
+unvalidated, which limits confidence in the system's claimed generality.
+Insufficient root-cause analysis of failure modes.
+The error classification in Table 3 is too coarse: the largest
+category, "Other," accounts for 8 out of 30 runtime exceptions,
+providing little diagnostic insight. Similarly, the 4 tool-cycle aborts
+in the Environment stage (agent loop repeating tool calls, Table 4) are
+observed but their underlying causes are not investigated. A deeper
+qualitative analysis of representative failures would substantially
+strengthen the paper.
+No user study on generated tool quality.
+The
+interface design quality, naming semantics, documentation adequacy, and
+error-handling robustness of the generated MCP tools are never evaluated
+by human users. Without such evaluation, it is unclear whether the
+tools are practically usable by downstream agents or developers.
+Rating:
+6: Marginally above acceptance threshold
+Confidence:
+4: The reviewer is confident but not absolutely certain that the evaluation is correct
+−
+＝
+≡
+A Well-Designed System with Insufficient Validation of Tool Reliability
+Copy URL of note 2f72PsJ799
+Official Review
+by
+Reviewer QhoV
+01 Aug 2026, 19:44 (modified: 22 Aug 2026, 18:13)
+Program Chairs, Area Chairs, Reviewers, Authors
+Revisions
+Review:
+This paper presents
+Alembic
+,
+an end-to-end system that converts scientific code repositories into
+callable MCP servers. Given a GitHub URL, Alembic uses a five-stage
+pipeline—Explorer, Environment, Coder, Validator, and Wrapper—together
+with deterministic gates for checking intermediate artifacts. The final
+output is a versioned Docker image serving the generated tools through
+MCP.
+Overall, the paper addresses an important problem and presents a
+substantial engineering effort. However, the current experimental
+evidence does not adequately support the paper’s central claims
+regarding the correctness and reliability of the generated tools. In
+particular, it remains unclear whether the proposed internal
+verification mechanism can reliably detect semantically incorrect tool
+implementations.
+Pros
+The paper addresses an important problem.
+Scientific repositories are often difficult to install, poorly
+documented, and not designed for use by LLM agents. Automatically
+converting them into reusable and callable tools could substantially
+improve scientific-agent workflows.
+The overall workflow is reasonable and well structured.
+The division into repository exploration, environment construction, tool
+implementation, validation, and server packaging is intuitive.
+Structured handoffs and deterministic gates also provide clearer control
+than a fully unconstrained agent pipeline.
+The environment-isolation strategy is novel and practically useful.
+Separating the repository-specific environment from the modern MCP
+server environment allows older scientific software to retain its
+original interpreter and dependencies while still being exposed through a
+current MCP interface. This is a meaningful design contribution.
+Cons
+The experimental validation is insufficient.
+The experiments demonstrate that Alembic can produce served MCP
+artifacts, but they do not adequately establish the functional
+correctness, robustness, or competitiveness of the generated tools. On
+TM-Bench, Alembic achieves (27/42) successful invocations and (93/124)
+passing tests, compared with (37/42) and (116/124) for ToolMaker.
+Moreover, the comparison is not controlled for the underlying model:
+Alembic uses GLM-5.2, whereas the reported ToolMaker results use GPT-4o.
+The experiments also use known-target mode, which does not directly
+validate the claimed autonomous tool-discovery capability. Repeated
+runs, controlled baselines, and ablation studies are needed to support
+the paper’s main claims.
+The reliability of the internal self-verification mechanism is unclear.
+Within the five-stage pipeline, the system derives the tool
+specification, generates the implementation, constructs the tests, and
+then validates the tool largely using evidence produced by the same
+pipeline. This creates a partially self-referential verification
+process: an incorrect interpretation of a repository could potentially
+lead to an incorrect implementation and an incorrect test that remain
+mutually consistent. The deterministic gates ensure structural
+properties such as symbol existence, compilation, importability, and
+execution, but they do not necessarily guarantee semantic correctness.
+The paper should more carefully evaluate whether this internal
+verification mechanism is reliable, preferably using independent
+human-written tests or expert assessment.
+Overall assessment
+Alembic addresses a valuable problem and presents a coherent,
+substantial system implementation. However, the current evaluation
+demonstrates successful pipeline execution and MCP delivery more
+convincingly than it demonstrates the semantic correctness and
+reliability of the generated tools. The uncontrolled baseline
+comparison, the use of known-target mode, and the uncertainty
+surrounding the internally generated validation tests are central
+limitations rather than minor omissions.
+Paper Summary:
+This
+paper presents Alembic, a system that automatically converts scientific
+code repositories into MCP servers. It uses a five-stage agent pipeline
+with deterministic validation gates to discover tools, build isolated
+environments, generate and test wrappers, and package them as versioned
+Docker images. The system is evaluated on fourteen repositories from
+TM-Bench.
+Strengths And Weaknesses:
+Strengths
+The paper addresses an important problem.
+Scientific repositories are often difficult to install, poorly
+documented, and not designed for use by LLM agents. Automatically
+converting them into reusable and callable tools could substantially
+improve scientific-agent workflows.
+The overall workflow is reasonable and well structured.
+The division into repository exploration, environment construction, tool
+implementation, validation, and server packaging is intuitive.
+Structured handoffs and deterministic gates also provide clearer control
+than a fully unconstrained agent pipeline.
+The environment-isolation strategy is novel and practically useful.
+Separating the repository-specific environment from the modern MCP
+server environment allows older scientific software to retain its
+original interpreter and dependencies while still being exposed through a
+current MCP interface. This is a meaningful design contribution.
+Weaknesses
+The experimental validation is insufficient.
+The experiments demonstrate that Alembic can produce served MCP
+artifacts, but they do not adequately establish the functional
+correctness, robustness, or competitiveness of the generated tools. On
+TM-Bench, Alembic achieves (27/42) successful invocations and (93/124)
+passing tests, compared with (37/42) and (116/124) for ToolMaker.
+Moreover, the comparison is not controlled for the underlying model:
+Alembic uses GLM-5.2, whereas the reported ToolMaker results use GPT-4o.
+The experiments also use known-target mode, which does not directly
+validate the claimed autonomous tool-discovery capability. Repeated
+runs, controlled baselines, and ablation studies are needed to support
+the paper’s main claims.
+The reliability of the internal self-verification mechanism is unclear.
+Within the five-stage pipeline, the system derives the tool
+specification, generates the implementation, constructs the tests, and
+then validates the tool largely using evidence produced by the same
+pipeline. This creates a partially self-referential verification
+process: an incorrect interpretation of a repository could potentially
+lead to an incorrect implementation and an incorrect test that remain
+mutually consistent. The deterministic gates ensure structural
+properties such as symbol existence, compilation, importability, and
+execution, but they do not necessarily guarantee semantic correctness.
+The paper should more carefully evaluate whether this internal
+verification mechanism is reliable, preferably using independent
+human-written tests or expert assessment.
+Rating:
+4: Ok but not good enough - rejection
+Confidence:
+3: The reviewer is fairly confident that the evaluation is correct

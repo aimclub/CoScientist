@@ -1,0 +1,66 @@
+\documentclass{article}
+\usepackage[a4paper,margin=1.2cm,landscape]{geometry}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage[table]{xcolor}
+\usepackage{amssymb}   % \circlearrowleft
+\usepackage{pifont}    % \ding{55} for the cross mark
+\usepackage{graphicx}  % \rotatebox
+
+% ---- cell colors (correct / partial / failed) ----
+\definecolor{okgreen}{RGB}{198,239,206}
+\definecolor{midyellow}{RGB}{255,235,156}
+\definecolor{badred}{RGB}{255,199,206}
+
+\newcommand{\G}[1]{\cellcolor{okgreen}#1}   % all unit tests pass
+\newcommand{\Y}[1]{\cellcolor{midyellow}#1} % at least one failed
+\newcommand{\R}[1]{\cellcolor{badred}#1}    % all failed
+\newcommand{\selfc}{\,$\circlearrowleft$}       % self-correcting iteration
+\newcommand{\xmark}{\ding{55}}
+
+\begin{document}
+\pagestyle{empty}
+
+\begin{table}
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4.5pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{@{}ll rrrrr rrrrr@{}}
+\toprule
+& & \multicolumn{5}{c}{\textbf{ToolMaker (ours)}} & \multicolumn{5}{c}{\textbf{OpenHands} \small(Wang et al., 2024)} \\
+\cmidrule(lr){3-7}\cmidrule(lr){8-12}
+& Task & Invoc. & Tests & Cost & Actions & Tokens & Invoc. & Tests & Cost & Actions & Tokens \\
+\midrule
+\multirow{6}{*}{\rotatebox[origin=c]{90}{Pathology}}
+ & conch\_extract\_features \small(Lu et al., 2024b)            & \G{3/3} & \G{9/9}   & \$0.35 & 15 (1\selfc) & 171,226   & \G{3/3}   & \G{9/9}   & \$0.08 & 5  & 51,701  \\
+ & musk\_extract\_features \small(Xiang et al., 2025)           & \G{3/3} & \G{6/6}   & \$1.19 & 29 (6\selfc) & 696,386   & \R{\xmark} & \R{\xmark} & \$0.15 & 7  & 97,386  \\
+ & pathfinder\_verify\_biomarker \small(Liang et al., 2023)     & \R{0/2} & \Y{4/6}   & \$0.61 & 27 (1\selfc) & 356,825   & \R{0/2}   & \Y{4/6}   & \$0.08 & 6  & 49,414  \\
+ & stamp\_extract\_features \small(El Nahhas et al., 2024)      & \G{3/3} & \G{12/12} & \$1.12 & 20 (4\selfc) & 631,138   & \R{0/3}   & \Y{3/12}  & \$0.07 & 6  & 42,793  \\
+ & stamp\_train\_classification\_model \small(El Nahhas et al., 2024) & \G{3/3} & \G{9/9} & \$2.27 & 33 (9\selfc) & 1,249,521 & \R{0/3}   & \R{0/9}   & \$0.15 & 8  & 87,915  \\
+ & uni\_extract\_features \small(Chen et al., 2024)             & \G{3/3} & \G{9/9}   & \$0.61 & 16 (4\selfc) & 326,806   & \R{\xmark} & \R{\xmark} & \$0.25 & 10 & 177,119 \\
+\midrule
+\multirow{2}{*}{\rotatebox[origin=c]{90}{Rad.}}
+ & medsam\_inference \small(Ma et al., 2024)                    & \G{3/3} & \G{6/6}   & \$0.96 & 18 (6\selfc) & 508,954   & \R{\xmark} & \R{\xmark} & \$0.07 & 5  & 41,096  \\
+ & nnunet\_train\_model \small(Isensee et al., 2020)            & \R{0/2} & \R{0/4}   & \$2.90 & 35 (9\selfc) & 1,792,291 & \R{0/2}   & \R{0/4}   & \$0.12 & 8  & 79,231  \\
+\midrule
+\multirow{2}{*}{\rotatebox[origin=c]{90}{Omics}}
+ & cytopus\_db \small(Kunes et al., 2023)                       & \G{3/3} & \G{12/12} & \$0.41 & 10 (3\selfc) & 185,912   & \R{\xmark} & \R{\xmark} & \$0.36 & 8  & 236,217 \\
+ & esm\_fold\_predict \small(Verkuil et al., 2022; Hie et al., 2022) & \Y{2/3} & \Y{13/15} & \$0.66 & 20 (1\selfc) & 336,754 & \R{\xmark} & \R{\xmark} & \$0.11 & 6  & 69,493  \\
+\midrule
+\multirow{5}{*}{\rotatebox[origin=c]{90}{Other}}
+ & flowmap\_overfit\_scene \small(Smith et al., 2024)           & \G{2/2} & \G{6/6}   & \$0.70 & 18 (5\selfc) & 358,552   & \R{\xmark} & \R{\xmark} & \$0.36 & 15 & 250,787 \\
+ & medsss\_generate \small(Jiang et al., 2025)                  & \G{3/3} & \G{6/6}   & \$0.53 & 25 (3\selfc) & 282,771   & \G{3/3}   & \G{6/6}   & \$0.15 & 10 & 104,505 \\
+ & modernbert\_predict\_masked \small(Warner et al., 2024)      & \G{3/3} & \G{9/9}   & \$0.66 & 20 (4\selfc) & 356,228   & \R{\xmark} & \R{\xmark} & \$0.13 & 10 & 82,930  \\
+ & retfound\_feature\_vector \small(Zhou et al., 2023)          & \G{3/3} & \G{6/6}   & \$0.97 & 31 (5\selfc) & 561,936   & \R{0/3}   & \R{0/6}   & \$0.08 & 4  & 46,521  \\
+ & tabpfn\_predict \small(Hollmann et al., 2025)                & \G{3/3} & \G{9/9}   & \$0.23 & 10 (1\selfc) & 95,257    & \G{3/3}   & \G{9/9}   & \$0.07 & 4  & 36,320  \\
+\bottomrule
+\end{tabular}
+\caption{Performance of the tools created by \textsc{ToolMaker} and the OpenHands baseline (Wang et al., 2024) on
+the benchmark tasks. \xmark{} indicates that the environment installation failed. We use $\circlearrowleft$ to indicate the number of
+self-correcting iterations. Green cells indicate that the tool implementation is correct (all unit tests pass), yellow
+indicates that at least one unit test failed, and red indicates that all unit tests failed.}
+\label{tab:results}
+\end{table}
+
+\end{document}

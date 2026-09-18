@@ -1,0 +1,96 @@
+% Alembic — EMNLP 2026 System Demonstrations submission
+%
+% Built on the official ACL style files (github.com/acl-org/acl-style-files).
+% EMNLP reuses the shared *ACL template; do not modify acl.sty / acl_natbib.bst.
+%
+% Demo track is SINGLE-BLIND (see https://2026.emnlp.org/calls/demos/):
+% authors need not anonymize and self-references are permitted, so we load
+% the "preprint" variant (non-anonymous, page numbers, no line numbers).
+% Switch to the bare \usepackage{acl} (no options) for the camera-ready copy.
+%
+% Body text lives in sections/*.tex (one file per section) — edit those,
+% not this file, for content changes. This file is preamble + \input wiring.
+\documentclass[11pt]{article}
+% xcolor is loaded by acl.sty; pass the table option up front so \cellcolor works.
+\PassOptionsToPackage{table}{xcolor}
+\usepackage[preprint]{acl}
+
+\usepackage{times}
+\usepackage{latexsym}
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{microtype}
+\usepackage{inconsolata}
+\usepackage{graphicx}
+\graphicspath{{figures/}}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{makecell}
+\usepackage{pifont}     % \ding{51}/\ding{55} for the results tables
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta, positioning}
+
+% Give LaTeX more freedom to pack the result-section floats so the small error
+% tables settle on p.5 and Limitations stays within the 6-page body.
+\renewcommand{\topfraction}{0.92}
+\renewcommand{\bottomfraction}{0.85}
+\renewcommand{\textfraction}{0.06}
+\renewcommand{\floatpagefraction}{0.75}
+\setcounter{topnumber}{4}
+\setcounter{totalnumber}{5}
+
+% ---- shared macros for the generated results tables (tables/*_body.tex) ----
+\definecolor{okgreen}{RGB}{198,239,206}
+\definecolor{midyellow}{RGB}{255,235,156}
+\definecolor{badred}{RGB}{255,199,206}
+\newcommand{\G}[1]{\cellcolor{okgreen}#1}   % all pass
+\newcommand{\Y}[1]{\cellcolor{midyellow}#1} % some pass
+\newcommand{\R}[1]{\cellcolor{badred}#1}    % none pass
+\newcommand{\cmark}{\ding{51}}
+\newcommand{\xmark}{\ding{55}}
+
+% TODO(authors): point \repourl at the dedicated Alembic fork (benchmark runs,
+% tables, artefacts, without CoScientist) and fill in the web-demo link.
+\newcommand{\repourl}{https://github.com/stas1f1/alembic}
+\newcommand{\demourl}{https://youtu.be/NIepDZkMKAA}
+\newcommand{\weburl}{https://huggingface.co/spaces/jrzkaminski/alembic-demo}
+
+\title{Alembic: Autonomous Synthesis of MCP Servers from Scientific Repositories}
+
+% Single-blind review: real author list is permitted at submission time.
+\author{
+  \textbf{Stanislav Chumakov},
+  \textbf{Rodion Golovinskii},
+  \textbf{Denis Chistiakov},
+  \\
+  \textbf{Gleb Vitalevich Solovev},
+  \textbf{Nikolay Nikitin}
+  \\
+  ITMO University, Saint Petersburg, Russia
+  \\
+  \small{
+    \textbf{Correspondence:} \href{mailto:svchumakov@itmo.ru}{svchumakov@itmo.ru}
+  }
+}
+
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\input{sections/abstract}
+\end{abstract}
+
+\input{sections/intro}
+\input{sections/system}
+\input{sections/demo}
+\input{sections/comparison}
+\input{sections/availability}
+\input{sections/evaluation}
+\input{sections/limitations}
+\input{sections/ethics}
+% \input{sections/acknowledgments}
+
+\bibliography{custom}
+
+\end{document}

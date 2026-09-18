@@ -1,0 +1,37 @@
+% Auto-generated fragment — \input this into the paper; do not edit by hand.
+\begin{table*}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4.5pt}
+\renewcommand{\arraystretch}{1.15}
+\resizebox{\textwidth}{!}{%
+\begin{tabular}{@{}ll rrr rrr c rrr@{}}
+\toprule
+& & \multicolumn{3}{c}{\textbf{Tools}} & \multicolumn{3}{c}{\textbf{Checks}} & & & & \\
+\cmidrule(lr){3-5}\cmidrule(lr){6-8}
+& Repo & Stable & \makecell{Pass\\Invoc.} & Total & Tests & Exec & Invoc & \makecell{All\\stages?} & Time & \makecell{Stage\\retries} & Tokens \\
+\midrule
+\multirow{5}{*}{\rotatebox[origin=c]{90}{Pathology}} & CONCH \small\citep{lu2024conch} & \G{5} & \Y{4} & 5 & \G{16/16} & \G{4/4} & \G{4/4} & \G{\cmark} & 24m27s & 0 & 1,206,593 \\
+ & MUSK \small\citep{xiang2025musk} & \G{5} & 0 & 5 & \G{10/10} & \G{5/5} & -- & \G{\cmark} & 20m54s & 0 & 1,098,224 \\
+ & PathFinder \small\citep{liang2023pathfinder} & \G{4} & \Y{3} & 4 & \G{14/14} & \G{4/4} & \G{3/3} & \G{\cmark} & 26m08s & 2 & 956,298 \\
+ & STAMP \small\citep{elnahhas2024stamp} & \Y{4} & \R{0} & 6 & \G{13/13} & \Y{4/6} & \R{0/4} & \G{\cmark} & 56m23s & 0 & 1,758,210 \\
+ & UNI \small\citep{chen2024uni} & \G{5} & \G{5} & 5 & \G{10/10} & \G{5/5} & \G{5/5} & \G{\cmark} & 47m46s & 0 & 1,683,079 \\
+\midrule
+\multirow{2}{*}{\rotatebox[origin=c]{90}{Rad.}} & MedSAM \small\citep{ma2024medsam} & \G{5} & \Y{4} & 5 & \G{10/10} & \G{3/3} & \G{9/9} & \G{\cmark} & 57m18s & 2 & 3,442,100 \\
+ & nnU-Net \small\citep{isensee2020nnunet} & \Y{5} & \R{0} & 8 & \G{23/23} & \Y{5/8} & \R{0/2} & \G{\cmark} & 1h12m & 1 & 5,350,444 \\
+\midrule
+\multirow{2}{*}{\rotatebox[origin=c]{90}{Omics}} & Cytopus \small\citep{kunes2023cytopus} & \G{9} & \G{9} & 9 & \G{24/24} & \G{9/9} & \G{19/19} & \G{\cmark} & 22m20s & 0 & 1,967,988 \\
+ & ESM \small\citep{verkuil2022esm1,hie2022esm2} & \G{7} & \Y{4} & 7 & \G{15/15} & \G{7/7} & \G{4/4} & \G{\cmark} & 2h45m & 4 & 8,735,809 \\
+\midrule
+\multirow{5}{*}{\rotatebox[origin=c]{90}{Other}} & FlowMap \small\citep{smith2024flowmap} & \Y{3} & \Y{1} & 5 & \G{15/15} & \Y{3/5} & \Y{3/4} & \G{\cmark} & 33m52s & 0 & 1,704,245 \\
+ & MedSSS \small\citep{jiang2025medsss} & \Y{4} & \Y{1} & 6 & \G{12/12} & \R{0/2} & \Y{2/6} & \G{\cmark} & 1h03m & 0 & 3,970,326 \\
+ & ModernBERT \small\citep{warner2024modernbert} & \Y{4} & \R{0} & 5 & \G{14/14} & \R{0/1} & \R{0/2} & \G{\cmark} & 53m27s & 1 & 2,909,347 \\
+ & RETFound \small\citep{zhou2023retfound} & \G{3} & 0 & 3 & \G{8/8} & \G{3/3} & -- & \G{\cmark} & 55m38s & 0 & 721,849 \\
+ & TabPFN \small\citep{hollmann2025tabpfn} & \G{4} & \G{4} & 4 & \G{13/13} & \G{1/1} & \G{8/8} & \Y{soft-conf.} & 35m33s & 1 & 1,550,724 \\
+\midrule
+ & \textbf{Total} (14 repos) & \textbf{67} & \textbf{35} & \textbf{77} & \textbf{197/197} & \textbf{53/63} & \textbf{57/70} & \textbf{13\,\cmark}\,+\,1\,soft & \textbf{12h15m} & \textbf{11} & \textbf{37,055,236} \\
+\bottomrule
+\end{tabular}}
+\caption{Alembic self-metrics on the TM-Bench repositories, one row per repository; green/yellow/red mark all/some/none passing. \emph{All stages?} marks an end-to-end delivery (\cmark); TabPFN's environment resolved only after a soft dependency conflict (\emph{soft-conf.}).}
+\label{tab:alembic-selfmetrics}
+\end{table*}

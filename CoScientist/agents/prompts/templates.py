@@ -810,6 +810,11 @@ improvise from unrelated tools. Respond with EXACTLY one line and nothing else:
    fields in `keys`; do not call the tool again or assume it lacks them. For real
    processing of the file (joins, statistics, plots), hand the `result_s3` link
    and `s3_key` to CoderAgent.
+   Tools return data; they are not a calculator. When the needed operation is
+   not among your tools, do NOT reshape the inputs to force an existing tool
+   into it (repeating items to imitate weights, passing a list where one item
+   is expected). Return the tool outputs you have, with their `result_s3`
+   links, and state plainly which computation remains for CoderAgent.
 4. Return the final answer, INCLUDING the concrete results and any artifact URLs.
 
 ### LONG-RUNNING JOBS (status/log checks)
@@ -858,10 +863,22 @@ def task_router(ctx: PromptContext) -> str:
             "   background, without asking for an MCP server from it, does NOT trigger\n"
             "   this rule."
         )
+        rules.append(
+            "The task needs to RUN a method that lives in a named code repository (its\n"
+            "   model, pipeline or functions), and no ready tool covers it ⇒\n"
+            f"   {builder_path} first: it reuses a local server, pulls one from the hub,\n"
+            f"   or converts the repository. Then call the server's tools through\n"
+            f"   {tools_path or 'the tool path'}; {coder_path or 'the coding path'} does the analysis around the tool\n"
+            "   results. A repository that is only cited as background, or a plain\n"
+            "   library installable with pip and used in a few lines, does NOT trigger\n"
+            "   this rule."
+        )
     if coder_path:
         rules.append(
             "The task needs ENGINEERING — writing/running code, a named repository,\n"
-            "   URL or example code to clone and read, a specific architecture,\n"
+            "   URL or example code to clone and read (unless its method has to be run or\n"
+            "   kept as a reusable tool, which the rule above sends to the MCP builder),\n"
+            "   a specific architecture,\n"
             "   library or training procedure, shell/git work, or collecting and\n"
             f"   processing data ⇒ {coder_path}, straight away. Note: {coder_path} has NO\n"
             "   ability to call MCP tools/servers and must NEVER be given tasks meant for MCP."
@@ -887,6 +904,13 @@ def task_router(ctx: PromptContext) -> str:
             f"   {coder_path}, adding what the pipeline said was missing. Never call\n"
             f"   {tools_path} twice for one task, and never pass NO_MATCHING_TOOL\n"
             "   upward as your answer — resolving it is YOUR job, not the caller's."
+        )
+        rules.append(
+            f"{tools_path} returned tool outputs and says a computation over them\n"
+            "   remains (arithmetic on vectors, statistics, a model fit, a plot) ⇒\n"
+            f"   pass exactly that computation to {coder_path}, with the `result_s3`\n"
+            "   links and `s3_key`s of the outputs. The tools produce the data, the\n"
+            "   coder computes over it."
         )
         rules.append(
             "The task has BOTH natures (compute something ready-made, then build on\n"
@@ -1702,8 +1726,13 @@ def orchestrator(ctx: PromptContext) -> str:
             "   named code repository, a ready tool found by `retrieve_tools` does NOT\n"
             "   replace it: delegate so that the server is built or reused from THAT\n"
             "   repository (McpBuilderAgent, directly or via TaskExecutorAgent), and do\n"
-            "   not offer a catalogue tool as a substitute. When the repository is only\n"
-            "   mentioned, or not mentioned at all, keep the usual order."
+            "   not offer a catalogue tool as a substitute. The same holds when the task\n"
+            "   needs to RUN a method that lives in a named code repository (its model,\n"
+            "   pipeline or functions) and no ready tool covers it: delegate so that the\n"
+            "   server is reused, pulled from the hub, or converted from THAT repository,\n"
+            "   and leave the analysis around the tool results to the coding path. When\n"
+            "   the repository is only cited as background, is a plain pip library used\n"
+            "   in a few lines, or is not mentioned at all, keep the usual order."
         )
 
     steps.append(

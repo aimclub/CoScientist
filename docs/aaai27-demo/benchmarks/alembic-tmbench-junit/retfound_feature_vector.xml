@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="6" skipped="0" tests="6" time="0.809" timestamp="2026-07-11T02:11:41.353669+03:00" hostname="pop-os"><testcase classname="test_retfound_feature_vector" name="test_status[jpg-alembic/retfound_feature_vector]" time="0.004"><properties><property name="prefix" value="alembic" /><property name="tool" value="retfound_feature_vector" /><property name="invocation" value="jpg" /></properties><failure message="AssertionError: assert 'error' == 'success'&#10;  &#10;  - success&#10;  + error">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...eature_vector/run/1e2959f662247a7739772d3b33659618578add978ef2e1194f3ceefb1b785883/output', elapsed=142.16728734970093)
+
+    @parametrize_invocation("jpg", "png", "cucumber_different_filename")
+    def test_status(invocation: ToolRunResult):
+&gt;       assert invocation.status == "success"
+E       AssertionError: assert 'error' == 'success'
+E         
+E         - success
+E         + error
+
+benchmark/tests/test_retfound_feature_vector.py:10: AssertionError</failure></testcase><testcase classname="test_retfound_feature_vector" name="test_shape_and_type[jpg-alembic/retfound_feature_vector]" time="0.000"><properties><property name="prefix" value="alembic" /><property name="tool" value="retfound_feature_vector" /><property name="invocation" value="jpg" /></properties><failure message="TypeError: string indices must be integers, not 'str'">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...eature_vector/run/1e2959f662247a7739772d3b33659618578add978ef2e1194f3ceefb1b785883/output', elapsed=142.16728734970093)
+
+    @parametrize_invocation("jpg", "png", "cucumber_different_filename")
+    def test_shape_and_type(invocation: ToolRunResult):
+&gt;       assert isinstance(invocation.result["feature_vector"], list)
+E       TypeError: string indices must be integers, not 'str'
+
+benchmark/tests/test_retfound_feature_vector.py:15: TypeError</failure></testcase><testcase classname="test_retfound_feature_vector" name="test_status[png-alembic/retfound_feature_vector]" time="0.003"><properties><property name="prefix" value="alembic" /><property name="tool" value="retfound_feature_vector" /><property name="invocation" value="png" /></properties><failure message="AssertionError: assert 'error' == 'success'&#10;  &#10;  - success&#10;  + error">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...eature_vector/run/c09d3292c0c3f860f89a5ba9d86a3a2bbfdc1dc91ebe305c052166d724c18d9e/output', elapsed=142.06213903427124)
+
+    @parametrize_invocation("jpg", "png", "cucumber_different_filename")
+    def test_status(invocation: ToolRunResult):
+&gt;       assert invocation.status == "success"
+E       AssertionError: assert 'error' == 'success'
+E         
+E         - success
+E         + error
+
+benchmark/tests/test_retfound_feature_vector.py:10: AssertionError</failure></testcase><testcase classname="test_retfound_feature_vector" name="test_shape_and_type[png-alembic/retfound_feature_vector]" time="0.000"><properties><property name="prefix" value="alembic" /><property name="tool" value="retfound_feature_vector" /><property name="invocation" value="png" /></properties><failure message="TypeError: string indices must be integers, not 'str'">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...eature_vector/run/c09d3292c0c3f860f89a5ba9d86a3a2bbfdc1dc91ebe305c052166d724c18d9e/output', elapsed=142.06213903427124)
+
+    @parametrize_invocation("jpg", "png", "cucumber_different_filename")
+    def test_shape_and_type(invocation: ToolRunResult):
+&gt;       assert isinstance(invocation.result["feature_vector"], list)
+E       TypeError: string indices must be integers, not 'str'
+
+benchmark/tests/test_retfound_feature_vector.py:15: TypeError</failure></testcase><testcase classname="test_retfound_feature_vector" name="test_status[cucumber_different_filename-alembic/retfound_feature_vector]" time="0.002"><properties><property name="prefix" value="alembic" /><property name="tool" value="retfound_feature_vector" /><property name="invocation" value="cucumber_different_filename" /></properties><failure message="AssertionError: assert 'error' == 'success'&#10;  &#10;  - success&#10;  + error">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...eature_vector/run/b4d5c1294ee90be18646fa21d0c5b2ed7ab5caed9a72ae2e9f9e35c471c87735/output', elapsed=141.67689871788025)
+
+    @parametrize_invocation("jpg", "png", "cucumber_different_filename")
+    def test_status(invocation: ToolRunResult):
+&gt;       assert invocation.status == "success"
+E       AssertionError: assert 'error' == 'success'
+E         
+E         - success
+E         + error
+
+benchmark/tests/test_retfound_feature_vector.py:10: AssertionError</failure></testcase><testcase classname="test_retfound_feature_vector" name="test_shape_and_type[cucumber_different_filename-alembic/retfound_feature_vector]" time="0.000"><properties><property name="prefix" value="alembic" /><property name="tool" value="retfound_feature_vector" /><property name="invocation" value="cucumber_different_filename" /></properties><failure message="TypeError: string indices must be integers, not 'str'">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...eature_vector/run/b4d5c1294ee90be18646fa21d0c5b2ed7ab5caed9a72ae2e9f9e35c471c87735/output', elapsed=141.67689871788025)
+
+    @parametrize_invocation("jpg", "png", "cucumber_different_filename")
+    def test_shape_and_type(invocation: ToolRunResult):
+&gt;       assert isinstance(invocation.result["feature_vector"], list)
+E       TypeError: string indices must be integers, not 'str'
+
+benchmark/tests/test_retfound_feature_vector.py:15: TypeError</failure></testcase></testsuite></testsuites>

@@ -1,0 +1,47 @@
+% Case-study illustration: how Alembic's generated medsam_inference tool operates.
+% Input/output tiles are the REAL assets/img_demo.png and the actual MedSAM mask
+% (box [95,255,190,350], ViT-B on CPU). pdflatex medsam_casestudy
+\documentclass[border=4pt]{standalone}
+\usepackage[T1]{fontenc}
+\usepackage{xcolor}
+\usepackage{graphicx}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,calc,positioning}
+
+\definecolor{ink}{RGB}{60,60,66}
+\definecolor{toolc}{RGB}{244,239,228}
+
+\begin{document}
+\begin{tikzpicture}[
+   font=\sffamily,
+   >={Stealth[length=2.4mm]},
+   img/.style={draw=ink, line width=0.7pt, inner sep=0pt, rounded corners=1pt},
+   lbl/.style={font=\scriptsize\sffamily, text=ink, align=center},
+]
+
+% ---------- input scan tile (real CT + bounding-box prompt) ----------
+\node[img] (in) at (0,0) {\includegraphics[width=2.2cm]{medsam_input.png}};
+\node[lbl, above=1pt of in] {\textbf{input}};
+\node[lbl, below=1pt of in, text width=3.0cm] {\texttt{img\_demo.png}\\[-1pt]$+$ box \texttt{[95,255,190,350]}};
+
+% ---------- the generated tool ----------
+\node[draw=ink, line width=0.8pt, rounded corners=3pt, fill=toolc,
+      minimum width=3.5cm, minimum height=2.2cm, align=center, right=1.4cm of in] (tool) {};
+\node[lbl, text=ink] at ($(tool.north)+(0,-0.36)$) {\textbf{\ttfamily medsam\_inference}};
+\node[lbl, text width=3.3cm] at ($(tool.center)+(0,-0.15)$)
+  {\footnotesize generated wrapper\\[2pt]
+   \scriptsize shells $\to$ repo venv:\\[-1pt]
+   \texttt{MedSAM\_Inference.py}\\[-1pt]
+   $+$ \texttt{medsam\_vit\_b.pth} (CPU)};
+
+% ---------- output segmentation tile (real MedSAM mask overlay) ----------
+\node[img, right=1.4cm of tool] (out) {\includegraphics[width=2.2cm]{medsam_output.png}};
+\node[lbl, above=1pt of out] {\textbf{output}};
+\node[lbl, below=1pt of out, text width=3.0cm] {segmentation mask\\[-1pt](\texttt{uint8}, $H\times W$)};
+
+% ---------- flow arrows ----------
+\draw[->, line width=1pt, ink] (in.east) -- (tool.west);
+\draw[->, line width=1pt, ink] (tool.east) -- (out.west);
+
+\end{tikzpicture}
+\end{document}

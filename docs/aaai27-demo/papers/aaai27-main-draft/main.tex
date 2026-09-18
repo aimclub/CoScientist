@@ -1,0 +1,72 @@
+% Towards Generalisation of AI4Science Systems -- AAAI-27 main technical track.
+%
+% Compile with pdflatex:
+%   cd paper-aaai27 && pdflatex main && bibtex main && pdflatex main && pdflatex main
+%
+% Section files live under sections/ and are \input{}ed below; figures go in
+% figures/, generated tables in tables/. AAAI limits: 7 pages main text + 2
+% pages references (submission mode).
+
+\documentclass[letterpaper]{article} % DO NOT CHANGE THIS
+\usepackage[submission]{aaai2027}  % DO NOT CHANGE THIS
+% Fonts are loaded automatically by aaai2027.sty (newtxtext, helvet, courier).
+% DO NOT add \usepackage{times}, {helvet}, {courier}, or other font packages.
+\usepackage[hyphens]{url}  % DO NOT CHANGE THIS
+\usepackage{graphicx} % DO NOT CHANGE THIS
+\urlstyle{rm} % DO NOT CHANGE THIS
+\def\UrlFont{\rm}  % DO NOT CHANGE THIS
+\usepackage{natbib}  % DO NOT CHANGE THIS AND DO NOT ADD ANY OPTIONS TO IT
+\usepackage{caption} % DO NOT CHANGE THIS AND DO NOT ADD ANY OPTIONS TO IT
+\frenchspacing  % DO NOT CHANGE THIS
+
+% algorithm/algorithmic need texlive-science (apt install texlive-science).
+% Uncomment when the gated-generation-loop algorithm block is added.
+% \usepackage{algorithm}
+% \usepackage{algorithmic}
+\DeclareCaptionStyle{ruled}{labelfont=normalfont,labelsep=colon,strut=off} % DO NOT CHANGE THIS
+
+\usepackage{booktabs}
+\usepackage{amsmath}
+\usepackage{amssymb}
+
+% Keep the \pdfinfo as shown here. No /Title or /Author tags.
+\pdfinfo{
+/TemplateVersion (2027.1)
+}
+
+\setcounter{secnumdepth}{2}
+
+\title{Towards Generalisation of AI4Science Systems:\\
+       Growing a Verified, Reusable Tool Ecosystem from Scientific Repositories}
+
+% Anonymous submissions: "Anonymous Submission" as the sole author, empty
+% affiliations (AAAI-27 kit rule). Real names go in the camera-ready only.
+\author{Anonymous Submission}
+\affiliations{}
+
+\begin{document}
+
+\maketitle
+
+\input{sections/abstract}
+\input{sections/introduction}
+\input{sections/related_work}
+\input{sections/system}
+\input{sections/alembic}
+\input{sections/benchmark}
+\input{sections/results}
+\input{sections/discussion}
+\input{sections/limitations}
+\input{sections/conclusion}
+
+% aaai2027.sty sets the bibliographystyle itself -- do not add one.
+\bibliography{references}
+
+\appendix
+\input{sections/appendix}
+
+% AAAI-27 reproducibility checklist, appended after the references.
+\def\isChecklistMainFile{}
+\input{ReproducibilityChecklist}
+
+\end{document}

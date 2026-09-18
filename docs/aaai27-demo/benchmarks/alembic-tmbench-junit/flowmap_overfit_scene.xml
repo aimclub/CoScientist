@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="6" skipped="0" tests="6" time="0.603" timestamp="2026-07-11T09:42:10.370210+03:00" hostname="pop-os"><testcase classname="test_flowmap_overfit_scene" name="test_status[llff_fern-alembic/flowmap_overfit_scene]" time="0.003"><properties><property name="prefix" value="alembic" /><property name="tool" value="flowmap_overfit_scene" /><property name="invocation" value="llff_fern" /></properties><failure message="AssertionError: assert 'error' == 'success'&#10;  &#10;  - success&#10;  + error">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n..._overfit_scene/run/0b888ae90604ca3ae1ff9709dc173501010ce90f18ba922654e56c7bee9596f6/output', elapsed=137.4762670993805)
+
+    @parametrize_invocation("llff_fern", "llff_orchids")
+    def test_status(invocation: ToolRunResult):
+&gt;       assert invocation.status == "success"
+E       AssertionError: assert 'error' == 'success'
+E         
+E         - success
+E         + error
+
+benchmark/tests/test_flowmap_overfit_scene.py:12: AssertionError</failure></testcase><testcase classname="test_flowmap_overfit_scene" name="test_types_and_shapes[llff_fern-alembic/flowmap_overfit_scene]" time="0.000"><properties><property name="prefix" value="alembic" /><property name="tool" value="flowmap_overfit_scene" /><property name="invocation" value="llff_fern" /></properties><failure message="AssertionError: assert 'camera_extrinsics' in 'Process failed with return code 1'&#10; +  where 'Process failed with return code 1' = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n..._overfit_scene/run/0b888ae90604ca3ae1ff9709dc173501010ce90f18ba922654e56c7bee9596f6/output', elapsed=137.4762670993805).result">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n..._overfit_scene/run/0b888ae90604ca3ae1ff9709dc173501010ce90f18ba922654e56c7bee9596f6/output', elapsed=137.4762670993805)
+
+    @pytest.mark.parametrize(
+        "invocation",
+        [
+            lf("llff_fern"),
+            lf("llff_orchids"),
+        ],
+    )
+    def test_types_and_shapes(invocation: ToolRunResult):
+&gt;       assert "camera_extrinsics" in invocation.result
+E       AssertionError: assert 'camera_extrinsics' in 'Process failed with return code 1'
+E        +  where 'Process failed with return code 1' = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n..._overfit_scene/run/0b888ae90604ca3ae1ff9709dc173501010ce90f18ba922654e56c7bee9596f6/output', elapsed=137.4762670993805).result
+
+benchmark/tests/test_flowmap_overfit_scene.py:23: AssertionError</failure></testcase><testcase classname="test_flowmap_overfit_scene" name="test_correct_number_of_frames[llff_fern-20-alembic/flowmap_overfit_scene]" time="0.000"><properties><property name="prefix" value="alembic" /><property name="tool" value="flowmap_overfit_scene" /><property name="invocation" value="llff_fern" /></properties><failure message="AssertionError: assert 'camera_extrinsics' in 'Process failed with return code 1'&#10; +  where 'Process failed with return code 1' = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n..._overfit_scene/run/0b888ae90604ca3ae1ff9709dc173501010ce90f18ba922654e56c7bee9596f6/output', elapsed=137.4762670993805).result">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n..._overfit_scene/run/0b888ae90604ca3ae1ff9709dc173501010ce90f18ba922654e56c7bee9596f6/output', elapsed=137.4762670993805)
+expected_n = 20
+
+    @pytest.mark.parametrize(
+        "invocation,expected_n",
+        [
+            (lf("llff_fern"), 20),
+            (lf("llff_orchids"), 25),
+        ],
+    )
+    def test_correct_number_of_frames(invocation: ToolRunResult, expected_n: int):
+        assert "n" in invocation.result
+&gt;       assert "camera_extrinsics" in invocation.result
+E       AssertionError: assert 'camera_extrinsics' in 'Process failed with return code 1'
+E        +  where 'Process failed with return code 1' = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n..._overfit_scene/run/0b888ae90604ca3ae1ff9709dc173501010ce90f18ba922654e56c7bee9596f6/output', elapsed=137.4762670993805).result
+
+benchmark/tests/test_flowmap_overfit_scene.py:50: AssertionError</failure></testcase><testcase classname="test_flowmap_overfit_scene" name="test_status[llff_orchids-alembic/flowmap_overfit_scene]" time="0.002"><properties><property name="prefix" value="alembic" /><property name="tool" value="flowmap_overfit_scene" /><property name="invocation" value="llff_orchids" /></properties><failure message="AssertionError: assert 'error' == 'success'&#10;  &#10;  - success&#10;  + error">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...overfit_scene/run/2496a51f5fe71bbd9ee86ae820f4a0d152ad112c72b2dbd9514ccd7be2accba5/output', elapsed=159.30929327011108)
+
+    @parametrize_invocation("llff_fern", "llff_orchids")
+    def test_status(invocation: ToolRunResult):
+&gt;       assert invocation.status == "success"
+E       AssertionError: assert 'error' == 'success'
+E         
+E         - success
+E         + error
+
+benchmark/tests/test_flowmap_overfit_scene.py:12: AssertionError</failure></testcase><testcase classname="test_flowmap_overfit_scene" name="test_types_and_shapes[llff_orchids-alembic/flowmap_overfit_scene]" time="0.000"><properties><property name="prefix" value="alembic" /><property name="tool" value="flowmap_overfit_scene" /><property name="invocation" value="llff_orchids" /></properties><failure message="AssertionError: assert 'camera_extrinsics' in 'Process failed with return code 1'&#10; +  where 'Process failed with return code 1' = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...overfit_scene/run/2496a51f5fe71bbd9ee86ae820f4a0d152ad112c72b2dbd9514ccd7be2accba5/output', elapsed=159.30929327011108).result">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...overfit_scene/run/2496a51f5fe71bbd9ee86ae820f4a0d152ad112c72b2dbd9514ccd7be2accba5/output', elapsed=159.30929327011108)
+
+    @pytest.mark.parametrize(
+        "invocation",
+        [
+            lf("llff_fern"),
+            lf("llff_orchids"),
+        ],
+    )
+    def test_types_and_shapes(invocation: ToolRunResult):
+&gt;       assert "camera_extrinsics" in invocation.result
+E       AssertionError: assert 'camera_extrinsics' in 'Process failed with return code 1'
+E        +  where 'Process failed with return code 1' = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...overfit_scene/run/2496a51f5fe71bbd9ee86ae820f4a0d152ad112c72b2dbd9514ccd7be2accba5/output', elapsed=159.30929327011108).result
+
+benchmark/tests/test_flowmap_overfit_scene.py:23: AssertionError</failure></testcase><testcase classname="test_flowmap_overfit_scene" name="test_correct_number_of_frames[llff_orchids-25-alembic/flowmap_overfit_scene]" time="0.000"><properties><property name="prefix" value="alembic" /><property name="tool" value="flowmap_overfit_scene" /><property name="invocation" value="llff_orchids" /></properties><failure message="AssertionError: assert 'camera_extrinsics' in 'Process failed with return code 1'&#10; +  where 'Process failed with return code 1' = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...overfit_scene/run/2496a51f5fe71bbd9ee86ae820f4a0d152ad112c72b2dbd9514ccd7be2accba5/output', elapsed=159.30929327011108).result">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...overfit_scene/run/2496a51f5fe71bbd9ee86ae820f4a0d152ad112c72b2dbd9514ccd7be2accba5/output', elapsed=159.30929327011108)
+expected_n = 25
+
+    @pytest.mark.parametrize(
+        "invocation,expected_n",
+        [
+            (lf("llff_fern"), 20),
+            (lf("llff_orchids"), 25),
+        ],
+    )
+    def test_correct_number_of_frames(invocation: ToolRunResult, expected_n: int):
+        assert "n" in invocation.result
+&gt;       assert "camera_extrinsics" in invocation.result
+E       AssertionError: assert 'camera_extrinsics' in 'Process failed with return code 1'
+E        +  where 'Process failed with return code 1' = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Traceback (most recent call last):\n...overfit_scene/run/2496a51f5fe71bbd9ee86ae820f4a0d152ad112c72b2dbd9514ccd7be2accba5/output', elapsed=159.30929327011108).result
+
+benchmark/tests/test_flowmap_overfit_scene.py:50: AssertionError</failure></testcase></testsuite></testsuites>

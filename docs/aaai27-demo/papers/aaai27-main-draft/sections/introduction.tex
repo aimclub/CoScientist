@@ -1,0 +1,80 @@
+\section{Introduction}
+
+Autonomous ``AI4Science'' systems now do more than propose hypotheses: they
+plan and \emph{execute} numerical experiments, from chemical synthesis to
+computational biology~\citep{boiko2023coscientist,bran2024chemcrow,google2025coscientist,swanson2025virtuallab}.
+Yet almost all of them run the experiment step in one of two regimes. Either a
+general-purpose \emph{coding agent} re-derives a solution from scratch on every
+call---installing dependencies, writing code, and executing it in a
+sandbox~\citep{lu2024aiscientist,schmidgall2025agentlab}---or the system is
+wired to a \emph{small, fixed set} of ready-made tools or servers hand-built by
+its authors~\citep{boiko2023coscientist,bran2024chemcrow}. Both regimes place a
+hard ceiling on the experiment layer.
+
+The coding-agent regime is expensive and, more fundamentally, \emph{stochastic}:
+the same experiment re-derived twice can differ not only in cost but in the
+\emph{format} and \emph{value} of its output. This is not merely sampling noise
+that a lower temperature removes---recent work shows that even temperature-0 LLM
+inference is non-deterministic for architectural
+reasons~\citep{he2025nondeterminism}, and the broader reproducibility record of
+computational science is poor: fewer than one in ten biomedical Jupyter notebooks
+reproduce their published results~\citep{pimentel2024notebooks}. Coding agents
+also fail disproportionately on exactly the obscure, under-documented research
+repositories that most need automation~\citep{super2024,corebench2024,starace2025paperbench}.
+The fixed-tool regime avoids stochasticity but cannot scale: curated scientific
+tool coverage is thin, and much of the growing Model Context Protocol (MCP)
+server ecosystem is low-quality or unmaintained~\citep{hou2025mcpsurvey,mcpquality2025}.
+In both regimes, the set of experiments a system can \emph{reliably} run is
+narrow.
+
+Our starting observation is that an extensible ecosystem of \emph{verified}
+scientific tooling would relax this ceiling. If experiments could be executed
+through a growing catalogue of tools built from domain scientists' own
+code---validated once and then reused---the experiment layer would lean on
+expert code rather than on stochastic regeneration, cover the long tail of
+repositories, and, crucially, yield a \emph{reproducible} record for downstream
+experiments to build on. This is the logic of tool-making and skill-library
+agents~\citep{cai2024latm,yuan2024craft,wang2023voyager}, but applied to whole
+scientific repositories and integrated into a system that plans across many
+experiments.
+
+We realise this idea as the \emph{experiment module} of a general AI4Science
+system with a planner, an action graph, and an executor. Faced with an
+experiment, the executor first looks for a suitable tool in a shared catalogue;
+if none exists, it invokes our converter, \textsc{Alembic}, which turns an
+arbitrary GitHub repository into a served, gate-verified MCP tool, and then calls
+that tool to run the experiment. Conversion is a five-agent pipeline interleaved
+with four \emph{code-enforced gates} (the LLM proposes, deterministic code disposes):
+it builds an isolated environment, writes each tool as a plain function, and
+validates it by \emph{live invocation on held-out inputs}---not by an
+import-smoke check or an LLM judge. Every accepted tool enters the catalogue, so
+the system's experimental reach grows monotonically as more repositories are
+converted.
+
+We are deliberately careful about what this does and does not buy, because the
+mechanism of ``convert a repository into a verified served tool'' is now
+occupied by strong concurrent work---ToolMaker~\citep{wolflein2025toolmaker_acl},
+Paper2Agent~\citep{miao2025paper2agent}, and the ToolUniverse
+catalogue~\citep{gao2025tooluniverse}. Our contribution is not that conversion is
+possible, but a \emph{generalising system that consumes a growing verified
+catalogue across domains and studies}, together with an honest empirical account
+of when this helps. Concretely, we contribute:
+\begin{itemize}
+  \item \textbf{A system} that integrates repository-to-tool conversion into a
+    planner--action-graph--executor loop with a shared, growing tool catalogue,
+    turning one-off experiment code into reusable, composable infrastructure.
+  \item \textbf{\textsc{Alembic}}, a repository-to-verified-MCP converter whose
+    code-enforced gates and always-split environments make catalogue entries
+    reproducible by construction, and whose validation resists the
+    hollow/mocked ``passing'' tests that inflate other pipelines.
+  \item \textbf{An empirical characterisation} on a gold-validated scientific
+    benchmark of \emph{when} a verified reusable catalogue improves
+    reproducibility, coverage, and amortised cost---and, in the interest of
+    scientific integrity, where it does \emph{not}: on the repositories we could
+    test head-to-head, a modern coding agent matches the converted tools'
+    per-task capability and sets up even gated, version-pinned environments
+    reliably. The catalogue's value is therefore reproducibility, coverage
+    growth, and amortised cost across a many-call system---not per-task
+    capability---and we frame the system as \emph{hybrid}: catalogue-first, with
+    a coding-agent fallback for genuinely novel experiments.
+\end{itemize}

@@ -1,0 +1,15 @@
+Making a scientific codebase usable by an LLM agent today means reading the
+repository, resolving its dependencies, and hand-writing a tool wrapper: a
+slow, per-repository step that keeps most of the thousands of published research
+repositories from ever becoming agent-usable tools. We present \textbf{Alembic},
+which automates this conversion end to end. Given only a GitHub URL, five agents
+(Explorer, Environment, Coder, Validator, and a deterministic Wrapper)
+interleave with four code-enforced gates that build isolated environments, write
+and test each tool as a plain function, and validate it by actually invoking it,
+then package the result as a versioned Docker image serving a Model Context
+Protocol (MCP) endpoint over HTTP. Moving every mechanical decision from the
+prompt into a gate keeps the pipeline model-agnostic and eliminates whole classes
+of failure by construction. On TM-Bench, Alembic delivers a working served MCP
+for all fourteen repositories and matches or exceeds the ToolMaker baseline on
+the shared held-out tests. Code, benchmark runs, and artefacts:
+\url{\repourl}; screencast: \url{\demourl}; interactive web demo: \url{\weburl}.

@@ -1,0 +1,37 @@
+{
+ "mooney_viscosity": {
+  "phr": -0.063,
+  "phr+type": -0.086,
+  "phr+mordred": -0.012
+ },
+ "tensile_strength_MPa": {
+  "phr": -0.515,
+  "phr+type": -1.019,
+  "phr+mordred": -1.052
+ },
+ "elongation_at_break_percent": {
+  "phr": -0.257,
+  "phr+type": -0.3,
+  "phr+mordred": -0.458
+ },
+ "M300_MPa": {
+  "phr": 0.311,
+  "phr+type": 0.294,
+  "phr+mordred": 0.326
+ },
+ "hardness_shore_A": {
+  "phr": -0.104,
+  "phr+type": 0.006,
+  "phr+mordred": -0.199
+ },
+ "tan_delta_60C": {
+  "phr": -0.274,
+  "phr+type": -0.137,
+  "phr+mordred": -0.133
+ },
+ "t90_min": {
+  "phr": -0.328,
+  "phr+type": -0.215,
+  "phr+mordred": -0.145
+ }
+}

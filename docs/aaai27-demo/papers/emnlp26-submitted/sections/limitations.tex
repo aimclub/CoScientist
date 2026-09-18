@@ -1,0 +1,9 @@
+\section*{Limitations}
+Alembic wraps a repository's callable surface, not its undocumented internals, so
+script-only repositories with hard-coded paths yield fewer, coarser tools.
+Environment construction leans on \texttt{uv} and \texttt{apt-get} (conda as a
+last resort) and cannot resolve every conflict, so repositories needing
+GPU-specific builds or proprietary system libraries may fail setup. And
+correctness testing is only as strong as the Explorer's evidence: with documented
+values or shapes Alembic writes held-out tests, but ungrounded tools receive
+execution-status checks only, so their correctness is asserted, not verified.

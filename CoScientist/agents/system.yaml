@@ -53,7 +53,7 @@ defaults:
   # of those turns costs seconds per call and buys nothing there. The agents
   # that actually reason declare `reasoning:` for themselves. Set this to
   # `medium` to restore the previous system-wide behaviour in one line.
-  reasoning: off
+  reasoning: low   # GLM-5.3 refuses calls with reasoning disabled
 
 # ─────────────────────────────────────────────────────────────────────────────
 # System lifecycle flow (separate from the delegation tree).
@@ -186,7 +186,7 @@ agents:
       согласует её с оператором и заполняет граф исследования до старта.
     # Interprets a free-form question, but into a fixed schema, and the operator
     # reviews the result before it is seeded — some thinking, not a lot.
-    reasoning: off
+    reasoning: low
     prompt: context_init
     output_key: research_frame
     output_schema: research_frame

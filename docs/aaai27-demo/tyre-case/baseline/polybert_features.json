@@ -1,0 +1,32 @@
+{
+ "mooney_viscosity": {
+  "phr": -0.063,
+  "phr+polyBERT": -0.07,
+  "polyBERT": -0.005
+ },
+ "tensile_strength_MPa": {
+  "phr": -0.515,
+  "phr+polyBERT": -0.518,
+  "polyBERT": -0.118
+ },
+ "elongation_at_break_percent": {
+  "phr": -0.257,
+  "phr+polyBERT": 0.101,
+  "polyBERT": 0.049
+ },
+ "M300_MPa": {
+  "phr": 0.311,
+  "phr+polyBERT": 0.249,
+  "polyBERT": 0.159
+ },
+ "hardness_shore_A": {
+  "phr": -0.104,
+  "phr+polyBERT": -0.075,
+  "polyBERT": -0.109
+ },
+ "tan_delta_60C": {
+  "phr": -0.274,
+  "phr+polyBERT": -0.282,
+  "polyBERT": -0.042
+ }
+}

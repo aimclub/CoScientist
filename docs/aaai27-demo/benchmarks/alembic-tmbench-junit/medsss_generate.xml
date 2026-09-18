@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="6" skipped="0" tests="6" time="0.804" timestamp="2026-07-11T02:35:11.127365+03:00" hostname="pop-os"><testcase classname="test_medsss_generate" name="test_status[nsclc-alembic/medsss_generate]" time="0.002"><properties><property name="prefix" value="alembic" /><property name="tool" value="medsss_generate" /><property name="invocation" value="nsclc" /></properties><failure message="AssertionError: assert 'error' == 'success'&#10;  &#10;  - success&#10;  + error">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Warning: No installed s3 client. Ple...edsss_generate/run/f40a90ce3d777694b43f5b1d56a2328bb8e06d46dc5bfb43b82e51f08b3b764f/output', elapsed=154.6580469608307)
+
+    @parametrize_invocation("nsclc", "motor_vehicle_accident", "pediatric_rash")
+    def test_status(invocation: ToolRunResult):
+&gt;       assert invocation.status == "success"
+E       AssertionError: assert 'error' == 'success'
+E         
+E         - success
+E         + error
+
+benchmark/tests/test_medsss_generate.py:10: AssertionError</failure></testcase><testcase classname="test_medsss_generate" name="test_response_is_str[nsclc-alembic/medsss_generate]" time="0.000"><properties><property name="prefix" value="alembic" /><property name="tool" value="medsss_generate" /><property name="invocation" value="nsclc" /></properties><failure message="AssertionError: assert 'response' in 'Process failed with return code 1'&#10; +  where 'Process failed with return code 1' = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Warning: No installed s3 client. Ple...edsss_generate/run/f40a90ce3d777694b43f5b1d56a2328bb8e06d46dc5bfb43b82e51f08b3b764f/output', elapsed=154.6580469608307).result">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Warning: No installed s3 client. Ple...edsss_generate/run/f40a90ce3d777694b43f5b1d56a2328bb8e06d46dc5bfb43b82e51f08b3b764f/output', elapsed=154.6580469608307)
+
+    @parametrize_invocation("nsclc", "motor_vehicle_accident", "pediatric_rash")
+    def test_response_is_str(invocation: ToolRunResult):
+&gt;       assert "response" in invocation.result
+E       AssertionError: assert 'response' in 'Process failed with return code 1'
+E        +  where 'Process failed with return code 1' = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Warning: No installed s3 client. Ple...edsss_generate/run/f40a90ce3d777694b43f5b1d56a2328bb8e06d46dc5bfb43b82e51f08b3b764f/output', elapsed=154.6580469608307).result
+
+benchmark/tests/test_medsss_generate.py:15: AssertionError</failure></testcase><testcase classname="test_medsss_generate" name="test_status[motor_vehicle_accident-alembic/medsss_generate]" time="0.003"><properties><property name="prefix" value="alembic" /><property name="tool" value="medsss_generate" /><property name="invocation" value="motor_vehicle_accident" /></properties><failure message="AssertionError: assert 'error' == 'success'&#10;  &#10;  - success&#10;  + error">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Warning: No installed s3 client. Ple...dsss_generate/run/722cf2dad5e304479c79a3469aa2d5a3bc9138a67ae1d55de21ec016ba9f8721/output', elapsed=151.90666365623474)
+
+    @parametrize_invocation("nsclc", "motor_vehicle_accident", "pediatric_rash")
+    def test_status(invocation: ToolRunResult):
+&gt;       assert invocation.status == "success"
+E       AssertionError: assert 'error' == 'success'
+E         
+E         - success
+E         + error
+
+benchmark/tests/test_medsss_generate.py:10: AssertionError</failure></testcase><testcase classname="test_medsss_generate" name="test_response_is_str[motor_vehicle_accident-alembic/medsss_generate]" time="0.001"><properties><property name="prefix" value="alembic" /><property name="tool" value="medsss_generate" /><property name="invocation" value="motor_vehicle_accident" /></properties><failure message="AssertionError: assert 'response' in 'Process failed with return code 1'&#10; +  where 'Process failed with return code 1' = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Warning: No installed s3 client. Ple...dsss_generate/run/722cf2dad5e304479c79a3469aa2d5a3bc9138a67ae1d55de21ec016ba9f8721/output', elapsed=151.90666365623474).result">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Warning: No installed s3 client. Ple...dsss_generate/run/722cf2dad5e304479c79a3469aa2d5a3bc9138a67ae1d55de21ec016ba9f8721/output', elapsed=151.90666365623474)
+
+    @parametrize_invocation("nsclc", "motor_vehicle_accident", "pediatric_rash")
+    def test_response_is_str(invocation: ToolRunResult):
+&gt;       assert "response" in invocation.result
+E       AssertionError: assert 'response' in 'Process failed with return code 1'
+E        +  where 'Process failed with return code 1' = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Warning: No installed s3 client. Ple...dsss_generate/run/722cf2dad5e304479c79a3469aa2d5a3bc9138a67ae1d55de21ec016ba9f8721/output', elapsed=151.90666365623474).result
+
+benchmark/tests/test_medsss_generate.py:15: AssertionError</failure></testcase><testcase classname="test_medsss_generate" name="test_status[pediatric_rash-alembic/medsss_generate]" time="0.002"><properties><property name="prefix" value="alembic" /><property name="tool" value="medsss_generate" /><property name="invocation" value="pediatric_rash" /></properties><failure message="AssertionError: assert 'error' == 'success'&#10;  &#10;  - success&#10;  + error">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Warning: No installed s3 client. Ple...edsss_generate/run/a1a15b89ccf13cfd421a4d1411ec2d68145fd45f43539c6e11b1f3b66d96602a/output', elapsed=154.5537304878235)
+
+    @parametrize_invocation("nsclc", "motor_vehicle_accident", "pediatric_rash")
+    def test_status(invocation: ToolRunResult):
+&gt;       assert invocation.status == "success"
+E       AssertionError: assert 'error' == 'success'
+E         
+E         - success
+E         + error
+
+benchmark/tests/test_medsss_generate.py:10: AssertionError</failure></testcase><testcase classname="test_medsss_generate" name="test_response_is_str[pediatric_rash-alembic/medsss_generate]" time="0.000"><properties><property name="prefix" value="alembic" /><property name="tool" value="medsss_generate" /><property name="invocation" value="pediatric_rash" /></properties><failure message="AssertionError: assert 'response' in 'Process failed with return code 1'&#10; +  where 'Process failed with return code 1' = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Warning: No installed s3 client. Ple...edsss_generate/run/a1a15b89ccf13cfd421a4d1411ec2d68145fd45f43539c6e11b1f3b66d96602a/output', elapsed=154.5537304878235).result">invocation = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Warning: No installed s3 client. Ple...edsss_generate/run/a1a15b89ccf13cfd421a4d1411ec2d68145fd45f43539c6e11b1f3b66d96602a/output', elapsed=154.5537304878235)
+
+    @parametrize_invocation("nsclc", "motor_vehicle_accident", "pediatric_rash")
+    def test_response_is_str(invocation: ToolRunResult):
+&gt;       assert "response" in invocation.result
+E       AssertionError: assert 'response' in 'Process failed with return code 1'
+E        +  where 'Process failed with return code 1' = ToolRunResult(status='error', result='Process failed with return code 1', stdout='Warning: No installed s3 client. Ple...edsss_generate/run/a1a15b89ccf13cfd421a4d1411ec2d68145fd45f43539c6e11b1f3b66d96602a/output', elapsed=154.5537304878235).result
+
+benchmark/tests/test_medsss_generate.py:15: AssertionError</failure></testcase></testsuite></testsuites>
