@@ -1552,10 +1552,97 @@ def test_experiment_agent_can_open_the_method_it_runs(store):
     ok = store.commit(source="ExperimentAgent",
                       nodes=[{"id": "VM1", "attrs": {"failure_reason": "OOM"}}])
     assert ok.ok, ok.errors
-    # A role that does not own methods still may not touch one.
-    nope = store.commit(source="ResearchAgent",
+    # A role that does not own methods still may not touch one. Not the
+    # ResearchAgent any more — a literature review IS a verification method, so
+    # it owns the type now (see the test below); the collector does not.
+    nope = store.commit(source="DatasetCollectorAgent",
                         nodes=[{"id": "VM1", "attrs": {"failure_reason": "mine now"}}])
     assert not nope.ok, "ownership is per type, not per field name"
+
+
+def test_the_literature_agent_can_open_the_search_it_ran(store):
+    """Evidence from a paper belongs to the search that found it.
+
+    The ResearchAgent could create Evidence but neither open a
+    VerificationMethod nor write `produces`, so a literature finding could only
+    hang off the question by `relates_to` — and before the first hypothesis
+    exists, that was its ONLY legal attachment. Meanwhile the "collect the
+    literature" method the plan mirror had written stayed `planned` forever,
+    with the evidence it produced floating unattached beside it.
+    """
+    _init(store)
+    root = store.root_id()
+    r = store.commit(
+        source="ResearchAgent",
+        nodes=[{"type": "VerificationMethod", "ref": "vm",
+                "attrs": {"method_type": "literature_review",
+                          "procedure": "Collect the metabolite list from the literature"}},
+               {"type": "Evidence", "ref": "e",
+                "attrs": {"subtype": "literature", "content": "225 metabolites",
+                          "source_ref": "DOI 10.3390/plants14213253"}}],
+        edges=[{"type": "tested_by", "from": root, "to": "#vm"},
+               {"type": "produces", "from": "#vm", "to": "#e"}],
+    )
+    assert r.ok, r.errors
+
+    view = store.view_of(None)
+    links = {(e["src"], e["type"], e["dst"]) for e in view["edges"]}
+    assert ("VM1", "produces", "E1") in links, \
+        "the finding must point at the search that produced it"
+
+    # And both land in the reading band, not among the experiments.
+    stages = {n["id"]: n.get("stage") for n in view["nodes"]}
+    assert stages["VM1"] == "literature"
+    assert stages["E1"] == "literature"
+
+
+def test_a_card_carries_the_stage_its_band_is_drawn_from(store):
+    """The viewer bands a study by stage, and a stage is not an epistemic level.
+
+    The same Evidence type belongs to the reading band when it came out of a
+    paper and to the hypothesis band when an experiment produced it, so the
+    projection has to say which — the type alone cannot.
+    """
+    _init(store)
+    root = store.root_id()
+    store.commit(source="ResearchAgent",
+                 nodes=[{"type": "Evidence", "ref": "lit",
+                         "attrs": {"subtype": "literature", "content": "from a paper"}}],
+                 edges=[{"type": "relates_to", "from": "#lit", "to": root}])
+    store.commit(source="ExperimentAgent",
+                 nodes=[{"type": "VerificationMethod", "ref": "vm",
+                         "attrs": {"method_type": "computational"}},
+                        {"type": "Evidence", "ref": "run",
+                         "attrs": {"subtype": "computational", "content": "AUC=0.91",
+                                   "measured_on": "repo@abc123, dataset v2"}}],
+                 edges=[{"type": "tested_by", "from": root, "to": "#vm"},
+                        {"type": "produces", "from": "#vm", "to": "#run"}])
+
+    stages = {n["id"]: n.get("stage") for n in store.view_of(None)["nodes"]}
+    assert stages[root] == "framing"
+    assert stages["E1"] == "literature", "a finding read out of a paper"
+    assert stages["E2"] == "hypotheses", "the same type, produced by a run"
+    assert stages["VM1"] == "hypotheses", "placed by what it produced"
+    # The derived cards are banded too. The outcome card is only projected once
+    # the study has something to sum up, so it is checked where it appears.
+    assert stages.get("FRAME") == "framing"
+    assert stages.get("OUTCOME", "report") == "report"
+
+
+def test_a_metabolomics_method_is_not_mistaken_for_a_meta_analysis(store):
+    """`meta` is a legal Evidence subtype and `metabolomics` is this domain's
+    bread and butter, so the reading test matches whole tokens, never
+    substrings."""
+    from CoScientist.graph.research.store import _is_reading, _reads_like_review
+
+    assert _is_reading("literature") and _is_reading("meta")
+    assert not _is_reading("metabolomics")
+    assert not _is_reading("computational")
+    # Free text: the plan mirror writes its step as prose, and "dataset
+    # overview" must not read as a literature review.
+    assert _reads_like_review({"procedure": "По литературе собрать метаболиты"})
+    assert not _reads_like_review(
+        {"procedure": "dataset_overview and chemical_space_clustering, как в статье"})
 
 
 # ── the page ─────────────────────────────────────────────────────────────────

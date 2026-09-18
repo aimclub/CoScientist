@@ -318,6 +318,44 @@ _DERIVED_IDS = (FRAME_ID, OUTCOME_ID)
 _LEVEL = {"Framing": 0, "ResearchQuestion": 0, "Hypothesis": 1,
           "VerificationMethod": 2, "Evidence": 3, "Conclusion": 4, "Outcome": 5}
 
+#: The stages a study moves through, in the order a reader meets them. The
+#: viewer draws one band per stage, top to bottom, and puts a card in the band
+#: of the stage that produced it.
+#:
+#: A stage is NOT the epistemic level. The same Evidence type belongs to the
+#: reading stage when it came out of a paper and to the hypothesis stage when an
+#: experiment produced it; the search that gathered the papers belongs beside
+#: its own findings rather than beside the experiments.
+STAGES = ("framing", "literature", "hypotheses", "report")
+
+_STAGE_BY_TYPE = {
+    "Framing": "framing", "ResearchQuestion": "framing",
+    "Hypothesis": "hypotheses", "VerificationMethod": "hypotheses",
+    "Evidence": "hypotheses",
+    "Conclusion": "report", "Outcome": "report",
+}
+#: Subtypes and method types that mean "read", not "run". Whole tokens, never
+#: substrings: the schema allows Evidence subtypes literature / experimental /
+#: computational / expert / meta, and a substring test would read the
+#: "metabolomics" of a chemistry study as a meta-analysis.
+_READING_SUBTYPES = {"literature", "meta", "meta_analysis", "meta-analysis",
+                     "review", "literature_review", "literature review",
+                     "publication", "bibliography", "desk_research"}
+#: The last resort for a method nobody typed and that has produced nothing yet.
+#: `method_type` is free text — the schema documents computational / laboratory
+#: / analytical / statistical / expert and validates none of them — and the plan
+#: mirror writes its step as prose, so "collect the literature" exists nowhere
+#: but the procedure. Word-ish boundaries, and only stems that cannot mean
+#: anything else: "обзор" alone is what a dataset overview is called too.
+_READING_TEXT = re.compile(
+    r"литератур|публикац|библиограф"
+    r"|\bliterature\b|\bpublications?\b|\bbibliograph\w*"
+    r"|\bpapers\b|\blit[_\s-]?review\b",
+    re.IGNORECASE)
+#: The agents whose whole job is reading. A method one of them opened is a
+#: review even before it has produced anything to judge it by.
+_READING_AGENTS = {"ResearchAgent", "MedicalAgent"}
+
 #: Attributes that answer "why did it end like that", best first.
 _REASON_ATTRS = ("failure_reason", "inconclusive_reason", "not_tested_reason",
                  "postponed_reason")
@@ -368,6 +406,66 @@ def _adjacency(raw_edges: List[Dict[str, Any]]):
         out.setdefault(e["src"], []).append((e["type"], e["dst"]))
         inc.setdefault(e["dst"], []).append((e["type"], e["src"]))
     return out, inc
+
+
+def _is_reading(value: Any) -> bool:
+    """Whether a declared subtype / method_type names reading rather than running."""
+    return str(value or "").strip().lower().replace(" ", "_") in {
+        token.replace(" ", "_") for token in _READING_SUBTYPES}
+
+
+def _reads_like_review(attrs: Dict[str, Any]) -> bool:
+    """Whether what a method SAYS it does is gather sources.
+
+    Only reached when nothing stronger is on record: no evidence produced and no
+    method_type written. The plan mirror's steps are prose, so this is the one
+    place the intent of "collect the literature" survives.
+    """
+    text = " ".join(str(attrs.get(key) or "") for key in
+                    ("method_type", "procedure", "description", "name", "subtype"))
+    return bool(_READING_TEXT.search(text))
+
+
+def _stages_of(raw_nodes: Dict[str, Dict[str, Any]],
+               raw_edges: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Which stage band each drawn node belongs in.
+
+    Evidence is placed by its own subtype, which the schema requires. A method
+    is placed by what it actually produced: a search that returned nothing but
+    papers belongs with the literature whatever its free-text `method_type`
+    says, and one that has produced nothing yet is read off its declared type or
+    the agent that opened it. Computed for the whole graph at once because a
+    method's stage depends on its evidence.
+    """
+    out, _ = _adjacency(raw_edges)
+    stage: Dict[str, str] = {}
+    for nid, data in raw_nodes.items():
+        kind = data.get("type", "")
+        if kind not in _STAGE_BY_TYPE:
+            continue
+        attrs = data.get("attrs") or {}
+        if kind == "Evidence":
+            stage[nid] = ("literature" if _is_reading(attrs.get("subtype"))
+                          else "hypotheses")
+        elif kind == "VerificationMethod":
+            produced = [dst for etype, dst in out.get(nid, [])
+                        if etype == "produces"
+                        and (raw_nodes.get(dst) or {}).get("type") == "Evidence"]
+            if produced:
+                # All of it, not any of it: a method that also ran something
+                # belongs with the experiments it ran.
+                stage[nid] = "literature" if all(
+                    _is_reading(((raw_nodes[dst].get("attrs") or {}).get("subtype")))
+                    for dst in produced) else "hypotheses"
+            elif (_is_reading(attrs.get("method_type") or attrs.get("subtype"))
+                  or data.get("source") in _READING_AGENTS
+                  or _reads_like_review(attrs)):
+                stage[nid] = "literature"
+            else:
+                stage[nid] = "hypotheses"
+        else:
+            stage[nid] = _STAGE_BY_TYPE[kind]
+    return stage
 
 
 def _fold_plan(raw_nodes: Dict[str, Dict[str, Any]],
@@ -588,7 +686,8 @@ def _virtual_nodes(raw_nodes: Dict[str, Dict[str, Any]],
             "provenance": [], "t_start": None, "t_end": None, "status_history": [],
             "why": "", "why_missing": False, "chips": [],
             "attachments": [v for v, _ in members],
-            "level": _LEVEL["Framing"], "shown": True, "display_level": "primary",
+            "level": _LEVEL["Framing"], "stage": "framing",
+            "shown": True, "display_level": "primary",
             # Whether a human signed off on this setup: "agreed with the
             # operator" reads very differently from "the model assumed it".
             "hitl": bool(seeded_by & human),
@@ -626,7 +725,8 @@ def _virtual_nodes(raw_nodes: Dict[str, Dict[str, Any]],
         "executor_agent": "", "input": {}, "output": " → ".join(steps),
         "provenance": [], "t_start": None, "t_end": None, "status_history": [],
         "why": "", "why_missing": False, "chips": [], "attachments": spare,
-        "level": _LEVEL["Outcome"], "shown": True, "display_level": "primary",
+        "level": _LEVEL["Outcome"], "stage": "report",
+        "shown": True, "display_level": "primary",
         "empty": not steps,
     })
     return out
@@ -1109,6 +1209,7 @@ class ResearchGraphStore:
             seen_kind[kind] = seen_kind.get(kind, 0) + 1
             ordinal[nid] = seen_kind[kind]
 
+        stages = _stages_of(raw_nodes, raw_edges)
         nodes: List[Dict[str, Any]] = []
         for nid in sorted(drawn_ids, key=_id_order):
             d = raw_nodes[nid]
@@ -1154,6 +1255,10 @@ class ResearchGraphStore:
                 "chips": chips,
                 "attachments": attachments,
                 "level": _LEVEL.get(kind, 3),
+                # Which stage band the viewer draws it in. The level says where
+                # it sits in the argument; the stage says which part of the work
+                # produced it, and for Evidence and methods those differ.
+                "stage": stages.get(nid, _STAGE_BY_TYPE.get(kind, "hypotheses")),
                 "shown": True,
                 "display_level": "primary",
             }

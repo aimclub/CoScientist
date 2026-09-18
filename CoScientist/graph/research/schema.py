@@ -523,16 +523,32 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
                      "uses", "consumes", "supersedes"),
     ),
     "ResearchAgent": AgentPerm(
-        create=frozenset({"Evidence", "EmpiricalBase"}),
+        # The same hole the coder and the experimenter had, on the literature
+        # side. It gathered the sources and wrote the Evidence, but could
+        # neither open the method that gathered them nor say that the method
+        # produced them: `produces` was not in its edges and VerificationMethod
+        # was not in its create. So a literature finding could only hang off the
+        # question by `relates_to` — and with no hypotheses yet, that was its
+        # ONLY legal attachment — while the "collect the literature" method the
+        # plan mirror had written stayed `planned` forever, with the evidence it
+        # produced floating beside it. A literature review IS a verification
+        # method, so it gets the node, the lifecycle and the produces edge.
+        create=frozenset({"Evidence", "EmpiricalBase", "VerificationMethod"}),
         update_attrs=frozenset({"EmpiricalBase"}),
-        transitions=_transitions("Evidence"),
-        edges=_edges("relates_to", "supports", "refutes", "refines", "defines_scope"),
+        transitions=_transitions("Evidence", "VerificationMethod"),
+        edges=_edges("relates_to", "supports", "refutes", "refines",
+                     "defines_scope", "tested_by", "uses",
+                     ("produces", "VerificationMethod", "Evidence")),
     ),
     "MedicalAgent": AgentPerm(
-        create=frozenset({"Evidence"}),
+        # Same as the ResearchAgent above: a PubMed review is a method, and the
+        # findings it returns belong to it and not to the bare question.
+        create=frozenset({"Evidence", "VerificationMethod"}),
         update_attrs=frozenset(),
-        transitions=_transitions("Evidence"),
-        edges=_edges("relates_to", "supports", "refutes", "refines"),
+        transitions=_transitions("Evidence", "VerificationMethod"),
+        edges=_edges("relates_to", "supports", "refutes", "refines",
+                     "tested_by", "uses",
+                     ("produces", "VerificationMethod", "Evidence")),
     ),
     "CoderAgent": AgentPerm(
         # It already owned the VerificationMethod lifecycle (transitions below)

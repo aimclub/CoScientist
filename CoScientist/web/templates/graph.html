@@ -38,7 +38,12 @@
       pointer-events: none; }
     #head.hidden { display: none; }
     #question { font-size: 15px; font-weight: 650; color: var(--ink); max-width: 62%;
-      line-height: 1.35; margin-bottom: 10px; text-shadow: 0 2px 8px rgba(0,0,0,.5); }
+      line-height: 1.35; margin-bottom: 10px; text-shadow: 0 2px 8px rgba(0,0,0,.5);
+      /* A question written as a whole brief ran to eight lines and pushed the
+         first band off the screen. Three lines here, the rest on hover and in
+         the card the question has of its own. */
+      display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+      overflow: hidden; pointer-events: auto; cursor: default; }
     #question .q { color: var(--accent); font-weight: 700; }
     #counters, #meta, #gaps { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
     #counters { margin-bottom: 6px; }
@@ -420,38 +425,27 @@
     const nodes = new vis.DataSet([]);
     const edges = new vis.DataSet([]);
     let network = null;
-    // ``flat`` — a research payload with no edges at all. vis's hierarchical
-    // layout treats every unlinked card as a separate tree and stacks the trees
-    // down the y axis, so the cards are pinned to a grid by hand instead.
-    let flatLayout = false;
-    function makeNetwork(flat){
+    // The research bands the canvas paints behind the cards, newest layout wins.
+    let stageBands = [];
+    function makeNetwork(){
       const r = isResearch();
-      flatLayout = !!flat;
-      // research = hierarchical top-down (epistemic layers). execution & memory =
-      // radial force layout that grows outward from the central system node.
       if (network) network.destroy();
       network = new vis.Network(document.getElementById("net"), { nodes, edges }, {
         nodes: { borderWidth: 2, shadow: { enabled: true, color: "rgba(0,0,0,0.35)", size: 10, x: 0, y: 3 } },
         edges: { arrows: { to: { scaleFactor: 0.55 } }, color: { color: "#3a4150", highlight: "#64748b" },
                  font: { color: "#8b93a1", size: r ? 12 : 10, strokeWidth: 0 },
-                 smooth: { type: "cubicBezier", forceDirection: "horizontal",
-                           roundness: r ? 0.5 : 0.35 } },
-        // The research graph is a hierarchy, so vis lays it out. The log is a
-        // timeline: every node already carries the x its start time earns and
-        // the row of the agent that ran it, so vis must not move anything —
-        // hierarchical layout would collapse the clock back into columns.
-        // Left to right, one column per epistemic layer: question → hypotheses →
-        // methods → observations → conclusions → outcome. That is the order the
-        // story is read in, and it puts the iterations of one hypothesis under
-        // each other instead of spreading them across a row.
-        layout: (r && !flat) ? { hierarchical: { enabled: true, direction: "LR",
-                    sortMethod: "directed", shakeTowards: "roots",
-                    // A card is up to 340 wide, so a 340 separation let two
-                    // columns touch; the layers of a wrapped crowd sit side by
-                    // side now and need the gap to read as separate columns.
-                    levelSeparation: LEVEL_SEPARATION, nodeSpacing: 190, treeSpacing: 240,
-                    blockShifting: true, edgeMinimization: true, parentCentralization: true } }
-                  : { hierarchical: false, randomSeed: 1 },
+                 // The research graph now reads top to bottom through its stage
+                 // bands, so its links bend the way they travel; the log still
+                 // runs along a clock, left to right.
+                 smooth: { type: "cubicBezier",
+                           forceDirection: r ? "vertical" : "horizontal",
+                           roundness: r ? 0.45 : 0.35 } },
+        // Neither view lets vis place anything. The log is a timeline: every
+        // node already carries the x its start time earns and the row of the
+        // agent that ran it. The research graph is banded by stage, and a band
+        // is a fact about the study — hierarchical layout would collapse both
+        // back into columns of its own choosing.
+        layout: { hierarchical: false, randomSeed: 1 },
         physics: { enabled: false },
         interaction: { hover: true, tooltipDelay: 120, navigationButtons: false },
       });
@@ -460,7 +454,8 @@
       // just says where one stretch ended and the next began, which is the
       // thing you otherwise reconstruct by reading every name in order.
       network.on("beforeDrawing", ctx => {
-        if (isResearch() || !lastPhases.length) return;
+        if (isResearch()) return drawStageBands(ctx);
+        if (!lastPhases.length) return;
         const ys = Object.values(nodeData)
           .map(n => n.y).filter(v => typeof v === "number");
         if (!ys.length) return;
@@ -489,72 +484,120 @@
       });
     }
 
-    // ── laying the layers out ─────────────────────────────────────────────────
-    // One epistemic layer is one column — until the layer is a crowd. A study
-    // that recorded eighteen observations and no hypotheses put all eighteen in
-    // a single column four thousand pixels tall; the fit that followed shrank
-    // it to 0.21, and vis stops drawing a label once fontSize × scale falls
-    // under its scaling.label.drawThreshold of 5. The canvas showed eighteen
-    // empty boxes. A crowded layer is wrapped over adjacent columns instead, so
-    // it stays a block that fits a screen at a zoom that still renders text.
-    const LEVEL_STRIDE = 12;        // most sub-columns one layer may take
-    // Below this a layer stays the single column it has always been: three
-    // hypotheses side by side read as three branches, and wrapping them would
-    // say they belong to different stages of the study.
-    const WRAP_AFTER = 6;
-    // vis places the next layer LEVEL_SEPARATION further along x and the next
-    // card NODE_PITCH further down y; a block of cards reads best at roughly
-    // the proportions of the window it is read in.
-    const LEVEL_SEPARATION = 400, NODE_PITCH = 240, TARGET_ASPECT = 1.6;
-    // Cards inside a layer read like text: along the row, then down. Column by
-    // column would be right if the neighbours meant something, and in a layer
-    // of siblings they do not.
-    function layoutGrid(list){
-      const byLayer = new Map();
-      list.forEach(n => {
-        const base = n.level != null ? n.level
-                   : (R_LEVEL[n.kind] != null ? R_LEVEL[n.kind] : 3);
-        if (!byLayer.has(base)) byLayer.set(base, []);
-        byLayer.get(base).push(n);
+    // ── stage bands ───────────────────────────────────────────────────────────
+    // A study is read down the page by the stage that produced each card — what
+    // was asked, what was read, what was tested, what came out — and across a
+    // band by the epistemic level, so the two readings do not fight: down is
+    // the work, across is the argument.
+    //
+    // This replaces vis's hierarchical layout for the research view. Its levels
+    // are an x index, so one layer is one column and a study that recorded
+    // eighteen observations put all eighteen in a single column four thousand
+    // pixels tall; the fit that followed dropped to 0.21, and vis stops drawing
+    // a label once fontSize × scale falls under its scaling.label.drawThreshold
+    // of 5 — the canvas showed eighteen empty boxes. Unlinked cards made it
+    // worse still: with no edge to hang on, each is its own tree and vis stacks
+    // the trees down the y axis, so the column came out as a diagonal.
+    const STAGE_ORDER = ["framing", "literature", "hypotheses", "report"];
+    const STAGE_TINT = {
+      framing:    { fill: "rgba(59,130,246,0.07)",  line: "rgba(59,130,246,0.42)" },
+      literature: { fill: "rgba(56,189,248,0.07)",  line: "rgba(56,189,248,0.42)" },
+      hypotheses: { fill: "rgba(249,115,22,0.07)",  line: "rgba(249,115,22,0.42)" },
+      report:     { fill: "rgba(34,197,94,0.07)",   line: "rgba(34,197,94,0.42)" },
+    };
+    // The server names the stage; this is the fallback for a study archived
+    // before it did, where the type is all there is to go on. Literature
+    // evidence is indistinguishable from experimental evidence here — that
+    // distinction lives in attrs.subtype, which the projection reads.
+    const STAGE_BY_KIND = { framing: "framing", researchquestion: "framing",
+      constraint: "framing", empiricalbase: "framing", resource: "framing",
+      hypothesis: "hypotheses", verificationmethod: "hypotheses",
+      confirmationcriteria: "hypotheses", tool: "hypotheses",
+      evidence: "hypotheses", generateddata: "hypotheses", codeartifact: "hypotheses",
+      conclusion: "report", outcome: "report", report: "report",
+      publication: "report", efficiencyjustification: "report",
+      costmodel: "report", efficiencymetric: "report" };
+    const stageOf = n => {
+      const s = n.stage || STAGE_BY_KIND[n.kind];
+      return STAGE_TINT[s] ? s : "hypotheses";
+    };
+    // Nominal card pitch, used for the first pass and as the fallback when a
+    // card has not been drawn yet and has no measured box.
+    const LEVEL_SEPARATION = 400, NODE_PITCH = 240;
+    // How wide a band runs before it wraps, and the breathing room around a
+    // band's contents. Wide enough for six cards: past that the whole study
+    // stops fitting a screen at a readable zoom.
+    const BAND_WIDTH = 2160, BAND_PAD = 38, BAND_MIN_HEIGHT = 128;
+
+    // The four stages, painted behind the cards as the rows of one page. A band
+    // with nothing in it is still drawn: an empty "report" row says the study
+    // has not got there yet, which is the question a reader opens the graph
+    // with, and leaving it out made a study that had barely started look
+    // finished.
+    function drawStageBands(ctx){
+      if (!stageBands.length) return;
+      ctx.save();
+      stageBands.forEach(b => {
+        const tint = STAGE_TINT[b.stage] || { fill: "rgba(148,163,184,0.05)",
+                                              line: "rgba(148,163,184,0.25)" };
+        const w = b.right - b.left, h = b.bottom - b.top;
+        ctx.fillStyle = b.count ? tint.fill : "rgba(148,163,184,0.03)";
+        ctx.fillRect(b.left, b.top, w, h);
+        ctx.strokeStyle = tint.line;
+        ctx.lineWidth = 1;
+        // A stage nobody has reached is outlined, not filled — the row is
+        // there, the work is not.
+        if (!b.count) ctx.setLineDash([7, 6]);
+        ctx.strokeRect(b.left, b.top, w, h);
+        ctx.setLineDash([]);
+        ctx.fillStyle = tint.line;
+        ctx.font = "600 26px -apple-system, Segoe UI, sans-serif";
+        ctx.textBaseline = "top";
+        const name = t('graph.stage.' + b.stage, b.stage);
+        // Measured under the heading font, before the note switches it.
+        const nameWidth = ctx.measureText(name).width;
+        ctx.fillText(name, b.left + 16, b.top + 12);
+        if (!b.count) {
+          ctx.font = "400 20px -apple-system, Segoe UI, sans-serif";
+          ctx.fillStyle = "rgba(148,163,184,0.55)";
+          ctx.fillText(t('graph.stage.empty'), b.left + 26 + nameWidth, b.top + 15);
+        }
       });
+      ctx.restore();
+    }
+
+    // First pass, on nominal sizes: vis reports a real box only once it has
+    // drawn a card, and it cannot draw one without a position.
+    function layoutStages(list){
       const place = {};
-      // Layers are laid out left to right, each starting where the last ended,
-      // so a wrapped layer never reaches into its neighbour's columns.
-      let colOffset = 0;
-      [...byLayer.keys()].sort((a, b) => a - b).forEach(base => {
-        const group = byLayer.get(base);
-        // cols² ≈ N · pitch_y · aspect / pitch_x — the squarest block the
-        // window will take.
-        const cols = group.length <= WRAP_AFTER ? 1
-          : Math.max(1, Math.min(group.length, LEVEL_STRIDE,
-              Math.round(Math.sqrt(group.length * NODE_PITCH * TARGET_ASPECT
-                                   / LEVEL_SEPARATION)) || 1));
+      const byStage = new Map(STAGE_ORDER.map(s => [s, []]));
+      list.forEach(n => byStage.get(stageOf(n)).push(n));
+      const perRow = Math.max(1, Math.floor(BAND_WIDTH / LEVEL_SEPARATION));
+      let y = 0;
+      STAGE_ORDER.forEach(stage => {
+        // Inside a band the epistemic level orders the cards, then the index —
+        // question before hypothesis before method before observation.
+        const group = byStage.get(stage).sort((a, b) =>
+          ((a.level ?? 3) - (b.level ?? 3))
+          || ((a.index || 0) - (b.index || 0))
+          || String(a.id).localeCompare(String(b.id)));
         group.forEach((n, i) => {
-          // The level is the column's rank, counted across the whole graph and
-          // with no gaps: vis reads a level as an x index, so numbering the
-          // layers 0, 12, 24… stretched a six-layer study over 24000px of
-          // empty canvas instead of leaving room inside each layer.
-          place[n.id] = { col: colOffset + (i % cols), row: Math.floor(i / cols) };
+          place[n.id] = { stage, order: i,
+                          x: (i % perRow) * LEVEL_SEPARATION,
+                          y: y + BAND_PAD + Math.floor(i / perRow) * NODE_PITCH };
         });
-        colOffset += cols;
+        y += Math.max(BAND_MIN_HEIGHT,
+                      Math.ceil(group.length / perRow) * NODE_PITCH + BAND_PAD * 2);
       });
       return place;
     }
 
     // ── the research node card ────────────────────────────────────────────────
-    function researchNode(n, place, flat){
+    function researchNode(n, place){
       const st = rStatus(n.status), c = st.c;
-      // The column comes from the server, which knows the epistemic layer of
-      // every type it draws; R_LEVEL stays as the fallback for archived studies
-      // projected before that field existed. layoutGrid then spreads a crowded
-      // layer sideways, keeping the layers themselves in order.
       const slot = place && place[n.id];
-      const level = slot ? slot.col
-                  : (n.level != null ? n.level
-                  : (R_LEVEL[n.kind] != null ? R_LEVEL[n.kind] : 3));
       const node = {
         id: n.id, title: titleOf(n), shape: "box", label: researchLabel(n),
-        level: level,
         color: { background: rgba(c, 0.14), border: c,
                  highlight: { background: rgba(c, 0.22), border: c },
                  // Without an explicit hover vis falls back to its OWN default
@@ -571,53 +614,68 @@
         widthConstraint: { minimum: 230, maximum: 340 }, margin: 12,
       };
       if (n.virtual) node.shapeProperties.borderDashes = [4, 3];
-      // A study with nothing linked yet is not a hierarchy, and vis lays one
-      // out as if it were: with no edges every card is its own tree, so the
-      // eighteen observations of a real session came out on a diagonal four
-      // thousand pixels tall — five columns wide and not one of them packed.
-      // When there is no structure to respect, the cards are pinned to a plain
-      // grid instead, the same way the execution log pins its own.
-      if (flat && slot) {
-        node.x = slot.col * LEVEL_SEPARATION;
-        node.y = packedY[n.id] != null ? packedY[n.id] : slot.row * NODE_PITCH;
+      // Every research card is pinned: the band it sits in is a fact about the
+      // study, not something a layout engine may optimise away.
+      if (slot) {
+        const seat = pinned[n.id] || slot;
+        node.x = seat.x; node.y = seat.y;
         node.fixed = { x: true, y: true };
-      } else {
-        node.fixed = false;        // vis lays this one out; see the switch in poll()
       }
       return node;
     }
 
-    // vis reports a card's height only once it has drawn it, so the flat grid
-    // is laid out on a uniform pitch first and tightened here: each column
-    // drops its cards one under the other with a constant gap. Without it a
-    // three-line card and a seven-line one get the same slot, and the grid is
-    // read across bands of empty canvas.
+    // Second pass, on the boxes vis measured. Cards differ in width and in
+    // height, so the nominal grid leaves ragged lanes of empty canvas; each
+    // band flows its own cards left to right, wraps at BAND_WIDTH, and the next
+    // band starts under the deepest row of this one. It also yields the band
+    // rectangles the canvas paints behind the cards.
     const CARD_GAP = 28;
-    let packedY = {}, packedFor = "";
-    function packGrid(place, signature){
-      if (!place || packedFor === signature) return false;
-      const byColumn = new Map();
+    let pinned = {}, pinnedFor = "";
+    function reflowStages(place, signature){
+      if (!place || pinnedFor === signature) return false;
+      const sizeOf = id => {
+        try {
+          const box = network.getBoundingBox(id);
+          if (box) return { w: box.right - box.left, h: box.bottom - box.top };
+        } catch (err) { /* not drawn yet */ }
+        return { w: LEVEL_SEPARATION - CARD_GAP, h: NODE_PITCH - CARD_GAP };
+      };
+      const byStage = new Map(STAGE_ORDER.map(s => [s, []]));
       Object.keys(place).forEach(id => {
-        if (!nodes.get(id)) return;
-        const slot = place[id];
-        if (!byColumn.has(slot.col)) byColumn.set(slot.col, []);
-        byColumn.get(slot.col).push([slot.row, id]);
+        if (nodes.get(id)) byStage.get(place[id].stage).push(id);
       });
-      const next = {};
-      byColumn.forEach(list => {
-        let y = 0;
-        list.sort((a, b) => a[0] - b[0]).forEach(([, id]) => {
-          let h = NODE_PITCH;
-          try {
-            const box = network.getBoundingBox(id);
-            if (box) h = box.bottom - box.top;
-          } catch (err) { /* not drawn yet — the uniform pitch stands */ }
-          next[id] = y + h / 2;
-          y += h + CARD_GAP;
+      const seats = {}, bands = [];
+      // The bands hug the widest row there actually is, not the wrap width: a
+      // study of six cards drawn inside 2160px of band ran the rows off the
+      // side of the screen with nothing in them.
+      let y = 0, widest = 0;
+      STAGE_ORDER.forEach(stage => {
+        const ids = byStage.get(stage)
+          .sort((a, b) => place[a].order - place[b].order);
+        const top = y;
+        let x = 0, rowTop = y + BAND_PAD, rowHeight = 0, reach = 0;
+        ids.forEach(id => {
+          const { w, h } = sizeOf(id);
+          if (x > 0 && x + w > BAND_WIDTH) {        // wrap within the band
+            x = 0; rowTop += rowHeight + CARD_GAP; rowHeight = 0;
+          }
+          seats[id] = { x: x + w / 2, y: rowTop + h / 2 };
+          x += w + CARD_GAP;
+          reach = Math.max(reach, x - CARD_GAP);
+          rowHeight = Math.max(rowHeight, h);
         });
+        const filled = ids.length ? (rowTop + rowHeight) - (top + BAND_PAD) : 0;
+        const height = Math.max(BAND_MIN_HEIGHT, filled + BAND_PAD * 2);
+        widest = Math.max(widest, reach);
+        bands.push({ stage, top, bottom: top + height, count: ids.length });
+        y = top + height;
       });
-      packedY = next; packedFor = signature;
-      nodes.update(Object.keys(next).map(id => ({ id, y: next[id] })));
+      // One width for every band, so they read as stacked rows of one page
+      // rather than four unrelated boxes.
+      bands.forEach(b => { b.left = -BAND_PAD; b.right = widest + BAND_PAD; });
+      stageBands = bands;
+      pinned = seats; pinnedFor = signature;
+      nodes.update(Object.keys(seats).map(id => ({ id, ...seats[id] })));
       return true;
     }
 
@@ -690,34 +748,9 @@
         // Already ordered by (level, start time) upstream; siblings enter in the
         // order they ran, which is the order vis lays them out.
         const ordered = g.nodes || [];
-        // Decided once for the whole payload: a column assignment needs to see
-        // how many nodes share a layer, which a per-node call cannot.
-        const place = research ? layoutGrid(ordered) : null;
-        // Which layout the payload deserves is only knowable once it arrives,
-        // and linking the observations turns a pile back into a study, so the
-        // switch is re-checked on every poll rather than at startup.
-        //
-        // The test is how much of the payload is loose, not whether a single
-        // edge exists: vis lays every unlinked card out as its own tree, so one
-        // arrow between two nodes does nothing for the other sixteen. A study
-        // that is mostly structured keeps its hierarchy — the grid takes over
-        // only when there is next to no structure left to draw.
-        const flat = research && ordered.length > 1 && (() => {
-          const linked = new Set();
-          (g.edges || []).forEach(e => { linked.add(e.src); linked.add(e.dst); });
-          return ordered.filter(n => !linked.has(n.id)).length
-                 >= ordered.length * 0.75;
-        })();
-        if (research && flat !== flatLayout) {
-          // The DataSet merges an update into what is already there, so the
-          // pinned x/y/fixed of the grid would survive the switch back to a
-          // hierarchy and freeze every card where the grid had left it. The
-          // cards are re-added from the payload on the very next line.
-          nodes.clear(); edges.clear();
-          packedY = {}; packedFor = "";
-          makeNetwork(flat);
-          fitted = false;          // a new layout deserves a new frame
-        }
+        // Decided once for the whole payload: placing a card needs to see how
+        // many others share its band, which a per-node call cannot.
+        const place = research ? layoutStages(ordered) : null;
         // One update call per poll, not one per node: physics is off, so every
         // single update() drags a full hierarchical re-layout and a synchronous
         // redraw behind it.
@@ -726,7 +759,7 @@
         ordered.forEach(n => {
           try {
           nodeData[n.id] = n; liveNodes.add(n.id);
-          if (research) { batchNodes.push(researchNode(n, place, flat)); }
+          if (research) { batchNodes.push(researchNode(n, place)); }
           else {
             // Cards, sized by what they are: the request opens the row, agents
             // carry it, calls are the detail. Status is the border, identity the
@@ -794,6 +827,17 @@
           const ekey = "graph.edge." + e.type;
           const rlabel = research ? t(ekey, R_EDGE_NAME[e.type] || e.type || "") : (e.type || "");
           const edge = { id, from:e.src, to:e.dst, label: e.provenance ? "" : rlabel };
+          // A link inside one band joins two cards on the same row, and a
+          // bezier told to bend vertically between them draws a straight line
+          // straight through everything in between — the evidence that supports
+          // a hypothesis six cards to its left cut across four other cards. Arc
+          // those; keep the vertical bend for the links that really do travel
+          // down the page from one stage to the next.
+          if (research && place) {
+            const a = place[e.src], b = place[e.dst];
+            if (a && b && a.stage === b.stage)
+              edge.smooth = { type: "curvedCW", roundness: 0.22 };
+          }
           if (e.synthetic) { edge.color={color:"#2c313a",highlight:"#3a4150"}; edge.dashes=true; edge.width=1; edge.arrows=""; edge.label=""; }
           else if (research) { const c=R_EDGE[e.type];
             edge.color={color:c||"#4a5160",highlight:c||"#64748b"}; edge.width=c?3:1.5;
@@ -837,19 +881,24 @@
         // Frame the study once it first has something to show. Research only:
         // execution cards are pinned at server-given coordinates and a fit
         // would drag the camera away from the part of the run in progress.
-        if (research && batchNodes.length && (!fitted || flat)) {
-          // A card's height depends on its text, so the packing is redone when
-          // the study changes and skipped when it has not — otherwise every
-          // poll would nudge the whole grid under a reader's cursor.
-          const signature = ordered.map(n => n.id + ":" + n.status).join("|");
+        if (research && batchNodes.length) {
+          // A card's size depends on its text and its status, so the reflow is
+          // redone when either changes and skipped when neither has —
+          // otherwise every poll would nudge the whole page under a reader's
+          // cursor. The stage is in the signature too: a method that moves to
+          // the literature band changes every band below it.
+          const signature = ordered
+            .map(n => [n.id, n.status, stageOf(n), String(n.output || "").length]
+                        .join(":"))
+            .join("|");
           network.once("afterDrawing", () => {
-            const repacked = flat && packGrid(place, signature);
+            const reflowed = reflowStages(place, signature);
             if (fitted) return;
             fitted = true;
-            // Packing moves every card, and the boxes frameStudy measures are
-            // a frame behind it — so the frame waits for the redraw the pack
-            // just scheduled instead of measuring where the cards used to be.
-            if (repacked) network.once("afterDrawing", frameStudy);
+            // The reflow moves every card, and the boxes frameStudy measures
+            // are a frame behind it — so the frame waits for the redraw the
+            // reflow just scheduled instead of measuring where cards used to be.
+            if (reflowed) network.once("afterDrawing", frameStudy);
             else frameStudy();
           });
         }
@@ -894,6 +943,13 @@
           if (!box) return;
           x0 = Math.min(x0, box.left); x1 = Math.max(x1, box.right);
           y0 = Math.min(y0, box.top);  y1 = Math.max(y1, box.bottom);
+        });
+        // The bands are part of the picture — an empty "report" row is the
+        // answer to "how far has this got" — so the frame has to hold them too,
+        // or the camera centres on the cards and cuts the row off.
+        stageBands.forEach(b => {
+          x0 = Math.min(x0, b.left); x1 = Math.max(x1, b.right);
+          y0 = Math.min(y0, b.top);  y1 = Math.max(y1, b.bottom);
         });
         if (!(x1 > x0 && y1 > y0)) { network.fit({ animation: false }); return; }
         const canvas = document.getElementById("net");
@@ -982,7 +1038,11 @@
     function renderHeader(g){
       const head = (g && g.headline) || {};
       const qText = head.question || "";
-      document.getElementById("question").innerHTML = qText
+      const qEl = document.getElementById("question");
+      // Clamped to three lines in CSS, so the whole question has to be reachable
+      // somewhere: the tooltip carries it verbatim.
+      qEl.title = qText;
+      qEl.innerHTML = qText
         ? `<span class="q">❓ ${esc(head.root_id || "")}</span> · ${esc(qText)}` : "";
 
       const c = (g && g.counters) || {};
@@ -1464,7 +1524,7 @@
     let lastDetailStamp = null;
     function hardReset(){ nodes.clear(); edges.clear(); lastDetailStamp = null;
       fitted = false; lastPhases = []; lastGraph = { nodes: [], edges: [] };
-      packedY = {}; packedFor = "";
+      pinned = {}; pinnedFor = ""; stageBands = [];
       for (const k in nodeData) delete nodeData[k]; closeDetail(); }
     document.getElementById("refresh").onclick = poll;
     document.getElementById("view").onchange = () => {

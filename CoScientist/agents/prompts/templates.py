@@ -94,16 +94,34 @@ _RESEARCH_EXAMPLES = {
         '{"type":"formulated_for","from":"#cc","to":"#h"}, '
         '{"type":"requires","from":"#h","to":"#t"}, {"type":"uses","from":"#vm","to":"#t"}])'
     ),
+    # A literature review is a VerificationMethod like any other, so the search
+    # that found a finding is named and closed in the same commit. The example
+    # showed only `supports`/`relates_to`, and with no hypotheses in the graph
+    # yet that left `relates_to` to the bare question as the single thing the
+    # agent ever wrote: the planned "collect the literature" method stayed
+    # `planned` and its own evidence floated unattached beside it.
     "ResearchAgent": (
         'research_commit(nodes=[{"type":"Evidence","ref":"e","attrs":'
         '{"subtype":"literature","content":"…","source_ref":"DOI…"}}], '
-        'edges=[{"type":"supports","from":"#e","to":"H2"}, '
-        '{"type":"relates_to","from":"#e","to":"Q1"}])'
+        'edges=[{"type":"produces","from":"VM1","to":"#e"}, '
+        '{"type":"supports","from":"#e","to":"H2"}], '
+        'status_updates=[{"id":"VM1","status":"done"}])   '
+        '# VM1 = the literature-review method you ran. If the plan never wrote '
+        'one, open it in the SAME commit — {"type":"VerificationMethod",'
+        '"ref":"vm","attrs":{"method_type":"literature_review"}} with '
+        '{"type":"tested_by","from":"Q1","to":"#vm"} (or from the hypothesis) '
+        'and produce your evidence from "#vm". Fall back to '
+        '{"type":"relates_to","from":"#e","to":"Q1"} only when there is no '
+        'method and no hypothesis to attach to.'
     ),
     "MedicalAgent": (
         'research_commit(nodes=[{"type":"Evidence","ref":"e","attrs":'
         '{"subtype":"literature","content":"PubMed finding…"}}], '
-        'edges=[{"type":"supports","from":"#e","to":"H2"}])'
+        'edges=[{"type":"produces","from":"VM1","to":"#e"}, '
+        '{"type":"supports","from":"#e","to":"H2"}], '
+        'status_updates=[{"id":"VM1","status":"done"}])   '
+        '# VM1 = the review you ran; open one in the same commit if the plan '
+        'never wrote it (see the ResearchAgent example).'
     ),
     "CoderAgent": (
         'research_commit(nodes=[{"type":"CodeArtifact","ref":"ca","attrs":'

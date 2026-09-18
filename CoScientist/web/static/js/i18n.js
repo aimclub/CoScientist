@@ -1316,6 +1316,14 @@ const i18n = {
     en: 'recorded from {from}, over {mins} min',
     ru: 'записано с {from}, за {mins} мин'
   },
+  // The four bands the research canvas is read down, top to bottom. A card sits
+  // in the band of the stage that produced it, so the picture says where the
+  // study has got to before any card is read.
+  'graph.stage.framing': { en: 'Framing', ru: 'Постановка' },
+  'graph.stage.literature': { en: 'Literature review', ru: 'Анализ литературы' },
+  'graph.stage.hypotheses': { en: 'Hypotheses', ru: 'Гипотезы' },
+  'graph.stage.report': { en: 'Report', ru: 'Отчёт' },
+  'graph.stage.empty': { en: '— not reached yet', ru: '— этап не начат' },
   // What the record is missing — said out loud, because an empty canvas looked
   // the same whether nobody wrote anything or every write was refused.
   'graph.gap.no_root': { en: 'no root question', ru: 'нет корневого вопроса' },
