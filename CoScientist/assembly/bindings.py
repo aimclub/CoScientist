@@ -650,17 +650,34 @@ REGISTRY.register_tool(ToolEntry(
 # docs/superpowers/specs/2026-07-14-microfluidics-graph-modules-design.md), plus
 # finish_optimization — the REAL tool that ends the 7⇄8 optimization loop.
 
+def _molecular_design():
+    from CoScientist.microfluidics.molecular_design import molecular_design
+    return [molecular_design]
+
+
 REGISTRY.register_tool(ToolEntry(
-    key="molecular_design_stub",
-    factory=_microfluidics_stub("molecular_design_stub"),
+    key="molecular_design",
+    factory=_molecular_design,
     docs=(
         ToolDoc(
-            name="molecular_design_stub",
-            signature="molecular_design_stub(requirements)",
+            name="molecular_design",
+            signature="molecular_design(requirements)",
             purpose=(
-                "(ЗАГЛУШКА) Predicts target molecules for the ТЗ from the "
-                "literature analogues: SMILES + the properties the quality "
-                "criteria are checked against."
+                "Screens literature analogues with RDKit descriptors and explicit TZ "
+                "constraints, optionally enumerating BRICS hypotheses. Reads TZ and "
+                "literature from session state; saves molecular_design_result. "
+                "Returns candidates, criteria_checks, rejected structures and gaps; "
+                "unknown properties are not predicted."
+            ),
+            usage=(
+                'requirements is a JSON string: criteria [{name, minimum and/or maximum, '
+                'unit, conditions}], required_smarts, forbidden_smarts, generate (bool), '
+                'max_candidates (1..30). All fields are optional; {} is valid.',
+                'Descriptor names/units: MolWt (g/mol), TPSA (angstrom^2); MolLogP, '
+                'HBD, HBA, RotatableBonds, FormalCharge use unit="". Other properties '
+                'require matching literature name, unit and measurement conditions.',
+                'Use only explicit TZ bounds. status=error/no_candidates means no '
+                'usable candidates; do not invent a fallback result.',
             ),
         ),
     ),
@@ -966,8 +983,9 @@ REGISTRY.register_tool(ToolEntry(
 def _optimization_a2a():
     from CoScientist.microfluidics.a2a_optimization.adapter import (
         optimization_start, optimization_get_status,
+        optimization_provide_input, optimization_approve,
     )
-    return [optimization_start, optimization_get_status]
+    return [optimization_start, optimization_get_status, optimization_provide_input, optimization_approve]
 
 
 REGISTRY.register_tool(ToolEntry(
@@ -976,13 +994,23 @@ REGISTRY.register_tool(ToolEntry(
     docs=(
         ToolDoc(
             name="optimization_start",
-            signature="optimization_start()",
-            purpose="Send session routes, economics, plan and journal to the A2A optimizer, which owns CFD. Reuses the current unconsumed task.",
+            signature="optimization_start(planning_only=False)",
+            purpose="Delegate the whole CFD/equipment/optimization workflow with validated TZ, literature, routes and ranking. Reuses the existing task even after completion. planning_only=True forbids execution.",
         ),
         ToolDoc(
             name="optimization_get_status",
             signature="optimization_get_status()",
-            purpose="Poll the current A2A task. Returns state, phase and the full task with artifacts. input_required is a pause, not success.",
+            purpose="Poll the same A2A task and preserve all raw responses/artifacts. input_required is a request for clarification or approval, not completion.",
+        ),
+        ToolDoc(
+            name="optimization_provide_input",
+            signature="optimization_provide_input(details)",
+            purpose="Reply to waiting_input with known facts or user clarification, preserving task/context/experiment IDs. Never invent parameters.",
+        ),
+        ToolDoc(
+            name="optimization_approve",
+            signature="optimization_approve()",
+            purpose="Approve the external plan at input_required/approval within the authorized work order. May start remote equipment. Unavailable in planning-only mode.",
         ),
     ),
 ))
@@ -1724,11 +1752,3 @@ def _register_planners() -> None:
 _register_classes()
 _register_schemas()
 _register_planners()
-
-
-def _require_optimization_result():
-    from CoScientist.microfluidics.a2a_optimization.adapter import require_optimization_result
-    return require_optimization_result
-
-
-_cb("require_optimization_result", "before_agent", factory=lambda ctx: _require_optimization_result())

@@ -78,16 +78,19 @@ TOOL_TIERS: dict[str, Tier] = {
     "resolve_chemicals": Tier.READ,
     "estimate_synthesis_cost": Tier.READ,
     "rank_routes_by_cost": Tier.READ,
-    # microfluidics: CFD service — a run takes the service's only solver slot;
-    # reading results and the reactor list is harmless.
-    "optimization_start": Tier.COMPUTE,
+    # A2A messages can start/resume the external system's physical equipment.
+    "optimization_start": Tier.SIDE_EFFECT,
     "optimization_get_status": Tier.READ,
+    "optimization_provide_input": Tier.SIDE_EFFECT,
+    "optimization_approve": Tier.SIDE_EFFECT,
+    # Legacy CFD tools remain registered for other profiles, not microfluidics.
     "cfd_list_reactors": Tier.READ,
     "cfd_get_experiment_result": Tier.READ,
     "cfd_list_artifacts": Tier.READ,
     "cfd_run_reactor_experiment": Tier.COMPUTE,
     "cfd_cancel_run": Tier.COMPUTE,
     # microfluidics: retrosynthesis service — the tree search takes shared compute.
+    "molecular_design": Tier.COMPUTE,
     "retrosynthesis_routes": Tier.COMPUTE,
     "predict_reaction_products": Tier.READ,
     "classify_reactions": Tier.READ,

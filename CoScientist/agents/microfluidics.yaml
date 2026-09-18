@@ -6,8 +6,7 @@
 # from the ТЗ to the final report.
 #
 # The graph is MODULAR. RootOrchestrator routes whole modules and never reaches
-# inside one: only 3 edges cross a module boundary (2→3, 4→6, 7→11), every other
-# edge is the module's own business.
+# inside one. The external experimental subsystem is reached only through A2A.
 #
 #   RootOrchestrator (llm, root)              routes MODULES only
 #   ├─ ModuleA_TZLiterature (sequential)      stages 1–2 — ТЗ + literature
@@ -22,15 +21,13 @@
 #   │                                   routes + conditions, facts, gaps)
 #   ├─ ModuleB_Design (sequential)            stages 3–5
 #   │    └─ MolDesignAgent → SynthRouteAgent → EconomicsAgent
-#   ├─ ModuleC_Experiment (sequential)        stages 6–10
-#   │    ├─ ExpPlannerAgent
-#   │    └─ ExperimentLoop (loop, max 3)      the 7⇄8 cycle
-#   │         ├─ OptimizerAgent   A2A optimization owns CFD; produces the plan
-#   │         └─ EquipmentAgent   executes the plan; returns the journal
+#   ├─ ModuleC_Experiment (sequential)        external experimental subsystem
+#   │    └─ OptimizerAgent                   one A2A task owns planning, CFD,
+#   │                                       equipment and the optimization loop
 #   └─ ReportAgent (llm)                      stage 11
 #
-# Optimization uses A2A; CFD belongs to that remote module.
-# The rig remains a stub; other services depend on their configured endpoints.
+# Optimization, CFD and equipment are owned by the external A2A system.
+# CoScientist supplies inputs and consumes its raw results for reporting.
 # Design: docs/superpowers/specs/2026-07-14-microfluidics-graph-modules-design.md
 #
 # Run a separate CoScientist instance with this profile:
@@ -48,7 +45,7 @@ defaults:
 # The root runs the modules in order and each module its steps in order, so
 # the web status indicator shows "stage k of N". The stages are the modules'
 # steps (SystemConfig.linear_stages: ТЗ, queries, plan, literature, design ×3,
-# experiment plan, experiment loop, report); each is labelled by its `title`.
+# external experimentation, report); each is labelled by its `title`.
 pipeline:
   linear: true
 
@@ -285,7 +282,7 @@ agents:
       под требования ТЗ, опираясь на аналоги из литературы.
     reasoning: medium
     prompt: microfluidics_mol_design
-    tools: [molecular_design_stub]
+    tools: [molecular_design]
     output_key: design_candidates
     # Structured hand-off (DesignCandidates): who to synthesise, with SMILES.
     output_schema: design_candidates
@@ -340,75 +337,32 @@ agents:
       # The server's numbers, as given, for the report: economics_ranking.
       after_tool: [collect_economics_result]
 
-  # ── Module C — stages 6–10: experiment ─────────────────────────────────────
+  # ── Module C — external experimental subsystem through A2A ────────────────
   ModuleC_Experiment:
     class: sequential
     description: >-
-      планирует опыты по маршрутам синтеза и ведёт цикл «установка ⇄
-      оптимизация», пока оптимизация не перестанет давать выигрыш.
+      передаёт ТЗ, литературу, маршруты и экономический рейтинг во внешнюю
+      A2A-систему, которая сама выполняет CFD, опыты и оптимизацию.
     routing: >-
-      run after module B, passing the synthesis routes and their operating
-      conditions. It ends when the optimizer stops the cycle.
-    children:
-      - ExpPlannerAgent
-      - ExperimentLoop
-
-  ExpPlannerAgent:
-    class: llm
-    title: План экспериментов
-    description: >-
-      планировщик опытов — превращает маршрут синтеза в план экспериментов на
-      микрофлюидной установке с числовыми критериями успеха.
-    reasoning: low
-    prompt: microfluidics_exp_planner
-    output_key: experiment_plan
-
-  # The 7⇄8 cycle. The body repeats until OptimizerAgent calls
-  # finish_optimization (which escalates); max_iterations is the backstop —
-  # every iteration costs at least two LLM calls.
-  ExperimentLoop:
-    class: loop
-    title: Эксперимент и оптимизация
-    description: >-
-      цикл эксперимента: исполнение плана на установке и оптимизация плана по
-      результатам.
+      run after module B with a valid economic ranking. The external system
+      owns the entire experiment loop; pass its original results to the report.
     children:
       - OptimizerAgent
-      - EquipmentAgent
-    options:
-      max_iterations: 3
 
-  # CFD is owned by the remote optimizer. This agent only controls the rig.
-  # hitl: it commands real hardware — the approval is wired now, while it is
-  # still a stub, so connecting the rig later needs no rework.
-  EquipmentAgent:
-    class: llm
-    description: >-
-      установка — исполняет план A2A-оптимизатора и подаёт команды на
-      микрофлюидную установку, снимая телеметрию.
-    prompt: microfluidics_equipment
-    tools: [rig_mcp_stub]
-    output_key: experiment_journal
-    hitl: true
-    # Once per loop iteration. Rig commands are side effects: blocking checks.
-    work_order: true
-    work_order_step_review: true
-    callbacks:
-      before_agent: [require_optimization_result]
-
-  # Writes back into `experiment_plan` ON PURPOSE: that shared key IS edge 8→7,
-  # so the next iteration of EquipmentAgent runs the refined plan.
   OptimizerAgent:
     class: llm
+    title: Внешняя оптимизация и эксперименты
     description: >-
-      оптимизация через A2A — передаёт маршруты, экономику и журнал внешнему
-      модулю, который вызывает CFD и возвращает следующий план опытов.
+      сопровождает одну задачу внешней A2A-системы: передаёт входные данные,
+      уточнения и подтверждения, получает статусы и результаты экспериментов.
     reasoning: medium
     prompt: microfluidics_optimizer
-    tools: [optimization_a2a, sleep, finish_optimization]
-    output_key: experiment_plan
+    tools: [optimization_a2a, sleep]
+    # Narrative is separate from raw service results written by the tools.
+    output_key: optimization_summary
     hitl: true
     work_order: true
+    work_order_step_review: true
 
   # ── Module D — stage 11: report ────────────────────────────────────────────
   ReportAgent:
@@ -419,7 +373,7 @@ agents:
       и эксперименты в ответ заказчику.
     routing: >-
       run LAST, once the experiment module is finished or it is clear no
-      further optimization is needed (edge 7→11).
+      further optimization is possible; report pending/failed tasks honestly.
     reasoning: low
     prompt: microfluidics_report
     output_key: final_report

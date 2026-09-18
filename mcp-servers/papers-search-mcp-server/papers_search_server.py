@@ -44,8 +44,8 @@ def search_entity(entity_type: str, entity_name: str) -> dict:
         entity_type: Type of entity to search for ("author", "source", "institution")
         entity_name: Name of the entity to search for (e.g., author name, journal name, institution name)
     """
-    email, _ = _get_credentials()
-    client = OpenAlexClient(email=email)
+    email, api_key = _get_credentials()
+    client = OpenAlexClient(email=email, api_key=api_key)
     result = client.search_entity(entity_type=entity_type, entity_name=entity_name)
     if result:
         return {'answer': f'Entity ID: {result["id"]}'}
@@ -79,8 +79,8 @@ def search_papers(
         limit: Max number of results
         sort: OpenAlex sort field (e.g., "cited_by_count:desc")
     """
-    email, _ = _get_credentials()
-    client = OpenAlexClient(email=email)
+    email, api_key = _get_credentials()
+    client = OpenAlexClient(email=email, api_key=api_key)
     response = client.search_works(
         keywords=keywords,
         author_id=author_id,
@@ -135,7 +135,7 @@ def download_papers_from_search(
     bucket and the key are the durable reference. The URL expires in one hour.
     """
     email, api_key = _get_credentials()
-    client = OpenAlexClient(email=email)
+    client = OpenAlexClient(email=email, api_key=api_key)
     response = client.search_works(
         keywords=keywords,
         author_id=author_id,
@@ -166,7 +166,7 @@ def download_papers_from_search(
         file_name = f"{_sanitize_filename(title)}.pdf"
         s3_key = f"{s3_prefix.rstrip('/')}/{file_name}"
 
-        response = client.request_with_retry(endpoint=pdf_url, params={"api_key": api_key})
+        response = client.request_with_retry(endpoint=pdf_url, stream=True)
         destination_path = f"{s3_prefix.rstrip('/')}/{file_name}"
         s3_client.upload_fileobj(BytesIO(response.content), s3_service.bucket_name, destination_path)
         logging.info(f"Uploaded paper '{title}' to S3 at {destination_path}")

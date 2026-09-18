@@ -13,7 +13,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Check the public A2A Agent Card")
     parser.add_argument(
         "--base-url",
-        default=os.getenv("A2A_ROUTER_PUBLIC_URL", "http://127.0.0.1:19000/"),
+        default=os.getenv("A2A_ROUTER_PUBLIC_URL", "https://ailab.se.ifmo.ru/"),
     )
     args = parser.parse_args()
     try:

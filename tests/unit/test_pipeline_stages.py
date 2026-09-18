@@ -10,7 +10,7 @@ from CoScientist.assembly.schema import (
 )
 
 
-def test_microfluidics_runs_its_modules_as_eleven_stages():
+def test_microfluidics_delegates_experiments_as_one_external_stage():
     config = load_config(resolve_config_path("microfluidics"))
 
     stages = config.linear_stages()
@@ -18,13 +18,14 @@ def test_microfluidics_runs_its_modules_as_eleven_stages():
     assert [s["agent"] for s in stages] == [
         "TZSpecAgent", "TZQueryGenAgent", "PlannerAgent", "LiteratureOrchestrator",
         "LiteratureSynthesisAgent", "MolDesignAgent", "SynthRouteAgent", "EconomicsAgent",
-        "ExpPlannerAgent", "ExperimentLoop", "ReportAgent",
+        "OptimizerAgent", "ReportAgent",
     ]
     assert stages[0]["title"] == "Техническое задание"
     # Everything working inside a stage counts as that stage.
     by_agent = {s["agent"]: s["members"] for s in stages}
     assert "ResearchAgent" in by_agent["LiteratureOrchestrator"]
-    assert {"EquipmentAgent", "OptimizerAgent"} <= set(by_agent["ExperimentLoop"])
+    assert by_agent["OptimizerAgent"] == ["OptimizerAgent"]
+    assert stages[-2]["title"] == "Внешняя оптимизация и эксперименты"
 
 
 def test_a_freely_routing_orchestrator_has_no_stages():

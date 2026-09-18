@@ -409,6 +409,8 @@ Update task status to "done" immediately upon completion of each work item.
 
 @_register("research")
 def research(ctx: PromptContext) -> str:
+    from CoScientist.config import get_settings
+
     paper_analysis = ctx.has_tool("paper_analysis")
     papers_search = ctx.has_tool("papers_search")
     lit = paper_analysis or papers_search
@@ -502,7 +504,7 @@ Write these section headings in the report language (see LANGUAGE REQUIREMENT):
 **Key Points** – main takeaways
 **Uncertainty** – gaps or doubts (if any)
 
-You have a STRICT LIMIT of 2 search calls. Plan your search carefully.
+You have a STRICT LIMIT of <<MAX_SEARCHES>> search calls. Plan your search carefully.
 
 
 ### TASK_MANAGEMENT
@@ -521,6 +523,7 @@ Update task status to "done" immediately upon completion of each work item.
         TOOLS=ctx.render_tools(),
         STEPS="\n".join(steps),
         PAPER_SEARCH_SECTION=paper_search_section,
+        MAX_SEARCHES=str(get_settings().web.max_searches),
         PREFER_LINE=prefer_line,
         RESEARCH=render_research_protocol(ctx),
         HITL=ctx.render_hitl(),
@@ -3004,8 +3007,8 @@ previous one has delivered:
 2. **ModuleB_Design** — after A. Turns the ТЗ + literature into molecule
    candidates, synthesis routes and their economics.
 3. **ModuleC_Experiment** — after B, taking the synthesis routes and their
-   operating conditions. Plans the experiments and runs the rig/optimization
-   cycle until the optimizer reports it is done.
+   operating conditions and economic ranking. Delegates the whole experimental
+   subsystem to one A2A task: planning, CFD, equipment and optimization.
 4. **ReportAgent** — last, once C is finished (or once it is clear no further
    optimization is needed). Composes the final report for the customer.
 
@@ -3049,30 +3052,32 @@ propose concrete target molecules to synthesise.
 ### ЗАДАЧА
 Заказчик не задал конкретную молекулу (иначе эта стадия пропускается и дальше
 идёт сама молекула) — подбери кандидатов.
-1. Собери из ТЗ требования к целевому продукту: функция, целевые свойства,
-   критерии качества, ограничения (среда, температура, минерализация).
-2. Вызови `molecular_design_stub`, передав эти требования вместе с аналогами и
-   фактами из литературы.
-3. Добавь сильных аналогов из литературы, если они сами закрывают ТЗ (source
-   «литература»), — со SMILES и свойствами как в литературном анализе.
-4. Сопоставь каждого кандидата с критериями ТЗ: какие требования он закрывает,
-   какие — нет. Поля ТЗ со статусом «не задано» НЕ придумывай: отметь их как
-   неопределённые допущения. Поля «не требуется» намеренно не ограничивают
-   выбор — любое значение допустимо, критерием отбора их не делай.
+1. Извлеки только явно заданные числовые и структурные ограничения ТЗ.
+   «Не задано» означает неизвестное ограничение, «не требуется» не задаёт
+   критерия отбора. Не подставляй собственные пороги.
+2. Вызови `molecular_design` с requirements — JSON-строкой по контракту
+   инструмента: criteria, required_smarts, forbidden_smarts, generate,
+   max_candidates. ТЗ и аналоги инструмент читает из состояния сам; не добавляй
+   их в requirements. Если явных ограничений нет, передай "{}".
+3. Используй только возвращённые candidates. Инструмент уже включает
+   литературные аналоги: не добавляй отклонённые структуры обратно вручную.
+   При error или no_candidates верни пустой список и исходные gaps.
+4. Сохрани criteria_checks, ограничения и неопределённость в пояснениях.
+   Расчётные дескрипторы RDKit — не измерения, BRICS-кандидаты — гипотезы,
+   а не подтверждённые молекулы с требуемыми свойствами. Не переноси свойства
+   исходных аналогов на новые структуры. ККМ, МПН и другие неизвестные свойства
+   не выдумывай; unknown не означает соответствие ТЗ.
 
 ### ВЫХОД — СТРУКТУРА design_candidates
 - fixed_target: false.
 - candidates: по каждому кандидату — name, smiles (как вернул инструмент или
   литература; не выдумывай), compound_class, properties (name, value с
   единицами, conditions), tz_fit (что закрывает и что нет), risks, source
-  («дизайн» — от инструмента, «литература» — из анализа), stub (true для
-  всего, что вернула заглушка).
+  (сохрани значение инструмента), sources, derivation, stub: false.
 - gaps: каких данных не хватает для окончательного отбора.
 Все тексты — на русском.
-<<STUB_HONESTY>>
 ''',
         TOOLS=ctx.render_tools(),
-        STUB_HONESTY=_STUB_HONESTY,
     )
 
 
@@ -3083,6 +3088,12 @@ propose concrete target molecules to synthesise.
 
 _SYNTH_ROUTE_OUTPUT = '''### ВЫХОД — СТРУКТУРА synthesis_routes
 Эту структуру дальше считает сервер стоимости, поэтому поля важны:
+В финальном set_model_response обязательно передай routes целиком вместе с
+gaps: результаты инструментов и текст update_work_step автоматически в routes
+не переносятся. Нельзя завершать ответ только списком пробелов. Если маршруты
+найдены, включи их операции в steps; routes: [] допустимо только когда ни одного
+маршрута не найдено, с объяснением в gaps. Перед финальным ответом заверши шаги
+плана и представь рабочий отчёт через submit_work_report, если он подключён.
 - routes[]: route_id, product (name, smiles), source, sources, stub,
   flow_suitability, bottlenecks и steps[] по порядку.
 - steps[]: operation; reactants — исходные вещества стадии: name (английское
@@ -3284,9 +3295,11 @@ economics server (supplier price lists) and compare them.
    conditions / yield_fraction. Перенеси их как есть: вещество — {"smiles":
    ...}, если SMILES есть, иначе английское название; "@prev" — строкой;
    yield_fraction → yield. Маршруты из литературы (literature_analysis) с id,
-   которого ещё нет среди маршрутов модуля дизайна, добавь так же (yield_value
-   «75 %» → 0.75). Маршрут без продуктов стадий посчитать нельзя: отметь его и
-   не отправляй.
+   которого нет в synthesis_routes.routes, не добавляй в рейтинг отдельно:
+   сначала он должен быть оформлен стадией маршрутов с тем же route_id.
+   Набор route_id рейтинга должен соответствовать synthesis_routes.routes.
+   Маршрут без продуктов стадий посчитать нельзя: отметь пробел и верни на
+   доработку, не создавай несвязанный с исходными маршрутами рейтинг.
 2. **Разрешение веществ** — `resolve_chemicals` одним вызовом для всех
    уникальных веществ всех маршрутов. Каждое error="unresolved" замени SMILES
    или английским систематическим названием и проверь повторно. Вещество,
@@ -3339,127 +3352,61 @@ economics server (supplier price lists) and compare them.
     )
 
 
-# ── Node 6 — ExpPlannerAgent ─────────────────────────────────────────────────
-
-@_register("microfluidics_exp_planner")
-def microfluidics_exp_planner(ctx: PromptContext) -> str:
-    return render_template('''You are the ExpPlannerAgent (стадия 6) of the
-CoScientist microfluidics instance. You turn a synthesis route into a plan of
-experiments for the microfluidic rig.
-
-### ВХОД — МАРШРУТЫ СИНТЕЗА И УСЛОВИЯ ОПЕРАЦИЙ (стадия 4)
-{synthesis_routes?}
-
-### ЗАДАЧА
-Составь план опытов:
-- какие опыты и в каком порядке, с целью каждого;
-- варьируемые параметры и их диапазоны (расход, температура, время контакта,
-  соотношение потоков, геометрия канала);
-- что измеряем в каждом опыте (конверсия, селективность, чистота, МПН/ККМ) и
-  чем;
-- критерии успеха в цифрах — по ним стадия 8 решит, продолжать ли оптимизацию;
-- условия остановки и риски безопасности.
-
-Начинай с опытов, которые быстрее всего отсекают неверные гипотезы. План
-должен быть исполним на проточной установке — без ручных операций между
-стадиями там, где маршрут этого не допускает.
-
-### ВЫХОД (на русском)
-Нумерованный план опытов с параметрами, измерениями и числовыми критериями
-успеха.
-''')
-
-
-# ── Nodes 8 → 7: remote optimization, then local equipment ──────────────────
-
-@_register("microfluidics_equipment")
-def microfluidics_equipment(ctx: PromptContext) -> str:
-    return render_template('''You are the EquipmentAgent (стадия 7).
-Ты исполняешь план, подготовленный внешним модулем оптимизации через A2A.
-CFD принадлежит модулю оптимизации: не вызывай CFD напрямую.
-
-### ПЛАН ОПЫТОВ
-{experiment_plan?}
-
-### ИСХОДНЫЙ РЕЗУЛЬТАТ A2A-ОПТИМИЗАТОРА
-{optimization_a2a_task?}
-
-### ПРЕДЫДУЩИЙ ЖУРНАЛ
-{experiment_journal?}
-
-<<TOOLS>>
-
-Работай только по новому завершённому результату оптимизатора. Если результат
-не содержит исполнимого плана, содержит блокирующие ошибки CFD или требует
-уточнений, не подавай команды: перечисли препятствия в журнале.
-Выполняй опыты через rig_mcp_stub, по одной команде, фиксируя телеметрию.
-Не выдавай телеметрию заглушки за реальные измерения. Не повторяй уже
-выполненные опыты без явного нового задания оптимизатора.
-
-<<HITL>>
-
-### ВЫХОД — НАКОПИТЕЛЬНЫЙ ЖУРНАЛ (на русском)
-Сохрани предыдущие опыты и добавь новые: параметры с единицами, команды,
-телеметрию, измеренные показатели, отклонения и признак заглушки.
-Для CFD ссылайся только на результаты A2A-модуля и их идентификаторы;
-если расчёты не предоставлены, явно напиши об этом.
-<<STUB_HONESTY>>
-''', TOOLS=ctx.render_tools(), HITL=ctx.render_hitl(), STUB_HONESTY=_STUB_HONESTY)
-
+# ── External experimental subsystem: one A2A task ───────────────────────────
 
 @_register("microfluidics_optimizer")
 def microfluidics_optimizer(ctx: PromptContext) -> str:
-    return render_template('''You are the OptimizerAgent (стадия 8).
-Ты связываешь CoScientist с внешним модулем оптимизации через A2A.
-Именно внешний модуль выбирает следующий план и вызывает CFD через свой MCP.
-Не заменяй ответ внешнего модуля собственным расчётом или заглушкой.
+    return render_template('''You are the OptimizerAgent, the CoScientist liaison
+with the external experimental system over A2A. That system owns planning,
+CFD, equipment execution and the optimization loop. You do not perform those
+steps locally and do not rewrite its plan or measurement results.
 
 ### ТЗ
 {structured_tz?}
-### МАРШРУТЫ СИНТЕЗА
+### ЛИТЕРАТУРА: ФИЗИКО-ХИМИЧЕСКИЕ СВОЙСТВА И МАРШРУТЫ
+{literature_analysis?}
+### МАРШРУТЫ
 {synthesis_routes?}
 ### ЭКОНОМИЧЕСКИЙ РЕЙТИНГ
 {economics_ranking?}
-{economics?}
-### ТЕКУЩИЙ ПЛАН
-{experiment_plan?}
-### ВЫПОЛНЕННЫЕ ЭКСПЕРИМЕНТЫ
-{experiment_journal?}
 ### ТЕКУЩАЯ ЗАДАЧА A2A
 {optimization_a2a_task?}
 
 <<TOOLS>>
 <<HITL>>
 
-1. Вызови optimization_start: инструмент сам передаст исходные данные из
-   состояния сессии, включая экономику и журнал, и сохранит идентификаторы.
-   Повторный вызов возвращает текущую задачу, а не создаёт дубликат.
-2. Для submitted/working используй sleep_tool (5 секунд), затем
-   optimization_get_status. Не больше 12 проверок за один проход. Если задача
-   всё ещё выполняется — закончи цикл через finish_optimization с причиной
-   «A2A ещё выполняется», сохрани идентификаторы для продолжения, не называй
-   это успешным завершением оптимизации.
-3. input_required (approval или waiting_input) — пауза. Покажи точный запрос
-   сервиса и вызови finish_optimization с причиной паузы. Этот адаптер не
-   отправляет подтверждение запуска оборудования. Не считай HITL-подтверждение
-   плана работы подтверждением удалённого эксперимента.
-4. failed/rejected/canceled/error/submission_unknown/status_error — сообщи
-   ошибку и останови цикл через finish_optimization. Не создавай замену задаче
-   с неизвестным исходом отправки: она могла быть принята сервером.
-5. Только completed: прочитай status.message и artifacts исходной задачи.
-   Если сервис вернул полный исполнимый план — передай его EquipmentAgent,
-   сохранив параметры, единицы, ограничения и ссылки на CFD. Не исполняй
-   ошибки или блокирующие результаты расчёта. Если плана нет — останови цикл
-   с причиной «сервис не вернул исполнимый план».
-6. Если сервис сообщает, что критерии достигнуты либо улучшения нет, вызови
-   finish_optimization с его обоснованием. Данные заглушки не подтверждают
-   достижение критериев на физической установке.
+1. Вызови optimization_start(planning_only=False) для выполнения задачи;
+   planning_only=True — только если пользователь запросил исключительно план.
+   Инструмент проверяет ТЗ, литературу, маршруты и рейтинг стоимости, затем
+   передаёт исходные данные. При invalid_input исправь данные на предыдущем
+   этапе или сообщи о пробеле; не выдумывай стоимость и не запускай обходной путь.
+   Повторный вызов возвращает ту же задачу даже после завершения.
+2. submitted/working: sleep_tool на 5 секунд и optimization_get_status.
+   Не больше 12 опросов за проход; после этого сообщи «ещё выполняется» и task_id.
+   При продолжении используй ту же задачу, не создавай новый эксперимент.
+3. input_required/waiting_input: прочитай точный запрос внешнего агента.
+   Передай известные данные через optimization_provide_input; если данных нет,
+   запроси их у пользователя. Не подставляй произвольные параметры.
+4. input_required/approval: это готовый план ВНЕШНЕЙ системы. Проверь его
+   соответствие ТЗ и разрешённой работе. Для согласованного плана вызови
+   optimization_approve, затем опрашивай ту же задачу. Подтверждение может
+   запустить реальное оборудование. В planning_only не подтверждай запуск.
+   Если план выходит за согласованные условия, покажи пользователю отклонения.
+5. submission_unknown: не повторяй отправку без выяснения её исхода.
+   followup_unknown/status_error при известном task_id: сначала перечитай статус,
+   не отправляй подтверждение повторно. sending_input/submitting — сообщение
+   уже отправляется. auth_required или неизвестная фаза — сообщи о блокировке.
+6. completed означает завершение A2A-задачи, но не доказательство достижения
+   научных критериев. Бери план, измерения, CFD и причину остановки только из
+   исходных ответов сервиса. Если ответ лишь «готово», укажи, что результаты
+   не предоставлены. failed/rejected/canceled также передаются в отчёт с
+   имеющимися промежуточными данными, не заменяй их успехом.
 
-### ВЫХОД (на русском)
-Твой ответ заменяет experiment_plan. Всегда возвращай полный план; при паузе
-или ошибке сохрани предыдущий план целиком и добавь статус A2A, task_id,
-причину остановки и необходимые действия. Не выдавай черновой план за
-одобренный оптимизатором. При продолжении верни полный план внешнего модуля.
+### ВЫХОД
+Краткая сводка на русском: task_id, статус, что система действительно вернула,
+пробелы и запросы к пользователю. Сырые ответы сохраняются инструментами в
+optimization_result и optimization_a2a_runs. Не создавай локальный план,
+журнал или команды оборудованию; не вызывай finish_optimization.
 ''', TOOLS=ctx.render_tools(), HITL=ctx.render_hitl())
 
 
@@ -3493,11 +3440,11 @@ report is where they come together.
 ### ЭКОНОМИКА — ЦИФРЫ СЕРВЕРА СТОИМОСТИ (как их вернул сервер)
 {economics_ranking?}
 
-### ПЛАН ОПЫТОВ (стадии 6/8)
-{experiment_plan?}
+### ИСХОДНЫЕ РЕЗУЛЬТАТЫ ВНЕШНЕЙ ЭКСПЕРИМЕНТАЛЬНОЙ СИСТЕМЫ
+{optimization_result?}
 
-### ЖУРНАЛ ЭКСПЕРИМЕНТА (стадия 7)
-{experiment_journal?}
+### СВОДКА СОПРОВОЖДЕНИЯ A2A (не источник измерений)
+{optimization_summary?}
 
 ### ОПТИМИЗАЦИЯ И CFD — ИСХОДНЫЕ ОТВЕТЫ A2A-МОДУЛЯ
 {optimization_a2a_runs?}

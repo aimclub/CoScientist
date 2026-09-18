@@ -225,6 +225,8 @@ class DesignCandidate(BaseModel):
     source: str = Field(
         default="дизайн", description="Откуда кандидат: «ТЗ», «дизайн» или «литература»"
     )
+    sources: List[str] = Field(default_factory=list, description="Источники литературных свойств")
+    derivation: str = Field(default="", description="Происхождение структуры; не маршрут синтеза")
     stub: bool = Field(default=False, description="Данные получены от заглушки")
 
 
@@ -265,7 +267,9 @@ class SynthesisRoute(BaseModel):
     route_id: str = Field(description="GPN-1, GPN-2… — ретросинтез; LIT-1… — из литературы")
     product: Substance
     source: str = Field(default="ретросинтез", description="«ретросинтез» или «литература»")
-    steps: List[ProcessStep] = Field(default_factory=list)
+    steps: List[ProcessStep] = Field(
+        min_length=1, description="Все операции маршрута по порядку; обязательное непустое поле"
+    )
     flow_suitability: str = Field(default="")
     bottlenecks: List[str] = Field(default_factory=list)
     sources: List[str] = Field(default_factory=list, description="Ссылки / DOI")
@@ -275,7 +279,9 @@ class SynthesisRoute(BaseModel):
 class SynthesisRoutes(BaseModel):
     """Выход стадии 4 — как синтезировать."""
 
-    routes: List[SynthesisRoute] = Field(default_factory=list)
+    routes: List[SynthesisRoute] = Field(
+        description="Полные маршруты с операциями. Обязательное поле; [] только если маршруты не найдены."
+    )
     gaps: List[str] = Field(default_factory=list)
 
 
