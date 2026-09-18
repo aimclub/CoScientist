@@ -421,9 +421,9 @@ def research(ctx: PromptContext) -> str:
             "have actual S3 keys — never invent S3 keys."
         )
         n += 1
-        # 2) Otherwise (or if no uploaded papers) always call explore_chemistry_database first
+        # 2) Otherwise (or if no uploaded papers) always call explore_scientific_database first
         steps.append(
-            f"{n}. If there are NO user-uploaded papers, ALWAYS call `explore_chemistry_database` before other literature tools. "
+            f"{n}. If there are NO user-uploaded papers, ALWAYS call `explore_scientific_database` before other literature tools. "
             "Do this even if you plan to use `search_papers` or `download_papers_from_search` afterwards."
         )
     n += 1
@@ -2837,6 +2837,16 @@ _static("microfluidics_literature_synthesis", '''
 ### РЕЗУЛЬТАТЫ ПО КАЖДОЙ ЛИТЕРАТУРНОЙ ЗАДАЧЕ (query_id, запрос, ответ)
 {literature_findings?}
 
+### ПАРАЛЛЕЛЬНЫЕ РЕЗУЛЬТАТЫ ПО ID (основной источник; пропусти пустые)
+LIT-01: {literature_finding_LIT_01?}
+LIT-02: {literature_finding_LIT_02?}
+LIT-03: {literature_finding_LIT_03?}
+LIT-04: {literature_finding_LIT_04?}
+LIT-05: {literature_finding_LIT_05?}
+LIT-06: {literature_finding_LIT_06?}
+LIT-07: {literature_finding_LIT_07?}
+LIT-08: {literature_finding_LIT_08?}
+
 ### СВОДКА ОРКЕСТРАТОРА ЛИТЕРАТУРЫ
 {literature_report?}
 
@@ -2905,19 +2915,21 @@ Available tools from agents:
 
 ### Instructions
 
-1. Work through the plan task by task, in order. For every literature task
-   (LIT-xx), delegate it to ResearchAgent, passing the task's description —
-   the task VERBATIM and the list of data to extract. Do not paraphrase away
-   domain terms from the ТЗ.
+1. Execute all independent literature tasks (LIT-xx) in parallel. First mark
+   every pending LIT task IN_PROGRESS. Then, in ONE model response, emit one
+   ResearchAgent tool call per task so ADK runs the calls concurrently. Pass
+   each task's description VERBATIM with its list of data to extract; do not
+   paraphrase away domain terms from the ТЗ. Do not wait for one ResearchAgent
+   result before emitting the next call.
 2. Route by the nature of the work:
 
 <<ROUTING>>
 
-3. Use `update_task_status` REGULARLY: set a task to IN_PROGRESS when you
-   delegate it and to DONE (with brief result notes) as soon as its result is
-   in. Never leave finished tasks not updated.
-4. If ResearchAgent returns nothing useful for a query, retry ONCE with a
-   reformulated request (expand or split the query); then move on — do not loop.
+3. After the parallel batch returns, mark every completed task DONE with brief
+   result notes. Never leave finished tasks not updated.
+4. If some ResearchAgent calls return nothing useful, retry only those failed
+   queries ONCE. Emit all such retries together in one model response so that
+   they also run in parallel; then move on — do not loop.
 5. When delegating, keep the task id (LIT-xx) at the start of the request —
    it is how each answer is filed. If the target molecule is fixed, name it
    (name, SMILES, CAS) in every request that concerns it.
@@ -2927,7 +2939,9 @@ Available tools from agents:
    for flow/microfluidic setups, limitations), plus overall conclusions and
    uncertainties. Answer the customer's original request from the ТЗ.
 
-<<DIRECT_TOOLS>>### Trust your sub-agents' results
+<<DIRECT_TOOLS>>
+<<HITL>>
+### Trust your sub-agents' results
 Sub-agents really execute their work; their reported results are
 authoritative.
 
@@ -2941,6 +2955,7 @@ authoritative.
         AGENTS=ctx.render_agents(),
         ROUTING=ctx.render_routing(),
         DIRECT_TOOLS=direct_tools_section,
+        HITL=ctx.render_hitl(),
     )
 
 
@@ -3062,12 +3077,67 @@ propose concrete target molecules to synthesise.
 
 
 # ── Node 4 — SynthRouteAgent ─────────────────────────────────────────────────
+# Two branches: the retrosynthesis service (retrosynthesis tools attached) or,
+# with no service configured, the literature routes alone — there is no stub.
+# Both answer in SynthesisRoutes — the shape the economics server costs.
+
+_SYNTH_ROUTE_OUTPUT = '''### ВЫХОД — СТРУКТУРА synthesis_routes
+Эту структуру дальше считает сервер стоимости, поэтому поля важны:
+- routes[]: route_id, product (name, smiles), source, sources, stub,
+  flow_suitability, bottlenecks и steps[] по порядку.
+- steps[]: operation; reactants — исходные вещества стадии: name (английское
+  название, если известно) и smiles; на второй и следующих стадиях продукт
+  предыдущей стадии идёт реагентом с name "@prev" и пустым smiles; agents —
+  растворители, катализаторы, среды (amount оставь пустым — его задаёт стадия
+  экономики); products — что получается на стадии; conditions — температура,
+  время, соотношения, давление с единицами; yield_fraction — выход долей
+  («75 %» → 0.75), нет данных — null; flow_notes.
+- gaps: чего не хватает.
+SMILES не выдумывай: нет в инструменте или источнике — оставь пустым. Тексты —
+на русском, названия веществ — как в источнике плюс английское, если известно.'''
+
 
 @_register("microfluidics_synth_route")
 def microfluidics_synth_route(ctx: PromptContext) -> str:
+    if ctx.has_tool("retrosynthesis"):
+        return _microfluidics_synth_route_service(ctx)
     return render_template('''You are the SynthRouteAgent (стадия 4) of the
 CoScientist microfluidics instance. For the proposed molecules you work out HOW
 they are made — the route and the operating conditions of every operation.
+
+Сервис ретросинтеза в этом развёртывании не подключён: маршруты берутся только
+из литературного анализа. Не придумывай маршрутов, которых там нет.
+
+### ВХОД — КАНДИДАТЫ (стадия 3)
+{design_candidates?}
+
+### ВХОД — МАРШРУТЫ И УСЛОВИЯ ИЗ ЛИТЕРАТУРЫ (synthesis_routes внутри)
+{literature_analysis?}
+
+### ЗАДАЧА
+1. Для каждого кандидата найди в литературном анализе маршруты к нему (по
+   SMILES, иначе по названию) и перенеси их как LIT-1, LIT-2… (source
+   «литература», источники из анализа, stub false).
+2. Кандидата, к которому в литературе маршрута нет, назови в gaps: «маршрут не
+   найден, сервис ретросинтеза не подключён».
+3. Отметь операции, которые плохо переносятся на проточный/микрофлюидный
+   реактор (быстрая экзотермика, осадки, многофазность) — стадия 6 планирует
+   опыты именно по этим условиям.
+
+<<OUTPUT>>
+<<HITL>>
+''',
+        OUTPUT=_SYNTH_ROUTE_OUTPUT,
+        HITL=ctx.render_hitl(),
+    )
+
+
+def _microfluidics_synth_route_service(ctx: PromptContext) -> str:
+    """SynthRouteAgent on the retrosynthesis service (bindings: retrosynthesis)."""
+    return render_template('''You are the SynthRouteAgent (стадия 4) of the
+CoScientist microfluidics instance. For the proposed molecules you work out HOW
+they are made — the route and the operating conditions of every operation — on
+the retrosynthesis service and from the literature.
 
 ### ВХОД — КАНДИДАТЫ (стадия 3)
 {design_candidates?}
@@ -3077,38 +3147,56 @@ they are made — the route and the operating conditions of every operation.
 
 <<TOOLS>>
 
-### ЗАДАЧА
-1. Для каждого кандидата найди в литературном анализе маршруты к нему (по
-   SMILES, иначе по названию). Описанный в литературе маршрут с условиями —
-   основа: перенеси его как маршрут LIT-1, LIT-2… (source «литература»,
-   источники из анализа, stub false).
-2. Для каждого кандидата со SMILES вызови `retrosynthesis_stub` — это маршрут
-   GPN-1, GPN-2… (source «ретросинтез», stub true). Кандидата без SMILES
-   отметь в gaps.
-3. Сверь маршруты ретросинтеза с литературными: где условия расходятся — назови
-   это в bottlenecks, не усредняй.
-4. Отметь операции, которые плохо переносятся на проточный/микрофлюидный
-   реактор (быстрая экзотермика, осадки, многофазность) — стадия 6 планирует
-   опыты именно по этим условиям.
+### КАК РАБОТАЕТ СЕРВИС (проверено на сервисе)
+- Поиск маршрутов идёт по структуре: одна нейтральная молекула. Соль или
+  SMILES из нескольких частей (с точкой) часто не находит ничего — отправляй
+  исходную кислоту или основание (например, для
+  CCCCCCCCCCCCOS(=O)(=O)[O-].[Na+] — CCCCCCCCCCCCOS(=O)(=O)O), а стадию
+  получения соли допиши сам как нейтрализацию.
+- Для части молекул маршрутов нет совсем (status no_routes) — это не ошибка,
+  а пробел: тогда основой остаются литературные маршруты.
+- Условий реакций и выходов сервис не даёт.
+- purchasable=true у вещества — его можно купить; маршрут, где все стартовые
+  вещества покупаемые, предпочтительнее.
+- Прямое предсказание (`predict_reaction_products`) ошибается и с высокой
+  уверенностью — это проверка, а не истина.
 
-### ВЫХОД — СТРУКТУРА synthesis_routes
-Эту структуру дальше считает сервер стоимости, поэтому поля важны:
-- routes[]: route_id, product (name, smiles), source, sources, stub,
-  flow_suitability, bottlenecks и steps[] по порядку.
-- steps[]: operation; reactants — исходные вещества стадии: name (английское
-  название, если известно) и smiles; на второй и следующих стадиях первым
-  реагентом идёт продукт предыдущей — name "@prev", smiles пустой; agents —
-  растворители, катализаторы, среды (amount оставь пустым — его задаёт стадия
-  экономики); products — что получается на стадии; conditions — температура,
-  время, соотношения, давление с единицами; yield_fraction — выход долей
-  («75 %» → 0.75), нет данных — null; flow_notes.
-- gaps: чего не хватает.
-SMILES не выдумывай: нет в инструменте или источнике — оставь пустым. Тексты —
-на русском, названия веществ — как в источнике плюс английское, если известно.
-<<STUB_HONESTY>>
+### ПОРЯДОК РАБОТЫ (это и есть шаги твоего плана)
+1. **Литература.** Для каждого кандидата найди в литературном анализе маршруты
+   к нему (по SMILES, иначе по названию). Описанный маршрут с условиями
+   перенеси как LIT-1, LIT-2… (source «литература», источники, stub false).
+2. **Ретросинтез.** Для каждого кандидата со SMILES — `retrosynthesis_routes`
+   (mode "balanced"). Нет маршрутов для соли — повтори для нейтральной формы;
+   нет и так — «deep» один раз, затем отметь пробел. Кандидата без SMILES
+   отметь в gaps.
+3. **Отбор.** Из маршрутов сервиса возьми не больше 3 на кандидата: все
+   стартовые вещества покупаемые, высокая min_step_plausibility, меньше
+   стадий, ниже precursor_cost. Это маршруты GPN-1, GPN-2… (source
+   «ретросинтез», stub false; в sources — "retrosynthesis service, route_id").
+4. **Названия стадий.** `classify_reactions` на reaction SMILES выбранных
+   стадий — operation бери из reaction_name и reaction_classname.
+5. **Условия и выход.** Стадия маршрута сервиса совпадает по превращению со
+   стадией литературного маршрута — перенеси её условия и выход и укажи это
+   в flow_notes. Не совпадает — conditions пустые, yield_fraction null, и
+   назови это в gaps.
+6. **Проверка (по необходимости).** Для литературной стадии с сомнительным
+   продуктом — `predict_reaction_products`; расхождение с ожидаемым продуктом
+   отметь в bottlenecks.
+7. Отметь операции, которые плохо переносятся на проточный/микрофлюидный
+   реактор (быстрая экзотермика, осадки, многофазность).
+
+### КАК ПЕРЕНЕСТИ МАРШРУТ СЕРВИСА В СТРУКТУРУ
+Стадии уже в прямом порядке. reactants стадии — её reactants со smiles (name —
+английское название, если знаешь его наверняка, иначе пусто); продукт
+предыдущей стадии — name "@prev", smiles пустой; products — products стадии;
+product маршрута — целевая молекула.
+
+<<OUTPUT>>
+<<HITL>>
 ''',
         TOOLS=ctx.render_tools(),
-        STUB_HONESTY=_STUB_HONESTY,
+        OUTPUT=_SYNTH_ROUTE_OUTPUT,
+        HITL=ctx.render_hitl(),
     )
 
 
@@ -3282,137 +3370,97 @@ experiments for the microfluidic rig.
 ''')
 
 
-# ── Node 7 — EquipmentAgent (tools: nodes 9 and 10) ──────────────────────────
+# ── Nodes 8 → 7: remote optimization, then local equipment ──────────────────
 
 @_register("microfluidics_equipment")
 def microfluidics_equipment(ctx: PromptContext) -> str:
-    cfd_server = ctx.has_tool("cfd_mcp")
-    cfd_block = _EQUIPMENT_CFD_SERVER if cfd_server else _EQUIPMENT_CFD_STUB
-    return render_template('''You are the EquipmentAgent (стадия 7) of the
-CoScientist microfluidics instance. You execute the experiment plan: you
-simulate the flow and you drive the rig.
+    return render_template('''You are the EquipmentAgent (стадия 7).
+Ты исполняешь план, подготовленный внешним модулем оптимизации через A2A.
+CFD принадлежит модулю оптимизации: не вызывай CFD напрямую.
 
-### ВХОД — ПЛАН ОПЫТОВ
+### ПЛАН ОПЫТОВ
 {experiment_plan?}
 
-ВАЖНО: план мог быть УТОЧНЁН оптимизатором (стадия 8) на прошлой итерации —
-работай по той версии, что выше, а не по своей памяти о прошлом прогоне.
+### ИСХОДНЫЙ РЕЗУЛЬТАТ A2A-ОПТИМИЗАТОРА
+{optimization_a2a_task?}
 
-### РАСЧЁТЫ CFD, УЖЕ СДЕЛАННЫЕ В ЭТОЙ СЕССИИ (по request_id)
-{cfd_runs?}
+### ПРЕДЫДУЩИЙ ЖУРНАЛ
+{experiment_journal?}
 
 <<TOOLS>>
 
-<<CFD>>
-
-### УСТАНОВКА
-1. Выполняй опыты плана командами `rig_mcp_stub` и снимай телеметрию после
-   каждой команды. Каждая команда — отдельный шаг.
-2. Если телеметрия расходится с расчётом или с ожиданием плана — фиксируй это,
-   не подгоняй.
+Работай только по новому завершённому результату оптимизатора. Если результат
+не содержит исполнимого плана, содержит блокирующие ошибки CFD или требует
+уточнений, не подавай команды: перечисли препятствия в журнале.
+Выполняй опыты через rig_mcp_stub, по одной команде, фиксируя телеметрию.
+Не выдавай телеметрию заглушки за реальные измерения. Не повторяй уже
+выполненные опыты без явного нового задания оптимизатора.
 
 <<HITL>>
 
-### ВЫХОД — ЖУРНАЛ ЭКСПЕРИМЕНТА (на русском)
-По каждому опыту: параметры, результат расчёта (request_id, статус, цифры),
-команды, телеметрия, измеренные показатели, отклонения и наблюдения. Журнал —
-вход стадии 8, поэтому цифры важнее прозы.
+### ВЫХОД — НАКОПИТЕЛЬНЫЙ ЖУРНАЛ (на русском)
+Сохрани предыдущие опыты и добавь новые: параметры с единицами, команды,
+телеметрию, измеренные показатели, отклонения и признак заглушки.
+Для CFD ссылайся только на результаты A2A-модуля и их идентификаторы;
+если расчёты не предоставлены, явно напиши об этом.
 <<STUB_HONESTY>>
-''',
-        TOOLS=ctx.render_tools(),
-        CFD=cfd_block,
-        HITL=ctx.render_hitl(),
-        STUB_HONESTY=_STUB_HONESTY,
-    )
+''', TOOLS=ctx.render_tools(), HITL=ctx.render_hitl(), STUB_HONESTY=_STUB_HONESTY)
 
-
-_EQUIPMENT_CFD_STUB = '''### РАСЧЁТ ПОТОКА
-Перед новой/изменённой конфигурацией канала прогони `cfd_mcp_stub` с
-геометрией и режимом потока: расчёт дешевле опыта и отсекает заведомо нерабочие
-режимы (перепад давления, качество смешения, перегрев).'''
-
-_EQUIPMENT_CFD_SERVER = '''### РАСЧЁТ ПОТОКА (CFD-сервис, проверено на сервисе)
-Перед опытом на новом режиме посчитай его: расчёт дешевле опыта и отсекает
-заведомо нерабочие режимы.
-1. **Реактор.** Один раз за запуск — `cfd_list_reactors`. Для реакции A + B
-   бери реактор с supports_two_reactant_feed=true и available=true. Самый
-   мелкий меш считается дольше всего: для первой оценки бери более грубый
-   (t_junction), производственный (ss316_t_junction_narrow_tubes) — когда
-   режим уже выбран.
-2. **Параметры из плана** (единицы сервиса): inlet_speed_m_per_s — из расхода
-   (скорость = расход / площадь входа; площадь есть в derived после первого
-   запуска), концентрации в mol/m3 (1 моль/л = 1000 mol/m3),
-   rate_constant_m3_per_mol_s, temperature_k (°C + 273.15). Каких данных нет в
-   плане — не выдумывай: назови значение допущением в плане работы.
-3. **Запуск** — `cfd_run_reactor_experiment` с СВОИМ request_id вида
-   "exp<N>-cfd-<M>" и wait_seconds не больше 600. Повтор того же request_id
-   с теми же параметрами вернёт тот же расчёт, а не запустит новый.
-4. **Ожидание.** status pending — расчёт идёт: подожди `sleep_tool` (1–5 минут)
-   и спроси `cfd_get_experiment_result(request_id)`; повторяй, пока статус не
-   станет succeeded, failed или cancelled. Сервис считает ОДИН расчёт за раз:
-   ошибка capacity_exceeded — подожди и повтори тот же request_id.
-5. **Проверка результата.** Цифрам можно верить только при succeeded и пустом
-   blocking. Если blocking говорит, что расчёт покрыл меньше 3 времён
-   пребывания, — конверсия около нуля означает «реактор ещё заполняется», а не
-   «реакция не идёт»: повтори с turnovers из blocking под НОВЫМ request_id.
-   Damköhler (damkohler) держи в пределах 1–10: меньше — смесь выходит, не
-   прореагировав; больше — расчёт долгий. Для конверсии меняй константу
-   скорости или концентрации; диффузию (species_diffusivity_m2_s) не трогай —
-   на этих сетках она ничего не меняет.
-6. **Ошибка расчёта.** status failed: выпиши error.code, error.message и
-   стадию с ненулевым exit_code (stages[]). Параметры не подгоняй вслепую и
-   тот же запуск не повторяй больше одного раза — запиши сбой в журнал.
-7. Пути из `cfd_list_artifacts` — файлы на машине сервиса, не ссылки: называй
-   их количество, не пути. `cfd_cancel_run` — только для своего расчёта,
-   который больше не нужен.
-Система сама сохраняет результаты каждого request_id в состояние (cfd_runs) —
-в журнале ссылайся на request_id и приводи ключевые цифры.'''
-
-
-# ── Node 8 — OptimizerAgent (owns the loop's exit) ───────────────────────────
 
 @_register("microfluidics_optimizer")
 def microfluidics_optimizer(ctx: PromptContext) -> str:
-    return render_template('''You are the OptimizerAgent (стадия 8) of the
-CoScientist microfluidics instance. You read the experiment journal and decide
-whether to refine the plan and run again — or to stop.
+    return render_template('''You are the OptimizerAgent (стадия 8).
+Ты связываешь CoScientist с внешним модулем оптимизации через A2A.
+Именно внешний модуль выбирает следующий план и вызывает CFD через свой MCP.
+Не заменяй ответ внешнего модуля собственным расчётом или заглушкой.
 
-### ВХОД — ЖУРНАЛ ЭКСПЕРИМЕНТА (стадия 7)
-{experiment_journal?}
-
-### ВХОД — ТЕКУЩИЙ ПЛАН ОПЫТОВ
+### ТЗ
+{structured_tz?}
+### МАРШРУТЫ СИНТЕЗА
+{synthesis_routes?}
+### ЭКОНОМИЧЕСКИЙ РЕЙТИНГ
+{economics_ranking?}
+{economics?}
+### ТЕКУЩИЙ ПЛАН
 {experiment_plan?}
+### ВЫПОЛНЕННЫЕ ЭКСПЕРИМЕНТЫ
+{experiment_journal?}
+### ТЕКУЩАЯ ЗАДАЧА A2A
+{optimization_a2a_task?}
 
 <<TOOLS>>
+<<HITL>>
 
-### РЕШЕНИЕ
-Сначала оцени журнал против числовых критериев успеха из плана.
+1. Вызови optimization_start: инструмент сам передаст исходные данные из
+   состояния сессии, включая экономику и журнал, и сохранит идентификаторы.
+   Повторный вызов возвращает текущую задачу, а не создаёт дубликат.
+2. Для submitted/working используй sleep_tool (5 секунд), затем
+   optimization_get_status. Не больше 12 проверок за один проход. Если задача
+   всё ещё выполняется — закончи цикл через finish_optimization с причиной
+   «A2A ещё выполняется», сохрани идентификаторы для продолжения, не называй
+   это успешным завершением оптимизации.
+3. input_required (approval или waiting_input) — пауза. Покажи точный запрос
+   сервиса и вызови finish_optimization с причиной паузы. Этот адаптер не
+   отправляет подтверждение запуска оборудования. Не считай HITL-подтверждение
+   плана работы подтверждением удалённого эксперимента.
+4. failed/rejected/canceled/error/submission_unknown/status_error — сообщи
+   ошибку и останови цикл через finish_optimization. Не создавай замену задаче
+   с неизвестным исходом отправки: она могла быть принята сервером.
+5. Только completed: прочитай status.message и artifacts исходной задачи.
+   Если сервис вернул полный исполнимый план — передай его EquipmentAgent,
+   сохранив параметры, единицы, ограничения и ссылки на CFD. Не исполняй
+   ошибки или блокирующие результаты расчёта. Если плана нет — останови цикл
+   с причиной «сервис не вернул исполнимый план».
+6. Если сервис сообщает, что критерии достигнуты либо улучшения нет, вызови
+   finish_optimization с его обоснованием. Данные заглушки не подтверждают
+   достижение критериев на физической установке.
 
-**Останови цикл** — вызови `finish_optimization` с обоснованием, если:
-- критерии успеха достигнуты; ИЛИ
-- последняя итерация не дала значимого улучшения; ИЛИ
-- упёрлись в ограничение ТЗ или установки, и его не обойти изменением
-  параметров.
-
-**Иначе — уточни план** и верни его целиком: стадия 7 на следующей итерации
-исполнит именно твой вариант. Меняй за итерацию немного параметров и объясняй
-каждое изменение результатом из журнала. Цикл ограничен по числу итераций, так
-что двигайся к решению, а не исследуй пространство впустую.
-
-### ВЫХОД (на русском) — ВСЕГДА ПОЛНЫЙ ПЛАН
-Твой ответ ЦЕЛИКОМ замещает план опытов в состоянии — и в той итерации, где ты
-останавливаешь цикл, тоже. Поэтому в ЛЮБОМ случае возвращай ПОЛНЫЙ план опытов
-в том же виде, что и исходный (опыты, параметры, измерения, числовые критерии
-успеха), а не одну лишь сводку: сводкой вместо плана ты сотрёшь план, и отчёт
-(стадия 11) останется без него.
-
-В конце плана — раздел «Итоги оптимизации»:
-- если продолжаем: что изменено и почему, со ссылкой на данные журнала;
-- если останавливаемся (ты вызвал `finish_optimization`): что достигнуто,
-  какие критерии закрыты, а что осталось открытым.
-''',
-        TOOLS=ctx.render_tools(),
-    )
+### ВЫХОД (на русском)
+Твой ответ заменяет experiment_plan. Всегда возвращай полный план; при паузе
+или ошибке сохрани предыдущий план целиком и добавь статус A2A, task_id,
+причину остановки и необходимые действия. Не выдавай черновой план за
+одобренный оптимизатором. При продолжении верни полный план внешнего модуля.
+''', TOOLS=ctx.render_tools(), HITL=ctx.render_hitl())
 
 
 # ── Node 11 — ReportAgent ────────────────────────────────────────────────────
@@ -3451,8 +3499,8 @@ report is where they come together.
 ### ЖУРНАЛ ЭКСПЕРИМЕНТА (стадия 7)
 {experiment_journal?}
 
-### РАСЧЁТЫ CFD — ЦИФРЫ СЕРВИСА (по request_id)
-{cfd_runs?}
+### ОПТИМИЗАЦИЯ И CFD — ИСХОДНЫЕ ОТВЕТЫ A2A-МОДУЛЯ
+{optimization_a2a_runs?}
 
 ### СТРУКТУРА ОТЧЁТА (на русском)
 1. **Задача** — исходный запрос заказчика и ключевые требования ТЗ.
@@ -3464,9 +3512,11 @@ report is where they come together.
    риски поставок. Если есть цифры сервера стоимости — суммы бери из них, с
    валютой и статусом маршрута (partial — нижняя граница).
 6. **Эксперименты** — что планировали, что получили, как менялся план в ходе
-   оптимизации и чем она закончилась. Расчёты CFD — с request_id, статусом и
-   цифрами сервиса; расчёт со статусом не succeeded или с непустым blocking
-   цифрами не считается.
+   оптимизации и чем она закончилась. Укажи task_id и статус A2A.
+   Расчёты CFD бери только из ответов модуля оптимизации, с идентификаторами
+   и статусами. completed задачи A2A сам по себе не подтверждает успех CFD.
+   Ожидание, запрос ввода/подтверждения и ошибки — не успешная оптимизация.
+   Если расчётов нет, так и напиши; данные заглушки не являются измерениями.
 7. **Технико-экономическое обоснование (ТЭО)** — для рекомендованного
    маршрута: целевое количество, себестоимость (cost_per_unit) и чек за
    упаковки (cost_packs) с валютой из цифр сервера стоимости, пересчёт на 1 кг

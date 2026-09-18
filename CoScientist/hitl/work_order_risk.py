@@ -47,7 +47,7 @@ TOOL_TIERS: dict[str, Tier] = {
     "tavily_crawl": Tier.COMPUTE,
     "search_papers": Tier.READ,
     "download_papers_from_search": Tier.COMPUTE,
-    "explore_chemistry_database": Tier.READ,
+    "explore_scientific_database": Tier.READ,
     "explore_my_papers": Tier.READ,
     # medical
     "search_pubmed": Tier.READ,
@@ -80,11 +80,17 @@ TOOL_TIERS: dict[str, Tier] = {
     "rank_routes_by_cost": Tier.READ,
     # microfluidics: CFD service — a run takes the service's only solver slot;
     # reading results and the reactor list is harmless.
+    "optimization_start": Tier.COMPUTE,
+    "optimization_get_status": Tier.READ,
     "cfd_list_reactors": Tier.READ,
     "cfd_get_experiment_result": Tier.READ,
     "cfd_list_artifacts": Tier.READ,
     "cfd_run_reactor_experiment": Tier.COMPUTE,
     "cfd_cancel_run": Tier.COMPUTE,
+    # microfluidics: retrosynthesis service — the tree search takes shared compute.
+    "retrosynthesis_routes": Tier.COMPUTE,
+    "predict_reaction_products": Tier.READ,
+    "classify_reactions": Tier.READ,
     # microfluidics: the chip simulation and the rig. The rig is a stub today,
     # but it stands for physical hardware: its commands are reviewed as such.
     "cfd_mcp_stub": Tier.COMPUTE,
@@ -117,6 +123,9 @@ EXEMPT_TOOLS = frozenset({
     "submit_work_report",
     "request_approval",
     "request_selection",
+    # ADK's own tool for an agent with an output schema AND tools: it carries the
+    # final structured answer, not work.
+    "set_model_response",
 })
 
 

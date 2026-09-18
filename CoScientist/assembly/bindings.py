@@ -134,6 +134,11 @@ def _microfluidics_stub_unless(name: str, real_url_setting: str):
     return factory
 
 
+def _retrosynthesis():
+    from CoScientist.microfluidics.retrosynthesis import tools
+    return tools()
+
+
 def _microfluidics_stub(name: str):
     """Wrap one microfluidics STUB (stages 3–11) as an attachable function tool.
 
@@ -261,8 +266,8 @@ REGISTRY.register_tool(ToolEntry(
     runtime_resolved=True,
     docs=(
         ToolDoc(
-            name="explore_chemistry_database",
-            signature="explore_chemistry_database(question)",
+            name="explore_scientific_database",
+            signature="explore_scientific_database(question)",
             purpose="RAG search over an internal scientific literature database.",
         ),
         ToolDoc(
@@ -641,7 +646,7 @@ REGISTRY.register_tool(ToolEntry(
 ))
 
 # ── Microfluidics stages 3–11 ────────────────────────────────────────────────
-# Stubs for the services behind nodes 3, 4, 5, 9 and 10 (see the design in
+# Stubs for the services behind nodes 3, 5, 9 and 10 (see the design in
 # docs/superpowers/specs/2026-07-14-microfluidics-graph-modules-design.md), plus
 # finish_optimization — the REAL tool that ends the 7⇄8 optimization loop.
 
@@ -661,17 +666,56 @@ REGISTRY.register_tool(ToolEntry(
     ),
 ))
 
+# The retrosynthesis service (ASKCOS proxy — the ГПН block "ретро / forward /
+# классиф."), recorded in tests/fixtures/retrosynthesis/. Plain HTTP, not MCP:
+# the tools are async wrappers in microfluidics/retrosynthesis.py.
 REGISTRY.register_tool(ToolEntry(
-    key="retrosynthesis_stub",
-    factory=_microfluidics_stub("retrosynthesis_stub"),
+    key="retrosynthesis",
+    factory=_retrosynthesis,
+    optional=True,  # built only when HOSTS_PORTS__RETROSYNTHESIS_SERVICES_HOST/PORT are set
     docs=(
         ToolDoc(
-            name="retrosynthesis_stub",
-            signature="retrosynthesis_stub(smiles)",
+            name="retrosynthesis_routes",
+            signature="retrosynthesis_routes(smiles, mode=\"balanced\", max_routes=5)",
             purpose=(
-                "(ЗАГЛУШКА) Plans a synthesis route to a target molecule: "
-                "ordered steps with reagents and operating conditions."
+                "Routes to a target molecule from the retrosynthesis tree search. "
+                "Returns status (ok | no_routes | error) and routes[]: route_id, "
+                "depth (steps), precursor_cost, min_step_plausibility, "
+                "all_starting_materials_purchasable, starting_materials, and steps "
+                "in FORWARD order — reaction_smiles, plausibility, "
+                "template_examples, reactants (smiles, purchasable, "
+                "stoichiometry), products."
             ),
+            usage=(
+                "mode: \"balanced\" (about 30 s) first; \"deep\" only once, if "
+                "balanced found nothing — it is much slower.",
+                "Send ONE neutral molecule: a salt or a dotted SMILES often finds "
+                "no route — use the parent acid or base.",
+                "No conditions and no yields: take them from the literature.",
+            ),
+        ),
+        ToolDoc(
+            name="predict_reaction_products",
+            signature="predict_reaction_products(reactants, reagents=\"\", solvent=\"\", top_n=5)",
+            purpose=(
+                "Forward prediction: predictions[] {smiles, score} for a set of "
+                "reactant SMILES."
+            ),
+            usage=(
+                "A cross-check, not a verdict: a confident prediction can be wrong "
+                "(dodecanol + chlorosulfonic acid came back as dodecanal). A "
+                "mismatch with the expected product is a bottleneck to name.",
+            ),
+        ),
+        ToolDoc(
+            name="classify_reactions",
+            signature="classify_reactions(reaction_smiles)",
+            purpose=(
+                "Reaction class per reaction SMILES: classes[] {rank, "
+                "reaction_name, reaction_classname, reaction_superclassname, "
+                "certainty}."
+            ),
+            usage=("Use it to name a step's operation from its reaction SMILES.",),
         ),
     ),
 ))
@@ -915,6 +959,30 @@ REGISTRY.register_tool(ToolEntry(
                 "(ЗАГЛУШКА) Sends a command to the microfluidic rig and reads "
                 "back its status and telemetry."
             ),
+        ),
+    ),
+))
+
+def _optimization_a2a():
+    from CoScientist.microfluidics.a2a_optimization.adapter import (
+        optimization_start, optimization_get_status,
+    )
+    return [optimization_start, optimization_get_status]
+
+
+REGISTRY.register_tool(ToolEntry(
+    key="optimization_a2a",
+    factory=_optimization_a2a,
+    docs=(
+        ToolDoc(
+            name="optimization_start",
+            signature="optimization_start()",
+            purpose="Send session routes, economics, plan and journal to the A2A optimizer, which owns CFD. Reuses the current unconsumed task.",
+        ),
+        ToolDoc(
+            name="optimization_get_status",
+            signature="optimization_get_status()",
+            purpose="Poll the current A2A task. Returns state, phase and the full task with artifacts. input_required is a pause, not success.",
         ),
     ),
 ))
@@ -1656,3 +1724,11 @@ def _register_planners() -> None:
 _register_classes()
 _register_schemas()
 _register_planners()
+
+
+def _require_optimization_result():
+    from CoScientist.microfluidics.a2a_optimization.adapter import require_optimization_result
+    return require_optimization_result
+
+
+_cb("require_optimization_result", "before_agent", factory=lambda ctx: _require_optimization_result())

@@ -25,13 +25,12 @@
 #   ├─ ModuleC_Experiment (sequential)        stages 6–10
 #   │    ├─ ExpPlannerAgent
 #   │    └─ ExperimentLoop (loop, max 3)      the 7⇄8 cycle
-#   │         ├─ EquipmentAgent   nodes 9/10 are its TOOLS (CFD, rig)
-#   │         └─ OptimizerAgent   finish_optimization ends the loop
+#   │         ├─ OptimizerAgent   A2A optimization owns CFD; produces the plan
+#   │         └─ EquipmentAgent   executes the plan; returns the journal
 #   └─ ReportAgent (llm)                      stage 11
 #
-# Stages 3–11 run on STUBS (see CoScientist/microfluidics/stubs.py): the
-# molecular design, retrosynthesis, economics, CFD and rig services are not
-# connected yet. Connecting one replaces a stub BODY — this file does not change.
+# Optimization uses A2A; CFD belongs to that remote module.
+# The rig remains a stub; other services depend on their configured endpoints.
 # Design: docs/superpowers/specs/2026-07-14-microfluidics-graph-modules-design.md
 #
 # Run a separate CoScientist instance with this profile:
@@ -44,6 +43,7 @@
 
 defaults:
   model: main
+  reasoning: off
 
 # The root runs the modules in order and each module its steps in order, so
 # the web status indicator shows "stage k of N". The stages are the modules'
@@ -58,7 +58,7 @@ pipeline:
 # entry: it is an orientation read, allowed anyway.
 internal_tools:
   - update_task_status
-  # waiting between polls of a CFD run is not work the human needs to approve
+  # waiting between polls of an A2A task is not work the human needs to approve
   - sleep_tool
 
 agents:
@@ -192,8 +192,8 @@ agents:
     include_contents: none
     description: >-
       Microfluidics literature orchestrator — executes the roadmap by
-      delegating literature tasks to ResearchAgent and sums up the findings
-      against the ТЗ.
+      delegating independent literature tasks to ResearchAgent in parallel and
+      sums up the findings against the ТЗ.
     prompt: microfluidics_orchestrator
     tools: [task_tracker]
     # Its closing summary across all LIT tasks — kept, not just posted.
@@ -202,6 +202,11 @@ agents:
       - ResearchAgent
     callbacks:
       before_agent: [before_get_task, inject_target_molecule]
+    # Unified HITL / Work Order for the literature stage: one check at the start
+    # (search plan approval) and one at the end (literature findings review),
+    # without interrupting individual ResearchAgent runs. Needs HITL__ENABLED=true.
+    hitl: true
+    work_order: true
 
   ResearchAgent:
     class: llm
@@ -222,10 +227,9 @@ agents:
     prompt: research
     tools: [websearch, paper_analysis, papers_search, task_tracker]
     output_key: search_results
-    # Runs once per LIT-xx task: each run is a plan, a check per step and a
-    # report. Drop work_order_step_review here if that is too many checks.
-    work_order: true
-    work_order_step_review: true
+    # Runs concurrently for all LIT-xx tasks under LiteratureOrchestrator. HITL review is done
+    # at the orchestrator level (common start and end checks), so research queries
+    # run through autonomously.
     # What each LIT-xx task actually found is the deliverable — post it to the
     # chat instead of leaving it inside the orchestrator's function_response.
     report_output: true
@@ -234,9 +238,8 @@ agents:
       before_model: [inject_uploaded_papers]
       before_tool: [WebSearchLimiter]
       after_tool: [log_research_tool_calls]
-      # search_results is overwritten per call — keep every LIT-xx answer.
+      # Keep every LIT-xx answer under a collision-free per-query state key.
       after_agent: [collect_literature_finding]
-    hitl: true
 
   # ── Hand-off of module A ───────────────────────────────────────────────────
   # Turns the per-task answers into ONE structured result the design module
@@ -280,6 +283,7 @@ agents:
     description: >-
       молекулярный дизайн — предлагает молекулы-кандидаты (SMILES + свойства)
       под требования ТЗ, опираясь на аналоги из литературы.
+    reasoning: medium
     prompt: microfluidics_mol_design
     tools: [molecular_design_stub]
     output_key: design_candidates
@@ -296,20 +300,30 @@ agents:
     description: >-
       ретросинтез — строит маршруты синтеза кандидатов с условиями каждой
       операции и оценивает их пригодность для проточного реактора.
+    reasoning: medium
     prompt: microfluidics_synth_route
-    tools: [retrosynthesis_stub]
+    # The retrosynthesis service (HOSTS_PORTS__RETROSYNTHESIS_SERVICES_HOST/PORT,
+    # not 0.0.0.0). No stub: without the service the agent works from the
+    # literature routes alone and says so.
+    tools: [retrosynthesis]
     output_key: synthesis_routes
+    # It sends target structures to an external service: the human sees the
+    # plan (what goes out), every step and the report. Needs HITL__ENABLED=true.
+    hitl: true
+    work_order: true
+    work_order_step_review: true
     # Structured hand-off (SynthesisRoutes): steps with reactants / agents /
     # products / conditions / yield — the shape the economics server costs.
     output_schema: synthesis_routes
 
-  # Node 5 is a LEAF: nothing consumes `economics` until the report (11).
+  # Economics feeds the optimization module and the final report.
   EconomicsAgent:
     class: llm
     title: Экономика маршрутов
     description: >-
       экономика маршрутов — стоимость за кг, доступность реагентов в РФ, риски
       поставок.
+    reasoning: low
     prompt: microfluidics_economics
     # economics_mcp once MCP_MICROFLUIDIC_ECONOMIC is set, otherwise the stub.
     tools: [economics_mcp, economics_mcp_stub]
@@ -345,6 +359,7 @@ agents:
     description: >-
       планировщик опытов — превращает маршрут синтеза в план экспериментов на
       микрофлюидной установке с числовыми критериями успеха.
+    reasoning: low
     prompt: microfluidics_exp_planner
     output_key: experiment_plan
 
@@ -358,42 +373,42 @@ agents:
       цикл эксперимента: исполнение плана на установке и оптимизация плана по
       результатам.
     children:
-      - EquipmentAgent
       - OptimizerAgent
+      - EquipmentAgent
     options:
       max_iterations: 3
 
-  # Nodes 9 (CFD) and 10 (rig) are this agent's TOOLS, not agents of their own.
+  # CFD is owned by the remote optimizer. This agent only controls the rig.
   # hitl: it commands real hardware — the approval is wired now, while it is
   # still a stub, so connecting the rig later needs no rework.
   EquipmentAgent:
     class: llm
     description: >-
-      установка — исполняет план опытов: считает течение в чипе (CFD) и подаёт
-      команды на микрофлюидную установку, снимая телеметрию.
+      установка — исполняет план A2A-оптимизатора и подаёт команды на
+      микрофлюидную установку, снимая телеметрию.
     prompt: microfluidics_equipment
-    # cfd_mcp once MCP_MICROFLUIDIC_CFD_3_TOOLS is set, otherwise the stub.
-    # sleep: waiting between polls of a CFD run that returned "pending".
-    tools: [cfd_mcp, cfd_mcp_stub, rig_mcp_stub, microfluidics, sleep]
+    tools: [rig_mcp_stub]
     output_key: experiment_journal
     hitl: true
     # Once per loop iteration. Rig commands are side effects: blocking checks.
     work_order: true
     work_order_step_review: true
     callbacks:
-      # The CFD service's numbers, as given, per request id: cfd_runs.
-      after_tool: [collect_cfd_result]
+      before_agent: [require_optimization_result]
 
   # Writes back into `experiment_plan` ON PURPOSE: that shared key IS edge 8→7,
   # so the next iteration of EquipmentAgent runs the refined plan.
   OptimizerAgent:
     class: llm
     description: >-
-      оптимизация — по журналу эксперимента уточняет план опытов или завершает
-      цикл, когда критерии достигнуты.
+      оптимизация через A2A — передаёт маршруты, экономику и журнал внешнему
+      модулю, который вызывает CFD и возвращает следующий план опытов.
+    reasoning: medium
     prompt: microfluidics_optimizer
-    tools: [finish_optimization]
+    tools: [optimization_a2a, sleep, finish_optimization]
     output_key: experiment_plan
+    hitl: true
+    work_order: true
 
   # ── Module D — stage 11: report ────────────────────────────────────────────
   ReportAgent:
@@ -405,5 +420,6 @@ agents:
     routing: >-
       run LAST, once the experiment module is finished or it is clear no
       further optimization is needed (edge 7→11).
+    reasoning: low
     prompt: microfluidics_report
     output_key: final_report

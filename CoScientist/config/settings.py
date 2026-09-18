@@ -42,7 +42,7 @@ class LLMSettings(BaseModel):
     # the agent waits forever and the run looks frozen with nothing in the log.
     # A timeout turns that silence into a retryable error. Override with
     # LLM__REQUEST_TIMEOUT.
-    request_timeout: int = 180
+    request_timeout: int = 600
 
     openrouter_provider: Optional[str] = None
     openrouter_provider_sort: Optional[str] = None

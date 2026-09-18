@@ -212,6 +212,11 @@ _WORK_ORDER_HINTS = (
      "solvents and catalysts are counted (amount / overrides, or left out). In "
      "`inputs` list the route ids and every substance you send, by English name "
      'or SMILES (e.g. "Целевое количество продукта — 100 g").'),
+    (("retrosynthesis",),
+     "For the retrosynthesis service, the molecule forms you send (neutral "
+     "parent instead of a salt), the search mode and how many routes you keep "
+     "per candidate are assumptions; in `inputs` list every SMILES you send "
+     '(e.g. "Для соли ищем маршрут к нейтральной кислоте").'),
     (("cfd_mcp",),
      "For the CFD service, each value you pass is an atomic assumption with its "
      "unit: the reactor id, inlet speed (m/s), concentrations (mol/m3), rate "

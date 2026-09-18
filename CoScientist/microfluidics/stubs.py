@@ -1,8 +1,9 @@
 """STUB tools for the microfluidics stages 3–11 — and the one real tool.
 
-Stages 3–11 (molecular design, retrosynthesis, economics, CFD, the rig) are
-wired against the services below BEFORE those services exist, so the graph can
-be assembled and run end to end today. Every stub returns a static, canonical
+Stages 3–11 (molecular design, economics, CFD, the rig) are wired against the
+services below BEFORE those services exist, so the graph can be assembled and
+run end to end today. Retrosynthesis has no stub: stage 4 works on the real
+service, or from the literature alone when the service is not configured. Every stub returns a static, canonical
 answer for the ПАВ / МУН case, marked ``"stub": True`` so a stubbed value stays
 recognisable in the session state and in the final report.
 
@@ -64,62 +65,6 @@ def molecular_design_stub(requirements: str) -> Dict[str, Any]:
                     "МПН, мН/м": 33.2,
                     "Солеустойчивость, г/л NaCl": 150,
                     "Термостабильность, °C": 120,
-                },
-            },
-        ],
-    }
-
-
-def retrosynthesis_stub(smiles: str) -> Dict[str, Any]:
-    """STUB. Plan a synthesis route to a target molecule.
-
-    Args:
-        smiles: SMILES of the target molecule.
-
-    Returns:
-        The route as ordered steps; each step carries the operation and the
-        operating conditions the experiment planner (node 6) plans against.
-    """
-    return {
-        "stub": True,
-        "target_smiles": smiles,
-        "confidence": 0.78,
-        "steps": [
-            {
-                "num": 1,
-                "operation": "Сульфатирование додеканола хлорсульфоновой кислотой",
-                "reagents": ["додеканол-1", "хлорсульфоновая кислота"],
-                "products": ["додецилгидросульфат (CCCCCCCCCCCCOS(=O)(=O)O)"],
-                "yield": 0.9,
-                "conditions": {
-                    "Температура, °C": 25,
-                    "Время, мин": 90,
-                    "Мольное соотношение": "1 : 1.05",
-                    "Среда": "безводный дихлорметан",
-                },
-            },
-            {
-                "num": 2,
-                "operation": "Нейтрализация водным раствором NaOH",
-                "reagents": ["продукт стадии 1", "NaOH (20 % водн.)"],
-                "products": ["додецилсульфат натрия (CCCCCCCCCCCCOS(=O)(=O)[O-].[Na+])"],
-                "yield": 0.95,
-                "conditions": {
-                    "Температура, °C": 30,
-                    "Время, мин": 30,
-                    "pH на выходе": 8.5,
-                },
-            },
-            {
-                "num": 3,
-                "operation": "Отгонка растворителя и сушка продукта",
-                "reagents": ["продукт стадии 2"],
-                "products": ["додецилсульфат натрия, сухой"],
-                "yield": 0.98,
-                "conditions": {
-                    "Температура, °C": 60,
-                    "Давление, мбар": 40,
-                    "Время, мин": 120,
                 },
             },
         ],

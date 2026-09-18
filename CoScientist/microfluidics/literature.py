@@ -6,9 +6,11 @@ that read it:
 ``collect_literature_finding`` (after_agent, ResearchAgent)
     ResearchAgent writes its answer to ``search_results`` on every call, so each
     LIT-xx task overwrote the one before and only the last survived. This
-    callback appends every answer to ``literature_findings``. ResearchAgent runs
-    as an AgentTool, and the AgentTool forwards the state delta to the parent
-    session, so the list accumulates across calls.
+    callback stores every answer both in the legacy ``literature_findings``
+    list and under a query-specific key (``literature_finding_LIT_01`` etc.).
+    The distinct keys matter when several AgentTool calls run concurrently:
+    their state deltas can then be merged without one whole-list write winning
+    over another.
 
 ``inject_target_molecule`` (before_agent)
     Reads the customer's target molecule out of the structured ТЗ into
@@ -33,6 +35,7 @@ from CoScientist.microfluidics.models import StructuredTZ, TargetMolecule
 logger = logging.getLogger(__name__)
 
 FINDINGS_KEY = "literature_findings"
+FINDING_KEY_PREFIX = "literature_finding_"
 TARGET_KEY = "target_molecule"
 ANALYSIS_KEY = "literature_analysis"
 
@@ -129,6 +132,14 @@ def collect_literature_finding(callback_context: CallbackContext) -> None:
         "result": result,
     }
 
+    # Parallel AgentTool calls start from the same parent-state snapshot.  A
+    # shared list is consequently a last-writer-wins value, whereas distinct
+    # keys survive ADK's merged state delta.  Keep the list for compatibility
+    # with sequential/general profiles and make the per-query key canonical for
+    # the parallel microfluidics literature stage.
+    if finding["query_id"]:
+        state[f"{FINDING_KEY_PREFIX}{finding['query_id'].replace('-', '_')}"] = finding
+
     findings = list(state.get(FINDINGS_KEY) or [])
     # The AgentTool copies the parent state in, so a call that wrote nothing
     # still sees the previous task's search_results — do not record it twice.
@@ -145,6 +156,7 @@ def collect_literature_finding(callback_context: CallbackContext) -> None:
 __all__ = [
     "ANALYSIS_KEY",
     "FINDINGS_KEY",
+    "FINDING_KEY_PREFIX",
     "TARGET_KEY",
     "collect_literature_finding",
     "extract_target_molecule",
