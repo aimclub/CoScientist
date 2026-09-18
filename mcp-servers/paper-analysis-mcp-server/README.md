@@ -1,34 +1,26 @@
-# papers-search-mcp-server
+# paper-analysis-mcp-server
 
 ## Environment
 
 Create a `.env` file in this directory based on `.env.example`.
 
-## Server Tools
+## Server tools
 
-This server exposes two MCP tools:
+### `explore_scientific_database`
 
-### 1. `explore_chemistry_database`
+Answer a general scientific question using retrieved and reranked body chunks, associated figures and an LLM. Use this for a synthesized answer; use `find_papers_in_db` for a list of publications.
 
-- Purpose: Answer general chemistry questions using the indexed chemistry papers database (Chroma).
-- Input:
-	- `task` (string): user question.
-- Output:
-	- JSON with `answer` and supporting context/metadata.
-- Use when:
-	- you need database-backed chemistry answers not tied to a specific user-uploaded paper set.
+### `explore_my_papers`
 
-### 2. `explore_my_papers`
+Answer questions about specific uploaded PDFs, including figures, experimental details, conclusions, titles and authors. Downloads the PDFs from the configured upload bucket, extracts reactions and molecules through OpenChemIE, and sends the PDFs with that additional context to the LLM.
 
-- Purpose: Answer questions about user-provided PDF papers, including figures/reactions/molecules and paper metadata.
-- Input:
-	- `task` (string): user question about uploaded papers.
-	- `config` (RunnableConfig): used for MCP session context (includes `session_id`).
-- Output:
-	- JSON with `answer` and metadata.
-	- Returns `{"answer": "No papers provided for search."}` if no PDFs are found.
-- Use when:
-	- the question is about the current uploaded paper set, specific document details, or cross-paper comparison.
+### `find_papers_in_db`
+
+Find publications by extracting metadata filters from the query, searching body chunks and reranking them. Results are deduplicated by article ID.
+
+### `find_relevant_data_in_db`
+
+Retrieve structured source material without generating a final answer. Uses LLM-extracted metadata filters, retrieves and reranks body chunks, and attaches referenced figures with captions and image payloads from S3.
 
 ## Run With uv
 
@@ -39,7 +31,7 @@ set -a
 source .env
 set +a
 uv sync --frozen --no-install-project
-uv run --no-project python papers_search_server.py
+uv run --no-project python papers_analysis_server.py
 ```
 
 ## Run With Docker
