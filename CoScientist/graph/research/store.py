@@ -14,6 +14,7 @@ and either applied atomically or rejected with instructive per-item errors.
 """
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import os
@@ -118,7 +119,33 @@ def _short(value: Any, n: int = 200) -> str:
 #: Russian. The statuses below are translated for the same reason: a card
 #: saying "Гипотеза · being tested" is harder to read than either language on
 #: its own. Both tables are display-only — nothing matches on these strings.
-_KIND_WORDS = {
+#:
+#: The viewer also has an English mode (the page's own language switch), so
+#: the tables are keyed by the language of the current request: `view_language`
+#: is set by the API for the duration of one projection and the word tables
+#: below read it on every lookup. Call sites keep the plain `.get(kind, kind)`.
+view_language: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "research_view_language", default="ru")
+
+
+class _Words(dict):
+    """A display dictionary with one table per language.
+
+    `.get` answers from the table of `view_language`; the Russian table is the
+    dict itself, so iteration and membership behave as before.
+    """
+
+    def __init__(self, ru: Dict[str, str], en: Dict[str, str]):
+        super().__init__(ru)
+        self._en = en
+
+    def get(self, key, default=None):  # type: ignore[override]
+        if view_language.get() == "en":
+            return self._en.get(key, key if default is None else default)
+        return super().get(key, default)
+
+
+_KIND_WORDS = _Words({
     "ResearchQuestion": "Вопрос", "Hypothesis": "Гипотеза",
     "VerificationMethod": "Метод проверки",
     "ConfirmationCriteria": "Критерий подтверждения",
@@ -130,9 +157,20 @@ _KIND_WORDS = {
     "EfficiencyJustification": "Обоснование эффективности",
     # Derived cards, projected rather than written.
     "Framing": "Постановка", "Outcome": "Итог",
-}
+}, {
+    "ResearchQuestion": "Question", "Hypothesis": "Hypothesis",
+    "VerificationMethod": "Verification method",
+    "ConfirmationCriteria": "Confirmation criterion",
+    "Evidence": "Evidence", "Conclusion": "Conclusion", "Constraint": "Constraint",
+    "Tool": "Tool", "Resource": "Budget", "EmpiricalBase": "Data source",
+    "CodeArtifact": "Code", "GeneratedData": "Generated data", "Report": "Report",
+    "Publication": "Publication", "Spec": "Spec",
+    "CostModel": "Cost", "EfficiencyMetric": "Efficiency",
+    "EfficiencyJustification": "Efficiency rationale",
+    "Framing": "Framing", "Outcome": "Outcome",
+})
 
-_STATUS_WORDS = {
+_STATUS_WORDS = _Words({
     "open": "открыт", "decomposed": "разбит на части", "closed": "закрыт",
     "formulated": "предложена", "under_verification": "проверяется",
     "confirmed": "подтверждена", "refuted": "опровергнута",
@@ -145,7 +183,20 @@ _STATUS_WORDS = {
     "creation_failed": "создать не удалось",
     "draft": "черновик", "approved": "утверждён", "created": "записан",
     "active": "действует", "derived": "сводка",
-}
+}, {
+    "open": "open", "decomposed": "decomposed", "closed": "closed",
+    "formulated": "formulated", "under_verification": "being tested",
+    "confirmed": "confirmed", "refuted": "refuted",
+    "inconclusive": "inconclusive", "postponed": "postponed",
+    "obtained": "obtained", "validated": "validated", "rejected": "rejected",
+    "planned": "planned", "running": "running", "done": "done",
+    "failed": "failed", "not_met": "not met yet", "met": "met",
+    "available": "available", "exhausted": "exhausted",
+    "needs_adaptation": "needs adaptation", "being_created": "being created",
+    "creation_failed": "creation failed",
+    "draft": "draft", "approved": "approved", "created": "recorded",
+    "active": "active", "derived": "summary",
+})
 
 _FIELD_WORDS = {
     "formulation": "Statement", "rationale": "Why", "priority": "Priority",

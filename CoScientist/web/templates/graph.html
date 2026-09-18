@@ -697,7 +697,10 @@
         const chosenTurn = document.getElementById("turn").value;
         const url = `/api/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}`
           + `/graph?view=${encodeURIComponent(document.getElementById("view").value)}`
-          + (chosenTurn ? `&turn=${encodeURIComponent(chosenTurn)}` : "");
+          + (chosenTurn ? `&turn=${encodeURIComponent(chosenTurn)}` : "")
+          // Card words (type, status) are projected on the server in the
+          // language of the page's own switch.
+          + `&lang=${encodeURIComponent(typeof currentLang !== "undefined" ? currentLang : "ru")}`;
         const r = await fetch(url, { cache: "no-store" });
         if (!r.ok) throw new Error(t('graph.error.http', { status: r.status }));
         const g = await r.json(); lastGraph = g;

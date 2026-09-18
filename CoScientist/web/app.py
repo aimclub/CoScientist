@@ -1573,21 +1573,28 @@ def create_app() -> FastAPI:
         )
 
     def graph_payload(user_id: str, session_id: str, view: str,
-                      turn: str | None = None):
+                      turn: str | None = None, lang: str = "ru"):
         """Return one session's graph: research, execution, or execution
         regrouped as a chronological trace (``view=trace``)."""
         runtime.registry.require_session(user_id, session_id)
         try:
             from CoScientist.graph.memory import get_knowledge_graph
-            from CoScientist.graph.research.store import get_research_graph
+            from CoScientist.graph.research.store import (
+                get_research_graph, view_language,
+            )
 
             if view == "research":
                 # One study at a time, and the session's others listed beside
                 # it — the same shape the execution log uses for requests.
-                return get_research_graph(
-                    user_id=user_id,
-                    session_id=session_id,
-                ).view_of(turn)
+                # Card words (type, status) follow the page's language switch.
+                token = view_language.set("en" if lang == "en" else "ru")
+                try:
+                    return get_research_graph(
+                        user_id=user_id,
+                        session_id=session_id,
+                    ).view_of(turn)
+                finally:
+                    view_language.reset(token)
             execution = get_knowledge_graph(
                 user_id=user_id,
                 session_id=session_id,
@@ -1625,9 +1632,11 @@ def create_app() -> FastAPI:
         view: str = "execution",
         # Which request (execution log) or which study (research graph) to draw.
         turn: str | None = None,
+        # Language of the card words on the research view: "ru" or "en".
+        lang: str = "ru",
     ):
         try:
-            payload = graph_payload(user_id, session_id, view, turn)
+            payload = graph_payload(user_id, session_id, view, turn, lang)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse(payload)
