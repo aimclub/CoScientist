@@ -8,6 +8,7 @@
       { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Knowledge Graph", id: "graph-link", href: "/graph" },
       { name: "MCPBuilds", icon: "build", desc: "MCP Builds", href: "/builds" },
       { name: "FedotTrace", icon: "monitoring", desc: "FEDOT.MAS Trace", href: "/fedot-trace" },
+      { name: "FedotDemo", icon: "hub", desc: "FEDOT.MAS Demo (agent graph)", href: "/fedot-demo/" },
       { name: "CoderSandbox", icon: "terminal", desc: "CoderSandbox", id: "coder-sandbox-link", href: "http://localhost:8884/" },
       { name: "__settings__", icon: "settings", desc: "Settings" },
     ];
@@ -63,6 +64,8 @@
         window.open('/builds', '_blank');
       } else if (name === "FedotTrace") {
         window.open('/fedot-trace', '_blank');
+      } else if (name === "FedotDemo") {
+        window.open('/fedot-demo/', '_blank');
       } else if (name === "CoderSandbox") {
         const link = document.getElementById('coder-sandbox-link');
         const url = (link && link.href) ? link.href : (activeSandboxWatchUrl || getBaseSandboxUrl());

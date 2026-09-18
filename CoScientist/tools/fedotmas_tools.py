@@ -12,6 +12,7 @@ from fedotmas.control import run_config_guardrails
 from fedotmas.plugins import LangfusePlugin, LoggingPlugin, WebSearchLimitPlugin
 
 from CoScientist.tools.fedot_artifact_plugin import ArtifactCapturePlugin
+from CoScientist.tools.fedot_live import FedotLivePlugin, fedot_live
 from CoScientist.logging.metrics import UsageMetricsPlugin
 from rag_tools import MCPServer
 from rag_tools.storage import PostgresClient
@@ -100,6 +101,7 @@ class FedotMASToolset(BaseToolset):
                 FEDOT_TIMEOUT_S = None
         result = None
         status, err = "success", None
+        fedot_live.event({"type": "run_start"})
         try:
             mas = MAW(
                 mcp_servers=servers_payload,
@@ -110,6 +112,7 @@ class FedotMASToolset(BaseToolset):
                     LoggingPlugin(),
                     WebSearchLimitPlugin(max_calls_per_agent=4),
                     LangfusePlugin(trace_name="coscientist:fedot"),
+                    FedotLivePlugin(fedot_live),
                     cap,
                     UsageMetricsPlugin(),
                 ],
@@ -121,6 +124,9 @@ class FedotMASToolset(BaseToolset):
                     raise ValueError(
                         f"Invalid pipeline config: {'; '.join(guardrail_errors)}"
                     )
+                # Published the instant it exists — the /fedot-demo bridge draws
+                # the pipeline shape before a single agent has run.
+                fedot_live.publish_config(config.model_dump())
                 result = await mas.build_and_run(
                     config, task_description, timeout=FEDOT_TIMEOUT_S
                 )
@@ -130,6 +136,8 @@ class FedotMASToolset(BaseToolset):
             status, err = "timeout", f"FEDOT.MAS exceeded {FEDOT_TIMEOUT_S}s"
         except Exception as e:
             status, err = "error", f"FEDOT.MAS run failed: {e}"
+        finally:
+            fedot_live.event({"type": "run_end", "status": status, "error": err})
 
         # Fallback (F010.A4): scan the final MAS state for presigned URLs the plugin may
         # have missed (only when a result actually came back).
