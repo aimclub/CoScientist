@@ -891,6 +891,16 @@ def _capture_mcp_artifacts():
     return capture_mcp_artifacts
 
 
+def _mirror_plan_after_create():
+    from CoScientist.agents.callbacks import mirror_plan_after_create
+    return mirror_plan_after_create
+
+
+def _mirror_plan_before_agent():
+    from CoScientist.agents.callbacks import mirror_plan_before_agent
+    return mirror_plan_before_agent
+
+
 def _skip_retriever_context():
     from CoScientist.agents.callbacks import before_tool_reranker_model
     return before_tool_reranker_model
@@ -1075,6 +1085,11 @@ _cb("inject_medical_artifacts", "before_model", factory=lambda ctx: _inject_medi
 _cb("inject_uploaded_papers", "before_model", factory=lambda ctx: _inject_uploaded_papers())
 _cb("log_research_tool_calls", "after_tool", factory=lambda ctx: _log_research_tool_calls())
 _cb("capture_mcp_artifacts", "after_tool", factory=lambda ctx: _capture_mcp_artifacts())
+# The registered plan becomes the research graph's method column, deterministically.
+# Two hooks because either path can be the one that fires: `create_plan` belongs to
+# an agent that ships disabled, and an operator can register a roadmap from the web.
+_cb("mirror_plan_after_create", "after_tool", factory=lambda ctx: _mirror_plan_after_create())
+_cb("mirror_plan_before_agent", "before_agent", factory=lambda ctx: _mirror_plan_before_agent())
 _cb("skip_retriever_context", "before_model", factory=lambda ctx: _skip_retriever_context())
 # Cross-encoder pre-pass: hand the LLM reranker a short list, not everything.
 _cb("shortlist_reranker_tools", "before_agent", factory=lambda ctx: _shortlist_reranker_tools())

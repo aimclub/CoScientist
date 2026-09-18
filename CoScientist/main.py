@@ -275,6 +275,38 @@ class CoScientistManager:
         except Exception as exc:
             logger.warning("could not set session state %r: %s", key, exc)
 
+    async def seed_research_context(self, query: str) -> None:
+        """The question the user asked IS the root of the research graph.
+
+        Two holes, one call. The graph had no guaranteed root: the pre-stage
+        that seeds the framing is gated on RESEARCH_FRAME, and with it off the
+        only remaining path was an orchestrator that had to *remember* to call
+        research_init — so a whole run could record a dozen findings hanging off
+        no question at all, which cannot be read as research. And `user_query`
+        was read (to match a new request against past studies) but written by
+        nobody, so that lookup never fired once.
+
+        Deliberately skipped when the context-init pre-stage is enabled: that
+        stage seeds a far richer frame through init_research, which ARCHIVES
+        whatever is already there — seeding a bare root first would make every
+        run start by archiving a study one second old.
+        """
+        await self._set_state("user_query", query)
+        try:
+            from CoScientist.config import get_settings
+
+            if get_settings().context_init.enabled:
+                return
+        except Exception:  # noqa: BLE001 — a settings hiccup must not skip the root
+            pass
+        try:
+            from CoScientist.graph.research.store import get_research_graph
+
+            get_research_graph(user_id=self.user_id,
+                               session_id=self.session_id).ensure_root(query)
+        except Exception as exc:  # noqa: BLE001 — seeding must never end a run
+            logger.warning("could not seed the research root: %s", exc)
+
     @staticmethod
     def _final_text(event) -> Optional[str]:
         """Answer text of a final-response event, skipping thinking parts."""
@@ -314,6 +346,7 @@ class CoScientistManager:
         # The aggregator's format_results reads report_config mid-invocation, so it
         # must be in state BEFORE the run starts.
         await self._set_state("report_config", report_config.to_state())
+        await self.seed_research_context(query)
         self._run_error = None
 
         content = types.Content(role="user", parts=[types.Part(text=query)])

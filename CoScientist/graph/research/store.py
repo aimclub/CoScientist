@@ -128,6 +128,8 @@ _KIND_WORDS = {
     "Publication": "Публикация", "Spec": "Спецификация",
     "CostModel": "Стоимость", "EfficiencyMetric": "Эффективность",
     "EfficiencyJustification": "Обоснование эффективности",
+    # Derived cards, projected rather than written.
+    "Framing": "Постановка", "Outcome": "Итог",
 }
 
 _STATUS_WORDS = {
@@ -142,7 +144,7 @@ _STATUS_WORDS = {
     "needs_adaptation": "нужна доработка", "being_created": "создаётся",
     "creation_failed": "создать не удалось",
     "draft": "черновик", "approved": "утверждён", "created": "записан",
-    "active": "действует",
+    "active": "действует", "derived": "сводка",
 }
 
 _FIELD_WORDS = {
@@ -156,10 +158,16 @@ _FIELD_WORDS = {
     "resource_type": "Resource", "remaining": "Remaining", "limit": "Total",
     "domain": "Field", "gap": "Knowledge gap", "not_tested_reason": "Why untested",
     "description": "Description", "method_type": "Type", "path": "File",
+    # Why something did not work out. `postponed_reason` is written by the store
+    # itself when it moves a surplus hypothesis to the backlog, and used to be
+    # hidden — so a card said "отложена" and never said what it was waiting for.
+    "failure_reason": "Why it failed", "postponed_reason": "Why postponed",
+    "inconclusive_reason": "What stayed unsettled",
+    "plan_task_id": "Plan step", "assignee": "Assigned to",
 }
 
 #: Never shown: bookkeeping the reader has no use for.
-_HIDDEN_FIELDS = {"_provenance", "selected", "display", "postponed_reason"}
+_HIDDEN_FIELDS = {"_provenance", "selected", "display"}
 
 
 def _headline(kind: str, attrs: Dict[str, Any]) -> str:
@@ -272,6 +280,467 @@ def _fields(attrs: Dict[str, Any], headline: str,
     return out
 
 
+# ── projection: from the record to the drawing ───────────────────────────────
+# The store keeps the whole engineering record — datasets, code, tools, budget,
+# cost models — and the canvas is read as a scientific narrative, in which those
+# outnumber the findings. They are NOT dropped: each is folded into the card it
+# belongs to, as a chip on the method that used it or an attachment on the
+# evidence it produced, and the panel still shows it in full.
+#
+# The viewer used to do this filtering on the client, by name, and threw away
+# every edge that touched a hidden node. In a real session the entire structure
+# of the graph hung off GeneratedData, so that was 100% of the edges: the canvas
+# drew eleven cards and not one line between them. Folding belongs here, where
+# the structure is known and an edge can be re-pointed at the card that absorbed
+# its endpoint instead of being discarded.
+
+#: Drawn as cards of their own: the scientific record.
+_STORY_TYPES = ("ResearchQuestion", "Hypothesis", "VerificationMethod",
+                "Evidence", "Conclusion", "Framing", "Outcome")
+#: Products of one finding — they belong to whatever they were derived from.
+_ARTIFACT_FOLD_TYPES = ("CodeArtifact", "GeneratedData", "Spec",
+                        "EfficiencyJustification", "Report", "Publication")
+#: The framing a study starts from: the context star.
+_FRAME_FOLD_TYPES = ("Constraint", "Resource", "EmpiricalBase", "CostModel",
+                     "EfficiencyMetric")
+
+#: The two derived cards. Literal ids, because `_next_id` can only ever mint
+#: `<PREFIX><digits>` — so these can never collide with a stored node.
+#:
+#: They exist in the PROJECTION only. Keep them out of `overview()`, `_ids_hint`
+#: and `get_context_slice`: those reach an agent's prompt, and an agent that saw
+#: one would reference a node the store does not have and lose its whole commit.
+FRAME_ID = "FRAME"
+OUTCOME_ID = "OUTCOME"
+_DERIVED_IDS = (FRAME_ID, OUTCOME_ID)
+
+#: One column per epistemic layer: the story reads left to right.
+_LEVEL = {"Framing": 0, "ResearchQuestion": 0, "Hypothesis": 1,
+          "VerificationMethod": 2, "Evidence": 3, "Conclusion": 4, "Outcome": 5}
+
+#: Attributes that answer "why did it end like that", best first.
+_REASON_ATTRS = ("failure_reason", "inconclusive_reason", "not_tested_reason",
+                 "postponed_reason")
+#: Outcomes a reader will ask "why" about, and deserves an answer to.
+_UNRESOLVED_STATUSES = {"failed", "refuted", "inconclusive", "rejected",
+                        "creation_failed", "postponed"}
+#: Verdict on the superseded hypothesis -> how the next one came about.
+_ORIGIN_BY_VERDICT = {"refuted": "modified", "confirmed": "refined",
+                      "inconclusive": "retried"}
+
+
+def _id_order(node_id: str) -> Tuple[str, int]:
+    m = re.match(r"^([A-Z]+)(\d+)$", str(node_id))
+    return (m.group(1), int(m.group(2))) if m else (str(node_id), 0)
+
+
+def _why(attrs: Dict[str, Any], history: List[Dict[str, Any]]) -> str:
+    """Why this node ended where it did, in one line.
+
+    The answer was recorded all along — the store writes a `reason` into
+    status_history on every transition — and never left the store, because
+    to_view projected the current status and dropped the history. So a failed
+    method drew as "не удался" and nothing else, which is the one question a
+    reader of a failed step actually has.
+    """
+    last = (history or [])[-1] if history else {}
+    for candidate in (last.get("reason"), *(attrs.get(k) for k in _REASON_ATTRS)):
+        if str(candidate or "").strip():
+            return _short(candidate, 600)
+    return ""
+
+
+def _href(kind: str, attrs: Dict[str, Any]) -> str:
+    """Where a folded artifact actually is, so the chip can be opened."""
+    keys = ("location", "path", "uri") if kind == "Tool" else (
+        "path", "uri", "source_ref", "location")
+    for key in keys:
+        value = attrs.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return ""
+
+
+def _adjacency(raw_edges: List[Dict[str, Any]]):
+    out: Dict[str, List[Tuple[str, str]]] = {}
+    inc: Dict[str, List[Tuple[str, str]]] = {}
+    for e in raw_edges:
+        out.setdefault(e["src"], []).append((e["type"], e["dst"]))
+        inc.setdefault(e["dst"], []).append((e["type"], e["src"]))
+    return out, inc
+
+
+def _fold_plan(raw_nodes: Dict[str, Dict[str, Any]],
+               raw_edges: List[Dict[str, Any]]):
+    """Decide which nodes are not cards, and which card carries each of them.
+
+    Returns ``(host, carried)``. ``host`` maps a folded id to the ONE card that
+    absorbs its edges; ``carried`` maps a card id to ``[(role, folded_id)]``.
+
+    A node may be SHOWN on several cards — a tool used by three methods is a
+    chip on all three — but it is absorbed by exactly one. Re-pointing its edges
+    at every host instead would multiply them and turn the picture into a mesh.
+    """
+    out, inc = _adjacency(raw_edges)
+    types = {n: d.get("type", "") for n, d in raw_nodes.items()}
+
+    def methods_of(hypothesis: str) -> List[str]:
+        return [v for t, v in out.get(hypothesis, [])
+                if t == "tested_by" and types.get(v) == "VerificationMethod"]
+
+    host: Dict[str, str] = {}
+    carried: Dict[str, List[Tuple[str, str]]] = {}
+    hosts_of: Dict[str, set] = {}
+
+    def place(nid: str, hosts: List[str], role: str, fallback: str) -> None:
+        hosts = sorted({h for h in hosts if types.get(h) in _STORY_TYPES},
+                       key=_id_order)
+        host[nid] = hosts[0] if hosts else fallback
+        hosts_of[nid] = set(hosts or [fallback])
+        for h in (hosts or [fallback]):
+            carried.setdefault(h, []).append((role, nid))
+
+    for nid in sorted(raw_nodes, key=_id_order):
+        kind = types.get(nid, "")
+        if kind in _ARTIFACT_FOLD_TYPES:
+            # Whatever it was derived from carries it; a product of the study as
+            # a whole (a report nobody linked) belongs to the outcome.
+            place(nid, [v for t, v in out.get(nid, []) if t == "derived_from"],
+                  "attachment", OUTCOME_ID)
+        elif kind == "Tool":
+            hosts = [u for t, u in inc.get(nid, []) if t == "uses"]
+            for t, u in inc.get(nid, []):
+                if t == "requires" and types.get(u) == "Hypothesis":
+                    hosts += methods_of(u)
+            place(nid, hosts, "chip", FRAME_ID)
+        elif kind == "ConfirmationCriteria":
+            hosts: List[str] = []
+            for t, v in out.get(nid, []):
+                if t == "formulated_for" and types.get(v) == "Hypothesis":
+                    hosts += methods_of(v)
+            place(nid, hosts, "criterion", FRAME_ID)
+        elif kind in _FRAME_FOLD_TYPES:
+            place(nid, [], "attachment", FRAME_ID)
+    return host, carried, hosts_of
+
+
+def _folded_view(nid: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """A folded node as it appears on the card that carries it."""
+    attrs = data.get("attrs") or {}
+    kind = data.get("type", "?")
+    headline = _headline(kind, attrs)
+    status = data.get("status", "")
+    return {
+        "id": nid,
+        "kind": kind.lower(),
+        "type_word": _KIND_WORDS.get(kind, kind),
+        "label": headline,
+        "href": _href(kind, attrs),
+        "fields": _fields(attrs, headline, kind),
+        "status": status,
+        "status_word": _STATUS_WORDS.get(status, status),
+        "source": data.get("source", ""),
+    }
+
+
+def _history_view(data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The status trail, in words, with the reason for every move."""
+    return [{
+        "from": h.get("from"),
+        "to": h.get("to"),
+        "from_word": _STATUS_WORDS.get(h.get("from") or "", h.get("from") or ""),
+        "to_word": _STATUS_WORDS.get(h.get("to") or "", h.get("to") or ""),
+        "source": h.get("source", ""),
+        "at": h.get("at"),
+        # Capped: a long study keeps a dozen transitions, and the whole history
+        # rides along on a poll every 1.5 seconds.
+        "reason": _short(h.get("reason") or "", 400),
+    } for h in (data.get("status_history") or [])]
+
+
+def _reroute(raw_edges: List[Dict[str, Any]], host: Dict[str, str],
+             hosts_of: Dict[str, set], drawn: set) -> List[Dict[str, Any]]:
+    """Re-point every edge at the cards that absorbed its endpoints.
+
+    Folding is a graph homomorphism — each node maps to itself or to a card it
+    is attached to — so a path A→X→B survives as A→host(X)→B and the drawing
+    cannot fall apart into islands the record does not have.
+
+    Two kinds of edge are dropped rather than re-pointed. One collapses to a
+    self-loop. The other is the edge that BOUND the folded node to a card it is
+    shown on: one dataset feeding two findings would otherwise be re-pointed as
+    "finding A derived_from finding B" — an ancestry between siblings that the
+    record never claimed. The card already shows that dataset as an attachment,
+    on both of them.
+    """
+    direct: List[Dict[str, Any]] = []
+    inferred: List[Dict[str, Any]] = []
+    seen = set()
+    for e in raw_edges:
+        src, dst = e["src"], e["dst"]
+        u, v = host.get(src, src), host.get(dst, dst)
+        if u == v or u not in drawn or v not in drawn:
+            continue
+        if dst in hosts_of.get(src, ()) or src in hosts_of.get(dst, ()):
+            continue
+        key = (u, v, e["type"])
+        if key in seen:
+            continue
+        seen.add(key)
+        edge = {"src": u, "dst": v, "type": e["type"]}
+        if e.get("attrs"):
+            # A `supersedes` edge says WHICH verdict moved the study on; without
+            # its attrs the arrow between two hypotheses is unlabelled.
+            edge["attrs"] = e["attrs"]
+        if (u, v) == (src, dst):
+            direct.append(edge)
+        else:
+            edge["rerouted"] = True
+            edge["via"] = src if u != src else dst
+            inferred.append(edge)
+
+    # An inferred edge earns its place only by connecting something that is not
+    # connected already. The derived cards are excluded outright: they are tied
+    # on by their own synthetic edge, and every context node folded into them
+    # would otherwise draw its own line back to the question — the frame alone
+    # would fan out to a dozen arrows saying what one already says.
+    linked = {(e["src"], e["dst"]) for e in direct}
+    linked |= {(v, u) for u, v in linked}
+    out = list(direct)
+    for edge in inferred:
+        pair = (edge["src"], edge["dst"])
+        if edge["src"] in _DERIVED_IDS or edge["dst"] in _DERIVED_IDS:
+            continue
+        if pair in linked:
+            continue
+        linked |= {pair, (pair[1], pair[0])}
+        out.append(edge)
+    return out
+
+
+def _origin_of(nid: str, raw_edges: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Where a hypothesis came from: the question, or the one it replaced."""
+    for e in raw_edges:
+        if e["type"] == "supersedes" and e["dst"] == nid:
+            verdict = str((e.get("attrs") or {}).get("verdict") or "")
+            return {"code": _ORIGIN_BY_VERDICT.get(verdict, "other"),
+                    "reason": _short((e.get("attrs") or {}).get("reason") or "", 160),
+                    "from": e["src"]}
+    return {"code": "question", "reason": "", "from": ""}
+
+
+def _supersede_chain(raw_edges: List[Dict[str, Any]]) -> List[List[str]]:
+    """The iteration chains: H1 → H2 → H3, in the order the study walked them."""
+    nxt = {e["src"]: e["dst"] for e in raw_edges if e["type"] == "supersedes"}
+    if not nxt:
+        return []
+    targets = set(nxt.values())
+    chains = []
+    for start in sorted(set(nxt) - targets, key=_id_order):
+        chain, cur = [start], start
+        while cur in nxt and nxt[cur] not in chain:  # a cycle must not hang us
+            cur = nxt[cur]
+            chain.append(cur)
+        chains.append(chain)
+    return chains
+
+
+def _virtual_nodes(raw_nodes: Dict[str, Dict[str, Any]],
+                   raw_edges: List[Dict[str, Any]],
+                   carried: Dict[str, List[Tuple[str, str]]],
+                   root: Optional[str], research_id: str) -> List[Dict[str, Any]]:
+    """The two cards nobody authors: the framing, and what it all added up to.
+
+    Both are derived. Materializing them as stored nodes would mean a second
+    source of truth that goes stale the moment a new Constraint lands, and
+    would need an agent allowed to write them — which, with the context-init
+    pre-stage off, there is not. Projected here they are always in step with
+    the record, and to the page they are ordinary cards.
+    """
+    if not raw_nodes:
+        return []
+    out: List[Dict[str, Any]] = []
+    human = {"human", "user", "operator"}
+
+    members = [(_folded_view(f, raw_nodes[f]), role)
+               for role, f in carried.get(FRAME_ID, []) if f in raw_nodes]
+    root_attrs = dict((raw_nodes.get(root) or {}).get("attrs") or {}) if root else {}
+    root_attrs.pop("formulation", None)
+    fields = _fields(root_attrs, "", "ResearchQuestion")
+    grouped: Dict[str, List[str]] = {}
+    for view, _role in members:
+        grouped.setdefault(view["type_word"], []).append(view["label"])
+    for word, labels in grouped.items():
+        fields[word] = "; ".join(l for l in labels if l)[:600]
+    seeded_by = {(raw_nodes.get(root) or {}).get("source", "")} | {
+        v["source"] for v, _ in members}
+    # An empty framing card is worse than none: it promises the reader a setup
+    # and then has nothing in it. When nothing was ever recorded the page says
+    # so instead, through the `no_frame` gap.
+    if members or fields:
+        out.append({
+            "id": FRAME_ID, "run_id": research_id, "kind": "framing", "virtual": True,
+            "label": _KIND_WORDS.get("Framing", "Постановка"),
+            "type_word": _KIND_WORDS.get("Framing", "Постановка"),
+            "index": None, "status": "derived",
+            "status_word": _STATUS_WORDS.get("derived", ""),
+            "executor_agent": "", "input": fields, "output": "",
+            "provenance": [], "t_start": None, "t_end": None, "status_history": [],
+            "why": "", "why_missing": False, "chips": [],
+            "attachments": [v for v, _ in members],
+            "level": _LEVEL["Framing"], "shown": True, "display_level": "primary",
+            # Whether a human signed off on this setup: "agreed with the
+            # operator" reads very differently from "the model assumed it".
+            "hitl": bool(seeded_by & human),
+        })
+
+    conclusions = [n for n, d in raw_nodes.items()
+                   if d.get("type") == "Conclusion"]
+    hypotheses = {n: d for n, d in raw_nodes.items()
+                  if d.get("type") == "Hypothesis"}
+    settled = {n for n, d in hypotheses.items()
+               if d.get("status") in ("confirmed", "refuted", "inconclusive")}
+    spare = [(_folded_view(f, raw_nodes[f]))
+             for _role, f in carried.get(OUTCOME_ID, []) if f in raw_nodes]
+    if not (conclusions or settled or spare):
+        return out
+
+    chains = _supersede_chain(raw_edges)
+    walk = chains[0] if chains else sorted(hypotheses, key=_id_order)
+    steps = []
+    for hid in walk:
+        d = hypotheses.get(hid)
+        if not d:
+            continue
+        status = d.get("status", "")
+        why = _why(d.get("attrs") or {}, _history_view(d))
+        step = f"{_short(_headline('Hypothesis', d.get('attrs') or {}), 70)} — " \
+               f"{_STATUS_WORDS.get(status, status)}"
+        steps.append(step + (f" ({_short(why, 90)})" if why else ""))
+    out.append({
+        "id": OUTCOME_ID, "run_id": research_id, "kind": "outcome", "virtual": True,
+        "label": " → ".join(steps),
+        "type_word": _KIND_WORDS.get("Outcome", "Итог"),
+        "index": None, "status": "derived",
+        "status_word": _STATUS_WORDS.get("derived", ""),
+        "executor_agent": "", "input": {}, "output": " → ".join(steps),
+        "provenance": [], "t_start": None, "t_end": None, "status_history": [],
+        "why": "", "why_missing": False, "chips": [], "attachments": spare,
+        "level": _LEVEL["Outcome"], "shown": True, "display_level": "primary",
+        "empty": not steps,
+    })
+    return out
+
+
+def _derived_edges(nodes: List[Dict[str, Any]],
+                   root: Optional[str]) -> List[Dict[str, Any]]:
+    """Attach the two derived cards, so neither of them floats."""
+    ids = {n["id"] for n in nodes}
+    out: List[Dict[str, Any]] = []
+    if FRAME_ID in ids and root in ids:
+        out.append({"src": FRAME_ID, "dst": root, "type": "frames",
+                    "synthetic": True})
+    if OUTCOME_ID in ids:
+        ends = [n["id"] for n in nodes if n["kind"] == "conclusion"]
+        if not ends and root in ids:
+            ends = [root]
+        for end in ends:
+            out.append({"src": end, "dst": OUTCOME_ID, "type": "concludes",
+                        "synthetic": True})
+    return out
+
+
+def _context_edges(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]],
+                   root: Optional[str]) -> List[Dict[str, Any]]:
+    """Tie whatever the agents left unattached to the question, faintly.
+
+    Computed over the PROJECTION, not the stored graph: a node can be connected
+    in the record and orphaned in the drawing (its only link ran through a node
+    that got folded), and the old check — run against the store — could not see
+    that. A dotted line to the root is honest about being inferred, and it keeps
+    the promise the page makes: one picture, not a field of islands.
+    """
+    if not root or len(nodes) < 2:
+        return []
+    und = nx.Graph()
+    und.add_nodes_from(n["id"] for n in nodes)
+    und.add_edges_from((e["src"], e["dst"]) for e in edges)
+    out = []
+    for comp in nx.connected_components(und):
+        if root in comp:
+            continue
+        rep = sorted(comp, key=_id_order)[0]
+        out.append({"src": root, "dst": rep, "type": "context",
+                    "synthetic": True})
+    return out
+
+
+def _counters(raw_nodes: Dict[str, Dict[str, Any]]) -> Dict[str, int]:
+    """How the branches stand — the tally the page prints above the canvas."""
+    counts = {"confirmed": 0, "refuted": 0, "under_verification": 0,
+              "formulated": 0, "inconclusive": 0, "postponed": 0}
+    for d in raw_nodes.values():
+        if d.get("type") == "Hypothesis":
+            status = d.get("status", "")
+            if status in counts:
+                counts[status] += 1
+    return counts
+
+
+def _headline_meta(raw_nodes: Dict[str, Dict[str, Any]],
+                   raw_edges: List[Dict[str, Any]],
+                   root: Optional[str]) -> Dict[str, Any]:
+    chains = _supersede_chain(raw_edges)
+    hypotheses = [n for n, d in raw_nodes.items() if d.get("type") == "Hypothesis"]
+    root_attrs = (raw_nodes.get(root) or {}).get("attrs") or {} if root else {}
+    return {
+        "question": _headline("ResearchQuestion", root_attrs) if root else "",
+        "root_id": root or "",
+        "branches": len(chains) or (1 if hypotheses else 0),
+        "iterations": len(hypotheses),
+    }
+
+
+def _gaps(raw_nodes: Dict[str, Dict[str, Any]], raw_edges: List[Dict[str, Any]],
+          root: Optional[str], rejected: int) -> List[Dict[str, Any]]:
+    """What the record is missing, as codes the page can say out loud.
+
+    An empty canvas has meant three different things — nobody wrote anything,
+    the write was refused, the server failed — and looked identical in all
+    three. Naming the hole is the difference between a reader who waits and a
+    reader who knows.
+    """
+    out: List[Dict[str, Any]] = []
+
+    def gap(code: str, ids: List[str]) -> None:
+        out.append({"code": code, "count": len(ids), "ids": sorted(ids, key=_id_order)})
+
+    by_type: Dict[str, List[str]] = {}
+    for n, d in raw_nodes.items():
+        by_type.setdefault(d.get("type", ""), []).append(n)
+    if not root:
+        gap("no_root", [])
+    if not any(by_type.get(t) for t in _FRAME_FOLD_TYPES):
+        gap("no_frame", [])
+    if not by_type.get("Hypothesis"):
+        gap("no_hypotheses", [])
+    else:
+        tested = {e["src"] for e in raw_edges if e["type"] == "tested_by"}
+        untested = [h for h in by_type["Hypothesis"] if h not in tested]
+        if untested:
+            gap("no_methods", untested)
+    if by_type.get("VerificationMethod") and not by_type.get("Evidence"):
+        gap("no_evidence", by_type["VerificationMethod"])
+    silent = [n for n, d in raw_nodes.items()
+              if d.get("status") in _UNRESOLVED_STATUSES
+              and not _why(d.get("attrs") or {}, _history_view(d))]
+    if silent:
+        gap("unreasoned_failures", silent)
+    if rejected:
+        out.append({"code": "rejected_commits", "count": rejected, "ids": []})
+    return out
+
+
 class ResearchGraphStore:
     def __init__(self, directory: Optional[str] = None,
                  active_file: Optional[str] = None) -> None:
@@ -282,6 +751,10 @@ class ResearchGraphStore:
         self._research_id = "research"
         self._created_at: float = time.time()
         self._root_id: Optional[str] = None
+        #: Commits refused since the last successful one. Deliberately NOT
+        #: persisted: it describes what is happening to this run, not what the
+        #: study is, and a restart should not accuse the graph of old failures.
+        self._rejected_commits = 0
         self._load()
 
     # ── public API ────────────────────────────────────────────────────────────
@@ -298,6 +771,57 @@ class ResearchGraphStore:
             questions = [(d.get("created_at", 0), n) for n, d in self._g.nodes(data=True)
                          if d.get("type") == "ResearchQuestion"]
             return min(questions)[1] if questions else None
+
+    def ensure_root(self, question: str,
+                    source: str = "human") -> Dict[str, Any]:
+        """Guarantee a root ResearchQuestion WITHOUT destroying anything.
+
+        `init_research` wipes the graph and starts a new generation, so calling
+        it at the start of every message would archive the study the second
+        message meant to continue. This fills the one hole that makes a graph
+        unreadable: a run whose question was never written. That is not an edge
+        case — with the context-init pre-stage off (RESEARCH_FRAME=0) nothing
+        seeds the frame, and the only other path is an orchestrator that has to
+        *remember* to call `research_init`. A study whose evidence hangs off no
+        question cannot be read, and nothing in the viewer can repair that.
+
+        Deliberately does NOT touch `_research_id`: the background validator
+        keys its dedup and its discard-stale-verdict check on that id
+        (validator.py), so rotating it mid-run would make every in-flight
+        judgment throw itself away.
+        """
+        text = " ".join(str(question or "").split())
+        if not text:
+            return {"ok": False, "created": False,
+                    "errors": ["question must be a non-empty string"]}
+        with self._lock:  # RLock: root_id() below re-enters safely
+            existing = self.root_id()
+            if existing:
+                if self._root_id != existing:
+                    # A root written by a plain commit leaves `_root_id` unset —
+                    # it is assigned only in init_research and _load — and then
+                    # _archive_data names the study `research_graph_*` instead of
+                    # `research_Q1_*`. Adopt it so the archive keeps its name.
+                    self._root_id = existing
+                    self._save()
+                return {"ok": True, "created": False, "root_id": existing}
+            result = self._commit_locked(
+                source,
+                [{"type": "ResearchQuestion", "ref": "q",
+                  "attrs": {"formulation": text}}],
+                [], [],
+                # The seeding caller is whoever started the run ("human" by
+                # default), and no ACL entry lets them create a question. The
+                # structural validation still applies — only the per-agent table
+                # is skipped, exactly as init_research does.
+                enforce_permissions=False,
+            )
+            if not result.ok:
+                return {"ok": False, "created": False, "errors": result.errors}
+            self._root_id = next(n["id"] for n in result.committed["nodes"]
+                                 if n.get("ref") == "q")
+            self._save()  # _commit_locked never saves; commit() does it for us
+            return {"ok": True, "created": True, "root_id": self._root_id}
 
     def init_research(self, source: str, question: str,
                       attrs: Optional[Dict[str, Any]] = None,
@@ -396,20 +920,38 @@ class ResearchGraphStore:
                nodes: Optional[List[Dict[str, Any]]] = None,
                edges: Optional[List[Dict[str, Any]]] = None,
                status_updates: Optional[List[Dict[str, Any]]] = None,
-               autolink_focus: Optional[str] = None) -> CommitResult:
+               autolink_focus: Optional[str] = None,
+               partial_edges: bool = False) -> CommitResult:
         """Transactional write: validate EVERYTHING, then apply all-or-nothing.
 
         `autolink_focus` (a Hypothesis id): any Evidence created in this commit
         that isn't already linked to a hypothesis is auto-linked to it with a
         `relates_to` edge — so evidence a worker records while focused on a
         hypothesis is never orphaned, and the background validator can pick it up
-        and decide its polarity."""
+        and decide its polarity.
+
+        `partial_edges` downgrades a refused EDGE from an error to a warning: the
+        valid nodes land and the bad link is dropped. It is OFF for agents on
+        purpose — an agent told "nothing was saved" fixes its payload and retries,
+        while one whose edge vanished quietly never learns that its finding is
+        attached to nothing. It is ON for the deterministic writers, where losing
+        a dozen good methods to one stale id is the worse failure."""
         with self._lock:
             result = self._commit_locked(source, list(nodes or []),
                                          list(edges or []), list(status_updates or []),
-                                         autolink_focus=autolink_focus)
+                                         autolink_focus=autolink_focus,
+                                         partial_edges=partial_edges)
             if result.ok:
+                self._rejected_commits = 0
                 self._save()
+            else:
+                # A refused commit writes NOTHING, and used to say so only to the
+                # agent that made it: no log line, and the execution view marked
+                # the call a success. Whole steps disappeared from the record
+                # with nobody, anywhere, being told.
+                self._rejected_commits += 1
+                logger.warning("research commit refused (source=%s): %s",
+                               source, "; ".join(result.errors[:3]))
             return result
 
     # ── reads ─────────────────────────────────────────────────────────────────
@@ -515,57 +1057,112 @@ class ResearchGraphStore:
         the thing the reader came for.
         """
         with self._lock:
-            nodes = []
-            for n, d in self._g.nodes(data=True):
-                attrs = d.get("attrs") or {}
-                provenance = attrs.get("_provenance") or []
-                node_type = d.get("type", "?")
-                status = d.get("status", "")
-                headline = _headline(node_type, attrs)
-                nodes.append({
-                    "id": n,
-                    "run_id": self._research_id,
-                    "kind": node_type.lower(),
-                    # The id used to open every label. It means nothing to a
-                    # reader and cost a third of the line, so it moves to the
-                    # panel and the label says what the node is instead.
-                    "label": headline,
-                    "type_word": _KIND_WORDS.get(node_type, node_type),
-                    "status": status,
-                    "status_word": _STATUS_WORDS.get(status, status),
-                    "executor_agent": d.get("source", ""),
-                    "input": _fields(attrs, headline, node_type),
-                    "output": headline,
-                    "provenance": provenance,
-                    "t_start": d.get("created_at"),
-                    "t_end": d.get("updated_at"),
-                })
-            edges = [{"src": u, "dst": v, "type": k}
-                     for u, v, k in self._g.edges(keys=True)]
-            # Cosmetic: tie orphan components (context nodes declared but not yet
-            # referenced — a Tool no hypothesis requires, an unconsumed Resource,
-            # an unlinked EmpiricalBase) to the root question with a faint
-            # "context" edge, so nothing floats in the viewer (the spec's "star").
+            raw_nodes = {n: dict(d) for n, d in self._g.nodes(data=True)}
+            raw_edges = [{"src": u, "dst": v, "type": k,
+                          "attrs": dict(d.get("attrs") or {})}
+                         for u, v, k, d in self._g.edges(keys=True, data=True)]
             root = self.root_id()
-            if root and self._g.number_of_nodes() > 1:
-                und = self._g.to_undirected(as_view=True)
-                for comp in nx.connected_components(und):
-                    if root in comp:
-                        continue
-                    rep = sorted(comp, key=self._sort_key_id)[0]
-                    edges.append({"src": root, "dst": rep, "type": "context",
-                                  "synthetic": True})
+            research_id = self._research_id
+            rejected = self._rejected_commits
+
+        host, carried, hosts_of = _fold_plan(raw_nodes, raw_edges)
+        nodes = self._project_nodes(raw_nodes, raw_edges, carried, research_id)
+        drawn = {n["id"] for n in nodes}
+        nodes += _virtual_nodes(raw_nodes, raw_edges, carried, root, research_id)
+        drawn |= {FRAME_ID, OUTCOME_ID} & {n["id"] for n in nodes}
+
+        edges = _reroute(raw_edges, host, hosts_of, drawn)
+        edges += _derived_edges(nodes, root)
+        edges += _context_edges(nodes, edges, root)
+
+        stamps = [d.get("updated_at") or d.get("created_at")
+                  for d in raw_nodes.values()]
+        stamps = [t for t in stamps if isinstance(t, (int, float))]
+        return {
+            "run_id": research_id,
+            "nodes": nodes,
+            "edges": edges,
             # When this study was last written to. A research graph outlives a
             # single prompt, so a session can show one that has not moved for a
             # day — which reads as "the new run produced nothing" only if the
-            # reader can see the date. Without it the stale graph is
-            # indistinguishable from a fresh one.
-            stamps = [d.get("updated_at") or d.get("created_at")
-                      for _, d in self._g.nodes(data=True)]
-            stamps = [t for t in stamps if isinstance(t, (int, float))]
-            return {"run_id": self._research_id, "nodes": nodes, "edges": edges,
-                    "updated_at": max(stamps) if stamps else None,
-                    "node_count": self._g.number_of_nodes()}
+            # reader can see the date.
+            "updated_at": max(stamps) if stamps else None,
+            "node_count": len(raw_nodes),
+            "counters": _counters(raw_nodes),
+            "headline": _headline_meta(raw_nodes, raw_edges, root),
+            # Codes, never sentences: the page renders them through its own
+            # dictionary, so an English reader does not get a Russian banner.
+            "gaps": _gaps(raw_nodes, raw_edges, root, rejected),
+        }
+
+    def _project_nodes(self, raw_nodes: Dict[str, Dict[str, Any]],
+                       raw_edges: List[Dict[str, Any]],
+                       carried: Dict[str, List[Tuple[str, str]]],
+                       research_id: str) -> List[Dict[str, Any]]:
+        """One card per node of the scientific record, with what it carries."""
+        drawn_ids = [n for n, d in raw_nodes.items()
+                     if d.get("type") in _STORY_TYPES]
+        ordinal: Dict[str, int] = {}
+        seen_kind: Dict[str, int] = {}
+        for nid in sorted(drawn_ids, key=_id_order):
+            kind = raw_nodes[nid].get("type", "")
+            seen_kind[kind] = seen_kind.get(kind, 0) + 1
+            ordinal[nid] = seen_kind[kind]
+
+        nodes: List[Dict[str, Any]] = []
+        for nid in sorted(drawn_ids, key=_id_order):
+            d = raw_nodes[nid]
+            attrs = d.get("attrs") or {}
+            kind = d.get("type", "?")
+            status = d.get("status", "")
+            headline = _headline(kind, attrs)
+            history = _history_view(d)
+            why = _why(attrs, history)
+            chips, attachments, criterion = [], [], ""
+            for role, folded in carried.get(nid, []):
+                view = _folded_view(folded, raw_nodes[folded])
+                if role == "chip":
+                    chips.append(view)
+                elif role == "criterion":
+                    criterion = criterion or view["label"]
+                    attachments.append(view)
+                else:
+                    attachments.append(view)
+            node = {
+                "id": nid,
+                "run_id": research_id,
+                "kind": kind.lower(),
+                # The id used to open every label. It means nothing to a reader
+                # and cost a third of the line, so it moves to the panel and the
+                # label says what the node is instead.
+                "label": headline,
+                "type_word": _KIND_WORDS.get(kind, kind),
+                "index": ordinal.get(nid),
+                "status": status,
+                "status_word": _STATUS_WORDS.get(status, status),
+                "executor_agent": d.get("source", ""),
+                "input": _fields(attrs, headline, kind),
+                "output": headline,
+                "provenance": attrs.get("_provenance") or [],
+                "t_start": d.get("created_at"),
+                "t_end": d.get("updated_at"),
+                "status_history": history,
+                "why": why,
+                # A step that ended badly and cannot say why is a hole in the
+                # record, not a rendering detail — the page says so out loud.
+                "why_missing": bool(status in _UNRESOLVED_STATUSES and not why),
+                "chips": chips,
+                "attachments": attachments,
+                "level": _LEVEL.get(kind, 3),
+                "shown": True,
+                "display_level": "primary",
+            }
+            if criterion:
+                node["criterion"] = criterion
+            if kind == "Hypothesis":
+                node["origin"] = _origin_of(nid, raw_edges)
+            nodes.append(node)
+        return nodes
 
     def view_of(self, study_id: Optional[str] = None) -> Dict[str, Any]:
         """One study's projection, plus the list of the session's other studies.
@@ -655,7 +1252,8 @@ class ResearchGraphStore:
     def _commit_locked(self, source: str, node_drafts: List[Any],
                        edge_drafts: List[Any], status_drafts: List[Any],
                        enforce_permissions: bool = True,
-                       autolink_focus: Optional[str] = None) -> CommitResult:
+                       autolink_focus: Optional[str] = None,
+                       partial_edges: bool = False) -> CommitResult:
         if not (node_drafts or edge_drafts or status_drafts):
             return CommitResult(ok=False, errors=[
                 "empty commit — provide nodes, edges and/or status_updates"],
@@ -717,14 +1315,16 @@ class ResearchGraphStore:
             etype = schema.normalize_token(d.get("type", ""))
             src, e1 = self._resolve_endpoint(d.get("from"), j, "from", refs, warnings)
             dst, e2 = self._resolve_endpoint(d.get("to"), j, "to", refs, warnings)
-            errors.extend(e for e in (e1, e2) if e)
+            edge_errs = [e for e in (e1, e2) if e]
             if src is None or dst is None:
+                (warnings if partial_edges else errors).extend(edge_errs)
                 continue
             ftype = creates[refs[src[1]]]["type"] if src[0] == "ref" else self._g.nodes[src[1]]["type"]
             ttype = creates[refs[dst[1]]]["type"] if dst[0] == "ref" else self._g.nodes[dst[1]]["type"]
-            edge_errs = schema.validate_edge(source, etype, ftype, ttype,
-                                             enforce_permissions=enforce_permissions)
-            errors.extend(f"edges[{j}]: {e}" for e in edge_errs)
+            edge_errs += [f"edges[{j}]: {e}" for e in schema.validate_edge(
+                source, etype, ftype, ttype, enforce_permissions=enforce_permissions)]
+            # In partial mode a rejected LINK costs the link, not the commit.
+            (warnings if partial_edges else errors).extend(edge_errs)
             if not edge_errs:
                 staged_edges.append({"type": etype, "from": src, "to": dst,
                                      "attrs": d.get("attrs") or {}})

@@ -103,6 +103,29 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
             "new_question": "optional follow-up question text",
         },
     ),
+    # ── Derived, never written ───────────────────────────────────────────────
+    # Two cards the reader needs that no agent authors: the framing the study
+    # started from, and the story its verdicts add up to. Both are projected by
+    # store.to_view from nodes that already exist (the context star, and the
+    # hypothesis/conclusion chain), so materializing them would create a second
+    # source of truth that goes stale on the next Constraint. They are declared
+    # here anyway, so the type name, the id prefix and the display words live in
+    # the one table everything else reads — and `creatable=()` plus their
+    # absence from every AgentPerm.create makes validate_node_draft refuse any
+    # agent that tries to write one.
+    NodeTypeSpec(
+        "Framing", "F", 1,
+        statuses=("derived",), creatable=(),
+        attr_docs={"_": "DERIVED — projected from the context star "
+                        "(Constraint/Resource/EmpiricalBase/ConfirmationCriteria/"
+                        "CostModel) by store.to_view; no agent may create it"},
+    ),
+    NodeTypeSpec(
+        "Outcome", "OC", 1,
+        statuses=("derived",), creatable=(),
+        attr_docs={"_": "DERIVED — the chain of hypothesis verdicts, assembled "
+                        "by store.to_view; no agent may create it"},
+    ),
     # ── Layer 2 — methodological frame ───────────────────────────────────────
     NodeTypeSpec(
         "VerificationMethod", "VM", 2,
@@ -113,6 +136,11 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
             "outputs": "what it yields",
             "cost": "estimated cost",
             "limitations": "known weaknesses",
+            # A failed step with no reason is indistinguishable from one nobody
+            # started, which is exactly how a run reads when it is over.
+            "failure_reason": "WHY the run failed — the error, the missing "
+                              "input, the limit hit. Required when you move it "
+                              "to `failed`",
         },
     ),
     NodeTypeSpec(
@@ -139,6 +167,8 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
             # the library it was supposed to build on.
             "location": "WHERE it is: repo URL, local path, MCP server or API "
                         "endpoint — required for anything the coder must read or run",
+            "failure_reason": "WHY building it failed. Required when you move "
+                              "it to `creation_failed`",
         },
     ),
     NodeTypeSpec(
@@ -229,7 +259,12 @@ _ARTIFACT_TYPES = ("CodeArtifact", "GeneratedData", "Report", "Publication",
 
 EDGE_TYPES: Dict[str, Tuple[Tuple[str, str], ...]] = {
     "motivates": (("ResearchQuestion", "Hypothesis"),),
-    "tested_by": (("Hypothesis", "VerificationMethod"),),
+    # A plan arrives before the hypotheses do: the deterministic plan mirror
+    # writes one method per registered task, and at that moment there may be
+    # nothing to hang it on but the question itself. A method floating with no
+    # parent reads as a bug, so the question may be what a method tests.
+    "tested_by": (("Hypothesis", "VerificationMethod"),
+                  ("ResearchQuestion", "VerificationMethod")),
     "requires": (("Hypothesis", "Tool"),),
     "uses": (("VerificationMethod", "Tool"),),
     "consumes": (("VerificationMethod", "Resource"),),
@@ -238,6 +273,13 @@ EDGE_TYPES: Dict[str, Tuple[Tuple[str, str], ...]] = {
     "supports": (("Evidence", "Hypothesis"),),
     "refutes": (("Evidence", "Hypothesis"),),
     "refines": (("Evidence", "Hypothesis"),),
+    # How a study actually moves: a hypothesis is judged, and a modified one
+    # takes its place. Without this edge the iterations sit side by side under
+    # the question and the reader cannot tell a second attempt from a second
+    # branch. `from` is the hypothesis that was judged, `to` the one that
+    # replaced it — the arrow points the way the research went. attrs carry
+    # {"verdict": confirmed|refuted|inconclusive, "reason": what changed}.
+    "supersedes": (("Hypothesis", "Hypothesis"),),
     "based_on": (("Conclusion", "Evidence"),),
     "determines_sufficiency": (("ConfirmationCriteria", "Conclusion"),),
     # Not in the spec's edge table, but the docx says criteria are "formulated
@@ -436,7 +478,7 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
             ("Hypothesis", "postponed", "formulated")),          # scheduling only
         edges=_edges("contextualizes", "defines_scope", "derived_from", "applies_to",
                      "motivates", "regulates", "constrains",
-                     "relates_to", "supports", "refutes", "refines",
+                     "relates_to", "supports", "refutes", "refines", "supersedes",
                      ("produces", "Conclusion", "ResearchQuestion")),
         # It decides what gets tested, so it is the one that can say why a
         # branch was not. Only that: the formulation and the verdict stay with
@@ -475,8 +517,10 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
                           "Tool"}),
         update_attrs=frozenset(),
         transitions=_transitions(("Hypothesis", "formulated", "postponed")),
+        # It writes the modified hypothesis, so it is the one that can say which
+        # hypothesis that modification replaces.
         edges=_edges("motivates", "tested_by", "requires", "formulated_for",
-                     "uses", "consumes"),
+                     "uses", "consumes", "supersedes"),
     ),
     "ResearchAgent": AgentPerm(
         create=frozenset({"Evidence", "EmpiricalBase"}),
@@ -491,11 +535,17 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         edges=_edges("relates_to", "supports", "refutes", "refines"),
     ),
     "CoderAgent": AgentPerm(
-        create=frozenset({"Tool", "CodeArtifact", "GeneratedData", "Evidence"}),
+        # It already owned the VerificationMethod lifecycle (transitions below)
+        # but could not open one, so work the plan never named ran with no
+        # method to point at and its evidence hung off the hypothesis with
+        # nothing in between.
+        create=frozenset({"Tool", "CodeArtifact", "GeneratedData", "Evidence",
+                          "VerificationMethod"}),
         update_attrs=frozenset({"Tool"}),
         transitions=_transitions("Tool", "VerificationMethod"),
         edges=_edges("uses", "consumes", "derived_from", "supports", "refutes",
-                     "refines", "relates_to", ("produces", "VerificationMethod", "Evidence")),
+                     "refines", "relates_to", "tested_by",
+                     ("produces", "VerificationMethod", "Evidence")),
     ),
     "DatasetCollectorAgent": AgentPerm(
         create=frozenset({"GeneratedData", "EmpiricalBase"}),
@@ -504,12 +554,28 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         edges=_edges("derived_from", "defines_scope", "relates_to"),
     ),
     "ExperimentAgent": AgentPerm(
-        create=frozenset({"Evidence", "GeneratedData"}),
+        # Same hole as the coder's: it ran the method and could move it through
+        # planned→running→done/failed, but could not create the node it was
+        # moving. Creating a type also carries the right to enrich it
+        # (_stage_merge), so `failure_reason` needs no separate grant.
+        create=frozenset({"Evidence", "GeneratedData", "VerificationMethod"}),
         update_attrs=frozenset(),
         transitions=_transitions("VerificationMethod"),
         edges=_edges("uses", "consumes", "supports", "refutes", "refines",
-                     "relates_to", "derived_from",
+                     "relates_to", "derived_from", "tested_by",
                      ("produces", "VerificationMethod", "Evidence")),
+    ),
+    # NOT an agent: the deterministic mirror that turns each registered plan
+    # task into a planned VerificationMethod (agents/callbacks/tool_callbacks.py).
+    # It is named as its own write-source rather than borrowing the planner's or
+    # the orchestrator's, because a reader who sees "plan-mirror" on a method
+    # knows no model chose it — it is the roadmap, one card per step. It writes
+    # methods and attaches them; it never runs or judges anything.
+    "plan-mirror": AgentPerm(
+        create=frozenset({"VerificationMethod"}),
+        update_attrs=frozenset({"VerificationMethod"}),
+        transitions=frozenset(),
+        edges=_edges("tested_by"),
     ),
     # The pre-stage context-initialization agent seeds the framing frame at the
     # start of a run. It writes the whole context star through the PRIVILEGED

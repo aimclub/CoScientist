@@ -116,13 +116,13 @@ agents:
       - McpBuilderAgent
     callbacks:
       before_model: [save_uploaded_artifacts, seed_coder_workspace, redact_link_urls]
-      before_agent: [before_get_task, inject_graph_root, inject_research_context, user_links]
+      before_agent: [before_get_task, mirror_plan_before_agent, inject_graph_root, inject_research_context, user_links]
       # Catch hallucinated tool calls (e.g. the orchestrator inventing a
       # sub-agent's `execute_bash`) and correct them, instead of ADK raising
       # ValueError('Tool not found') and crashing the whole run.
       after_model: [expand_link_refs, guard_unknown_tools]
       before_tool: [resolve_link_refs]
-      after_tool: [register_tool_result_links]
+      after_tool: [register_tool_result_links, mirror_plan_after_create]
       # after_model: [pre_action_critique]
       # The post-action critic is intentionally not wired; add
       # `after_tool: [post_action_critique]` to enable it — the orchestrator
@@ -181,7 +181,7 @@ agents:
       before_model: [redact_link_urls]
       after_model: [expand_link_refs, guard_unknown_tools, finish_after_plan_registered]
       before_tool: [resolve_link_refs]
-      after_tool: [register_tool_result_links]
+      after_tool: [register_tool_result_links, mirror_plan_after_create]
     hitl: true
     critic: ${web.planner_critic_enabled}
     options:
