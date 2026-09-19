@@ -478,7 +478,14 @@ def test_closable_and_missing_criteria(store):
     # not the orchestrator (verdict/criteria are the judge's job).
     assert not store.commit(source="OrchestratorAgent",
                             status_updates=[{"id": "CC1", "status": "met"}]).ok
-    store.commit(source="ValidatorAgent", status_updates=[{"id": "CC1", "status": "met"}])
+    # ...and even the judge has to say what met it, or the bar and the claim
+    # that it was cleared are the same unargued sentence.
+    bare = store.commit(source="ValidatorAgent",
+                        status_updates=[{"id": "CC1", "status": "met"}])
+    assert not bare.ok and "reason" in bare.errors[0]
+    store.commit(source="ValidatorAgent",
+                 status_updates=[{"id": "CC1", "status": "met",
+                                  "reason": "met by E1 (docking -9)"}])
     res2 = queries.closable_hypotheses(store)
     assert [i["hypothesis"] for i in res2["items"]] == ["H1"]
 
@@ -561,6 +568,193 @@ def test_background_validator_judges_hypothesis(store):
     assert nodes["CC1"]["status"] == "met"
     assert any(n["type"] == "Conclusion" and n["source"] == "ValidatorAgent"
                for n in nodes.values())
+
+
+def test_a_bar_can_still_be_written_after_evidence_starts_arriving(store):
+    """Writing a bar and moving one are different acts, and the freeze must only
+    refuse the second. A ConfirmationCriteria is legal with no attrs at all, so
+    the generator can commit `{metric: "docking score"}` and fill in the
+    threshold a turn later — and a literature finding recorded under the focus
+    in between auto-links to the hypothesis. Keyed on the attribute NAME, that
+    first write was refused as a move, and the hypothesis was left carrying a
+    bar-less criterion that `_unmet_criteria` still counted and the judge was
+    asked to weigh evidence against.
+    """
+    _init(store)
+    root = store.root_id()
+    store.commit(source="HypothesesAgent", nodes=[
+        {"type": "Hypothesis", "ref": "h", "attrs": {"formulation": "X binds Y"}},
+        {"type": "ConfirmationCriteria", "ref": "cc",
+         "attrs": {"metric": "docking score"}}],       # no threshold yet
+        edges=[{"type": "motivates", "from": root, "to": "#h"},
+               {"type": "formulated_for", "from": "#cc", "to": "#h"}])
+
+    # Background reading lands under the focus, so the store auto-links it.
+    store.commit(source="ResearchAgent",
+                 nodes=[{"type": "Evidence", "attrs": {
+                     "subtype": "literature", "content": "adjacent SDHI work"}}],
+                 autolink_focus="H1")
+
+    first = store.commit(source="HypothesesAgent", nodes=[
+        {"id": "CC1", "attrs": {"threshold": "docking below -8.0 kcal/mol"}}])
+    assert first.ok, first.errors
+    cc1 = next(n for n in store.full()["nodes"] if n["id"] == "CC1")
+    assert cc1["attrs"]["threshold"] == "docking below -8.0 kcal/mol"
+
+    # Re-writing the SAME value is not a move either.
+    assert store.commit(source="HypothesesAgent", nodes=[
+        {"id": "CC1", "attrs": {"threshold": "docking below -8.0 kcal/mol"}}]).ok
+
+    # But moving it now is exactly what the freeze is for.
+    moved = store.commit(source="HypothesesAgent", nodes=[
+        {"id": "CC1", "attrs": {"threshold": "docking below -6.0 kcal/mol"}}])
+    assert not moved.ok
+    assert "frozen" in moved.errors[0]
+
+
+def test_the_bar_cannot_be_lowered_to_meet_the_result(store):
+    """The author of a criterion also owns its attrs, so nothing stopped a run
+    from editing `threshold` after the number came back. Before the measurement
+    is aimed at it the bar is still being written; after, it is the record."""
+    _build_verifiable(store)
+    ok = store.commit(source="HypothesesAgent",
+                      nodes=[{"id": "CC1", "attrs": {"threshold": "LD50 < 40 mg/kg"}}])
+    assert ok.ok, ok.errors
+
+    store.commit(source="ExperimentAgent",
+                 nodes=[{"type": "Evidence", "ref": "e",
+                         "attrs": {"subtype": "computational", "content": "LD50 58",
+                                   "measured_on": "ADMETlab 3.0"}}],
+                 edges=[{"type": "supports", "from": "#e", "to": "H1"}])
+
+    moved = store.commit(source="HypothesesAgent",
+                         nodes=[{"id": "CC1", "attrs": {"threshold": "LD50 < 60 mg/kg"}}])
+    assert not moved.ok
+    assert "frozen" in moved.errors[0]
+    # The prose around the bar is still editable — only the bar is frozen.
+    assert store.commit(source="HypothesesAgent",
+                        nodes=[{"id": "CC1", "attrs": {
+                            "description": "measured on the rat oral model"}}]).ok
+
+
+def test_a_branch_the_judge_could_not_settle_can_be_reopened(store):
+    """`inconclusive` was in the Hypothesis lifecycle with nothing holding the
+    way out of it, so a branch parked there stayed parked. That was nearly
+    unreachable until the background validator started WRITING that verdict
+    whenever a confirmation is refused — which turned a theoretical dead end
+    into the ordinary outcome of a claim that outran its evidence. Reopening one
+    is scheduling, the same as reviving a postponed branch.
+    """
+    _build_verifiable(store)
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "under_verification"}])
+    assert store.commit(source="ValidatorAgent", status_updates=[
+        {"id": "H1", "status": "inconclusive",
+         "reason": "the docking run never produced a score"}]).ok
+
+    # New evidence arrives, so the branch goes back under the judge.
+    store.commit(source="ExperimentAgent",
+                 nodes=[{"type": "Evidence", "ref": "e", "attrs": {
+                     "subtype": "computational", "content": "docking -9.1 kcal/mol",
+                     "measured_on": "AutoDock Vina 1.2.5"}}],
+                 edges=[{"type": "supports", "from": "#e", "to": "H1"}])
+    revived = store.commit(source="OrchestratorAgent",
+                           status_updates=[{"id": "H1", "status": "under_verification"}])
+    assert revived.ok, revived.errors
+    h1 = next(n for n in store.full()["nodes"] if n["id"] == "H1")
+    assert h1["status"] == "under_verification"
+
+    # And it can now reach a verdict, which is the whole point of reopening it.
+    assert store.commit(source="ValidatorAgent", status_updates=[
+        {"id": "H1", "status": "confirmed", "reason": "the score clears the bar"},
+        {"id": "CC1", "status": "met", "reason": "met by E2 at -9.1"}]).ok
+
+
+def test_a_refused_confirmation_leaves_the_branch_open_for_the_missing_measurement(store):
+    """A refusal is not a verdict, and the difference decides the study.
+
+    The store refuses a confirmation whose criteria are still unmet, or which no
+    Evidence supports. Both are "not yet": the runtime benchmark has not run
+    yet, the docking score is still queued. An earlier version of this closed
+    the branch as `inconclusive` on that refusal, which threw away the judge's
+    own `met` findings along with the atomic commit and settled a hypothesis
+    whose missing measurement was on its way.
+    """
+    import asyncio
+
+    import CoScientist.graph.research.validator as V
+
+    _build_verifiable(store)                       # H1 + CC1
+    store.commit(source="HypothesesAgent", nodes=[
+        {"type": "ConfirmationCriteria", "ref": "cc2",
+         "attrs": {"threshold": "runtime under 1 s"}}],
+        edges=[{"type": "formulated_for", "from": "#cc2", "to": "H1"}])
+    store.commit(source="ResearchAgent",
+                 nodes=[{"type": "Evidence", "ref": "e", "attrs": {
+                     "subtype": "literature", "content": "affinity -9.4 kcal/mol"}}],
+                 edges=[{"type": "supports", "from": "#e", "to": "H1"}])
+
+    async def confident(system, user):
+        # Honest: one bar cleared, the other not measured yet.
+        return ('{"verdict":"confirmed","criteria":{"CC1":"met","CC2":"not_met"},'
+                '"conclusion":"it binds","reason":"affinity clears the bar"}')
+
+    orig = V.research_graph
+    V.research_graph = store
+    try:
+        res = asyncio.run(V.judge_hypothesis("H1", complete=confident))
+    finally:
+        V.research_graph = orig
+
+    assert res is not None and not res["ok"], res
+    assert "CC2" in " ".join(res["errors"])
+    h1 = next(n for n in store.full()["nodes"] if n["id"] == "H1")
+    assert h1["status"] == "under_verification", \
+        "a not-yet must not be recorded as a verdict"
+    assert not any(n["type"] == "Conclusion" for n in store.full()["nodes"])
+
+    # The missing measurement arrives, and now the same judgment lands.
+    store.commit(source="ExperimentAgent",
+                 nodes=[{"type": "Evidence", "ref": "e", "attrs": {
+                     "subtype": "computational", "content": "runtime 0.4 s",
+                     "measured_on": "one core, n=1000"}}],
+                 edges=[{"type": "supports", "from": "#e", "to": "H1"}])
+
+    async def complete_now(system, user):
+        return ('{"verdict":"confirmed","criteria":{"CC1":"met","CC2":"met"},'
+                '"conclusion":"it binds and it is fast","reason":"both bars clear"}')
+
+    V.research_graph = store
+    try:
+        res2 = asyncio.run(V.judge_hypothesis("H1", complete=complete_now))
+    finally:
+        V.research_graph = orig
+    assert res2 and res2["ok"], res2
+    nodes = {n["id"]: n for n in store.full()["nodes"]}
+    assert nodes["H1"]["status"] == "confirmed"
+    assert nodes["CC1"]["status"] == "met" and nodes["CC2"]["status"] == "met"
+
+
+def test_the_same_evidence_is_not_re_judged_after_a_refusal(store):
+    """What bounds the cost of leaving the branch open. The plugin's dedupe key
+    fingerprints the evidence set, and a refusal is deterministic in the slice
+    it was made on — so keying only on SUCCESS meant a hypothesis the store
+    would not let the judge confirm was re-judged on every later commit by
+    anyone, for the rest of the run, at one LLM call each."""
+    from CoScientist.graph.research.validator import BackgroundValidatorPlugin
+
+    plugin = BackgroundValidatorPlugin()
+    item = {"hypothesis": "H1", "supporting": ["E1"], "refuting": [], "related": []}
+    key = plugin._key(store, "research", item)
+    grown = plugin._key(store, "research",
+                        {**item, "supporting": ["E1", "E2"]})
+    assert key != grown, "new evidence must reopen the question"
+
+    # A refusal settles this evidence set...
+    plugin._completed.add(key)
+    assert key in plugin._completed
+    # ...and does not settle the next one.
+    assert grown not in plugin._completed
 
 
 def test_focus_autolink_relates_evidence_to_hypothesis(store):
@@ -849,7 +1043,10 @@ def test_the_view_speaks_the_reader_s_language(tmp_path):
     hypothesis = view["hypothesis"]
     assert hypothesis["type_word"] == "Гипотеза"
     assert hypothesis["status_word"] == "предложена", "`formulated` is not a word"
-    assert hypothesis["input"]["Priority"] == "high", "attrs need reader-facing names"
+    # The projection sends the attribute CODE; the page captions it through
+    # graph.field.priority, so one record reads correctly in either language.
+    assert hypothesis["input"]["priority"] == "high"
+    assert not any(k[:1].isupper() for k in hypothesis["input"]),         "a display word baked in here picks the reader's language for them"
 
 
 def test_a_tested_branch_is_not_recorded_as_untried(tmp_path):
@@ -932,9 +1129,53 @@ def test_a_claim_cannot_outrun_the_bar_set_for_it(tmp_path):
     # for, and the verdict may lead the list.
     allowed = store.commit(source="ValidatorAgent", status_updates=[
         {"id": "H1", "status": "confirmed", "reason": "criterion met"},
-        {"id": "CC1", "status": "met"},
+        {"id": "CC1", "status": "met", "reason": "met by E1, 2 of 3 datasets"},
     ])
     assert allowed.ok, allowed.errors
+
+
+def test_a_verdict_needs_something_that_was_actually_measured(store):
+    """A run confirmed a hypothesis nothing in the graph supported.
+
+    The judge is an LLM reading a context slice, so "confirmed" costs it
+    nothing. The graph is what makes the claim answerable later, so the
+    transition is refused until some Evidence points at the hypothesis.
+    """
+    _build_verifiable(store)
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "under_verification"}])
+
+    empty = store.commit(source="ValidatorAgent", status_updates=[
+        {"id": "H1", "status": "confirmed", "reason": "the literature agrees"},
+        {"id": "CC1", "status": "met", "reason": "met by the review"},
+    ])
+    assert not empty.ok
+    assert "Evidence" in empty.errors[0]
+
+    # Refuting it needs no such support — a claim may die of an argument.
+    assert store.commit(source="ValidatorAgent", status_updates=[
+        {"id": "H1", "status": "refuted", "reason": "the assay never ran"}]).ok
+
+
+def test_the_polarity_edge_may_arrive_with_the_verdict(store):
+    """Evidence lands unattached and the judge decides which way it cuts, so
+    the `supports` edge and the verdict are written in one commit. A gate
+    reading only the saved graph would refuse the judge its own evidence."""
+    _build_verifiable(store)
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "under_verification"}])
+    store.commit(source="ExperimentAgent",
+                 nodes=[{"type": "Evidence", "attrs": {
+                     "subtype": "computational", "content": "LD50 41 mg/kg",
+                     "measured_on": "ADMETlab 3.0"}}])
+    res = store.commit(
+        source="ValidatorAgent",
+        edges=[{"type": "supports", "from": "E1", "to": "H1"}],
+        status_updates=[
+            {"id": "H1", "status": "confirmed", "reason": "below the bar"},
+            {"id": "CC1", "status": "met", "reason": "met by E1"},
+        ])
+    assert res.ok, res.errors
 
 
 def test_a_session_can_reach_every_study_it_holds(tmp_path):
@@ -1505,38 +1746,197 @@ _PLAN = [{"id": "TASK-1", "title": "Collect the metabolites", "assignee": "Resea
          {"id": "TASK-3", "title": "Estimate LD50 per cluster", "assignee": "ExperimentAgent"}]
 
 
-def test_the_plan_becomes_one_method_per_task(store):
-    """The middle layer stops depending on a model remembering to write it.
 
-    A run whose agents all skipped research_commit drew a question with nothing
-    underneath it. The roadmap is already an ordered list of steps.
+
+
+
+
+
+
+_PLAN_STEPS = [
+    {"id": "TASK-1", "title": "Write a testable hypothesis", "description": "one claim",
+     "assignee": "HypothesesAgent", "status": "DONE"},
+    {"id": "TASK-2", "title": "Collect the metabolite SMILES", "description": "from papers",
+     "assignee": "TaskExecutorAgent", "status": "IN_PROGRESS",
+     "tools": ["explore_chemistry_database", "name2smiles"]},
+    {"id": "TASK-3", "title": "Predict LD50 per cluster", "description": "and the AD",
+     "assignee": "TaskExecutorAgent", "status": "TODO",
+     "tools": ["predict_general_toxicity"]},
+]
+
+
+def test_the_plan_becomes_one_step_per_task_not_one_method(store):
+    """The mirror wrote the planner's task list as `VerificationMethod`, and
+    that was the most misleading thing in the graph. A step is an INTENTION —
+    what to do, in what order, by whom. A method answers a different question:
+    by what MEANS was this established, and against which bar. Conflated, the
+    task list appeared as "methods" hanging off the research QUESTION, carrying
+    no instrument, indistinguishable from a method an agent had designed.
     """
     from CoScientist.agents.callbacks.tool_callbacks import sync_plan_to_research_graph
 
     state = {}
-    r = sync_plan_to_research_graph(_PLAN, store, state, question="How toxic is it?")
+    r = sync_plan_to_research_graph(_PLAN_STEPS, store, state,
+                                    question="How toxic is it?")
     assert r.ok, r.errors
-    methods = [n for n in store.to_view()["nodes"]
-               if n["kind"] == "verificationmethod"]
-    assert [m["status"] for m in methods] == ["planned"] * 3
-    assert {m["label"] for m in methods} == {t["title"] for t in _PLAN}
-    assert all(m["executor_agent"] == "plan-mirror" for m in methods), \
-        "no model chose these, and the card should not imply one did"
-    assert _drawn_components(store.to_view()) == 1
+    nodes = {n["id"]: n for n in store.full()["nodes"]}
+    steps = sorted(n for n, v in nodes.items() if v["type"] == "PlanStep")
+    assert len(steps) == 3, steps
+    assert not [n for n, v in nodes.items() if v["type"] == "VerificationMethod"], \
+        "the plan is not a set of methods"
+    # The tracker's own status, so the column shows what has actually run.
+    assert [nodes[s]["status"] for s in steps] == ["done", "in_progress", "todo"]
+    assert all(nodes[s]["source"] == "plan-mirror" for s in steps), \
+        "a reader must see that no model chose these"
+    # The one part of the method the PLAN can already answer: the planner reads
+    # the tool list, so the instruments come across with the step.
+    assert (nodes[steps[1]]["attrs"] or {})["tools"] == \
+        "explore_chemistry_database, name2smiles"
+    assert "tools" not in (nodes[steps[0]]["attrs"] or {}), "a step that runs none"
 
-    # A re-plan must not double the column.
-    assert sync_plan_to_research_graph(_PLAN, store, state) is None
+    # A re-plan of the same steps says nothing new.
+    assert sync_plan_to_research_graph(_PLAN_STEPS, store, state) is None
 
 
-def test_the_plan_mirror_attaches_to_the_live_hypothesis(store):
-    """When there is a branch being worked on, the methods belong to it."""
+def test_the_plan_step_and_the_work_that_carried_it_out_are_linked(store):
+    """`realises` is what lets a reader cross between the intention and the
+    record. It runs from the RECORD to the INTENTION, so following the research
+    forward never walks into the plan by accident, and a step with nothing
+    pointing at it is visibly unrealised.
+
+    Note which node realises which step: "write a testable hypothesis" is
+    carried out by the HYPOTHESIS itself. That step used to be drawn as a
+    verification method — a card in the literature band that verified nothing.
+    """
     from CoScientist.agents.callbacks.tool_callbacks import sync_plan_to_research_graph
 
-    _build_verifiable(store)
-    sync_plan_to_research_graph(_PLAN, store, {})
-    tested_by = {(e["src"], e["dst"]) for e in store.to_view()["edges"]
-                 if e["type"] == "tested_by"}
-    assert ("H1", "VM2") in tested_by, tested_by
+    state = {}
+    sync_plan_to_research_graph(_PLAN_STEPS, store, state, question="How toxic is it?")
+    store.commit(source="HypothesesAgent", nodes=[
+        {"type": "Hypothesis", "ref": "h", "attrs": {
+            "formulation": "the coumarin cluster is the toxic one",
+            "plan_task_id": "TASK-1"}},
+        {"type": "VerificationMethod", "ref": "vm", "attrs": {
+            "description": "Predict LD50 with ADMETlab",
+            "procedure": "run predict_general_toxicity per cluster",
+            "plan_task_id": "TASK-3"}}],
+        edges=[{"type": "motivates", "from": store.root_id(), "to": "#h"},
+               {"type": "tested_by", "from": "#h", "to": "#vm"}])
+
+    # The task list is EMPTY now — the plan was registered turns ago. Gating the
+    # linking on "are there tasks to mirror" made it unreachable in practice.
+    linked = sync_plan_to_research_graph([], store, state)
+    assert linked is not None and linked.ok, linked
+    realises = {(e["from"], e["to"]) for e in store.full()["edges"]
+                if e["type"] == "realises"}
+    steps = sorted(n["id"] for n in store.full()["nodes"] if n["type"] == "PlanStep")
+    assert ("H1", steps[0]) in realises, realises
+    assert ("VM1", steps[2]) in realises, realises
+    # Idempotent: a link that is already there is not written twice.
+    assert sync_plan_to_research_graph([], store, state) is None
+
+
+def test_a_step_the_plan_advances_is_advanced_in_the_graph(store):
+    """The column is only worth reading if it says what has actually run."""
+    from CoScientist.agents.callbacks.tool_callbacks import sync_plan_to_research_graph
+
+    state = {}
+    sync_plan_to_research_graph(_PLAN_STEPS, store, state, question="How toxic?")
+    moved = [dict(t, status="DONE") for t in _PLAN_STEPS]
+    r = sync_plan_to_research_graph(moved, store, state)
+    assert r is not None and r.ok, r
+    steps = {n["id"]: n["status"] for n in store.full()["nodes"]
+             if n["type"] == "PlanStep"}
+    assert set(steps.values()) == {"done"}, steps
+    assert sync_plan_to_research_graph(moved, store, state) is None
+
+
+def test_the_mirror_memo_does_not_outlive_the_study_it_was_written_for(store):
+    """`research_init` archives the study and starts an empty graph, so ids
+    restart at PS1 — but the memo lives in ADK session state, which survives.
+    Checking that a remembered id still RESOLVES cannot catch that: it resolves
+    to a different node. The mirror both skipped tasks it had never mirrored in
+    the new study and wrote an edge to an id that now named somebody else's.
+    """
+    from CoScientist.agents.callbacks.tool_callbacks import sync_plan_to_research_graph
+
+    state = {}
+    assert sync_plan_to_research_graph(_PLAN_STEPS, store, state,
+                                       question="How toxic is it?").ok
+    first = sorted(n["id"] for n in store.full()["nodes"] if n["type"] == "PlanStep")
+
+    store.init_research(source="OrchestratorAgent", question="Which ligand binds 6LU7?")
+    again = sync_plan_to_research_graph(_PLAN_STEPS, store, state)
+    assert again is not None and again.ok, "the same plan is new work here"
+    fresh = sorted(n["id"] for n in store.full()["nodes"] if n["type"] == "PlanStep")
+    assert len(fresh) == len(_PLAN_STEPS), fresh
+    assert fresh == first, "ids restart, which is exactly why the memo cannot"
+
+
+def test_two_methods_carrying_out_one_plan_step_both_point_at_it(store):
+    """The operator's complaint was that «метод проверки 3 и 4» were
+    indistinguishable cards. The cause was the mirror duplicating one plan step
+    into two look-alike "methods"; with the plan as its own node that cause is
+    gone, and two methods genuinely carrying out one step is legitimate — a
+    step can be realised by several pieces of work. What matters is that the
+    reader can SEE it, which the step on each card and the `realises` edges do.
+    """
+    _init(store)
+    root = store.root_id()
+    store.commit(source="plan-mirror", nodes=[
+        {"type": "PlanStep", "attrs": {
+            "title": "Toxicity profiling for the cluster", "plan_task_id": "TASK-3"}}])
+    r = store.commit(source="HypothesesAgent", nodes=[
+        {"type": "Hypothesis", "ref": "h", "attrs": {"formulation": "E is the toxic one"}},
+        {"type": "VerificationMethod", "ref": "a", "attrs": {
+            "description": "Acute toxicity: LD50 per route",
+            "procedure": "predict_general_toxicity over the cluster",
+            "plan_task_id": "TASK-3"}},
+        {"type": "VerificationMethod", "ref": "b", "attrs": {
+            "description": "Organ toxicity: DILI and hERG",
+            "procedure": "predict_molecule_profile over the cluster",
+            "plan_task_id": "TASK-3"}}],
+        edges=[{"type": "motivates", "from": root, "to": "#h"},
+               {"type": "tested_by", "from": "#h", "to": "#a"},
+               {"type": "tested_by", "from": "#h", "to": "#b"}])
+    assert r.ok, r.errors
+
+    view = store.view_of(None)
+    steps = {n["id"]: n.get("plan_step") for n in view["nodes"]
+             if n["kind"] == "verificationmethod"}
+    assert set(steps.values()) == {"TASK-3"}, steps
+    # And it is NOT reported as a fault of the record.
+    assert "duplicate_plan_step" not in {g["code"] for g in view["gaps"]}
+
+
+def test_a_method_card_names_the_hypothesis_it_tests_and_not_the_question(store):
+    """Four method cards read identically on a real graph: every one of them
+    said what it did and none said what it was for. The card names the claim
+    the method is aimed at — and the HYPOTHESIS, never the question, because
+    the question is already the page's own heading."""
+    _init(store)
+    root = store.root_id()
+    store.commit(source="HypothesesAgent", nodes=[
+        {"type": "Hypothesis", "ref": "h", "attrs": {
+            "formulation": "Cluster E is the most toxic of the five"}},
+        {"type": "VerificationMethod", "ref": "vm", "attrs": {
+            "description": "Predict LD50 per cluster",
+            "procedure": "predict_general_toxicity, mouse, all routes"}}],
+        edges=[{"type": "motivates", "from": root, "to": "#h"},
+               {"type": "tested_by", "from": "#h", "to": "#vm"}])
+
+    cards = {n["id"]: n for n in store.view_of(None)["nodes"]}
+    assert cards["VM1"].get("tests", "").startswith("Cluster E is the most toxic")
+    # A method serving the question directly — a literature sweep before any
+    # hypothesis exists — has nothing to claim, and says nothing rather than
+    # repeating the heading.
+    store.commit(source="ResearchAgent", nodes=[
+        {"type": "VerificationMethod", "ref": "lit", "attrs": {
+            "method_type": "literature_review",
+            "procedure": "Collect the published metabolite list"}}],
+        edges=[{"type": "tested_by", "from": root, "to": "#lit"}])
+    cards = {n["id"]: n for n in store.view_of(None)["nodes"]}
+    assert not cards["VM2"].get("tests"), cards["VM2"].get("tests")
 
 
 def test_experiment_agent_can_open_the_method_it_runs(store):
@@ -1600,8 +2000,8 @@ def test_a_card_carries_the_stage_its_band_is_drawn_from(store):
     """The viewer bands a study by stage, and a stage is not an epistemic level.
 
     The same Evidence type belongs to the reading band when it came out of a
-    paper and to the hypothesis band when an experiment produced it, so the
-    projection has to say which — the type alone cannot.
+    paper and to the experiment band when a run produced it, so the projection
+    has to say which — the type alone cannot.
     """
     _init(store)
     root = store.root_id()
@@ -1621,12 +2021,14 @@ def test_a_card_carries_the_stage_its_band_is_drawn_from(store):
     stages = {n["id"]: n.get("stage") for n in store.view_of(None)["nodes"]}
     assert stages[root] == "framing"
     assert stages["E1"] == "literature", "a finding read out of a paper"
-    assert stages["E2"] == "hypotheses", "the same type, produced by a run"
-    assert stages["VM1"] == "hypotheses", "placed by what it produced"
+    assert stages["E2"] == "experiment", "the same type, produced by a run"
+    assert stages["VM1"] == "experiment", "placed by what it produced"
     # The derived cards are banded too. The outcome card is only projected once
     # the study has something to sum up, so it is checked where it appears.
     assert stages.get("FRAME") == "framing"
     assert stages.get("OUTCOME", "report") == "report"
+
+
 
 
 def test_a_metabolomics_method_is_not_mistaken_for_a_meta_analysis(store):
@@ -1643,6 +2045,163 @@ def test_a_metabolomics_method_is_not_mistaken_for_a_meta_analysis(store):
     assert _reads_like_review({"procedure": "По литературе собрать метаболиты"})
     assert not _reads_like_review(
         {"procedure": "dataset_overview and chemical_space_clustering, как в статье"})
+
+
+# ── getting a hypothesis written at all ──────────────────────────────────────
+# The graph almost never closed its arc: across both study runs and 27 of the
+# operator's 29 archived studies there were zero hypotheses, so there was
+# nothing for the methods to test or the validator to judge. Nothing was
+# broken — every route to the generator was worded for uncertainty, and a
+# procedural request ("automate X") is the opposite of uncertain. These tests
+# pin the three independent places that had to change. They check the mechanism,
+# not the model: whether an agent then writes a GOOD hypothesis is not
+# something a unit test can answer.
+
+
+def test_a_study_with_no_hypothesis_says_so_as_an_instruction(store):
+    """`open_questions` already computed this and rendered it as the aside
+    "no hypotheses yet (branch)", which no line of the orchestrator's action
+    table consumed. An unconsumed observation changed nothing."""
+    _init(store)
+    from CoScientist.graph.research import queries as q
+
+    fired = q.study_without_hypothesis(store)
+    assert fired["items"], "a study with a question and no hypothesis"
+    assert "NO HYPOTHESIS" in fired["rendered"]
+    assert "HypothesesAgent" in fired["rendered"]
+    # It has to be in the digest the orchestrator actually reads.
+    assert "study_without_hypothesis" in q.TRIGGERS
+    assert q.trigger_report(store)["rendered"].startswith("NO HYPOTHESIS")
+
+    # Methods already standing under the question is the aggravating case and is
+    # named — with their STATUS. The mirror creates them `planned`, the only
+    # creatable status, so calling them "running" was false on every graph that
+    # had just been planned and contradicted the PROGRESS line of the same
+    # digest.
+    store.commit(source="ResearchAgent", nodes=[
+        {"type": "VerificationMethod", "ref": "vm", "attrs": {
+            "method_type": "literature_review", "procedure": "run it"}}],
+        edges=[{"type": "tested_by", "from": store.root_id(), "to": "#vm"}])
+    rendered = q.study_without_hypothesis(store)["rendered"]
+    assert "nothing to test" in rendered
+    assert "VM1 (planned)" in rendered
+    assert "are already running" not in rendered,         "do not assert a status the graph itself contradicts"
+
+
+def test_the_trigger_speaks_again_when_every_branch_is_settled(store):
+    """The prompt promises "more come later, and only if the first ones fail",
+    and nothing delivered it. Keyed on whether any Hypothesis EXISTS, the
+    trigger went silent the moment the first one was written and never spoke
+    again — so a study whose sole hypothesis was refuted, with no backlog to
+    revive, sat on an open question with every branch dead and nothing
+    re-invoking the generator.
+    """
+    from CoScientist.graph.research import queries as q
+
+    _build_verifiable(store)                       # H1 formulated
+    assert not q.study_without_hypothesis(store)["items"], "H1 is live"
+
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "under_verification"}])
+    assert not q.study_without_hypothesis(store)["items"], "still live"
+
+    store.commit(source="ValidatorAgent",
+                 status_updates=[{"id": "H1", "status": "refuted",
+                                  "reason": "the assay came back clean"}])
+    fired = q.study_without_hypothesis(store)
+    assert fired["items"], "nothing live is left under an open question"
+    assert "NO LIVE HYPOTHESIS" in fired["rendered"]
+    assert "H1 (refuted)" in fired["rendered"]
+    assert "HypothesesAgent" in fired["rendered"]
+
+    # A backlog IS something to revive, so the generator is not needed.
+    store.commit(source="HypothesesAgent", nodes=[
+        {"type": "Hypothesis", "ref": "h2", "status": "postponed",
+         "attrs": {"formulation": "the other cluster is the toxic one"}}],
+        edges=[{"type": "motivates", "from": store.root_id(), "to": "#h2"}])
+    assert not q.study_without_hypothesis(store)["items"], \
+        "a postponed branch is work in hand, not a gap"
+
+
+def test_the_trigger_goes_quiet_once_a_hypothesis_exists(store):
+    """A trigger that keeps firing after it has been acted on is noise, and the
+    digest is char-budgeted — noise pushes the actionable lines out of it."""
+    from CoScientist.graph.research import queries as q
+
+    _build_verifiable(store)          # has H1, formulated
+    assert not q.study_without_hypothesis(store)["items"]
+    assert not q.study_without_hypothesis(store)["rendered"]
+
+
+def test_the_orchestrator_is_told_to_get_a_hypothesis_before_running_methods():
+    from CoScientist.assembly import load_config
+    from CoScientist.assembly.prompting import PromptContext, ToolEntry
+    from CoScientist.assembly.registry import REGISTRY
+
+    cfg = load_config()
+    ctx = PromptContext(config=cfg.agent("OrchestratorAgent"), system=cfg,
+                        tool_entries=[ToolEntry(key="research_graph_orchestrator",
+                                                factory=lambda: None)])
+    prompt = REGISTRY.prompt("orchestrator")(ctx)
+    assert "NO HYPOTHESIS" in prompt, "the trigger needs a line that consumes it"
+    # The escape hatch read as an exemption for exactly the tasks that need the
+    # graph most: "for a simple one-shot computation or question you may skip
+    # the graph" is how a procedural request looks from the inside.
+    assert "For a simple one-shot computation" not in prompt
+    assert "Anything that gets a" in prompt and "PLAN goes in the graph" in prompt
+
+
+def test_the_generator_is_asked_for_one_or_two_hypotheses_that_could_be_wrong():
+    """It asked for "a small set (2–5)". Five hypotheses on one question buy
+    five verification branches and finish none, and the surplus are usually
+    the same claim reworded. The ceiling is two, and the two rules underneath
+    are what stop a restated request or a method from being filed as one.
+
+    The ceiling has to FOLLOW `web.max_active_hypotheses`, not ignore it: the
+    selection scaffolding further down the prompt is generated from that
+    setting, so a hardcoded "propose one or two, not five" told the model to
+    write two hypotheses and then handed it five SELECTED HYPOTHESIS slots to
+    fill. Raising the active limit is the operator asking for more branches.
+    """
+    from CoScientist.assembly import load_config
+    from CoScientist.assembly.prompting import PromptContext
+    from CoScientist.assembly.registry import REGISTRY
+    from CoScientist.config import get_settings
+
+    cfg = load_config()
+    settings = get_settings()
+    original = settings.web.max_active_hypotheses
+    try:
+        rendered = {}
+        for limit in (1, 2, 5):
+            settings.web.max_active_hypotheses = limit
+            rendered[limit] = REGISTRY.prompt("hypotheses")(
+                PromptContext(config=cfg.agent("HypothesesAgent"), system=cfg))
+    finally:
+        settings.web.max_active_hypotheses = original
+
+    for limit, prompt in rendered.items():
+        assert "(2–5)" not in prompt, limit
+        assert "ONE or TWO" in prompt, f"the preference survives at limit {limit}"
+        # The one combination that used to contradict itself.
+        if limit > 2:
+            assert "Not five" not in prompt, (
+                f"limit {limit} offers {limit} selection slots, so the prompt "
+                f"must not also forbid five")
+            assert f"at most {limit} hypotheses" in prompt
+        else:
+            assert "Propose ONE or TWO hypotheses" in prompt
+
+    prompt = rendered[2]                      # the configured default
+    assert "threshold test" in prompt and "restatement test" in prompt
+    # A known route still needs a claim about its outcome — this is the whole
+    # reason the generator was never reached on a procedural task.
+    assert "A known route still needs one" in prompt
+    # And the human's own hypothesis is used rather than competed with.
+    assert "If the human already stated one, use theirs" in prompt
+    # The paragraph telling it to propose a VerificationMethod plus criteria was
+    # in there twice, which is how a prompt starts contradicting itself on edit.
+    assert prompt.count("propose HOW each would be verified") == 1
 
 
 # ── the page ─────────────────────────────────────────────────────────────────
@@ -1665,6 +2224,76 @@ def test_a_card_label_can_never_take_the_page_down():
     assert "function visSafe" in page
     assert "replace(/&/g" in page
     assert 'multi: "html"' in page, "the card keeps its bold head and italic foot"
+    # The first fix deleted the brackets, so a criterion reading "SA <= 3.5" was
+    # drawn as "SA  = 3.5" — a different threshold. The full-width forms are
+    # inert to the tokenizer for the same reason the full-width ampersand is.
+    assert 'replace(/<=/g, "≤")' in page
+    assert 'replace(/</g, "＜")' in page
+
+
+def test_the_server_and_the_page_agree_on_what_the_stages_are():
+    """Five tables have to name the same five bands: the server's STAGES and
+    _STAGE_BY_TYPE, and the page's STAGE_ORDER, STAGE_TINT and STAGE_BY_KIND.
+
+    None of the ways they can diverge fails visibly. A band missing from
+    STAGE_TINT does not disappear — `stageOf` sends its cards into another band
+    instead — and a stage the page does not list is dropped from the layout, so
+    a whole phase of the study goes quietly missing. ELK now reads STAGE_ORDER
+    as its partition index too, so a divergence also puts cards in the wrong
+    layer rather than merely the wrong colour.
+    """
+    import re
+
+    from starlette.testclient import TestClient
+
+    from CoScientist.graph.research.store import STAGES, _STAGE_BY_TYPE
+    from CoScientist.web.app import create_app
+
+    with TestClient(create_app()) as client:
+        page = client.get("/graph").text
+
+    order = re.search(r"const STAGE_ORDER = \[(.*?)\];", page, re.S)
+    assert order, "the page must still declare STAGE_ORDER"
+    assert re.findall(r'"([a-z]+)"', order.group(1)) == list(STAGES)
+
+    tint = re.search(r"const STAGE_TINT = \{(.*?)\n    \};", page, re.S)
+    assert tint, "the page must still declare STAGE_TINT"
+    for stage in STAGES:
+        assert re.search(r"\b" + stage + r":\s*\{", tint.group(1)), \
+            f"{stage} has no tint, so stageOf silently rehomes its cards"
+
+    # And every band the projection can name has somewhere to land.
+    assert set(_STAGE_BY_TYPE.values()) <= set(STAGES)
+    by_kind = re.search(r"const STAGE_BY_KIND = \{(.*?)\};", page, re.S)
+    assert by_kind, "the fallback for studies archived before the server sent a stage"
+    for kind, stage in re.findall(r'([a-z]+):\s*"([a-z]+)"', by_kind.group(1)):
+        assert stage in STAGES, f"STAGE_BY_KIND sends {kind} to unknown band {stage}"
+
+
+def test_the_page_computes_its_layout_with_a_layout_engine():
+    """Cards were flowed row by row, which got every card into the right band
+    but ordered them arbitrarily inside it: the evidence a method produced sat
+    six cards away with three unrelated methods in between. Ordering is ELK's
+    now — and only the ordering. vis-network is still the renderer, so the
+    label-safety and multi:"html" guarantees above still hold."""
+    from starlette.testclient import TestClient
+
+    from CoScientist.web.app import create_app
+
+    with TestClient(create_app()) as client:
+        page = client.get("/graph").text
+        assert client.get("/static/elk.bundled.js").status_code == 200
+
+    assert "/static/elk.bundled.js" in page
+    assert '"elk.algorithm": "layered"' in page
+    # The bands ARE the partitions — without this ELK is free to lift a
+    # conclusion into the framing row because it has fewer crossings there.
+    assert '"elk.partitioning.activate": "true"' in page
+    assert "elk.partitioning.partition" in page
+    # A 1.6MB script that fails to load must cost the study its ordering, not
+    # its drawing.
+    assert "function flowSeats" in page
+    assert "new vis.Network" in page
 
 
 def test_the_page_stopped_offering_a_view_it_no_longer_draws():

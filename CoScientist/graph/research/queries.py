@@ -348,6 +348,75 @@ def verdict_without_evidence(store: Optional[ResearchGraphStore] = None) -> Dict
     return {"items": stalled, "rendered": "\n".join(lines)}
 
 
+#: A branch that can still produce a verdict, or is waiting its turn to. The
+#: rest — refuted, confirmed, inconclusive — are settled, and a question with
+#: nothing but settled branches under it needs a new one.
+_LIVE_HYPOTHESIS = ("formulated", "under_verification", "postponed")
+
+
+def study_without_hypothesis(store: Optional[ResearchGraphStore] = None) -> Dict[str, Any]:
+    """A study that has a question but no hypothesis at all.
+
+    Across the runs this was written from, this was the graph's most common
+    shape by a wide margin: a question, a row of verification methods, some
+    evidence, and nothing claiming what any of it was supposed to show. The
+    cause was that every route to the generator was worded for uncertainty
+    ("when the direction is unclear"), and a procedural request — "build me the
+    pipeline that ranks these compounds" — reads as the opposite of unclear, so
+    the generator was never called and the graph never had an arc to close.
+
+    A known route is still a claim: running it may return nothing, or the wrong
+    thing. Writing that claim down first is what makes the outcome judgeable
+    rather than merely delivered, so the trigger fires on the absence and does
+    not care how obvious the task looks. `open_questions` already computed the
+    same fact, but rendered it as the descriptive aside "no hypotheses yet
+    (branch)", which no line of the orchestrator's action table consumed.
+    """
+    g = _graph(store).full_graph()
+    if not _nodes_of(g, "ResearchQuestion"):
+        return {"items": [], "rendered": ""}
+    # Status-aware, not existence-aware. Keyed on "are there any Hypothesis
+    # nodes", the trigger went silent the moment the first one was written and
+    # never spoke again — so once the sole hypothesis was refuted, with no
+    # backlog to revive, nothing re-invoked the generator and the study sat on
+    # an open question with every branch dead. The prompt promises "more come
+    # later, and only if the first ones fail"; this is what delivers it.
+    hypotheses = sorted(_nodes_of(g, "Hypothesis"), key=_id_order)
+    if any(_status(g, h) in _LIVE_HYPOTHESIS for h in hypotheses):
+        return {"items": [], "rendered": ""}
+    questions = sorted(
+        (q for q in _nodes_of(g, "ResearchQuestion") if _status(g, q) != "closed"),
+        key=_id_order)
+    if not questions:
+        return {"items": [], "rendered": ""}
+    methods = sorted(_nodes_of(g, "VerificationMethod"), key=_id_order)
+    items = [{"question": q, "label": _label(g, q), "methods": methods,
+              "settled": hypotheses}
+             for q in questions]
+    if hypotheses:
+        dead = ", ".join(f"{h} ({_status(g, h)})" for h in hypotheses)
+        head = (f"NO LIVE HYPOTHESIS: {questions[0]} \"{_label(g, questions[0])}\" "
+                f"is still open and every branch under it is settled: {dead}. "
+                f"Call the HypothesesAgent for a new one that accounts for what "
+                f"those branches showed, or close the question.")
+    else:
+        # Short on purpose: the digest is char-budgeted and the reasoning for
+        # this already sits in the orchestrator's action table, so paying for it
+        # twice costs rows off the end of the GRAPH INDEX.
+        head = (f"NO HYPOTHESIS: {questions[0]} \"{_label(g, questions[0])}\" has "
+                f"none. Call the HypothesesAgent BEFORE any verification method, "
+                f"however obvious the route looks.")
+    if methods:
+        # Their STATUS, not an assertion that they are running. The plan mirror
+        # creates methods as `planned`, which is the only creatable status, so
+        # "already running" was false on every graph that had just been planned
+        # — and it contradicted the PROGRESS line of the same digest.
+        head += (" " + str(len(methods)) + " method(s) already stand under the "
+                 "question with nothing to test: "
+                 + ", ".join(f"{m} ({_status(g, m)})" for m in methods) + ".")
+    return {"items": items, "rendered": head}
+
+
 def study_open(store: Optional[ResearchGraphStore] = None) -> Dict[str, Any]:
     """Whether the study may be called finished — as a graph condition.
 
@@ -561,6 +630,8 @@ def criteria_coverage(store: Optional[ResearchGraphStore] = None) -> Dict[str, A
 
 
 TRIGGERS = {
+    # First: a study with no hypothesis has nothing for the rest to act on.
+    "study_without_hypothesis": study_without_hypothesis,
     "criteria_coverage": criteria_coverage,
     "ready_hypotheses": ready_hypotheses,
     "blocked_hypotheses": blocked_hypotheses,

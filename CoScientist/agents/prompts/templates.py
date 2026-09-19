@@ -229,6 +229,15 @@ def hypotheses(ctx: PromptContext) -> str:
     from CoScientist.config import get_settings
     max_active: int = max(1, min(5, get_settings().web.max_active_hypotheses))
     single = max_active == 1
+    # How many to PROPOSE, as opposed to how many may be active at once. Two is
+    # the standing ceiling: past that the surplus are usually the same claim
+    # reworded, and each one still buys a verification branch, so a study that
+    # branches five ways finishes none of them. Raising the active limit IS the
+    # operator asking for more, so the ceiling follows it up rather than
+    # contradicting the selection scaffolding below.
+    propose_cap = max(2, max_active)
+    propose_rule = ("ONE or TWO hypotheses. Not five." if propose_cap == 2 else
+                    f"at most {propose_cap} hypotheses, and prefer ONE or TWO.")
 
     # The "one active hypothesis" rule is the same either way; only HOW the
     # selection is recorded differs — with the research graph it is a status on
@@ -327,7 +336,14 @@ validated for a given task — and to hand the orchestrator exactly <<SELECT_WOR
 ### Instructions:
 
 1. Understand the task and its constraints.
-2. Propose a small set (2–5) of distinct, realistic hypotheses or approaches.
+2. Propose <<PROPOSE_RULE>> The first one must be the hypothesis
+   that, if it holds, ALREADY SETTLES the task — carrying the logic of the whole
+   pipeline, not one step of it. Another is worth writing only when it is a
+   genuinely different account of the same outcome; if two would be tested by
+   the same procedure and the same measurement, they are one hypothesis phrased
+   twice, so write one. More come later, and only if the first ones fail or the
+   human asks: every extra hypothesis buys a verification branch, and a study
+   that branches five ways finishes none of them.
 3. Keep them concise and actionable.
 4. Prefer testable and experimentally verifiable ideas.
 5. If relevant, briefly note assumptions or required conditions.
@@ -336,6 +352,37 @@ validated for a given task — and to hand the orchestrator exactly <<SELECT_WOR
    question, how testable it is with the tools/resources at hand, and how much
    the outcome would change what we do next. The rest are the BACKLOG, not work
    to start now.
+
+### What counts as a hypothesis here
+
+A hypothesis is a CLAIM ABOUT AN OUTCOME that the run could turn out to be wrong
+about. Two rules decide it:
+
+- **The threshold test.** If you cannot write a ConfirmationCriteria for it with
+  a number and a unit — or, where the answer is not numeric, a named check with
+  a stated pass condition — then what you have written is a METHOD, not a
+  hypothesis. "Run ADMET prediction on the candidates" fails the test; "the
+  top-ranked cluster will show a median predicted LD50 below 50 mg/kg" passes.
+- **The restatement test.** A hypothesis is not the task in other words. If
+  striking out the words "we hypothesise that" leaves the user's own request,
+  you have restated it. Ask instead: what does the request QUIETLY ASSUME that
+  could be false? That assumption is the hypothesis.
+
+**A known route still needs one.** Most requests here are procedural — build the
+pipeline, rank the compounds, assemble the review — and the method is obvious
+from the start. That does not exempt the study: the pipeline can run to
+completion and return nothing usable, or rank on a signal that turns out not to
+carry. So for a procedural task, state the EXPECTED OUTCOME of the pipeline as
+the hypothesis ("the toxicity ranking will separate the clusters by more than
+one order of magnitude in predicted LD50"), never the list of steps. The steps
+are the VerificationMethod.
+
+**If the human already stated one, use theirs.** When the request contains a
+claim about an outcome — including one written out as a hypothesis — adopt it as
+the hypothesis, in their terms, and do not invent a rival to look thorough.
+Being careful here cuts both ways: a request that only describes a goal or a
+procedure contains no hypothesis, and turning its sentences around is the
+restatement failure above.
 
 Do not perform experiments or retrieve external information — focus only on generating hypotheses.
 
@@ -348,11 +395,6 @@ or use physical instruments (HPLC, mass spec, cell culture, animal studies,
 crystallography you would perform, clinical trials).
 
 <<SELECTION>>
-
-For the selected hypothesis(es), propose HOW each would be verified: a
-VerificationMethod (what procedure yields evidence) and ConfirmationCriteria
-(when the evidence is sufficient). Record all of this in the research graph so
-the orchestrator can schedule verification.
 
 So every VerificationMethod you propose MUST be doable this way — a literature
 review, a computational analysis, or use of an existing dataset/tool. Do NOT
@@ -413,6 +455,7 @@ Update task status to "done" immediately upon completion of each work item.
 ''', SELECTION=selection, ANSWER_HEAD=answer_head,
         ANSWER_BACKLOG=answer_backlog, RESEARCH=render_research_protocol(ctx),
         SELECT_WORD=select_word, HAND_RULE=hand_rule, BACKLOG_RULE=backlog_rule,
+        PROPOSE_RULE=propose_rule,
         HITL=ctx.render_hitl())
 
 
@@ -1752,8 +1795,11 @@ def orchestrator(ctx: PromptContext) -> str:
             "   `research_init` first; consult `research_triggers` before each\n"
             "   delegation and act on them (start READY hypotheses, review REFUTE\n"
             "   signals, write Conclusions for CLOSABLE ones, wrap up when RESOURCES\n"
-            "   are LOW). For a simple one-shot computation or question you may skip\n"
-            "   the graph."
+            "   are LOW). You may skip the graph ONLY for a question you answer\n"
+            "   in one turn, with no plan and no delegation. Anything that gets a\n"
+            "   PLAN goes in the graph, however clear the route looks: \"build the\n"
+            "   pipeline that ranks X\" is a study with an obvious method, not an\n"
+            "   exemption."
         )
 
     steps.append(
@@ -1877,6 +1923,11 @@ def orchestrator(ctx: PromptContext) -> str:
             )
         research_graph_section += (
             "- Consult `research_triggers` before each step and act on them:\n"
+            "  • NO HYPOTHESIS ⇒ delegate to the HypothesesAgent BEFORE you start "
+            "any verification method. This holds even when the route to the answer "
+            "is obvious: running a known pipeline is still a claim that it returns "
+            "the result, and that claim is what the evidence is weighed against. "
+            "Without it the run delivers output nobody can call right or wrong.\n"
             "  • READY hypothesis (tools available) ⇒ verify it in this ORDER: "
             "call `research_set_focus(<hypothesis id>)` FIRST, THEN delegate the "
             "evidence-gathering (ResearchAgent for literature, TaskExecutorAgent "
@@ -1892,6 +1943,11 @@ def orchestrator(ctx: PromptContext) -> str:
             "hypothesis (status → postponed, reason 'requires wet-lab / out of scope') "
             "and move on. Do NOT keep trying to build it.\n"
             "  • REFUTE SIGNAL ⇒ review/close that branch; do not keep verifying it.\n"
+            "  • INCONCLUSIVE hypothesis ⇒ the judge could not settle it on what the "
+            "record held. If new evidence has since been gathered for it, put it "
+            "back to under_verification and the validator will look again; if "
+            "nothing new is coming, record `attrs.not_tested_reason` and move on. "
+            "Do NOT gather the same evidence twice hoping for a different verdict.\n"
             "  • NEEDS VERDICT (a hypothesis has evidence) ⇒ you do NOTHING here: a "
             "background validator judges it automatically (confirmed/refuted) and "
             "writes the Conclusion off the main loop. Your job is only to make sure "

@@ -137,15 +137,31 @@ def _orchestrator_digest(research_graph) -> str:
         return ("Research graph has NO ROOT QUESTION. If this is a research "
                 "task, call research_init(question=...) before delegating.")
     budget = _context_budget()
+    # The two halves are budgeted separately, and the index is cut by whole
+    # LINES with a visible count. Handing the whole budget to the triggers and
+    # then slicing the concatenation took every overflowing character off the
+    # END — which is the index — mid-token: a real run measured 3592 chars, and
+    # one more mirrored plan step tipped it over, so the index ended
+    # "- VM7 [VerificationMeth …[truncated]" and the newest method simply was
+    # not there. Silent, and exactly the row the orchestrator needed.
+    triggers = queries.trigger_report(
+        research_graph, char_budget=max(400, budget // 2)).get("rendered", "")
     overview = research_graph.overview().get("rendered", "")
-    triggers = queries.trigger_report(research_graph, char_budget=budget).get("rendered", "")
-    parts = []
-    if triggers:
-        parts.append("ACTIVE TRIGGERS:\n" + triggers)
-    if overview:
-        parts.append("GRAPH INDEX:\n" + overview)
-    text = "\n\n".join(parts)
-    return text[:budget] + ("\n…[truncated]" if len(text) > budget else "")
+    head = ("ACTIVE TRIGGERS:\n" + triggers + "\n\n") if triggers else ""
+    if not overview:
+        return head.rstrip()
+    label = "GRAPH INDEX:\n"
+    room = budget - len(head) - len(label)
+    kept, dropped = [], 0
+    for line in overview.split("\n"):
+        if room - len(line) - 1 < 0:
+            dropped += 1
+            continue
+        kept.append(line)
+        room -= len(line) + 1
+    if dropped:
+        kept.append(f"…[{dropped} more row(s) not shown — call research_overview]")
+    return head + label + "\n".join(kept)
 
 
 def _worker_context(research_graph, state: Any) -> str:

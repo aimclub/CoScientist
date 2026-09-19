@@ -261,12 +261,17 @@ agents:
       generates candidate hypotheses and returns the selected hypothesis(es) to verify next 
       the alternatives stay in the graph as postponed backlog).
     routing: >-
-      when the direction is unclear or approaches need to be proposed. It comes
-      back with selected hypothesis(es) — verify those; do not start the
-      alternatives in parallel unless they are among the selected set.
+      when the study has no hypothesis yet — BEFORE any verification method
+      runs, including when the route to an answer already looks obvious. An
+      obvious route is still a claim that it will produce the result, and that
+      claim is what the run is about to spend its budget on. It comes back with
+      selected hypothesis(es) — verify those; do not start the alternatives in
+      parallel unless they are among the selected set.
     planning: |-
-      Use this to generate hypotheses when the solution is unclear or approaches need to be proposed.
-      It picks the single most relevant hypothesis to test first, so plan ONE verification branch after it.
+      Use this FIRST on any study that has no hypothesis yet, procedural tasks included:
+      one hypothesis stating what the planned pipeline will show is what makes the result
+      judgeable instead of merely delivered. It picks the single most relevant hypothesis
+      to test first, so plan ONE verification branch after it.
       Decision-making and compatibility assessment based on gathered facts.
     # Ideation plus choosing what to test first: the most reasoning-bound job
     # in the system.

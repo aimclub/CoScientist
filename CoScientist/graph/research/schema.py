@@ -127,15 +127,50 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
                         "by store.to_view; no agent may create it"},
     ),
     # ── Layer 2 — methodological frame ───────────────────────────────────────
+    # The PLAN, as opposed to the record. A plan step is an intention: what is
+    # to be done, in what order, by whom. A VerificationMethod is the answer to
+    # a different question — by WHAT MEANS was this established, and against
+    # which bar — and it can only exist once there is a claim to test.
+    #
+    # They were the same node until now, and that is the single biggest thing
+    # wrong with the graph the operator reads: the mirror wrote the planner's
+    # task list as `VerificationMethod`, so "Метод проверки 2" hung off the
+    # research QUESTION, carried no instrument, and could not be told apart
+    # from a method an agent had actually designed. A step and a method are
+    # linked by `realises`, and a reader can now see both the intention and
+    # what was made of it.
+    NodeTypeSpec(
+        "PlanStep", "PS", 2,
+        # The task tracker's own vocabulary, lowercased. A step the mirror first
+        # sees already finished is created finished, so every status is creatable.
+        statuses=("todo", "in_progress", "done", "blocked"),
+        creatable=("todo", "in_progress", "done", "blocked"),
+        attr_docs={
+            "title": "the step as the plan words it — the card's headline",
+            "description": "what the step asks for",
+            "plan_task_id": "the id the plan gave it (TASK-n)",
+            "assignee": "the agent the plan assigned it to",
+            "notes": "anything the plan attached to the step",
+        },
+    ),
     NodeTypeSpec(
         "VerificationMethod", "VM", 2,
         statuses=("planned", "running", "done", "failed"), creatable=("planned",),
         attr_docs={
-            "method_type": "computational / laboratory / analytical / statistical / expert",
+            "method_type": "computational / laboratory / analytical / statistical "
+                           "/ expert / literature_review",
+            "description": "WHAT this method is, in one line — it is the card's "
+                           "headline, so two methods that differ must differ here",
+            "procedure": "HOW it is run: the concrete steps, tools and settings",
             "inputs": "what it needs",
             "outputs": "what it yields",
             "cost": "estimated cost",
             "limitations": "known weaknesses",
+            # Written by the plan mirror (agents/callbacks/tool_callbacks.py), not
+            # by a model, and undeclared until now — which is why a reader could
+            # not tell two methods mirrored from two plan steps apart.
+            "plan_task_id": "the plan step this method mirrors (TASK-n)",
+            "assignee": "the agent the plan assigned the step to",
             # A failed step with no reason is indistinguishable from one nobody
             # started, which is exactly how a run reads when it is over.
             "failure_reason": "WHY the run failed — the error, the missing "
@@ -147,7 +182,9 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
         "ConfirmationCriteria", "CC", 2,
         statuses=("not_met", "met"), creatable=("not_met",),
         attr_docs={
-            "threshold": "quantitative/qualitative bar",
+            "threshold": "quantitative/qualitative bar — FROZEN once evidence "
+                         "is aimed at the hypothesis; to revise the standard, "
+                         "write a new criterion saying what it replaces",
             "confirmations_needed": "number of independent confirmations",
             "reproducibility": "reproducibility requirement",
         },
@@ -244,6 +281,13 @@ STATUS_TRANSITIONS: Dict[str, FrozenSet[Tuple[str, str]]] = {
                                      ("running", "done"), ("running", "failed"),
                                      ("failed", "planned")}),
     "ConfirmationCriteria": frozenset({("not_met", "met"), ("met", "not_met")}),
+    # The tracker's own moves. A finished step can be reopened, because a
+    # re-plan may put a step back in play, and a blocked one can be released.
+    "PlanStep": frozenset({("todo", "in_progress"), ("todo", "done"),
+                           ("todo", "blocked"), ("in_progress", "done"),
+                           ("in_progress", "blocked"), ("in_progress", "todo"),
+                           ("blocked", "in_progress"), ("blocked", "todo"),
+                           ("done", "in_progress")}),
     "Tool": frozenset({("needs_adaptation", "available"),
                        ("needs_adaptation", "being_created"),
                        ("being_created", "available"),
@@ -285,6 +329,16 @@ EDGE_TYPES: Dict[str, Tuple[Tuple[str, str], ...]] = {
     # Not in the spec's edge table, but the docx says criteria are "formulated
     # for a hypothesis" and the closable-path trigger needs the linkage.
     "formulated_for": (("ConfirmationCriteria", "Hypothesis"),),
+    # What a plan step turned into. The arrow runs from the RECORD to the
+    # INTENTION — "this method realises that step" — so a reader following the
+    # research forward never walks into the plan by accident, and a step with
+    # nothing pointing at it is visibly unrealised. A step can be realised by
+    # more than the method: "formulate a testable hypothesis" is realised by the
+    # hypothesis itself, and "write the report" by the conclusion.
+    "realises": (("VerificationMethod", "PlanStep"),
+                 ("Hypothesis", "PlanStep"),
+                 ("Evidence", "PlanStep"),
+                 ("Conclusion", "PlanStep")),
     "regulates": (("Constraint", "VerificationMethod"),
                   ("Constraint", "ConfirmationCriteria")),
     "constrains": (("Constraint", "Hypothesis"),
@@ -475,7 +529,15 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
             ("Conclusion", "draft", "approved"),               # approval
             ("Hypothesis", "formulated", "under_verification"),  # start verification
             ("Hypothesis", "formulated", "postponed"),
-            ("Hypothesis", "postponed", "formulated")),          # scheduling only
+            ("Hypothesis", "postponed", "formulated"),           # scheduling only
+            # `inconclusive` is in the lifecycle but nothing held the way OUT of
+            # it, so a branch the judge could not settle was parked there for
+            # good. The background validator now WRITES that verdict whenever a
+            # confirmation is refused, which makes a dead end that used to be
+            # nearly unreachable ordinary. Reopening one is scheduling, same as
+            # reviving a postponed branch: new evidence arrived, put it back
+            # under verification and let the judge look again.
+            ("Hypothesis", "inconclusive", "under_verification")),
         edges=_edges("contextualizes", "defines_scope", "derived_from", "applies_to",
                      "motivates", "regulates", "constrains",
                      "relates_to", "supports", "refutes", "refines", "supersedes",
@@ -588,10 +650,12 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
     # knows no model chose it — it is the roadmap, one card per step. It writes
     # methods and attaches them; it never runs or judges anything.
     "plan-mirror": AgentPerm(
-        create=frozenset({"VerificationMethod"}),
-        update_attrs=frozenset({"VerificationMethod"}),
-        transitions=frozenset(),
-        edges=_edges("tested_by"),
+        create=frozenset({"PlanStep"}),
+        update_attrs=frozenset({"PlanStep"}),
+        # It follows the tracker, so it moves a step through the tracker's own
+        # states. It still judges nothing and runs nothing.
+        transitions=_transitions("PlanStep"),
+        edges=_edges("realises"),
     ),
     # The pre-stage context-initialization agent seeds the framing frame at the
     # start of a run. It writes the whole context star through the PRIVILEGED

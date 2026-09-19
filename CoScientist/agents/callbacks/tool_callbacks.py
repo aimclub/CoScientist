@@ -776,7 +776,8 @@ def inject_original_query(
 # forgotten. Written as "plan-mirror" rather than as an agent, so a reader can
 # see at a glance that no model chose these.
 
-#: normalized task title -> the VerificationMethod id created for it.
+#: normalized task title -> the PlanStep id created for it, under the study
+#: generation it was written against.
 _VM_BY_TASK_KEY = "_research_vm_by_task"
 _PLAN_SOURCE = "plan-mirror"
 
@@ -785,79 +786,180 @@ def _task_key(task: Dict[str, Any]) -> str:
     return " ".join(str(task.get("title") or "").split()).lower()[:120]
 
 
-def _active_hypothesis(graph: Any) -> Optional[str]:
-    """The branch being worked on, if there is exactly one obvious candidate."""
+#: Node types that can be what a plan step turned into.
+_REALISING_TYPES = ("VerificationMethod", "Hypothesis", "Evidence", "Conclusion")
+
+#: The tracker's status words, lowercased into the PlanStep vocabulary. Anything
+#: unrecognised is a step nobody has started.
+_STEP_STATUS = {"todo": "todo", "in_progress": "in_progress", "done": "done",
+                "blocked": "blocked", "cancelled": "blocked", "failed": "blocked"}
+
+
+def _step_status(task: Dict[str, Any]) -> str:
+    return _STEP_STATUS.get(str(task.get("status") or "").strip().lower(), "todo")
+
+
+def _step_attrs(task: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in {
+        "title": task.get("title", ""),
+        "description": task.get("description", ""),
+        "plan_task_id": str(task.get("id") or ""),
+        "assignee": task.get("assignee", ""),
+        "notes": task.get("notes", ""),
+        # What the plan already knows about the HOW. The planner can read the
+        # tool list, so this is the one part of a method it can answer in
+        # advance, and whoever writes the method starts from it instead of
+        # guessing.
+        "tools": ", ".join(str(t) for t in (task.get("tools") or []) if t),
+    }.items() if v}
+
+
+def _study_generation(graph: Any) -> str:
+    """Identity of the LIVE study, so a memo cannot outlive its graph.
+
+    `research_init` archives the study and replaces the graph with an empty one,
+    and `_next_id` scans only the live graph — so ids restart at PS1. The memo
+    of "which step did I mirror for which task" lives in ADK session state,
+    which survives that reset, so after a switch the old ids matched the new
+    study's fresh ones and the mirror both skipped tasks it had never mirrored
+    HERE and wrote an edge to an id that now names somebody else's node.
+    Checking that an id merely resolves cannot catch this; only identity can.
+    """
     try:
-        nodes = graph.full().get("nodes") or []
+        full = graph.full()
+        return f"{full.get('root_id')}:{full.get('created_at')}"
     except Exception:  # noqa: BLE001
-        return None
-    live = [n for n in nodes if n.get("type") == "Hypothesis"
-            and n.get("status") in ("under_verification", "formulated")]
-    if not live:
-        return None
-    live.sort(key=lambda n: (n.get("status") != "under_verification",
-                             str(n.get("id"))))
-    return live[0].get("id")
+        return ""
+
+
+def _realises_edges(graph: Any) -> List[Dict[str, Any]]:
+    """`realises` edges for work that names the plan step it carried out.
+
+    A method, hypothesis or conclusion whose `plan_task_id` matches a step is
+    what became of that step, and this edge is the one thing that lets a reader
+    cross between the intention and the record. Derived from an attribute its
+    writer set — not guessed from wording — and only ever added, because a step
+    can be realised by several things and none of them stops being true.
+    """
+    try:
+        full = graph.full()
+        nodes = full.get("nodes") or []
+        already = {(e.get("from"), e.get("to")) for e in (full.get("edges") or [])
+                   if e.get("type") == "realises"}
+    except Exception:  # noqa: BLE001
+        return []
+    # BOTH sides come from the graph, not from the task list. The work that
+    # carries out a step is written turns after the plan was registered, and by
+    # then the task list is empty — reading the mapping from it made the
+    # linking unreachable exactly when it was needed.
+    step_by_task = {str((n.get("attrs") or {}).get("plan_task_id") or ""): n.get("id")
+                    for n in nodes if n.get("type") == "PlanStep"}
+    step_by_task.pop("", None)
+    if not step_by_task:
+        return []
+    out = []
+    for n in nodes:
+        if n.get("type") not in _REALISING_TYPES:
+            continue
+        task_id = str((n.get("attrs") or {}).get("plan_task_id") or "")
+        step = step_by_task.get(task_id)
+        if not step or (n.get("id"), step) in already:
+            continue
+        out.append({"type": "realises", "from": n.get("id"), "to": step})
+    return out
 
 
 def sync_plan_to_research_graph(tasks: Iterable[Dict[str, Any]], graph: Any,
                                 state: Any, question: str = "") -> Optional[Any]:
-    """Mirror a registered plan into the graph as one planned method per step.
+    """Mirror the registered plan into the graph as one PlanStep per step.
 
-    Idempotent: every task title it has already mirrored is remembered in
-    session state, so a re-plan adds only what is new instead of doubling the
-    column. Attaches to the live hypothesis when there is one, and to the root
-    question otherwise — a plan usually arrives before any hypothesis is
-    written, and a method attached to nothing reads as a bug.
+    It used to write the plan as `VerificationMethod` nodes, and that was the
+    most misleading thing in the graph a scientist reads. A step is an
+    INTENTION — what to do, in what order, by whom. A method answers a
+    different question: by what MEANS was this established, and against which
+    bar. Conflated, the planner's task list appeared as "methods" hanging off
+    the research question, carrying no instrument, indistinguishable from a
+    method an agent had designed for a hypothesis — and the reader could not
+    tell the plan from the record.
+
+    They are separate nodes now, joined by `realises`, so the graph shows both
+    the intention and what was made of it. Methods are written by the agents
+    that own them; when a hypothesis has none, the graph says so through
+    `queries.hypotheses_without_methods` instead of filling the gap with the
+    plan.
+
+    Idempotent: a task already mirrored is remembered in session state, keyed to
+    the study generation, so a re-plan adds only what is new; a step whose
+    tracker status has moved is advanced in place.
     """
     tasks = [t for t in (tasks or []) if isinstance(t, dict)]
-    if not tasks:
-        return None
     root = graph.root_id()
     if not root:
-        root = (graph.ensure_root(question or tasks[0].get("title", "")) or {}).get("root_id")
+        seed = question or (tasks[0].get("title", "") if tasks else "")
+        if not seed:
+            return None
+        root = (graph.ensure_root(seed) or {}).get("root_id")
     if not root:
         return None
+    # Deliberately NOT `if not tasks: return None`. The `realises` links are a
+    # fact about the GRAPH, not about the plan: the work that carries out a step
+    # is written after the plan is registered, and by then the task list this is
+    # called with can be empty. Gating on it made the linking unreachable.
+    gen = _study_generation(graph)
     try:
-        seen = dict(state.get(_VM_BY_TASK_KEY) or {})
+        memo = dict(state.get(_VM_BY_TASK_KEY) or {})
     except Exception:  # noqa: BLE001 — a stateless caller still gets the mirror
-        seen = {}
-    parent = _active_hypothesis(graph) or root
+        memo = {}
+    seen = dict(memo.get("ids") or {}) if memo.get("gen") == gen else {}
+    live = _live_statuses(graph)
 
-    nodes, edges, keys = [], [], []
+    creates, keys, updates = [], [], []
     for i, task in enumerate(tasks):
         key = _task_key(task)
-        if not key or key in seen:
+        if not key:
             continue
-        ref = f"vm{i}"
+        if key in seen:
+            step, want = seen[key], _step_status(task)
+            if live.get(step) not in (None, want):
+                updates.append({"id": step, "status": want,
+                                "reason": "the plan moved this step to " + want})
+            continue
         keys.append(key)
-        nodes.append({
-            "type": "VerificationMethod", "ref": ref, "status": "planned",
-            "attrs": {k: v for k, v in {
-                "description": task.get("title", ""),
-                "procedure": task.get("description", ""),
-                "inputs": task.get("notes", ""),
-                "plan_task_id": task.get("id", ""),
-                "assignee": task.get("assignee", ""),
-            }.items() if v},
-        })
-        edges.append({"type": "tested_by", "from": parent, "to": f"#{ref}"})
-    if not nodes:
-        return None
+        creates.append({"type": "PlanStep", "ref": f"ps{i}",
+                        "status": _step_status(task), "attrs": _step_attrs(task)})
 
-    # partial_edges: one stale parent id must not cost a dozen good methods.
-    result = graph.commit(source=_PLAN_SOURCE, nodes=nodes, edges=edges,
-                          partial_edges=True)
-    if not result.ok:
-        logger.warning("plan → research graph refused: %s", result.errors[:3])
-        return result
-    for key, echo in zip(keys, result.committed.get("nodes", [])):
-        seen[key] = echo.get("id")
-    try:
-        state[_VM_BY_TASK_KEY] = seen
-    except Exception:  # noqa: BLE001
-        pass
+    result = None
+    if creates or updates:
+        result = graph.commit(source=_PLAN_SOURCE, nodes=creates,
+                              status_updates=updates, partial_edges=True)
+        if not result.ok:
+            logger.warning("plan -> research graph refused: %s", result.errors[:3])
+            return result
+        for key, echo in zip(keys, result.committed.get("nodes", [])):
+            seen[key] = echo.get("id")
+        try:
+            state[_VM_BY_TASK_KEY] = {"gen": gen, "ids": seen}
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Read after the commit above, so a step created just now is linkable in
+    # this same call rather than a turn later.
+    edges = _realises_edges(graph)
+    if edges:
+        linked = graph.commit(source=_PLAN_SOURCE, edges=edges, partial_edges=True)
+        if not linked.ok:
+            logger.warning("plan links refused: %s", linked.errors[:3])
+        result = linked if result is None else result
     return result
+
+
+def _live_statuses(graph: Any) -> Dict[str, str]:
+    """id -> status for the steps already in the graph."""
+    try:
+        return {n.get("id"): n.get("status") for n in (graph.full().get("nodes") or [])
+                if n.get("type") == "PlanStep"}
+    except Exception:  # noqa: BLE001
+        return {}
 
 
 def mirror_plan_after_create(tool: BaseTool, args: Dict[str, Any],

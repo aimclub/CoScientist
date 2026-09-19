@@ -230,12 +230,6 @@ async def judge_hypothesis(
         # criteria the model judged, restricted to this hypothesis' actual criteria
         crit_ids = {e["from"] for e in sl.get("edges", [])
                     if e["type"] == "formulated_for" and e["to"] == hid}
-        for ccid, met in (data.get("criteria") or {}).items():
-            if ccid in crit_ids:
-                is_met = str(met).strip().lower() in ("met", "true", "yes", "1")
-                cur = by_id.get(ccid, {}).get("status")
-                if (is_met and cur == "not_met") or (not is_met and cur == "met"):
-                    status_updates.append({"id": ccid, "status": "met" if is_met else "not_met"})
 
         # Evidence attached to the hypothesis, and its CURRENT polarity edge (if any).
         cur_pol = {}
@@ -261,6 +255,26 @@ async def judge_hypothesis(
             if et in ("supports", "refutes", "refines"):
                 polarity.setdefault(eid, et)
 
+        # A criterion may only be marked met WITH the measurement that meets it
+        # (store._commit_locked refuses a bare `met`), so the reason names the
+        # evidence this judgment actually rested on. Appended after the polarity
+        # pass because that is where those ids become known; the store scans the
+        # whole commit for met criteria, so the order does not matter.
+        supporting = sorted(e for e, pol in polarity.items() if pol == "supports")
+        for ccid, met in (data.get("criteria") or {}).items():
+            if ccid not in crit_ids:
+                continue
+            is_met = str(met).strip().lower() in ("met", "true", "yes", "1")
+            cur = by_id.get(ccid, {}).get("status")
+            if not ((is_met and cur == "not_met") or (not is_met and cur == "met")):
+                continue
+            update = {"id": ccid, "status": "met" if is_met else "not_met"}
+            if is_met:
+                update["reason"] = (
+                    ("met by " + ", ".join(supporting)) if supporting
+                    else "met by the evidence on this hypothesis")
+            status_updates.append(update)
+
         nodes: List[Dict[str, Any]] = []
         concl = str(data.get("conclusion", "")).strip()
         if concl:
@@ -281,8 +295,17 @@ async def judge_hypothesis(
         if result.ok:
             logger.info("[validator] %s → %s%s", hid, verdict,
                         " (+Conclusion)" if concl else "")
-        else:
-            logger.info("[validator] %s commit rejected: %s", hid, result.errors)
+            return result.model_dump(exclude_none=True)
+
+        # A refusal is not a verdict. The store refuses a confirmation whose
+        # criteria are still unmet, or which no Evidence supports — both of
+        # which are "not yet", not "no". Writing `inconclusive` here closed a
+        # branch whose missing measurement was still on its way, and discarded
+        # the judge's own `met` findings with the atomic commit. The branch
+        # stays under verification; what bounds the cost is the plugin's dedupe
+        # key, which fingerprints the evidence set (see `_key`).
+        logger.info("[validator] %s commit refused, leaving it under "
+                    "verification: %s", hid, result.errors)
         return result.model_dump(exclude_none=True)
     except Exception as exc:  # noqa: BLE001 — never break a run
         logger.warning("[validator] judging %s failed: %s", hid, exc)
@@ -335,7 +358,15 @@ class BackgroundValidatorPlugin(BasePlugin):
                 graph=graph,
                 expected_research_id=research_id,
             )
-            if result and result.get("ok") and _research_id(graph) == research_id:
+            # Settled for THIS evidence set whether the commit was accepted or
+            # REFUSED. A refusal is deterministic in the slice it was made on,
+            # so retrying it buys another LLM call and the same answer; keying
+            # only on success meant a hypothesis the store would not let the
+            # judge confirm was re-judged on every later commit by anyone, for
+            # the rest of the run. New evidence changes the key and the branch
+            # is judged again — which is the one thing that can change the
+            # answer.
+            if result and _research_id(graph) == research_id:
                 self._completed.add(key)
         except Exception as exc:  # noqa: BLE001 -- background work is best-effort
             logger.warning("[validator] background judgment for %s failed: %s",

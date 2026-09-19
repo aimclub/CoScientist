@@ -47,6 +47,14 @@ class TaskTrackerToolset(BaseToolset):
             another task's result; leave it null for independent tasks. A task
             may never reference itself.
           - notes (str, optional)
+          - tools (list of str, optional): the tool names this step will be run
+            WITH, taken from the tools you can see — MCP tool names, or the
+            library/repo a code task must use. You know which tools exist, so
+            this is the one part of the method the plan can already answer: it
+            carries into the research graph as the instruments of the step, and
+            whoever writes the verification method starts from it instead of
+            guessing. Name the tool, not the capability ("calculate_docking",
+            not "docking"). Omit it for a step that runs no tool.
 
         Ids are renumbered TASK-1..TASK-N in final execution order, and the
         returned "plan" lists that order — check it before finishing your turn.
@@ -154,6 +162,7 @@ class TaskTrackerToolset(BaseToolset):
                 "status": "TODO",
                 "parent_id": final_ids[parents[-1]] if parents else None,
                 "notes": task["notes"],
+                "tools": task.get("tools") or [],
                 "created_at": datetime.now().isoformat(),
                 "updated_at": datetime.now().isoformat(),
             })

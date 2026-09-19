@@ -22,7 +22,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import uuid4
 
 import networkx as nx
@@ -128,6 +128,8 @@ _KIND_WORDS = {
     "Publication": "Публикация", "Spec": "Спецификация",
     "CostModel": "Стоимость", "EfficiencyMetric": "Эффективность",
     "EfficiencyJustification": "Обоснование эффективности",
+    # The plan track, beside the record rather than part of it.
+    "PlanStep": "Шаг плана",
     # Derived cards, projected rather than written.
     "Framing": "Постановка", "Outcome": "Итог",
 }
@@ -145,6 +147,8 @@ _STATUS_WORDS = {
     "creation_failed": "создать не удалось",
     "draft": "черновик", "approved": "утверждён", "created": "записан",
     "active": "действует", "derived": "сводка",
+    # A plan step's own states, from the task tracker.
+    "todo": "не начат", "in_progress": "в работе", "blocked": "заблокирован",
 }
 
 _FIELD_WORDS = {
@@ -264,9 +268,11 @@ def _fields(attrs: Dict[str, Any], headline: str,
             kind: str = "") -> Dict[str, str]:
     """The node's attributes under names a reader recognises.
 
-    The panel used to list the record verbatim, keys and all, so a scientist
-    read `base_type` and `source_ref`. Whatever the headline already says is
-    dropped rather than repeated underneath it.
+    Keys are the attribute CODES, never display words: the page localises them
+    through `graph.field.*`, the same way it already localises gap codes. Baking
+    the English word in here meant a Russian panel captioned "Procedure" and an
+    English one captioned nothing else — the server cannot know the reader.
+    Whatever the headline already says is dropped rather than repeated underneath.
     """
     out: Dict[str, str] = {}
     spoken = _CONSUMED_BY_HEADLINE.get(kind, set())
@@ -276,7 +282,7 @@ def _fields(attrs: Dict[str, Any], headline: str,
         rendered = _short(value, 600) if not isinstance(value, str) else value
         if rendered.strip() and rendered.strip() == headline.strip():
             continue
-        out[_FIELD_WORDS.get(key, key.replace("_", " ").capitalize())] = rendered
+        out[key] = rendered
     return out
 
 
@@ -294,9 +300,13 @@ def _fields(attrs: Dict[str, Any], headline: str,
 # the structure is known and an edge can be re-pointed at the card that absorbed
 # its endpoint instead of being discarded.
 
-#: Drawn as cards of their own: the scientific record.
+#: Drawn as cards of their own: the scientific record, plus the PLAN beside it.
+#: A PlanStep is not part of the record — it is the intention the record was
+#: made against — so the viewer draws it in its own column rather than in the
+#: band flow, keyed on `track: "plan"`. It still has to be projected, or the
+#: reader cannot see what was intended and what came of it.
 _STORY_TYPES = ("ResearchQuestion", "Hypothesis", "VerificationMethod",
-                "Evidence", "Conclusion", "Framing", "Outcome")
+                "Evidence", "Conclusion", "Framing", "Outcome", "PlanStep")
 #: Products of one finding — they belong to whatever they were derived from.
 _ARTIFACT_FOLD_TYPES = ("CodeArtifact", "GeneratedData", "Spec",
                         "EfficiencyJustification", "Report", "Publication")
@@ -316,22 +326,35 @@ _DERIVED_IDS = (FRAME_ID, OUTCOME_ID)
 
 #: One column per epistemic layer: the story reads left to right.
 _LEVEL = {"Framing": 0, "ResearchQuestion": 0, "Hypothesis": 1,
-          "VerificationMethod": 2, "Evidence": 3, "Conclusion": 4, "Outcome": 5}
+          "VerificationMethod": 2, "Evidence": 3, "Conclusion": 4, "Outcome": 5,
+          # Off the argument's ladder entirely: a step is an intention, so it
+          # gets the level of the work it asks for and is drawn beside the band.
+          "PlanStep": 2}
 
 #: The stages a study moves through, in the order a reader meets them. The
 #: viewer draws one band per stage, top to bottom, and puts a card in the band
 #: of the stage that produced it.
 #:
 #: A stage is NOT the epistemic level. The same Evidence type belongs to the
-#: reading stage when it came out of a paper and to the hypothesis stage when an
-#: experiment produced it; the search that gathered the papers belongs beside
-#: its own findings rather than beside the experiments.
-STAGES = ("framing", "literature", "hypotheses", "report")
+#: reading stage when it came out of a paper and to the experiment stage when a
+#: run produced it; the search that gathered the papers belongs beside its own
+#: findings rather than beside the experiments.
+#:
+#: The execution trace has its own unrelated band called "experiment"
+#: (graph/projection.py) with a different vocabulary — the two never meet.
+STAGES = ("framing", "literature", "hypotheses", "experiment", "report")
 
+#: Every drawn type must stay in this table: `_stages_of` skips a type that is
+#: missing from it (see below), and `_project_nodes` falls back to it, so
+#: deleting an entry does not move a card — it silently drops the card into the
+#: default band and makes the per-type rules underneath unreachable.
 _STAGE_BY_TYPE = {
     "Framing": "framing", "ResearchQuestion": "framing",
-    "Hypothesis": "hypotheses", "VerificationMethod": "hypotheses",
-    "Evidence": "hypotheses",
+    "PlanStep": "experiment",
+    # The claim and the bar written for it; what tests the claim is the
+    # experiment beside it, not the claim itself.
+    "Hypothesis": "hypotheses", "ConfirmationCriteria": "hypotheses",
+    "VerificationMethod": "experiment", "Evidence": "experiment",
     "Conclusion": "report", "Outcome": "report",
 }
 #: Subtypes and method types that mean "read", not "run". Whole tokens, never
@@ -355,6 +378,28 @@ _READING_TEXT = re.compile(
 #: The agents whose whole job is reading. A method one of them opened is a
 #: review even before it has produced anything to judge it by.
 _READING_AGENTS = {"ResearchAgent", "MedicalAgent"}
+
+#: The bar itself, as opposed to the prose around it. Once a measurement is
+#: aimed at a criterion these stop being editable: a threshold that follows the
+#: result is a result with extra steps.
+_BAR_ATTRS = frozenset({"threshold", "confirmations_needed", "reproducibility"})
+#: Edges by which a piece of Evidence is attached to a hypothesis. The neutral
+#: `relates_to` counts: the store writes it itself when a worker records a
+#: finding under a focus, so by the time one exists the branch has stopped being
+#: drafted and started being gathered for — which is the point past which its
+#: bar may no longer follow the numbers.
+_POLARITY_EDGES = ("supports", "refutes", "refines", "relates_to")
+
+
+#: A step whose product is the write-up rather than a measurement. Deliberately
+#: narrow: "report" appears inside plenty of experimental steps ("report the
+#: medians"), so the pattern asks for the deliverable, not the verb.
+_REPORTING_TEXT = re.compile(
+    r"\bитогов\w*\s+отч|\bфинальн\w*\s+отч"
+    r"|\bсобрать\s+отч|\bоформ\w*\s+отч"
+    r"|\bfinal\s+report\b|\bwrite\s+(?:up|the\s+report)\b"
+    r"|\bpublication\b",
+    re.IGNORECASE)
 
 #: Attributes that answer "why did it end like that", best first.
 _REASON_ATTRS = ("failure_reason", "inconclusive_reason", "not_tested_reason",
@@ -446,7 +491,7 @@ def _stages_of(raw_nodes: Dict[str, Dict[str, Any]],
         attrs = data.get("attrs") or {}
         if kind == "Evidence":
             stage[nid] = ("literature" if _is_reading(attrs.get("subtype"))
-                          else "hypotheses")
+                          else "experiment")
         elif kind == "VerificationMethod":
             produced = [dst for etype, dst in out.get(nid, [])
                         if etype == "produces"
@@ -456,13 +501,29 @@ def _stages_of(raw_nodes: Dict[str, Dict[str, Any]],
                 # belongs with the experiments it ran.
                 stage[nid] = "literature" if all(
                     _is_reading(((raw_nodes[dst].get("attrs") or {}).get("subtype")))
-                    for dst in produced) else "hypotheses"
+                    for dst in produced) else "experiment"
             elif (_is_reading(attrs.get("method_type") or attrs.get("subtype"))
                   or data.get("source") in _READING_AGENTS
                   or _reads_like_review(attrs)):
                 stage[nid] = "literature"
             else:
+                stage[nid] = "experiment"
+        elif kind == "PlanStep":
+            # A step is drawn at the height of the stage it ASKS FOR, so the
+            # plan column reads alongside the research it planned. The assignee
+            # is the most reliable signal the plan carries — the planner picks
+            # it from the real roster — and the wording is the fallback.
+            assignee = str(attrs.get("assignee") or "")
+            text = " ".join(str(attrs.get(k) or "")
+                            for k in ("title", "description", "notes"))
+            if assignee == "HypothesesAgent":
                 stage[nid] = "hypotheses"
+            elif assignee in _READING_AGENTS or _READING_TEXT.search(text):
+                stage[nid] = "literature"
+            elif _REPORTING_TEXT.search(text):
+                stage[nid] = "report"
+            else:
+                stage[nid] = "experiment"
         else:
             stage[nid] = _STAGE_BY_TYPE[kind]
     return stage
@@ -667,9 +728,12 @@ def _virtual_nodes(raw_nodes: Dict[str, Dict[str, Any]],
     fields = _fields(root_attrs, "", "ResearchQuestion")
     grouped: Dict[str, List[str]] = {}
     for view, _role in members:
-        grouped.setdefault(view["type_word"], []).append(view["label"])
-    for word, labels in grouped.items():
-        fields[word] = "; ".join(l for l in labels if l)[:600]
+        grouped.setdefault(view["kind"], []).append(view["label"])
+    # `type:<kind>` rather than the display word, so the whole dict stays one
+    # vocabulary the page can translate. Keyed on the Russian type_word, half of
+    # this card's fields were untranslatable by construction.
+    for kind, labels in grouped.items():
+        fields["type:" + kind] = "; ".join(l for l in labels if l)[:600]
     seeded_by = {(raw_nodes.get(root) or {}).get("source", "")} | {
         v["source"] for v, _ in members}
     # An empty framing card is worse than none: it promises the reader a setup
@@ -762,9 +826,20 @@ def _context_edges(nodes: List[Dict[str, Any]], edges: List[Dict[str, Any]],
     """
     if not root or len(nodes) < 2:
         return []
+    # The PLAN track is left out on both sides. A step nobody has carried out
+    # yet is not an orphan of the record — it is an intention waiting, drawn in
+    # its own column — and tying it to the question with an inferred line said
+    # the opposite: that the question had spawned it as work. Worse, one
+    # unrealised step would be picked as its component's representative and the
+    # real orphans behind it would stay unlinked.
+    record = [n for n in nodes if n.get("track") != "plan"]
+    plan_ids = {n["id"] for n in nodes if n.get("track") == "plan"}
+    if len(record) < 2:
+        return []
     und = nx.Graph()
-    und.add_nodes_from(n["id"] for n in nodes)
-    und.add_edges_from((e["src"], e["dst"]) for e in edges)
+    und.add_nodes_from(n["id"] for n in record)
+    und.add_edges_from((e["src"], e["dst"]) for e in edges
+                       if e["src"] not in plan_ids and e["dst"] not in plan_ids)
     out = []
     for comp in nx.connected_components(und):
         if root in comp:
@@ -1210,6 +1285,73 @@ class ResearchGraphStore:
             ordinal[nid] = seen_kind[kind]
 
         stages = _stages_of(raw_nodes, raw_edges)
+        # Which CLAIM each method tests. Only a hypothesis is worth naming here:
+        # when the parent is the root question — which is every method until a
+        # hypothesis exists — the question is already the page banner, and
+        # repeating it turns four method cards into four copies of one sentence.
+        tests_for: Dict[str, str] = {}
+        for e in raw_edges:
+            if e.get("type") != "tested_by":
+                continue
+            parent = raw_nodes.get(e.get("src"))
+            if parent is not None and parent.get("type") == "Hypothesis":
+                tests_for[e.get("dst")] = _short(
+                    _headline("Hypothesis", parent.get("attrs") or {}), 90)
+        # What each plan step turned into. A step with nothing pointing at it is
+        # an intention nobody carried out, and the reader should see that.
+        realised_by: Dict[str, List[str]] = {}
+        for e in raw_edges:
+            if e.get("type") == "realises":
+                realised_by.setdefault(e.get("dst"), []).append(e.get("src"))
+
+        # WITH WHAT a method was run — the part of "method" that was missing
+        # altogether. A method is a method OF a claim, FOR settling it, BY some
+        # instrument; the card used to carry only the first two. Three sources,
+        # best first: the Tools the method declares it `uses`, the tools the
+        # PLAN already named for the step (the planner can read the tool list,
+        # so this is the one part of the method it can answer in advance), and
+        # the calls actually recorded against the method.
+        step_tools: Dict[str, str] = {}
+        for sid, sd in raw_nodes.items():
+            if sd.get("type") != "PlanStep":
+                continue
+            sa = sd.get("attrs") or {}
+            task_id = str(sa.get("plan_task_id") or "").strip()
+            if task_id:
+                step_tools[task_id] = str(sa.get("tools") or "")
+        declared: Dict[str, List[str]] = {}
+        for e in raw_edges:
+            if e.get("type") != "uses":
+                continue
+            tool = raw_nodes.get(e.get("dst"))
+            if tool is None or tool.get("type") != "Tool":
+                continue
+            name = str((tool.get("attrs") or {}).get("name") or "").strip()
+            if name:
+                declared.setdefault(e.get("src"), []).append(name)
+        instruments: Dict[str, str] = {}
+        for mid, md in raw_nodes.items():
+            if md.get("type") != "VerificationMethod":
+                continue
+            ma = md.get("attrs") or {}
+            names = list(declared.get(mid, []))
+            names += [p.strip() for p in
+                      step_tools.get(str(ma.get("plan_task_id") or ""), "").split(",")
+                      if p.strip()]
+            names += [str(c.get("tool") or "").strip()
+                      for c in (ma.get("_provenance") or [])
+                      if isinstance(c, dict) and str(c.get("tool") or "").strip()]
+            ordered, seen_names = [], set()
+            for name in names:
+                if name.lower() in seen_names:
+                    continue
+                seen_names.add(name.lower())
+                ordered.append(name)
+            if ordered:
+                # Capped: the card is a headline, and a method that called
+                # twenty tools is better read in the panel.
+                instruments[mid] = ", ".join(ordered[:6])
+
         nodes: List[Dict[str, Any]] = []
         for nid in sorted(drawn_ids, key=_id_order):
             d = raw_nodes[nid]
@@ -1258,7 +1400,7 @@ class ResearchGraphStore:
                 # Which stage band the viewer draws it in. The level says where
                 # it sits in the argument; the stage says which part of the work
                 # produced it, and for Evidence and methods those differ.
-                "stage": stages.get(nid, _STAGE_BY_TYPE.get(kind, "hypotheses")),
+                "stage": stages.get(nid, _STAGE_BY_TYPE.get(kind, "experiment")),
                 "shown": True,
                 "display_level": "primary",
             }
@@ -1266,6 +1408,35 @@ class ResearchGraphStore:
                 node["criterion"] = criterion
             if kind == "Hypothesis":
                 node["origin"] = _origin_of(nid, raw_edges)
+            if kind == "PlanStep":
+                # The plan is a parallel track, not a card in the band: the
+                # viewer draws it in a column beside the stages, at the height
+                # of the stage the step serves. Mixing the two is what made the
+                # graph unreadable — a reader could not tell the intention from
+                # the record.
+                node["track"] = "plan"
+                if realised_by.get(nid):
+                    node["realised_by"] = sorted(realised_by[nid], key=_id_order)
+            if kind == "VerificationMethod":
+                if tests_for.get(nid):
+                    node["tests"] = tests_for[nid]
+                # WITH WHAT it was run. A method is a method OF something, FOR
+                # something, BY something — and the last of those was missing
+                # entirely: the card said what the step was called and never
+                # which instrument answered it. Collected from the Tools the
+                # method `uses`, the plan step's declared tools, and the tool
+                # calls actually recorded against it.
+                if instruments.get(nid):
+                    node["instruments"] = instruments[nid]
+                # The plan step, always, on any method the mirror derived. Two
+                # steps that read alike ("… органные эндпоинты ДЛЯ токсичного
+                # кластера" against "… органные эндпоинты токсичного кластера")
+                # produced two cards a reader could not tell apart; matching
+                # their headlines would not have caught it, and loosening the
+                # match to near-identical risks merging methods that differ.
+                # The step number is short, authoritative and traceable.
+                if attrs.get("plan_task_id"):
+                    node["plan_step"] = str(attrs["plan_task_id"])
             nodes.append(node)
         return nodes
 
@@ -1440,12 +1611,59 @@ class ResearchGraphStore:
         # and it lists the verdict first, so scanning only what is already
         # staged would judge the verdict against a bar this very commit is
         # raising.
-        met_here = {
-            str(d.get("id"))
-            for d in status_drafts
-            if isinstance(d, dict)
-            and schema.normalize_token(d.get("status") or "") == "met"
-        }
+        # Canonicalized, because `_unmet_criteria` returns stored ids while a
+        # model writes what it likes: keyed on the raw string, a commit marking
+        # `cc1` met was judged against `CC1` and refused for a bar it had just
+        # cleared.
+        #
+        # A criterion may be marked met only WITH the measurement that meets it.
+        # One LLM response supplies both the bar and the claim that the bar was
+        # cleared, so the one thing that can be asked of it is that it say on
+        # what. A non-empty reason, not a parsed id: the validator builds its
+        # reason out of the evidence ids it used, and refusing prose would turn
+        # a sound verdict into `inconclusive` over a formatting miss.
+        met_here: Set[str] = set()
+        for k, d in enumerate(status_drafts):
+            if not isinstance(d, dict):
+                continue
+            if schema.normalize_token(d.get("status") or "") != "met":
+                continue
+            canon = self._canon_node(d.get("id") or "")
+            if canon is None:
+                continue
+            if not str(d.get("reason") or "").strip():
+                errors.append(
+                    f"status_updates[{k}]: {canon} cannot be marked met without a "
+                    f"`reason` naming the measurement that meets it — the bar and "
+                    f"the claim that it was cleared are otherwise the same "
+                    f"unargued sentence.")
+                continue
+            met_here.add(canon)
+
+        def _has_supporting_evidence(hid: str) -> bool:
+            """Whether an Evidence node positively supports this hypothesis.
+
+            Counts what is already in the graph and what this commit stages —
+            the validator writes the polarity edge and the verdict together.
+            Only `supports`: `relates_to` means related, `refines` means
+            modified, and neither is grounds for calling a claim confirmed.
+            """
+            for esrc, _edst, key in self._g.in_edges(hid, keys=True):
+                if (key == "supports"
+                        and self._g.nodes[esrc].get("type") == "Evidence"):
+                    return True
+            for e in staged_edges:
+                if e["type"] != "supports":
+                    continue
+                dst = e["to"]
+                if dst[0] != "id" or dst[1] != hid:
+                    continue
+                esrc = e["from"]
+                ftype = (creates[refs[esrc[1]]]["type"] if esrc[0] == "ref"
+                         else self._g.nodes[esrc[1]].get("type"))
+                if ftype == "Evidence":
+                    return True
+            return False
         staged_status: List[Dict[str, Any]] = []
         for k, d in enumerate(status_drafts):
             if not isinstance(d, dict):
@@ -1476,8 +1694,19 @@ class ResearchGraphStore:
             tr_errs = schema.validate_transition(source, ntype, cur, new,
                                                 enforce_permissions=enforce_permissions)
             errors.extend(f"status_updates[{k}]: {e}" for e in tr_errs)
+            confirming = (ntype, new) == ("Hypothesis", "confirmed")
+            # A verdict with nothing behind it. The criteria gate never caught
+            # this: a hypothesis with no criteria at all passed it vacuously,
+            # which is exactly the study that was sloppiest.
+            if confirming and not _has_supporting_evidence(nid):
+                errors.append(
+                    f"status_updates[{k}]: {nid} cannot be confirmed with no "
+                    f"Evidence supporting it. Commit the finding and a "
+                    f"`supports` edge from it to {nid}, or record the verdict as "
+                    f"refuted or inconclusive.")
+                continue
             unmet = ([c for c in self._unmet_criteria(nid) if c not in met_here]
-                     if (ntype, new) == ("Hypothesis", "confirmed") else [])
+                     if confirming else [])
             if unmet:
                 # A hypothesis is confirmed against the bar written for it. A run
                 # once reported "all criteria satisfied" while both of its
@@ -1737,10 +1966,48 @@ class ResearchGraphStore:
                 allowed += f"; on {ntype} only attrs.{', attrs.'.join(sorted(granted))}"
             return [f"nodes[{i}]: agent '{source}' may not update attrs of "
                     f"{ntype} nodes (yours: {allowed})."]
+        if ntype == "ConfirmationCriteria":
+            # Compared against what the node already holds, because WRITING a
+            # bar and MOVING one are different acts. A criterion is legal with
+            # no attrs at all, so the generator may commit `{metric: "docking
+            # score"}` and fill in the threshold a turn later; keyed on the
+            # attribute name alone, that first write was refused as a move and
+            # the hypothesis was left with a bar-less criterion that
+            # `_unmet_criteria` still counted and the judge was asked to weigh
+            # evidence against. An unchanged re-write is not a move either.
+            stored = self._g.nodes[nid].get("attrs") or {}
+            moved = sorted(k for k in set(attrs) & _BAR_ATTRS
+                           if str(stored.get(k, "")).strip()
+                           and str(attrs[k]).strip() != str(stored[k]).strip())
+            if moved and self._criterion_is_under_measurement(nid):
+                return [f"nodes[{i}]: the bar on {nid} is frozen — "
+                        f"{', '.join(moved)} cannot be changed once evidence is "
+                        f"being weighed against it. A bar that moves after the "
+                        f"measurement is not a bar. Write a NEW "
+                        f"ConfirmationCriteria for the revised standard and say "
+                        f"in its text that it replaces {nid}."]
         if "subtype" in attrs:
             attrs = {**attrs, "subtype": schema.normalize_token(str(attrs["subtype"]))}
         merges.append({"id": nid, "attrs": attrs})
         return []
+
+    def _criterion_is_under_measurement(self, ccid: str) -> bool:
+        """Whether evidence has started arriving against this criterion's claim.
+
+        Measured from the hypothesis the criterion was formulated for: once any
+        Evidence points at that hypothesis, the bar has been aimed at and the
+        run can no longer discover that it meant a different number all along.
+        A criterion already marked met is frozen outright.
+        """
+        if self._g.nodes[ccid].get("status") == "met":
+            return True
+        for _src, hid, key in self._g.out_edges(ccid, keys=True):
+            if key != "formulated_for":
+                continue
+            for esrc, _d, ekey in self._g.in_edges(hid, keys=True):
+                if ekey in _POLARITY_EDGES and                         self._g.nodes[esrc].get("type") == "Evidence":
+                    return True
+        return False
 
     def _resolve_endpoint(self, value: Any, j: int, side: str,
                           refs: Dict[str, int],

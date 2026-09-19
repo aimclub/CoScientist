@@ -4,6 +4,8 @@
   <meta charset="utf-8" />
   <title data-i18n="graph.title">CoScientist — Research Graph</title>
   <script src="/static/vis-network.min.js"></script>
+  <!-- Placement only: ELK computes coordinates, vis-network draws. -->
+  <script src="/static/elk.bundled.js"></script>
   <script src="/static/js/i18n.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
@@ -214,6 +216,30 @@
       derived:{c:SLATE,g:'▣'},
     };
     const rStatus = s => R_STATUS[s] || {c:SLATE,g:'•'};
+    // What KIND of thing a card is, in colour. Status used to be the only thing
+    // colour said, which made an `open` question and a `planned` method the
+    // same blue — the reader had to read every card to find out what it was.
+    // Now the box is the kind, and the status is the glyph and the word: the
+    // split the hand-drawn reference uses.
+    //
+    // The hypothesis is the deliberate exception and is absent from this table:
+    // it is the one card whose STATUS is the message, because the whole study
+    // exists to settle it, so it keeps the verdict colour.
+    const R_KIND = {
+      framing:              "#d29922",  // the setup, agreed with the operator
+      researchquestion:     "#3b82f6",  // what was asked
+      planstep:             "#64748b",  // the intention: background, not record
+      confirmationcriteria: "#8b5cf6",  // the bar
+      verificationmethod:   "#14b8a6",  // by what means
+      tool:                 "#a9682a",
+      evidence:             "#f97316",  // what was measured
+      generateddata:        "#a9682a",
+      codeartifact:         "#a9682a",
+      conclusion:           "#fb923c",  // what it adds up to — evidence's family
+      report:               "#fb923c",
+      publication:          "#fb923c",
+      outcome:              "#94a3b8",
+    };
 
     const R_ICON = { researchquestion:'❓', hypothesis:'💡', evidence:'🔬', conclusion:'✅',
       verificationmethod:'⚙️', confirmationcriteria:'🎯', tool:'🔧', resource:'🔋',
@@ -349,10 +375,15 @@
     //
     // Escaping to "&amp;" makes it strictly worse: agents write plain '&' too
     // ("Rassabina & Fedorov"). So no '&', '<' or '>' may reach the label at all;
-    // the <b>/<i>/<code> we do want is added after this runs. Full-width '＆'
-    // reads as an ampersand and is inert to the tokenizer.
+    // the <b>/<i>/<code> we do want is added after this runs. Full-width '＆',
+    // '＜' and '＞' read as their ASCII twins and are inert to the tokenizer.
+    // Deleting the brackets instead cost the meaning: a criterion reading
+    // "SA <= 3.5" was drawn as "SA  = 3.5", which is a different threshold.
     function visSafe(s){
-      return String(s == null ? "" : s).replace(/[<>]/g, " ").replace(/&/g, "＆");
+      return String(s == null ? "" : s)
+        .replace(/<=/g, "≤").replace(/>=/g, "≥")
+        .replace(/</g, "＜").replace(/>/g, "＞")
+        .replace(/&/g, "＆");
     }
     function rText(n){ return String(n.output||n.label||"").replace(/\s+/g," ").trim(); }
     // A card is a headline, not the document. Seven hundred characters of
@@ -389,6 +420,28 @@
                                + firstSentence(n.why, 110)) + "</i>");
       else if (n.why_missing)
         L.push("<i>" + visSafe(t('graph.why.missing')) + "</i>");
+      // What the method answers, and — when two plan steps read alike — the step
+      // that tells this card from its twin. Four look-alike method cards left
+      // the reader no way to know why there were four.
+      if (n.tests)
+        L.push(visSafe("🎯 " + t('graph.card.tests') + " "
+                       + firstSentence(n.tests, 80)));
+      if (n.plan_step)
+        L.push("<code>" + visSafe(String(n.plan_step).slice(0, 24)) + "</code>");
+      // WITH WHAT. A method is a method of a claim, for settling it, BY some
+      // instrument — and the card carried only the first two, so every method
+      // read as a restated task. The reference drawing hangs the tool names
+      // right on the method box, and that is what makes it answerable: a
+      // reader can see the LD50 came out of ADMETlab and not out of a model's
+      // recollection.
+      if (n.instruments)
+        L.push(String(n.instruments).split(",").slice(0, 4)
+               .map(x => "<code>" + visSafe(x.trim().slice(0, 22)) + "</code>")
+               .join(" "));
+      if (n.kind === "planstep" && n.input && n.input.tools)
+        L.push(String(n.input.tools).split(",").slice(0, 4)
+               .map(x => "<code>" + visSafe(x.trim().slice(0, 22)) + "</code>")
+               .join(" "));
       if (n.criterion)
         L.push(visSafe("🎯 " + t('graph.card.criterion') + " "
                        + firstSentence(n.criterion, 80)));
@@ -498,11 +551,15 @@
     // of 5 — the canvas showed eighteen empty boxes. Unlinked cards made it
     // worse still: with no edge to hang on, each is its own tree and vis stacks
     // the trees down the y axis, so the column came out as a diagonal.
-    const STAGE_ORDER = ["framing", "literature", "hypotheses", "report"];
+    // A band with no STAGE_TINT entry does not fall back visibly — stageOf
+    // below sends its cards to "hypotheses" instead, so the two tables must be
+    // extended together or a whole stage silently disappears into another one.
+    const STAGE_ORDER = ["framing", "literature", "hypotheses", "experiment", "report"];
     const STAGE_TINT = {
       framing:    { fill: "rgba(59,130,246,0.07)",  line: "rgba(59,130,246,0.42)" },
       literature: { fill: "rgba(56,189,248,0.07)",  line: "rgba(56,189,248,0.42)" },
-      hypotheses: { fill: "rgba(249,115,22,0.07)",  line: "rgba(249,115,22,0.42)" },
+      hypotheses: { fill: "rgba(139,92,246,0.07)",  line: "rgba(139,92,246,0.42)" },
+      experiment: { fill: "rgba(249,115,22,0.07)",  line: "rgba(249,115,22,0.42)" },
       report:     { fill: "rgba(34,197,94,0.07)",   line: "rgba(34,197,94,0.42)" },
     };
     // The server names the stage; this is the fallback for a study archived
@@ -511,15 +568,15 @@
     // distinction lives in attrs.subtype, which the projection reads.
     const STAGE_BY_KIND = { framing: "framing", researchquestion: "framing",
       constraint: "framing", empiricalbase: "framing", resource: "framing",
-      hypothesis: "hypotheses", verificationmethod: "hypotheses",
-      confirmationcriteria: "hypotheses", tool: "hypotheses",
-      evidence: "hypotheses", generateddata: "hypotheses", codeartifact: "hypotheses",
+      hypothesis: "hypotheses", confirmationcriteria: "hypotheses",
+      verificationmethod: "experiment", tool: "experiment",
+      evidence: "experiment", generateddata: "experiment", codeartifact: "experiment",
       conclusion: "report", outcome: "report", report: "report",
       publication: "report", efficiencyjustification: "report",
       costmodel: "report", efficiencymetric: "report" };
     const stageOf = n => {
       const s = n.stage || STAGE_BY_KIND[n.kind];
-      return STAGE_TINT[s] ? s : "hypotheses";
+      return STAGE_TINT[s] ? s : "experiment";
     };
     // Nominal card pitch, used for the first pass and as the fallback when a
     // card has not been drawn yet and has no measured box.
@@ -550,6 +607,18 @@
         if (!b.count) ctx.setLineDash([7, 6]);
         ctx.strokeRect(b.left, b.top, w, h);
         ctx.setLineDash([]);
+        // The plan column's own edge, so the reader sees two tracks rather
+        // than one wide band: the intention on the left, the record on the
+        // right, sharing the level.
+        if (b.planRight != null) {
+          ctx.strokeStyle = "rgba(148,163,184,0.30)";
+          ctx.setLineDash([3, 5]);
+          ctx.beginPath();
+          ctx.moveTo(b.planRight + BAND_PAD / 2, b.top);
+          ctx.lineTo(b.planRight + BAND_PAD / 2, b.bottom);
+          ctx.stroke();
+          ctx.setLineDash([]);
+        }
         ctx.fillStyle = tint.line;
         ctx.font = "600 26px -apple-system, Segoe UI, sans-serif";
         ctx.textBaseline = "top";
@@ -563,7 +632,192 @@
           ctx.fillText(t('graph.stage.empty'), b.left + 26 + nameWidth, b.top + 15);
         }
       });
+      // One heading for the whole plan track, above its column.
+      const withPlan = stageBands.filter(b => b.planRight != null);
+      if (withPlan.length) {
+        const top = Math.min.apply(null, withPlan.map(b => b.top));
+        const left = Math.min.apply(null, withPlan.map(b => b.left));
+        ctx.fillStyle = "rgba(148,163,184,0.75)";
+        ctx.font = "600 22px -apple-system, Segoe UI, sans-serif";
+        ctx.textBaseline = "bottom";
+        ctx.fillText(t('graph.plan.title'), left + 16, top - 12);
+      }
       ctx.restore();
+    }
+
+    // ── layered placement ─────────────────────────────────────────────────────
+    // Flowing the cards row by row put every card in the right band but in an
+    // arbitrary order inside it, and that is what made the hogweed graph hard
+    // to follow: the evidence a method produced sat six cards away with three
+    // unrelated methods between them, and the link cut across all of them.
+    // Ordering within a band to keep connected cards adjacent is the one thing
+    // a layered engine does that a flow cannot, so the order is ELK's now
+    // (elkjs 0.12, layered — Sugiyama): `elk.partitioning` pins each card to
+    // its stage, and ELK is free to arrange inside it.
+    //
+    // ELK computes COORDINATES ONLY. Its POLYLINE bend points go unused —
+    // vis-network draws an edge as one curve between two anchors and accepts no
+    // waypoints — so crossings go away through placement, not routing.
+    const ELK_OPTS = {
+      "elk.algorithm": "layered",
+      "elk.direction": "DOWN",
+      "elk.partitioning.activate": "true",
+      "elk.edgeRouting": "POLYLINE",
+      "elk.layered.spacing.nodeNodeBetweenLayers": "96",
+      "elk.spacing.nodeNode": "34",
+      "elk.spacing.edgeNode": "26",
+      // Ties broken by the order the projection emitted — which is the order
+      // the study recorded things in — so re-opening a finished study does not
+      // reshuffle it.
+      "elk.layered.considerModelOrder.strategy": "NODES_AND_EDGES",
+    };
+    let elk = null;
+    try { elk = new ELK(); } catch (err) { console.warn("ELK unavailable", err); }
+
+    // Coordinates for the cards vis has drawn, or null if the engine could not
+    // be asked. Sizes are the measured boxes: a layered layout that guesses the
+    // card widths packs the rows wrong.
+    async function elkBoxes(place, sizeOf, edgeList){
+      if (!elk) return null;
+      const ids = Object.keys(place).filter(
+        id => nodes.get(id) && place[id].track !== "plan");
+      if (!ids.length) return null;
+      const children = ids.map(id => {
+        const size = sizeOf(id);
+        return { id: id, width: size.w, height: size.h,
+                 layoutOptions: { "elk.partitioning.partition":
+                                    String(STAGE_ORDER.indexOf(place[id].stage)) } };
+      });
+      const live = {};
+      ids.forEach(id => { live[id] = true; });
+      // Edges that run UP the page are handed to ELK the other way round.
+      // The graph is cyclic as recorded — a question motivates a hypothesis
+      // downward while the evidence it produced relates back up to the question
+      // — and a layered engine breaks a cycle by reversing an edge of its own
+      // choosing, which on this study put the evidence and the method that
+      // produced it on opposite sides of the band. The partitions already fix
+      // which layer each card lands in, so an upward edge carries no layering
+      // information: all it can still say is which two cards want to be near
+      // each other, and it says that in either direction. vis draws the real
+      // arrow from the real edge, so nothing about the record changes.
+      const rank = id => STAGE_ORDER.indexOf(place[id].stage);
+      const elkEdges = [];
+      (edgeList || []).forEach((e, i) => {
+        if (!e || !live[e.src] || !live[e.dst] || e.src === e.dst) return;
+        const up = rank(e.dst) < rank(e.src);
+        elkEdges.push({ id: "le" + i,
+                        sources: [up ? e.dst : e.src],
+                        targets: [up ? e.src : e.dst] });
+      });
+      const laid = await elk.layout({ id: "root", layoutOptions: ELK_OPTS,
+                                      children: children, edges: elkEdges });
+      const box = {};
+      (laid.children || []).forEach(c => {
+        if (typeof c.x === "number" && typeof c.y === "number") box[c.id] = c;
+      });
+      return Object.keys(box).length ? box : null;
+    }
+
+    // ELK leaves no room for a stage nobody has reached — it has no nodes there
+    // to space out — and an empty "report" row is the answer to "how far has
+    // this got". So the bands are re-stacked afterwards: each stage keeps the
+    // geometry ELK gave it and moves as one block, and an empty stage gets a
+    // strip of its own. Translating a stage uniformly cannot introduce a
+    // crossing: it preserves both the order within the band and the order of
+    // the bands.
+    function stackBands(place, box){
+      const extent = {};
+      Object.keys(box).forEach(id => {
+        const c = box[id], stage = place[id].stage;
+        const e = extent[stage] ||
+                  (extent[stage] = { top: Infinity, bottom: -Infinity, count: 0 });
+        e.top = Math.min(e.top, c.y);
+        e.bottom = Math.max(e.bottom, c.y + c.height);
+        e.count += 1;
+      });
+      const shift = {}, bands = [];
+      let cursor = 0;
+      STAGE_ORDER.forEach(stage => {
+        const e = extent[stage];
+        if (!e) {
+          bands.push({ stage: stage, top: cursor,
+                       bottom: cursor + BAND_MIN_HEIGHT, count: 0 });
+          cursor += BAND_MIN_HEIGHT;
+          return;
+        }
+        const height = (e.bottom - e.top) + BAND_PAD * 2;
+        shift[stage] = cursor + BAND_PAD - e.top;
+        bands.push({ stage: stage, top: cursor, bottom: cursor + height,
+                     count: e.count });
+        cursor += height;
+      });
+      const seats = {};
+      let x0 = Infinity, x1 = -Infinity;
+      Object.keys(box).forEach(id => {
+        const c = box[id];
+        seats[id] = { x: c.x + c.width / 2,
+                      y: c.y + c.height / 2 + shift[place[id].stage] };
+        x0 = Math.min(x0, c.x);
+        x1 = Math.max(x1, c.x + c.width);
+      });
+      bands.forEach(b => { b.left = x0 - BAND_PAD; b.right = x1 + BAND_PAD; });
+      // The plan goes in beside the finished bands, at each step's own level,
+      // and the bands are then widened to run behind the column: the tint is
+      // what makes "this step belongs to the literature stage" unambiguous
+      // rather than a guess from vertical position.
+      const plan = planColumn(place, bands, x0 - BAND_PAD);
+      if (plan.used) {
+        Object.keys(plan.seats).forEach(id => { seats[id] = plan.seats[id]; });
+        bands.forEach(b => { b.left = plan.left - BAND_PAD; b.planRight = plan.right; });
+      }
+      return { seats: seats, bands: bands };
+    }
+
+    // ── the plan column ───────────────────────────────────────────────────────
+    // The plan is a parallel track, not part of the argument, so it is drawn in
+    // its own column beside the bands rather than as cards inside them. A step
+    // sits at the height of the stage it asks for, so the reader can see the
+    // intention and the record of it on one line: "collect the literature" next
+    // to the literature that was collected.
+    //
+    // Kept out of the layout engine entirely. Feeding the steps to ELK put them
+    // in the band flow, which is exactly the conflation this separation exists
+    // to undo — and the `realises` links would then drag the record's cards
+    // toward the plan instead of ordering them by the argument.
+    const PLAN_WIDTH = 300, PLAN_GAP = 72, PLAN_ROW_GAP = 16;
+
+    function planColumn(place, bands, leftEdge){
+      const byStage = {};
+      Object.keys(place).forEach(id => {
+        if (place[id].track !== "plan" || !nodes.get(id)) return;
+        (byStage[place[id].stage] = byStage[place[id].stage] || []).push(id);
+      });
+      const ids = Object.keys(byStage);
+      if (!ids.length) return { seats: {}, right: leftEdge, used: false };
+      const right = leftEdge - PLAN_GAP;
+      const seats = {};
+      bands.forEach(band => {
+        const steps = (byStage[band.stage] || [])
+          .sort((a, b) => (place[a].order || 0) - (place[b].order || 0)
+                       || String(a).localeCompare(String(b)));
+        if (!steps.length) return;
+        const sizes = steps.map(id => measuredSize(id));
+        const tall = sizes.reduce((sum, s) => sum + s.h, 0)
+                   + PLAN_ROW_GAP * (steps.length - 1);
+        // Centred in its band, and allowed to overflow it: a stage with six
+        // steps and one card is common, and clipping the column would hide
+        // steps rather than the other way round.
+        let y = (band.top + band.bottom) / 2 - tall / 2;
+        steps.forEach((id, i) => {
+          seats[id] = { x: right - sizes[i].w / 2, y: y + sizes[i].h / 2 };
+          y += sizes[i].h + PLAN_ROW_GAP;
+        });
+      });
+      let far = right;
+      Object.keys(seats).forEach(id => {
+        far = Math.min(far, seats[id].x - measuredSize(id).w / 2);
+      });
+      return { seats: seats, right: right, left: far, used: true };
     }
 
     // First pass, on nominal sizes: vis reports a real box only once it has
@@ -582,7 +836,7 @@
           || ((a.index || 0) - (b.index || 0))
           || String(a.id).localeCompare(String(b.id)));
         group.forEach((n, i) => {
-          place[n.id] = { stage, order: i,
+          place[n.id] = { stage, order: i, track: n.track || "record",
                           x: (i % perRow) * LEVEL_SEPARATION,
                           y: y + BAND_PAD + Math.floor(i / perRow) * NODE_PITCH };
         });
@@ -594,7 +848,8 @@
 
     // ── the research node card ────────────────────────────────────────────────
     function researchNode(n, place){
-      const st = rStatus(n.status), c = st.c;
+      const st = rStatus(n.status);
+      const c = R_KIND[n.kind] || st.c;
       const slot = place && place[n.id];
       const node = {
         id: n.id, title: titleOf(n), shape: "box", label: researchLabel(n),
@@ -624,25 +879,157 @@
       return node;
     }
 
-    // Second pass, on the boxes vis measured. Cards differ in width and in
-    // height, so the nominal grid leaves ragged lanes of empty canvas; each
-    // band flows its own cards left to right, wraps at BAND_WIDTH, and the next
-    // band starts under the deepest row of this one. It also yields the band
-    // rectangles the canvas paints behind the cards.
     const CARD_GAP = 28;
-    let pinned = {}, pinnedFor = "";
-    function reflowStages(place, signature){
-      if (!place || pinnedFor === signature) return false;
-      const sizeOf = id => {
-        try {
-          const box = network.getBoundingBox(id);
-          if (box) return { w: box.right - box.left, h: box.bottom - box.top };
-        } catch (err) { /* not drawn yet */ }
-        return { w: LEVEL_SEPARATION - CARD_GAP, h: NODE_PITCH - CARD_GAP };
+    //: `laying` holds the layout currently in flight, so a second poll can WAIT
+    //: on it instead of being told nothing changed. Without it, a poll arriving
+    //: while ELK was still working framed the study against the nominal
+    //: first-pass grid and latched `fitted`, and the real layout that landed a
+    //: moment later was never framed — the reader got a camera pointed at blank
+    //: canvas beside the study. The synchronous version could not lose this way.
+    let pinned = {}, pinnedFor = "", laying = null;
+    //: Which study the layout belongs to. ELK resolves a task boundary or more
+    //: after the call, so a reader can switch studies mid-layout; `hardReset`
+    //: bumps this, and a layout that comes back for a study nobody is looking
+    //: at writes nothing. Without it the abandoned run wrote its bands and its
+    //: seats over the new study and vis's `update` RE-ADDED every one of its
+    //: cards, because update() inserts what the set does not hold.
+    let studyGen = 0;
+    function measuredSize(id){
+      try {
+        const box = network.getBoundingBox(id);
+        if (box) return { w: box.right - box.left, h: box.bottom - box.top };
+      } catch (err) { /* not drawn yet */ }
+      return { w: LEVEL_SEPARATION - CARD_GAP, h: NODE_PITCH - CARD_GAP };
+    }
+
+    // Second pass, on the boxes vis measured: ask ELK where the cards go, and
+    // flow them by hand if it cannot answer. The fallback is not decoration —
+    // a 1.6MB script that fails to load must cost the study its ordering, not
+    // its drawing.
+    function reflowStages(place, signature, edgeList){
+      if (!place) return Promise.resolve(false);
+      // Same study state as the layout already running or already done: hand
+      // back that run's promise if it is still going, so the caller waits for
+      // the real coordinates rather than framing the first-pass grid.
+      if (pinnedFor === signature) return laying || Promise.resolve(false);
+      // Claimed BEFORE the await: ELK is asynchronous and a poll arrives every
+      // second, so two layouts of the same study would otherwise race and the
+      // loser would move every card again under the reader's cursor.
+      pinnedFor = signature;
+      laying = layOutStudy(place, edgeList);
+      laying.then(() => { laying = null; }, () => { laying = null; });
+      return laying;
+    }
+
+    async function layOutStudy(place, edgeList){
+      const gen = studyGen;
+      let laid = null;
+      try {
+        const box = await elkBoxes(place, measuredSize, edgeList);
+        if (box) laid = stackBands(place, box);
+      } catch (err) {
+        console.warn("ELK layout failed; flowing the bands instead", err);
+      }
+      // Checked AFTER the await and before any write: this is the whole point
+      // of the token. `pinnedFor` is left alone — hardReset already cleared it
+      // for the new study, and writing to it here would clobber that.
+      if (gen !== studyGen) return false;
+      try {
+        if (!laid) laid = flowSeats(place, measuredSize);
+        if (!laid) { pinnedFor = ""; return false; }
+        stageBands = laid.bands;
+        pinned = laid.seats;
+        nodes.update(Object.keys(laid.seats).map(id => ({ id: id, ...laid.seats[id] })));
+        routeEdges(laid.seats);
+        return true;
+      } catch (err) {
+        // The signature was claimed before the await, so a throw from here on
+        // would pin this graph state forever and the study would never be laid
+        // out again. Release the claim and let the next poll try.
+        console.warn("laying out the study failed", err);
+        pinnedFor = "";
+        return false;
+      }
+    }
+
+    // The fallback ordering, used when ELK is unavailable. Each band flows its
+    // own cards left to right, wraps at BAND_WIDTH, and the next band starts
+    // under the deepest row of this one. Right band, arbitrary order.
+    // With the cards finally placed, every link is checked against the cards it
+    // would run over. This is the complaint the layout engine alone does not
+    // answer: a hypothesis sits one band above its methods and the evidence one
+    // row below them, so the link from that evidence back up to the hypothesis
+    // has the whole row of methods in its way, and both cards are in bands that
+    // look adjacent. vis draws an edge as one curve between two anchors and
+    // takes no waypoints, so such a link cannot be routed AROUND a card — but
+    // it can be bowed past it, and it is bowed outwards, away from the crowded
+    // middle of the study.
+    //: edge id -> the `smooth` setting the geometry asked for. Re-applied by
+    //: the edge build on every poll, which would otherwise overwrite it.
+    let routed = {};
+    //: How far a bowed link may swing off its straight line, in canvas pixels.
+    //: About two thirds of a card: enough to get past one, not enough to leave
+    //: the neighbourhood.
+    const MAX_BOW = 220;
+    function routeEdges(seats){
+      routed = {};
+      const boxes = Object.keys(seats).map(id => {
+        const size = measuredSize(id), seat = seats[id];
+        return { id: id, left: seat.x - size.w / 2, right: seat.x + size.w / 2,
+                 top: seat.y - size.h / 2, bottom: seat.y + size.h / 2 };
+      });
+      let centre = 0;
+      boxes.forEach(b => { centre += (b.left + b.right) / 2; });
+      centre = boxes.length ? centre / boxes.length : 0;
+      // Sampled rather than solved: a card is at least 230 wide and about a
+      // hundred tall, so a step of twenty pixels cannot slip past one, and the
+      // exact intersection point is of no interest here.
+      const runsOver = (a, b, box) => {
+        const steps = Math.max(12, Math.ceil(Math.hypot(b.x - a.x, b.y - a.y) / 20));
+        for (let k = 1; k < steps; k++) {
+          const x = a.x + (b.x - a.x) * k / steps;
+          const y = a.y + (b.y - a.y) * k / steps;
+          if (x >= box.left && x <= box.right && y >= box.top && y <= box.bottom)
+            return true;
+        }
+        return false;
       };
+      const updates = [];
+      edges.get().forEach(e => {
+        const a = seats[e.from], b = seats[e.to];
+        if (!a || !b) return;
+        if (e.from === e.to) {
+          routed[e.id] = { type: "curvedCW", roundness: 0.6 };
+          updates.push({ id: e.id, smooth: routed[e.id] });
+          return;
+        }
+        const blocked = boxes.some(box =>
+          box.id !== e.from && box.id !== e.to && runsOver(a, b, box));
+        let smooth;
+        if (blocked) {
+          const mid = (a.x + b.x) / 2;
+          // vis swings the curve sideways by roughly `roundness` × the span, so
+          // the bow is budgeted in PIXELS and the roundness derived from it. A
+          // long link gets a gentle bend that clears the card next to it; a
+          // fixed fraction sent it looping through a band it has no business in.
+          const span = Math.hypot(b.x - a.x, b.y - a.y) || 1;
+          smooth = { type: mid < centre ? "curvedCCW" : "curvedCW",
+                     roundness: Math.max(0.12, Math.min(0.55, MAX_BOW / span)) };
+        } else {
+          smooth = Math.abs(a.y - b.y) < 8
+            ? { type: "curvedCW", roundness: 0.22 } : false;
+        }
+        routed[e.id] = smooth;
+        updates.push({ id: e.id, smooth: smooth });
+      });
+      if (updates.length) edges.update(updates);
+    }
+
+    function flowSeats(place, sizeOf){
       const byStage = new Map(STAGE_ORDER.map(s => [s, []]));
       Object.keys(place).forEach(id => {
-        if (nodes.get(id)) byStage.get(place[id].stage).push(id);
+        if (nodes.get(id) && place[id].track !== "plan")
+          byStage.get(place[id].stage).push(id);
       });
       const seats = {}, bands = [];
       // The bands hug the widest row there actually is, not the wrap width: a
@@ -673,10 +1060,12 @@
       // One width for every band, so they read as stacked rows of one page
       // rather than four unrelated boxes.
       bands.forEach(b => { b.left = -BAND_PAD; b.right = widest + BAND_PAD; });
-      stageBands = bands;
-      pinned = seats; pinnedFor = signature;
-      nodes.update(Object.keys(seats).map(id => ({ id, ...seats[id] })));
-      return true;
+      const plan = planColumn(place, bands, -BAND_PAD);
+      if (plan.used) {
+        Object.keys(plan.seats).forEach(id => { seats[id] = plan.seats[id]; });
+        bands.forEach(b => { b.left = plan.left - BAND_PAD; b.planRight = plan.right; });
+      }
+      return { seats: seats, bands: bands };
     }
 
     // ══════════════════════════════════════════════════════════════════════════
@@ -833,12 +1222,29 @@
           // a hypothesis six cards to its left cut across four other cards. Arc
           // those; keep the vertical bend for the links that really do travel
           // down the page from one stage to the next.
+          // How the link is drawn: what `routeEdges` decided from the final
+          // coordinates if it has run, and otherwise a first-frame guess — a
+          // link inside one band joins two cards side by side and needs to arc,
+          // anything else starts straight. Re-applying the routing HERE is what
+          // makes it hold: this block runs on every poll, so a rebuild that
+          // used the guess would undo the routing a second after it was made
+          // and the study would go back to drawing lines through its own cards.
           if (research && place) {
-            const a = place[e.src], b = place[e.dst];
-            if (a && b && a.stage === b.stage)
-              edge.smooth = { type: "curvedCW", roundness: 0.22 };
+            if (id in routed) {
+              edge.smooth = routed[id];
+            } else {
+              const a = place[e.src], b = place[e.dst];
+              if (a && b) edge.smooth = a.stage === b.stage
+                ? { type: "curvedCW", roundness: 0.22 } : false;
+            }
           }
-          if (e.synthetic) { edge.color={color:"#2c313a",highlight:"#3a4150"}; edge.dashes=true; edge.width=1; edge.arrows=""; edge.label=""; }
+          if (research && e.type === "realises") {
+            edge.color = { color: "#4b5563", highlight: "#6b7280" };
+            edge.dashes = [2, 4]; edge.width = 1;
+            edge.font = { color: "#6b7280", size: 11, strokeWidth: 4,
+                          strokeColor: "#14161a" };
+          }
+          else if (e.synthetic) { edge.color={color:"#2c313a",highlight:"#3a4150"}; edge.dashes=true; edge.width=1; edge.arrows=""; edge.label=""; }
           else if (research) { const c=R_EDGE[e.type];
             edge.color={color:c||"#4a5160",highlight:c||"#64748b"}; edge.width=c?3:1.5;
             edge.font={color:c||"#aeb6c2",size:12,strokeWidth:4,strokeColor:"#14161a"}; }
@@ -882,24 +1288,36 @@
         // execution cards are pinned at server-given coordinates and a fit
         // would drag the camera away from the part of the run in progress.
         if (research && batchNodes.length) {
-          // A card's size depends on its text and its status, so the reflow is
-          // redone when either changes and skipped when neither has —
-          // otherwise every poll would nudge the whole page under a reader's
-          // cursor. The stage is in the signature too: a method that moves to
-          // the literature band changes every band below it.
+          // Which cards there are, how they stand and which band they are in —
+          // and deliberately NOT how long their text is. Keying on the text
+          // meant a method whose procedure gained a clause re-placed the entire
+          // study under the reader's cursor; the card grows in place instead,
+          // and the next real change re-places it. The stage stays in: a method
+          // that moves to the literature band changes every band below it.
           const signature = ordered
-            .map(n => [n.id, n.status, stageOf(n), String(n.output || "").length]
-                        .join(":"))
-            .join("|");
+            .map(n => [n.id, n.status, stageOf(n)].join(":"))
+            .join("|")
+            + "#" + (g.edges || []).length;
+          const seq = studyGen;
           network.once("afterDrawing", () => {
-            const reflowed = reflowStages(place, signature);
-            if (fitted) return;
-            fitted = true;
-            // The reflow moves every card, and the boxes frameStudy measures
-            // are a frame behind it — so the frame waits for the redraw the
-            // reflow just scheduled instead of measuring where cards used to be.
-            if (reflowed) network.once("afterDrawing", frameStudy);
-            else frameStudy();
+            if (seq !== studyGen) return;
+            reflowStages(place, signature, g.edges || []).catch(err => {
+              console.warn("layout rejected", err);
+              return false;
+            }).then(reflowed => {
+              // The abandoned study's continuation must not consume the
+              // one-shot latch: it used to claim `fitted`, frame the canvas
+              // against the other study's bands, and leave the study the reader
+              // actually picked unframed for the rest of the session.
+              if (seq !== studyGen || fitted) return;
+              fitted = true;
+              // The reflow moves every card, and the boxes frameStudy measures
+              // are a frame behind it — so the frame waits for the redraw the
+              // reflow just scheduled instead of measuring where cards used to
+              // be.
+              if (reflowed) network.once("afterDrawing", frameStudy);
+              else frameStudy();
+            });
           });
         }
         if (research) renderHeader(g);
@@ -968,10 +1386,30 @@
         // poster, not as a graph.
         const scale = Math.max(MIN_READABLE_SCALE,
           Math.min(1, availW / (x1 - x0), availH / (y1 - y0)));
-        // Centred across, and hung from the top of the band: a reader starts at
-        // the question, so that is what must be on screen.
+        // Hung from the top of the band, because a reader starts at the top.
+        // Across, the centre of the bounding box is right only while the whole
+        // study fits. Past that it can be empty canvas: the layout puts the
+        // question wherever its children's barycentre falls, so on a wide study
+        // a reader opened the graph looking at a blank stretch between cards
+        // with the question and the hypothesis off to one side. So when the
+        // study does NOT fit, the camera opens on the spine — the question and
+        // the hypothesis, the two cards the rest of the study hangs off.
+        let cx = (x0 + x1) / 2;
+        if (scale <= MIN_READABLE_SCALE + 1e-6) {
+          // From `pinned`, not from getBoundingBox: vis reports a box one frame
+          // behind the positions it was just given, and the first-pass grid puts
+          // the only card of each band at x = 0 — so measuring here read both
+          // spine cards at zero and opened the study on blank canvas beside it.
+          let sum = 0, seen = 0;
+          Object.keys(pinned).forEach(id => {
+            const d = nodeData[id];
+            if (!d || (d.kind !== "researchquestion" && d.kind !== "hypothesis")) return;
+            sum += pinned[id].x; seen += 1;
+          });
+          if (seen) cx = sum / seen;
+        }
         network.moveTo({ scale: scale, position: {
-          x: (x0 + x1) / 2,
+          x: cx,
           y: y0 + (canvas.clientHeight / 2 - top) / scale,
         } });
       } catch (err) { /* no nodes yet */ }
@@ -1096,7 +1534,9 @@
       else if (n.why_missing)
         body += `<div class="k">${t('graph.why.title')}</div>`
               + `<div class="empty">${esc(t('graph.why.missing'))}</div>`;
-      body += readable(t('graph.detail.details'), n.input);
+      // The research card's own fields: these keys are attribute codes the
+      // server sends for the browser to translate (i18n.js says so explicitly).
+      body += readable(t('graph.detail.details'), n.input, null, true);
       body += historyBlock(n.status_history);
       body += attachmentsBlock(n.chips, t('graph.chips.tools'));
       body += attachmentsBlock(n.attachments, t('graph.attach.title'));
@@ -1148,9 +1588,14 @@
           const out = e.src === id, other = out ? e.dst : e.src;
           if (!nodeData[other]) return "";
           const verb = t("graph.edge." + e.type, R_EDGE_NAME[e.type] || e.type || "");
-          const dir = out ? t('graph.links.out') : t('graph.links.in');
+          // The arrow carries the direction, so the row reads as one phrase.
+          // It used to print "приходит из · проверяется": the dot separated a
+          // direction from an edge name and read as a typo, and worse, made
+          // "проверяется" look like this node's state rather than the LINK's
+          // name.
+          const arrow = out ? "→" : "←";
           return `<div class="prov" onclick="focusNode('${esc(String(other))}')">`
-            + `<span class="tool">${esc(dir)} · ${esc(verb)}</span>`
+            + `<span class="tool">${arrow} ${esc(verb)}</span>`
             + `<span class="jump">${esc(rTypeName(nodeData[other]))} ${esc(other)}</span>`
             + `<div class="res">${esc(firstSentence(rText(nodeData[other]), 110))}</div></div>`;
         }).filter(Boolean).join("");
@@ -1255,8 +1700,23 @@
       return repaired ? `<div class="empty" style="margin-top:6px">${esc(t('graph.detail.cutShort'))}</div>` : "";
     }
     // Bookkeeping fields nobody reads, and values already said once.
+    // Execution-graph bookkeeping. Research field codes share this namespace
+    // now, so a node attribute named e.g. `verdict` would be dropped from the
+    // panel without a word — no schema type declares one today, and nothing on
+    // disk carries one, but do not add such an attribute without renaming here.
     const NOISE_KEYS = new Set(["is_root", "routing", "run_id", "semantic", "verdict",
                                 "parent_ids", "turn_id"]);
+    // The server sends attribute CODES, and for the framing card's members
+    // `type:<kind>`; both are turned into the reader's words here. An unknown
+    // code degrades to itself with the underscores opened up, never to a blank.
+    function fieldLabel(k){
+      const s = String(k);
+      if (s.indexOf("type:") === 0) {
+        const kind = s.slice(5);
+        return t('graph.type.' + kind, kind);
+      }
+      return t('graph.field.' + s, s.replace(/_/g, " "));
+    }
     const isScalar = x => x === null || typeof x !== "object";
     const isEmpty = v => v === null || v === undefined || v === ""
       || (Array.isArray(v) && !v.length)
@@ -1272,9 +1732,15 @@
       }
       return out;
     }
-    function kvRows(obj, depth){
+    // `fields` opts into translating the keys, and ONLY the research card does.
+    // This is the single renderer for both panels, and the execution log's rows
+    // are raw tool ARGUMENT names: `write_file(file_path, content, overwrite)`
+    // records an argument literally called `content`, and `graph.field.content`
+    // means "Finding". Translating unconditionally captioned the file body it
+    // was about to write as «Результат», next to the real result block.
+    function kvRows(obj, depth, fields){
       return `<div class="kv">` + Object.entries(obj).map(([k, v]) => {
-        const key = `<span class="key">${esc(k)}</span>`;
+        const key = `<span class="key">${esc(fields ? fieldLabel(k) : k)}</span>`;
         if (!isScalar(v)) {
           if (Array.isArray(v) && v.every(x => isScalar(x) && String(x).length <= 40))
             return `<div class="row">${key}<span class="val">`
@@ -1282,31 +1748,31 @@
           const count = Array.isArray(v) ? t('graph.count.item', { count: v.length })
                                          : t('graph.count.field', { count: Object.keys(v).length });
           return `<div class="row">${key}<span class="val dim">${count}</span>`
-            + `<div class="nested">${nestedValue(v, depth + 1)}</div></div>`;
+            + `<div class="nested">${nestedValue(v, depth + 1, fields)}</div></div>`;
         }
         const text = String(v);
         const long = text.length > 90 || text.includes("\n");
         return `<div class="row">${key}<span class="val${long ? " block" : ""}">${esc(text)}</span></div>`;
       }).join("") + `</div>`;
     }
-    function nestedValue(v, depth){
+    function nestedValue(v, depth, fields){
       if (depth > 4) return `<pre>${esc(JSON.stringify(v, null, 2))}</pre>`;
       if (Array.isArray(v))
         return `<ol class="items">` + v.map(x =>
-          `<li>${isScalar(x) ? esc(x) : nestedValue(x, depth)}</li>`).join("") + `</ol>`;
-      return kvRows(v, depth);
+          `<li>${isScalar(x) ? esc(x) : nestedValue(x, depth, fields)}</li>`).join("") + `</ol>`;
+      return kvRows(v, depth, fields);
     }
     // A titled block: labelled rows for a mapping, a list for a list, the text
     // itself for prose, and nothing at all when there is nothing to show.
-    function readable(title, value, ctx){
+    function readable(title, value, ctx, fields){
       const v = parseValue(value), repaired = salvaged;
       if (v === null) return "";
       let body;
-      if (Array.isArray(v)) body = nestedValue(v, 0);
+      if (Array.isArray(v)) body = nestedValue(v, 0, fields);
       else if (typeof v === "object") {
         const t = tidy(v, ctx);
         if (!Object.keys(t).length) return "";
-        body = kvRows(t, 0);
+        body = kvRows(t, 0, fields);
       } else body = `<pre>${esc(String(v))}</pre>`;
       const raw = typeof value === "string" ? value.length : 0;
       const size = raw > 900 ? ` <span class="chars">${esc(t('graph.chars', { count: raw.toLocaleString() }))}</span>` : "";
@@ -1524,7 +1990,10 @@
     let lastDetailStamp = null;
     function hardReset(){ nodes.clear(); edges.clear(); lastDetailStamp = null;
       fitted = false; lastPhases = []; lastGraph = { nodes: [], edges: [] };
-      pinned = {}; pinnedFor = ""; stageBands = [];
+      // `routed` too: an edge id is "src->dst:type", which two studies can
+      // share, so a stale routing would be applied to the new study for the
+      // frames before its first layout.
+      pinned = {}; pinnedFor = ""; stageBands = []; routed = {}; studyGen += 1;
       for (const k in nodeData) delete nodeData[k]; closeDetail(); }
     document.getElementById("refresh").onclick = poll;
     document.getElementById("view").onchange = () => {
