@@ -94,6 +94,31 @@ function relocalizeHitlCards() {
     if (!data) return;
     el.textContent = el.dataset.hitlPart === 'via' ? describeHitlVia(data) : localizeHitlMessage(data);
   });
+  redrawPlanCards();
+}
+
+// The plan card builds every label in JS — counts interpolated into "{n} tasks",
+// the design-matrix headers, the per-task field names — so there is no
+// data-i18n span for applyTranslations to swap. It is redrawn from the request
+// it was drawn from instead; fold state lives in planOpenTasks, so the same
+// tasks stay open across the redraw.
+function redrawPlanCards() {
+  if (typeof planByRequest === 'undefined') return;
+  planByRequest.forEach((_, rid) => {
+    const data = hitlCards.get(rid);
+    // Only cards actually on screen: placeHitlCard appends when it finds none,
+    // so a stale entry would resurrect a card the session has already cleared.
+    if (!data || !document.querySelector(`[data-hitl-card="${CSS.escape(rid)}"]`)) return;
+    const box = document.getElementById('hitl-controls-' + rid);
+    const answered = !!(box && box.querySelector('button[disabled]'));
+    // Redraw the sidebar only while it belongs to THIS request — a newer one
+    // may own it by now, and its panel is not ours to overwrite.
+    const panel = document.getElementById('hitl-panel');
+    const owns = !answered && panel && !panel.classList.contains('hidden')
+      && panel.innerHTML.indexOf(rid) !== -1;
+    renderExperimentPlanReview(owns ? panel : null, data);
+    if (answered) disableHitlControls(rid);
+  });
 }
 window.relocalizeHitlCards = relocalizeHitlCards;
 
@@ -121,6 +146,12 @@ function showHITL(data, { history = false } = {}) {
   // the free-text / option path below.
   if (data.form && Array.isArray(data.form.blocks)) {
     renderHitlForm(panel, data);
+  } else if (((data.context || {}).experiment_plan || {}).tasks) {
+    // An experiment plan is not a paragraph to skim: it is a design matrix and
+    // a task list, and it is what the human is being asked to approve. The
+    // backend ships it structured next to the rendered Markdown, so it gets a
+    // view of its own rather than a <pre> of pipe-separated rows.
+    renderExperimentPlanReview(panel, data);
   } else if (data.trigger === 'work_report') {
     // Work Report (what the agent found, against its order): accept, send back
     // for rework with findings marked wrong, or reject.
@@ -1015,4 +1046,312 @@ function renderWorkOrderNotice(data) {
     }
     addTelemetry('WORK ORDER :: ' + (data.agent_name || '?') + ' ' + line);
   }
+}
+
+
+// ── Experiment plan review ───────────────────────────────────────────────
+// The plan the Experiment Module builds during a run is the one thing the
+// human is asked to approve, and it used to arrive as Markdown in a <pre>:
+// a design matrix written as pipe-separated rows, ten task sections under
+// it, the whole thing in a 24rem scroll box. Nobody approves that; they
+// approve whatever they can see in the first screen of it.
+//
+// The backend now ships the plan structured (context.experiment_plan, see
+// CoScientist/experiments/plan_view.py), so it is drawn as what it is: a
+// header with the goal and the totals, the design matrix as a real table,
+// and one foldable card per task carrying that task's whole design. The
+// answer is unchanged — Accept / Revise / Reject through the same handlers
+// as any other review — so nothing downstream has to know about this view.
+
+const planOpenTasks = new Set();   // "<request_id>:<task_id>" of unfolded cards
+// The plan a card was drawn from, so folding a task re-renders from data
+// rather than from the DOM it is about to replace.
+const planByRequest = new Map();
+
+const PLAN_ROUTE_TONE = {
+  fedot_mas: 'text-primary border-primary/30 bg-primary/5',
+  react_tools: 'text-primary border-primary/30 bg-primary/5',
+  coder: 'text-tertiary border-tertiary/30 bg-tertiary/5',
+  alembic_build: 'text-secondary border-secondary/30 bg-secondary/5',
+  research: 'text-outline-variant border-outline-variant/30 bg-outline-variant/5',
+  medical: 'text-outline-variant border-outline-variant/30 bg-outline-variant/5',
+};
+const PLAN_CHIP_TONE = 'text-on-surface-variant border-outline-variant/20 bg-surface-container-high';
+
+// A slot the planner left empty is shown as empty. Printing its placeholder
+// text ("unspecified", "n/a") made an unfilled design look filled in.
+function planDash() { return '<span class="text-outline-variant/60">—</span>'; }
+
+function planText(value) {
+  const text = (value === 0 || value) ? String(value).trim() : '';
+  return text ? escHtml(text) : planDash();
+}
+
+// A list reads as a list, not as one comma-glued line: a task's metrics,
+// baselines and tools are each several short names and run together badly.
+function planItems(items, empty) {
+  const rows = (items || []).filter(x => x !== null && x !== undefined && String(x).trim());
+  if (!rows.length) return empty === undefined ? planDash() : escHtml(empty);
+  return rows.map(x => `<span class="inline-block bg-surface-container-high border border-outline-variant/10 rounded px-1.5 py-0.5 mr-1 mb-1 text-[10px] font-mono">${escHtml(String(x))}</span>`).join('');
+}
+
+function planChip(label, value, tone) {
+  const name = label ? `<span class="opacity-60 uppercase tracking-wider">${escHtml(label)}</span>` : '';
+  return `<span class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-mono ${tone || PLAN_CHIP_TONE}">${name}${escHtml(String(value))}</span>`;
+}
+
+function planRouteChip(route) {
+  return `<span class="inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-mono ${PLAN_ROUTE_TONE[route] || PLAN_CHIP_TONE}">${escHtml(route || '')}</span>`;
+}
+
+function planField(label, valueHtml) {
+  return `<div class="grid grid-cols-[minmax(92px,max-content)_1fr] gap-x-3 py-1 border-b border-outline-variant/5 last:border-0">
+    <span class="text-[10px] uppercase tracking-wider text-outline-variant pt-0.5">${escHtml(label)}</span>
+    <span class="text-[11px] text-on-surface-variant leading-relaxed break-words min-w-0">${valueHtml}</span>
+  </div>`;
+}
+
+function planSection(title, bodyHtml) {
+  if (!bodyHtml) return '';
+  return `<div class="mt-3">
+    <p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${escHtml(title)}</p>
+    ${bodyHtml}</div>`;
+}
+
+const PLAN_MATRIX_COLUMNS = [
+  'plan.col.task', 'plan.col.hypothesis', 'plan.col.question', 'plan.col.dataset',
+  'plan.col.baselines', 'plan.col.metrics', 'plan.col.tools', 'plan.col.artifacts',
+  'plan.col.route',
+];
+
+function planMatrix(plan) {
+  if (!Array.isArray(plan.matrix) || !plan.matrix.length) return '';
+  const head = PLAN_MATRIX_COLUMNS
+    .map(key => `<th class="text-left font-bold uppercase tracking-wider text-[9px] text-outline-variant px-2 py-1.5 whitespace-nowrap">${escHtml(t(key))}</th>`)
+    .join('');
+  const rows = plan.matrix.map(r => `
+    <tr class="border-t border-outline-variant/10 align-top">
+      <td class="px-2 py-1.5 font-mono text-[10px] text-primary whitespace-nowrap">${escHtml(r.task_id || '')}</td>
+      <td class="px-2 py-1.5 font-mono text-[10px] whitespace-nowrap">${planText(r.hypothesis)}</td>
+      <td class="px-2 py-1.5 text-[11px] min-w-[220px]">${planText(r.question)}</td>
+      <td class="px-2 py-1.5 text-[11px]">${planText(r.dataset)}</td>
+      <td class="px-2 py-1.5">${planItems(r.baselines)}</td>
+      <td class="px-2 py-1.5">${planItems(r.metrics)}</td>
+      <td class="px-2 py-1.5">${planItems(r.tools)}</td>
+      <td class="px-2 py-1.5">${planItems(r.artifacts)}</td>
+      <td class="px-2 py-1.5 whitespace-nowrap">${planRouteChip(r.route)}</td>
+    </tr>`).join('');
+  return planSection(t('plan.matrix'), `
+    <div class="overflow-x-auto rounded-lg border border-outline-variant/10 bg-surface-container-high/30">
+      <table class="w-full border-collapse text-on-surface-variant"><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>
+    </div>`);
+}
+
+function planTools(task) {
+  const servers = task.mcp_servers || [];
+  if (!servers.length) return planItems([], t('plan.noTools'));
+  return servers.map(s => {
+    const where = s.url ? ` <span class="text-outline-variant/70 break-all">${escHtml(s.url)}</span>` : '';
+    const names = (s.tools || []).map(x => x.name + (x.required ? '' : ' (' + t('plan.optionalTool') + ')'));
+    return `<div class="mb-1"><span class="font-mono text-[11px] text-on-surface">${escHtml(s.name || '')}</span>${where}
+      <div class="mt-0.5">${planItems(names)}</div></div>`;
+  }).join('');
+}
+
+function planCriteria(task) {
+  const rows = task.success_criteria || [];
+  if (!rows.length) return planDash();
+  return rows.map(c => `<div class="mb-1.5">
+    <span class="font-mono text-[10px] text-primary">${escHtml(c.criterion_id || '')}</span>
+    <span class="text-[9px] uppercase tracking-wider text-outline-variant ml-1">${escHtml(c.kind || '')}</span>
+    ${c.threshold ? `<span class="ml-1 font-mono text-[10px] text-tertiary">${escHtml(c.threshold)}</span>` : ''}
+    <div class="text-[11px]">${planText(c.description)}</div>
+    ${c.verification ? `<div class="text-[10px] text-outline-variant">${escHtml(c.verification)}</div>` : ''}
+  </div>`).join('');
+}
+
+function planInputs(task) {
+  const rows = task.input_data || [];
+  if (!rows.length) return `<span class="text-outline-variant/60">${escHtml(t('plan.noInputs'))}</span>`;
+  return rows.map(d => `<div class="mb-1">
+    <span class="font-mono text-[10px] text-on-surface">${escHtml(d.data_id || '')}</span>
+    <span class="text-[9px] uppercase tracking-wider text-outline-variant ml-1">${escHtml(d.kind || '')}</span>
+    ${d.location ? `<div class="font-mono text-[10px] text-outline-variant break-all">${escHtml(d.location)}</div>` : ''}
+    ${d.description ? `<div class="text-[11px]">${escHtml(d.description)}</div>` : ''}
+  </div>`).join('');
+}
+
+function planDatasetCell(dataset) {
+  if (!dataset || !dataset.name) return planDash();
+  const ref = dataset.ref ? ` <span class="font-mono text-[10px] text-outline-variant break-all">${escHtml(dataset.ref)}</span>` : '';
+  const notes = dataset.notes ? `<div class="text-[10px] text-outline-variant">${escHtml(dataset.notes)}</div>` : '';
+  return escHtml(dataset.name) + ref + notes;
+}
+
+function planTaskCard(rid, task, index) {
+  const open = planOpenTasks.has(rid + ':' + task.id);
+  const design = task.design || {};
+  const params = Object.entries(task.launch_params || {});
+  const body = !open ? '' : `
+    <div class="px-3 pb-3">
+      ${planField(t('plan.task.question'), planText(design.question))}
+      ${planField(t('plan.task.dataset'), planDatasetCell(design.dataset))}
+      ${planField(t('plan.task.baselines'), planItems((design.baselines || []).map(b => b.name + ' (' + b.kind + ')')))}
+      ${planField(t('plan.task.metrics'), planItems((design.metrics || []).map(m =>
+        m.name + ' ' + m.direction + (m.threshold ? ' ' + m.threshold : '') + (m.test ? ' [' + m.test + ']' : ''))))}
+      ${planField(t('plan.task.analysis'), planItems((design.analysis_artifacts || []).map(a => a.name + ' [' + a.role + '/' + a.prepare_via + ']')))}
+      ${planField(t('plan.task.description'), planText(task.description))}
+      ${task.rationale ? planField(t('plan.task.rationale'), planText(task.rationale)) : ''}
+      ${planField(t('plan.task.tools'), planTools(task))}
+      ${task.repo_url ? planField(t('plan.task.repo'), `<span class="font-mono text-[10px] break-all">${escHtml(task.repo_url)}</span>`) : ''}
+      ${params.length ? planField(t('plan.task.params'), planItems(params.map(p => p[0] + '=' + p[1]))) : ''}
+      ${planField(t('plan.task.inputs'), planInputs(task))}
+      ${planField(t('plan.task.criteria'), planCriteria(task))}
+      ${planField(t('plan.task.expected'), planItems((task.expected_artifacts || []).map(a => a.name + ' [' + a.role + ']')))}
+      ${(task.warnings || []).length ? planField(t('plan.task.warnings'),
+        `<span class="text-tertiary">${escHtml(task.warnings.join(' · '))}</span>`) : ''}
+    </div>`;
+  return `<div class="rounded-lg border border-outline-variant/10 bg-surface-container-high/30 mb-2">
+    <button type="button" onclick="togglePlanTask('${escJs(rid)}','${escJs(task.id)}')"
+      class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-surface-container-high/60 rounded-lg transition-colors">
+      <span class="material-symbols-outlined text-sm text-outline-variant">${open ? 'expand_more' : 'chevron_right'}</span>
+      <span class="font-mono text-[10px] text-primary">${escHtml(task.id || ('#' + (index + 1)))}</span>
+      <span class="text-[11px] text-on-surface truncate flex-1">${escHtml(task.name || '')}</span>
+      ${task.optional ? planChip('', t('plan.task.optional')) : ''}
+      ${(task.depends_on || []).length ? planChip(t('plan.task.after'), task.depends_on.join(', ')) : ''}
+      ${planChip('', (task.est_duration_min || 0) + ' ' + t('plan.min'))}
+      ${planRouteChip(task.route)}
+    </button>
+    ${body}</div>`;
+}
+
+function repaintPlanTasks(rid) {
+  const box = document.getElementById('plan-tasks-' + rid);
+  const plan = planByRequest.get(rid);
+  if (!box || !plan) return;
+  box.innerHTML = plan.tasks.map((task, i) => planTaskCard(rid, task, i)).join('');
+  const toggle = document.getElementById('plan-toggle-all-' + rid);
+  if (toggle) {
+    const allOpen = plan.tasks.every(task => planOpenTasks.has(rid + ':' + task.id));
+    toggle.textContent = allOpen ? t('plan.collapseAll') : t('plan.expandAll');
+  }
+}
+
+function togglePlanTask(rid, taskId) {
+  const key = rid + ':' + taskId;
+  if (planOpenTasks.has(key)) planOpenTasks.delete(key); else planOpenTasks.add(key);
+  repaintPlanTasks(rid);
+}
+
+function togglePlanAllTasks(rid) {
+  const plan = planByRequest.get(rid);
+  if (!plan) return;
+  const allOpen = plan.tasks.every(task => planOpenTasks.has(rid + ':' + task.id));
+  plan.tasks.forEach(task => {
+    if (allOpen) planOpenTasks.delete(rid + ':' + task.id);
+    else planOpenTasks.add(rid + ':' + task.id);
+  });
+  repaintPlanTasks(rid);
+}
+
+function planCritiqueBlock(plan) {
+  const critique = plan.critique;
+  if (!critique) return '';
+  const approved = critique.verdict === 'approve';
+  const issues = (critique.issues || []).map(i => `<div class="mb-1">
+    <span class="text-[9px] uppercase tracking-wider ${i.severity === 'blocker' ? 'text-error' : 'text-tertiary'}">${escHtml(i.severity || '')}</span>
+    <span class="text-[9px] uppercase tracking-wider text-outline-variant ml-1">${escHtml(i.category || '')}</span>
+    ${i.task_id ? `<span class="font-mono text-[10px] text-primary ml-1">${escHtml(i.task_id)}</span>` : ''}
+    <div class="text-[11px]">${planText(i.message)}</div>
+    ${i.suggestion ? `<div class="text-[10px] text-outline-variant">${escHtml(i.suggestion)}</div>` : ''}
+  </div>`).join('');
+  return planSection(t('plan.critique'),
+    `<p class="text-[11px] ${approved ? 'text-secondary' : 'text-tertiary'} mb-1">${escHtml(approved ? t('plan.critique.approve') : t('plan.critique.revise'))}</p>${issues}`);
+}
+
+function planBullets(list) {
+  return (list || []).length
+    ? `<ul class="list-disc list-inside text-[11px] text-on-surface-variant space-y-0.5">${list.map(x => `<li>${escHtml(x)}</li>`).join('')}</ul>`
+    : '';
+}
+
+function renderExperimentPlanReview(panel, data) {
+  const plan = (data.context || {}).experiment_plan;
+  const rid = data.request_id;
+  planByRequest.set(rid, plan);
+
+  if (panel) {
+    panel.classList.remove('hidden');
+    panel.innerHTML = `
+    <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-3">
+      <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${escHtml(t('plan.sidebarTitle'))}</h3>
+      <p class="text-[11px] text-on-surface-variant">${escHtml(t('plan.revision').replace('{n}', plan.revision))} · ${escHtml(t('plan.tasks').replace('{n}', plan.task_count))}</p>
+      <p class="text-[10px] text-outline-variant leading-relaxed">${escHtml(t('plan.sidebarHint'))}</p>
+      <div class="flex gap-3">
+        <button onclick="respondHITL('${escJs(rid)}', true)" class="flex-1 flex items-center justify-center gap-2 bg-primary text-on-primary py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+          <span class="material-symbols-outlined text-base">check_circle</span> ${escHtml(t('plan.accept'))}
+        </button>
+        <button onclick="respondHITL('${escJs(rid)}', false)" class="flex-1 flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
+          <span class="material-symbols-outlined text-base">close</span> ${escHtml(t('plan.reject'))}
+        </button>
+      </div>
+    </div>`;
+  }
+
+  const hypotheses = (plan.hypotheses || []).map(h =>
+    `<div class="mb-1"><span class="font-mono text-[10px] text-primary">${escHtml(h.id || '')}</span>
+      <span class="text-[11px] ml-1">${planText(h.statement)}</span></div>`).join('');
+
+  placeHitlCard(rid, `
+<div data-hitl-card="${escHtml(rid || '')}" class="my-6 relative msg-enter">
+  <div class="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 blur-2xl opacity-40"></div>
+  <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
+    <div class="flex items-center gap-3 mb-2">
+      <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
+        <span class="material-symbols-outlined text-on-primary text-sm">science</span>
+      </div>
+      <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${escHtml(t('plan.title'))}</h3>
+    </div>
+    <p class="text-[10px] text-outline-variant font-mono mb-2">CTX: ${escHtml(String(rid).slice(0, 8))} · ${escHtml(data.agent_name || '')}</p>
+    <div class="flex flex-wrap gap-1.5 mb-3">
+      ${planChip('', t('plan.revision').replace('{n}', plan.revision), 'text-primary border-primary/30 bg-primary/5')}
+      ${planChip('', t('plan.tasks').replace('{n}', plan.task_count))}
+      ${planChip('', (plan.total_est_duration_min || 0) + ' ' + t('plan.min'))}
+      ${(plan.routes || []).map(planRouteChip).join('')}
+      ${plan.plan_id ? planChip('id', plan.plan_id) : ''}
+    </div>
+    ${planField(t('plan.goal'), planText(plan.goal))}
+    ${plan.hypothesis ? planField(t('plan.hypothesis'), planText(plan.hypothesis)) : ''}
+    ${planField(t('plan.methods'), planItems(plan.methods))}
+    ${hypotheses ? planSection(t('plan.hypotheses'), hypotheses) : ''}
+    ${planCritiqueBlock(plan)}
+    ${planMatrix(plan)}
+    <div class="mt-3 flex items-center justify-between">
+      <p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider">${escHtml(t('plan.tasksTitle'))}</p>
+      <button type="button" id="plan-toggle-all-${escHtml(rid)}" onclick="togglePlanAllTasks('${escJs(rid)}')"
+        class="text-[10px] uppercase tracking-wider text-primary hover:underline">${escHtml(t('plan.expandAll'))}</button>
+    </div>
+    <div id="plan-tasks-${escHtml(rid)}" class="mt-1">${plan.tasks.map((task, i) => planTaskCard(rid, task, i)).join('')}</div>
+    ${planSection(t('plan.risks'), planBullets(plan.risks))}
+    ${planSection(t('plan.assumptions'), planBullets(plan.assumptions))}
+    <!-- Only the answer is disabled once this review is over (timeout, or
+         the operator has answered): the plan stays readable and its task
+         cards stay foldable, which is the whole point of drawing it. -->
+    <div id="hitl-controls-${escHtml(rid)}" class="mt-4 flex flex-col gap-2">
+      <textarea id="hitl-feedback-${escHtml(rid)}" rows="2" placeholder="${escHtml(t('plan.feedbackPlaceholder'))}"
+        class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
+      <div class="flex flex-wrap gap-3">
+        <button onclick="respondHITL('${escJs(rid)}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+          <span class="material-symbols-outlined text-base">check_circle</span> ${escHtml(t('plan.accept'))}
+        </button>
+        <button onclick="respondHITLEdit('${escJs(rid)}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
+          <span class="material-symbols-outlined text-base">edit_note</span> ${escHtml(t('plan.revise'))}
+        </button>
+        <button onclick="respondHITL('${escJs(rid)}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
+          <span class="material-symbols-outlined text-base">close</span> ${escHtml(t('plan.reject'))}
+        </button>
+      </div>
+    </div>
+  </div>
+</div>`);
 }

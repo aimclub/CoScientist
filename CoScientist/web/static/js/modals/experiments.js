@@ -94,7 +94,10 @@
       'ToolReranker', 'FullSetToolReranker', 'WebToolsDeployerAgent',
       'ExperimentAgent', 'CoderAgent', 'DatasetCollectorAgent',
       'MedicalAgent', 'McpBuilderAgent', 'ContextInitAgent',
-      'ContextInitSessionAgent', 'ResultAggregatorAgent', 'FedotAgent'
+      'ContextInitSessionAgent', 'ResultAggregatorAgent', 'FedotAgent',
+      // Experiment Module stages (experiments profile).
+      'ExperimentModuleAgent', 'ExperimentPlannerAgent',
+      'ExperimentExecutorAgent', 'ExperimentResultReviewAgent'
     ].forEach(name => KNOWN_AGENTS.add(name));
 
     // INTERNAL_AGENTS and isInternalAgent() come from activity_rail.js, which
@@ -127,6 +130,13 @@
       ['ContextInitSessionAgent', 'OrchestratorAgent'],
       ['ResultAggregatorAgent', 'OrchestratorAgent'],
       ['ExecutorSwitchAgent', 'TaskExecutorAgent'],
+      // Experiment Module: on the experiments profile it stands where
+      // TaskExecutorAgent stands here, with its four stages beneath it. This
+      // map is only the fallback — /api/agents carries the live hierarchy.
+      ['ExperimentModuleAgent', 'OrchestratorAgent'],
+      ['ExperimentPlannerAgent', 'ExperimentModuleAgent'],
+      ['ExperimentExecutorAgent', 'ExperimentModuleAgent'],
+      ['ExperimentResultReviewAgent', 'ExperimentModuleAgent'],
     ]);
 
     async function loadAgentHierarchy() {

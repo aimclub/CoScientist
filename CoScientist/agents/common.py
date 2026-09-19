@@ -161,28 +161,42 @@ def _retry_after_s(err: Exception) -> Optional[float]:
     return float(match.group(1)) if match else None
 
 
+#: Connect-phase failures: the request never reached a provider, so with a
+#: forward proxy configured the proxy is the thing to check.
+_PROXY_ERROR_SUBSTRINGS = (
+    "proxy",
+    "proxyerror",
+    "all connection attempts failed",
+    "connection refused",
+    "cannot connect to host",
+    "failed to connect",
+    "connecterror",
+    "connecttimeout",
+)
+#: Ambiguous with a proxy in the path — the connection failed somewhere between
+#: here and the provider — so these only count when a proxy is configured.
+_PROXY_ERROR_TYPES = ("ProxyError", "ConnectError", "ConnectTimeout", "APIConnectionError")
+
+
 def is_proxy_error(err: Exception) -> bool:
-    """Return True if *err* represents an unreachable proxy or network connection failure."""
+    """True when the failure looks like the forward proxy is unreachable.
+
+    Deliberately narrow, and a read timeout is deliberately NOT one. "timeout"
+    and "timed out" used to match here, so a model that simply took longer than
+    LLM__REQUEST_TIMEOUT to answer was reported to the operator as a dead proxy
+    — while the proxy was fine and the provider had just billed the run. Worse,
+    ``_is_transient`` short-circuits on this function, so classifying a timeout
+    as a proxy failure also cancelled the retry `_RETRYABLE_TYPES` grants it:
+    one slow answer ended the turn instead of being tried again.
+    """
     if not settings.web.use_proxy:
         return False
     msg = str(err).lower()
-    proxy_keywords = (
-        "proxy",
-        "all connection attempts failed",
-        "connecterror",
-        "connection refused",
-        "cannot connect to host",
-        "failed to connect",
-        "proxyerror",
-        "timed out",
-        "timeout",
-        "connecttimeout",
+    if any(k in msg for k in _PROXY_ERROR_SUBSTRINGS):
+        return True
+    return bool(settings.services.proxy_url) and (
+        type(err).__name__ in _PROXY_ERROR_TYPES or "connectionerror" in msg
     )
-    if any(k in msg for k in proxy_keywords):
-        return True
-    if settings.services.proxy_url and ("connectionerror" in msg or "connecterror" in msg or "apiconnectionerror" in msg):
-        return True
-    return False
 
 
 def _is_transient(err: Exception) -> bool:
@@ -423,7 +437,7 @@ class RetryingLiteLlm(LiteLlm):
 
 MODEL = settings.llm.main_model
 litellm.api_key = settings.llm.openai_api_key
-litellm.request_timeout = 45.0
+litellm.request_timeout = 600.0
 # Silence litellm's "Provider List: https://docs.litellm.ai/docs/providers" spam.
 # It fires when litellm can't map a model prefix (e.g. "qwen/...") to a known
 # provider during cost/token bookkeeping — harmless, but it floods the console.

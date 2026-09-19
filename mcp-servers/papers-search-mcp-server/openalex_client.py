@@ -19,9 +19,11 @@ class OpenAlexClient:
     def __init__(
         self,
         email: str = None,
+        api_key: str = None,
         s3_service: S3BucketService = None,
     ) -> None:
-        self.email = email
+        self.email = email or OPENALEX_EMAIL or os.environ.get("SERVICES__OPENALEX_EMAIL")
+        self.api_key = api_key or os.environ.get("OPENALEX_API_KEY") or os.environ.get("SERVICES__OPENALEX_API_KEY")
 
     def request_with_retry(
         self,
@@ -33,12 +35,18 @@ class OpenAlexClient:
     ) -> requests.Response:
         """Make an HTTP GET request with retry logic for rate limits and server errors."""
         url = endpoint if endpoint.startswith("http") else urljoin(self.BASE_URL, endpoint)
+        req_params = dict(params or {})
+        if self.api_key and "api_key" not in req_params:
+            req_params["api_key"] = self.api_key
+        if self.email and "mailto" not in req_params:
+            req_params["mailto"] = self.email
+
         for attempt in range(max_retries):
             try:
-                response = requests.get(url, params=params, timeout=timeout, stream=stream)
+                response = requests.get(url, params=req_params, timeout=timeout, stream=stream)
                 if response.status_code == 200:
                     return response
-                if response.status_code == 403 or response.status_code >= 500:
+                if response.status_code == 403 or response.status_code == 429 or response.status_code >= 500:
                     wait_time = 2 ** attempt
                     time.sleep(wait_time)
                 else:

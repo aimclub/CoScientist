@@ -26,6 +26,7 @@ v4_full.log
 
 # Django stuff:
 *.log
+!эксперименты/**/console.log
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
@@ -206,6 +207,9 @@ research_graph*.html
 research_graph*.json
 run_evolution*.jsonl
 run_evolution*.html
+# scripts/preview_plan_card.py writes these next to the repo root.
+plan_card_preview*.html
+plan_card_preview*.json
 agent_events.jsonl
 e2e_case.jsonl
 benchmarks/**/repository_inventory.jsonl

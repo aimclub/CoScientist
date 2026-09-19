@@ -40,6 +40,10 @@
     MedicalAgent: 'medical_services',
     McpBuilderAgent: 'construction',
     ExperimentAgent: 'science',
+    ExperimentModuleAgent: 'experiment',
+    ExperimentPlannerAgent: 'checklist',
+    ExperimentExecutorAgent: 'play_circle',
+    ExperimentResultReviewAgent: 'fact_check',
     ResultAggregatorAgent: 'summarize',
     FedotAgent: 'auto_graph',
   };

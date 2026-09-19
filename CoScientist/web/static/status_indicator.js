@@ -126,6 +126,12 @@
     WebToolsDeployerAgent: { ru: 'агент подключения инструментов', en: 'tool deployer agent' },
     ResultAggregatorAgent: { ru: 'агент составления отчёта', en: 'report writer agent' },
     ExperimentAgent: { ru: 'агент экспериментов', en: 'experiment agent' },
+    // The Experiment Module runs as four named stages, and a user watching the
+    // rail should be able to tell planning from execution from acceptance.
+    ExperimentModuleAgent: { ru: 'модуль экспериментов', en: 'experiment module' },
+    ExperimentPlannerAgent: { ru: 'агент планирования эксперимента', en: 'experiment planner agent' },
+    ExperimentExecutorAgent: { ru: 'агент проведения эксперимента', en: 'experiment executor agent' },
+    ExperimentResultReviewAgent: { ru: 'агент приёмки результатов', en: 'result review agent' },
     FedotAgent: { ru: 'агент AutoML', en: 'AutoML agent' },
     system: { ru: 'система', en: 'system' },
   };

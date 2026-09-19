@@ -77,7 +77,10 @@
     #detail .close:hover { color: var(--ink); }
     #detail .k { color: var(--accent); font-weight: 600; font-size: 11px; text-transform: uppercase;
       letter-spacing: .4px; margin: 14px 0 4px; }
-    #detail .attr { margin: 3px 0; color: var(--ink); word-break: break-word; }
+    /* pre-wrap: a Method's tool list is one server per line, and a formulation
+       written over several lines keeps them. */
+    #detail .attr { margin: 3px 0; color: var(--ink); word-break: break-word;
+      white-space: pre-wrap; }
     #detail .attr .ak { color: var(--ink2); }
     .chars { color: var(--ink3); font-size: 10px; letter-spacing: 0;
       text-transform: none; margin-left: 6px; }
@@ -357,6 +360,11 @@
           + (n.runs > 1 ? "  (" + t('graph.detail.runOf', { run: n.run, runs: n.runs }) + ")" : "") + tail
           + (calls ? "\n🛠 " + t('graph.count.calls', { count: calls }) : "");
       }
+      // A decision is written for its card — the Experiment Module's plan says
+      // "plan rev 2 · 4 tasks · 90 min" — so it keeps its whole line where a
+      // tool result, which is a dump, is cut to a headline.
+      if (n.kind === "decision")
+        return "📋 " + String(n.label || "decision").slice(0, 70) + tail;
       return String(n.label || n.id || "").slice(0, 30) + tail;
     }
 
@@ -1903,7 +1911,7 @@
       }
     }
     const KIND_WORD = { goal:"request", result:"answer", agent:"agent", agent_call:"agent",
-                        tool_call:"tool call", system:"system" };
+                        tool_call:"tool call", system:"system", decision:"decision" };
     const kindWord = n => {
       const key = "graph.kind." + n.kind;
       return t(key, KIND_WORD[n.kind] || n.kind || "");
@@ -1986,6 +1994,16 @@
           + artifactsBlock(n.artifacts)
           + readable(t('graph.detail.task'), n.input, { agent: n.executor_agent })
           + (where ? `<div class="note">${esc(where)}</div>` : "");
+      } else if (n.kind === "decision") {
+        // A decision carries the thing decided, not a call's arguments. The
+        // Experiment Module's plan opens on the plan itself, then the outcome
+        // the human gave it.
+        body = readable(n.input && n.input.kind === "experiment_plan"
+                          ? t('graph.detail.plan') : t('graph.detail.decision'),
+                        n.input)
+          + (n.verdict ? `<div class="k">${t('graph.detail.outcome')}</div>`
+                         + `<div class="attr">${esc(n.verdict)}</div>` : "")
+          + readable(t('graph.detail.note'), n.output);
       } else body = readable(t('graph.detail.arguments'), n.input) + readable(t('graph.detail.result'), n.output);
       if (isAgent) {
         // Older snapshots recorded nothing on the agent itself; say so, or

@@ -1148,7 +1148,8 @@ class ResearchGraphStore:
                edges: Optional[List[Dict[str, Any]]] = None,
                status_updates: Optional[List[Dict[str, Any]]] = None,
                autolink_focus: Optional[str] = None,
-               partial_edges: bool = False) -> CommitResult:
+               partial_edges: bool = False,
+               enforce_permissions: bool = True) -> CommitResult:
         """Transactional write: validate EVERYTHING, then apply all-or-nothing.
 
         `autolink_focus` (a Hypothesis id): any Evidence created in this commit
@@ -1162,10 +1163,20 @@ class ResearchGraphStore:
         purpose — an agent told "nothing was saved" fixes its payload and retries,
         while one whose edge vanished quietly never learns that its finding is
         attached to nothing. It is ON for the deterministic writers, where losing
-        a dozen good methods to one stale id is the worse failure."""
+        a dozen good methods to one stale id is the worse failure.
+
+        `enforce_permissions=False` is the privileged code-path (same contract as
+        ``init_research``): structural validation stays, only the per-agent ACL
+        is skipped. Reserved for deterministic module hooks — never LLM tools.
+
+        Both keywords have live callers and dropping either breaks the other
+        side at call time, silently: the experiment module's bridge swallows
+        every exception by contract, so a missing `enforce_permissions` would
+        show up only as an audit line and an empty graph."""
         with self._lock:
             result = self._commit_locked(source, list(nodes or []),
                                          list(edges or []), list(status_updates or []),
+                                         enforce_permissions=enforce_permissions,
                                          autolink_focus=autolink_focus,
                                          partial_edges=partial_edges)
             if result.ok:

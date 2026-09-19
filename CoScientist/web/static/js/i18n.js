@@ -198,6 +198,75 @@ const i18n = {
     ru: 'Параметры сервера и значения, которые задаются только в .env.'
   },
 
+  // ── Experiment plan review card (CoScientist/experiments/plan_view.py) ──
+  'plan.title': { en: 'Experiment plan', ru: 'План эксперимента' },
+  'plan.sidebarTitle': { en: 'Experiment plan', ru: 'План эксперимента' },
+  'plan.sidebarHint': {
+    en: 'Read the plan in the chat: the design matrix, then each task. Revise sends your corrections back to the planner.',
+    ru: 'План — в карточке в чате: матрица плана, затем задачи. «Доработать» отправит ваши правки планировщику.'
+  },
+  'plan.revision': { en: 'revision {n}', ru: 'ревизия {n}' },
+  'plan.tasks': { en: '{n} task(s)', ru: 'задач: {n}' },
+  'plan.tasksTitle': { en: 'Tasks', ru: 'Задачи' },
+  'plan.min': { en: 'min', ru: 'мин' },
+  'plan.goal': { en: 'Goal', ru: 'Цель' },
+  'plan.hypothesis': { en: 'Hypothesis', ru: 'Гипотеза' },
+  'plan.hypotheses': { en: 'Hypotheses', ru: 'Гипотезы' },
+  'plan.methods': { en: 'Methods', ru: 'Методы' },
+  'plan.matrix': {
+    en: 'Design matrix — hypothesis → experiment → data → baseline → metrics',
+    ru: 'Матрица плана — гипотеза → эксперимент → данные → базлайн → метрики'
+  },
+  'plan.col.task': { en: 'Task', ru: 'Задача' },
+  'plan.col.hypothesis': { en: 'Hypothesis', ru: 'Гипотеза' },
+  'plan.col.question': { en: 'Question', ru: 'Вопрос' },
+  'plan.col.dataset': { en: 'Dataset', ru: 'Данные' },
+  'plan.col.baselines': { en: 'Baselines', ru: 'Базлайны' },
+  'plan.col.metrics': { en: 'Metrics', ru: 'Метрики' },
+  'plan.col.tools': { en: 'Tools', ru: 'Инструменты' },
+  'plan.col.artifacts': { en: 'Analysis', ru: 'Анализ' },
+  'plan.col.route': { en: 'Route', ru: 'Маршрут' },
+  'plan.task.question': { en: 'Question', ru: 'Вопрос' },
+  'plan.task.dataset': { en: 'Dataset', ru: 'Данные' },
+  'plan.task.baselines': { en: 'Baselines', ru: 'Базлайны' },
+  'plan.task.metrics': { en: 'Metrics', ru: 'Метрики' },
+  'plan.task.analysis': { en: 'Analysis', ru: 'Анализ' },
+  'plan.task.description': { en: 'What runs', ru: 'Что выполняется' },
+  'plan.task.rationale': { en: 'Why', ru: 'Зачем' },
+  'plan.task.tools': { en: 'MCP / tools', ru: 'MCP / инструменты' },
+  'plan.task.repo': { en: 'Repository', ru: 'Репозиторий' },
+  'plan.task.params': { en: 'Launch params', ru: 'Параметры запуска' },
+  'plan.task.inputs': { en: 'Inputs', ru: 'Входные данные' },
+  'plan.task.criteria': { en: 'Success criteria', ru: 'Критерии успеха' },
+  'plan.task.expected': { en: 'Expected artifacts', ru: 'Ожидаемые артефакты' },
+  'plan.task.warnings': { en: 'Warnings', ru: 'Предупреждения' },
+  'plan.task.optional': { en: 'optional', ru: 'необязательная' },
+  'plan.task.after': { en: 'after', ru: 'после' },
+  'plan.optionalTool': { en: 'optional', ru: 'необязательный' },
+  'plan.noInputs': { en: 'no inputs — the task starts from its own launch params', ru: 'входных данных нет — задача стартует со своих параметров' },
+  'plan.noTools': { en: 'no MCP tools — this route does not use them', ru: 'MCP-инструменты не используются этим маршрутом' },
+  'plan.risks': { en: 'Risks', ru: 'Риски' },
+  'plan.assumptions': { en: 'Assumptions', ru: 'Допущения' },
+  'plan.critique': { en: 'Automatic review', ru: 'Автоматическая проверка' },
+  'plan.critique.approve': {
+    en: 'The deterministic critic found no blocking issue.',
+    ru: 'Детерминированная проверка не нашла блокирующих проблем.'
+  },
+  'plan.critique.revise': {
+    en: 'The deterministic critic asked for a revision.',
+    ru: 'Детерминированная проверка потребовала доработки.'
+  },
+  'plan.expandAll': { en: 'Expand all', ru: 'Раскрыть все' },
+  'plan.collapseAll': { en: 'Collapse all', ru: 'Свернуть все' },
+  'plan.accept': { en: 'Approve', ru: 'Утвердить' },
+  'plan.revise': { en: 'Revise', ru: 'Доработать' },
+  'plan.reject': { en: 'Reject', ru: 'Отклонить' },
+  'plan.feedbackPlaceholder': {
+    en: 'Corrections for the planner — then Revise',
+    ru: 'Правки для планировщика — затем «Доработать»'
+  },
+
+
   // Groups inside sections
   'settings.group.planning': { en: 'Planning', ru: 'Планирование' },
   'settings.group.search': { en: 'Web search', ru: 'Поиск в сети' },
@@ -1220,6 +1289,7 @@ const i18n = {
   'graph.kind.agent': { en: 'agent', ru: 'агент' },
   'graph.kind.agent_call': { en: 'agent', ru: 'агент' },
   'graph.kind.tool_call': { en: 'tool call', ru: 'вызов инструмента' },
+  'graph.kind.decision': { en: 'decision', ru: 'решение' },
   'graph.kind.system': { en: 'system', ru: 'система' },
   // Node hover tooltip (plain text, one line per item)
   'graph.tooltip.type': { en: 'type: {kind}', ru: 'тип: {kind}' },
@@ -1242,6 +1312,10 @@ const i18n = {
     ru: 'записанное значение обрезано · показано до последнего целого поля'
   },
   'graph.detail.arguments': { en: 'arguments', ru: 'аргументы' },
+  'graph.detail.plan': { en: 'plan', ru: 'план' },
+  'graph.detail.decision': { en: 'decision', ru: 'решение' },
+  'graph.detail.outcome': { en: 'outcome', ru: 'итог' },
+  'graph.detail.note': { en: 'note', ru: 'примечание' },
   'graph.detail.none': { en: 'none', ru: 'нет' },
   'graph.detail.result': { en: 'result', ru: 'результат' },
   'graph.detail.files': { en: 'files', ru: 'файлы' },

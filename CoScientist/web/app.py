@@ -2194,12 +2194,20 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
         runtime.hitl_handler.reset(key)
         runtime.registry.touch_session(user_id, session_id, status="idle")
 
+        # Whatever card the operator gets, the exception itself goes to the log.
+        # Without this the proxy branch below was a dead end: it replaced the
+        # error with advice about the proxy and recorded nothing else, so a run
+        # that failed for some other reason left no trace to diagnose from.
+        logging.getLogger("CoScientist.web").exception(
+            "Run failed for %s/%s: %s", user_id, session_id, exc)
+
         if is_proxy_error(exc):
             msg = (
                 f"**Error connecting to proxy server**\n\n"
                 f"Failed to connect to the proxy server to execute the query to the language model. "
                 f"Please ensure the proxy container is running, the corporate VPN is enabled (other - disabled), and "
-                f"and the proxy is accessible."
+                f"and the proxy is accessible.\n\n"
+                f"`{type(exc).__name__}: {exc}`"
             )
             agent_msg = {
                 "type": "agent_event",
