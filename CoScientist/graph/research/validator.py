@@ -23,6 +23,10 @@ from typing import Any, Callable, Dict, List, Optional
 
 from google.adk.plugins.base_plugin import BasePlugin
 
+from CoScientist.agents.callbacks.report_language import (
+    REPORT_LANGUAGE_STATE_KEY,
+    graph_text_rule,
+)
 from CoScientist.graph.research import queries
 from CoScientist.graph.research.store import get_research_graph, research_graph
 
@@ -56,15 +60,44 @@ _SYSTEM = (
     "otherwise the branch is INCONCLUSIVE — it was tested and the evidence did "
     "not settle it. Say what is missing in `reason`. Do not use inconclusive "
     "for a hypothesis nobody worked on; that is the orchestrator's backlog, not "
-    "a verdict. Reply with STRICT JSON only, no prose:\n"
+    "a verdict.\n"
+    "\n"
+    "THE CONCLUSION IS THE STUDY'S DELIVERABLE. It is the one card a reader "
+    "opens to learn what came of the work, and the thing the NEXT study starts "
+    "from — so it carries the chain that produced the answer, not only the "
+    "answer. A single paragraph of prose is not enough: a reader had to re-walk "
+    "the whole graph to find out how the answer was reached, and a follow-up "
+    "study had nothing to begin with. Write these five fields, each doing its "
+    "own job and none repeating another:\n"
+    "  - `conclusion`: THE ANSWER, one or two sentences. It becomes the card's "
+    "headline, so it must stand alone without the rest.\n"
+    "  - `how_established`: the chain, BY STAGE — what the reading established, "
+    "what was then run, with which instrument, and the numbers it returned. "
+    "Name the evidence ids and the tools. This is the part that makes the "
+    "answer checkable rather than merely stated.\n"
+    "  - `against_criteria`: every criterion by id, the value actually measured "
+    "against it, and whether it was met. If a criterion was not measured at "
+    "all, say so — an unmeasured bar is not a met bar.\n"
+    "  - `validity_bounds`: what the answer does NOT cover — the population, "
+    "the conditions, the model, the routes or regimes left out.\n"
+    "  - `open_questions`: what the next study should do FIRST. The measurement "
+    "that was missing, the bar that was not reached, the branch nobody tested. "
+    "Be concrete enough to act on.\n"
+    "\n"
+    "Every number you write must come from the evidence you were given. If a "
+    "figure is not in the record, do not supply one — say it is missing.\n"
+    "\n"
+    "Reply with STRICT JSON only, no prose:\n"
     '{"evidence":{"<evidence_id>":"supports|refutes|refines|irrelevant"},'
     '"verdict":"confirmed|refuted|inconclusive",'
     '"criteria":{"<criteria_id>":"met|not_met"},'
-    '"conclusion":"one-paragraph synthesis of the finding",'
+    '"conclusion":"the answer, one or two sentences",'
+    '"how_established":"the chain by stage, with instruments and numbers",'
+    '"against_criteria":"each criterion id, measured value, met or not",'
     '"validity_bounds":"limits of validity",'
+    '"open_questions":"what the next study should do first",'
     '"reason":"one sentence justifying the verdict"}'
 )
-
 
 def _enabled() -> bool:
     try:
@@ -180,10 +213,16 @@ async def judge_hypothesis(
     complete: Optional[Callable] = None,
     graph=None,
     expected_research_id: Optional[str] = None,
+    language: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Judge one hypothesis and commit the verdict + Conclusion. Best-effort;
     returns the CommitResult dict, or None if it could not judge/commit.
-    `complete` is injectable for tests (bypasses the real LLM)."""
+    `complete` is injectable for tests (bypasses the real LLM).
+
+    `language` is the study's report language. This is not an agent, so the
+    `{report_language_block?}` substitution every agent gets never reached it:
+    it wrote English conclusions into Russian studies, on the one card that
+    answers the question."""
     try:
         graph = graph or research_graph
         if expected_research_id is not None \
@@ -199,7 +238,8 @@ async def judge_hypothesis(
         if h.get("status") != "under_verification":
             return None  # only judge branches that are actually under verification
 
-        raw = await (complete or _complete)(_SYSTEM, _build_user(sl, hid))
+        system = _SYSTEM + graph_text_rule(language)
+        raw = await (complete or _complete)(system, _build_user(sl, hid))
         data = _parse_json(raw)
         if not data:
             return None
@@ -278,9 +318,17 @@ async def judge_hypothesis(
         nodes: List[Dict[str, Any]] = []
         concl = str(data.get("conclusion", "")).strip()
         if concl:
-            nodes.append({"type": "Conclusion", "ref": "cl",
-                          "attrs": {"synthesis": concl[:2000],
-                                    "validity_bounds": str(data.get("validity_bounds", ""))[:500]}})
+            # Every field the judge produced, so the card carries the chain
+            # and not only the answer. Empty ones are dropped rather than
+            # stored blank: a labelled empty row in the panel reads as "we
+            # looked and there was nothing", which is a different claim.
+            attrs = {"synthesis": concl[:2000]}
+            for key, cap in (("how_established", 2000), ("against_criteria", 1200),
+                             ("validity_bounds", 800), ("open_questions", 1200)):
+                text = str(data.get(key, "") or "").strip()
+                if text:
+                    attrs[key] = text[:cap]
+            nodes.append({"type": "Conclusion", "ref": "cl", "attrs": attrs})
             edges += [{"type": "based_on", "from": "#cl", "to": eid}
                       for eid in sorted(polarity)]
             edges += [{"type": "determines_sufficiency", "from": ccid, "to": "#cl"}
@@ -351,12 +399,14 @@ class BackgroundValidatorPlugin(BasePlugin):
         graph: Any,
         hypothesis: str,
         research_id: str,
+        language: Optional[str] = None,
     ) -> None:
         try:
             result = await judge_hypothesis(
                 hypothesis,
                 graph=graph,
                 expected_research_id=research_id,
+                language=language,
             )
             # Settled for THIS evidence set whether the commit was accepted or
             # REFUSED. A refusal is deterministic in the slice it was made on,
@@ -382,6 +432,12 @@ class BackgroundValidatorPlugin(BasePlugin):
         try:
             graph = get_research_graph(tool_context)
             research_id = _research_id(graph)
+            # The one place a tool_context is in scope, so the one place the
+            # study's language can be read.
+            try:
+                language = tool_context.state.get(REPORT_LANGUAGE_STATE_KEY)
+            except Exception:  # noqa: BLE001 — a judgment is worth more than its language
+                language = None
             self._activate_research(graph, research_id)
             for item in queries.unresolved_hypotheses(graph)["items"]:
                 key = self._key(graph, research_id, item)
@@ -396,6 +452,7 @@ class BackgroundValidatorPlugin(BasePlugin):
                         graph=graph,
                         hypothesis=item["hypothesis"],
                         research_id=research_id,
+                        language=language,
                     )
                 )
                 _TASKS.add(task)

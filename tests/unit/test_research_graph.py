@@ -670,6 +670,105 @@ def test_a_branch_the_judge_could_not_settle_can_be_reopened(store):
         {"id": "CC1", "status": "met", "reason": "met by E2 at -9.1"}]).ok
 
 
+def test_the_conclusion_carries_the_chain_and_not_only_the_answer(store):
+    """The conclusion is the study's deliverable: the one card a reader opens
+    to learn what came of the work, and what the NEXT study starts from. It
+    used to hold a single paragraph, so the reader had to re-walk the whole
+    graph to find out how the answer had been reached and a follow-up had
+    nothing to begin with.
+    """
+    import asyncio
+    import json
+
+    import CoScientist.graph.research.validator as V
+
+    _build_verifiable(store)
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "under_verification"}])
+    store.commit(source="ExperimentAgent",
+                 nodes=[{"type": "Evidence", "ref": "e", "attrs": {
+                     "subtype": "computational", "content": "медианная LD50 41 мг/кг",
+                     "measured_on": "ADMETlab 3.0"}}],
+                 edges=[{"type": "supports", "from": "#e", "to": "H1"}])
+
+    async def judge(system, user):
+        return json.dumps({
+            "verdict": "confirmed",
+            "criteria": {"CC1": "met"},
+            "conclusion": "Кластер линейных фурокумаринов самый токсичный.",
+            "how_established": "Литература дала 41 метаболит; прогон ADMETlab "
+                               "3.0 вернул медианную LD50 41 мг/кг (E2).",
+            "against_criteria": "CC1: измерено 41 мг/кг против порога 50 — "
+                                "выполнен.",
+            "validity_bounds": "in silico, мышь, внутривенно.",
+            "open_questions": "Не измерен разброс между путями введения.",
+            "reason": "порог пройден",
+        }, ensure_ascii=False)
+
+    orig = V.research_graph
+    V.research_graph = store
+    try:
+        res = asyncio.run(V.judge_hypothesis("H1", complete=judge, language="ru"))
+    finally:
+        V.research_graph = orig
+    assert res and res["ok"], res
+
+    cl = next(n for n in store.full()["nodes"] if n["type"] == "Conclusion")
+    attrs = cl["attrs"]
+    # The answer stands alone, because it is the card's headline...
+    assert attrs["synthesis"].startswith("Кластер линейных")
+    # ...and the chain that produced it is stored beside it, not instead of it.
+    assert "ADMETlab" in attrs["how_established"]
+    assert "CC1" in attrs["against_criteria"]
+    assert attrs["validity_bounds"]
+    # What makes the study usable as the next one's starting point.
+    assert "путями введения" in attrs["open_questions"]
+
+
+def test_the_judge_is_told_which_language_the_study_is_written_in(store):
+    """It is not an agent, so the `{report_language_block?}` substitution every
+    agent receives never reached it: a Russian study got an English paragraph
+    on the one card that answers its question."""
+    import asyncio
+
+    import CoScientist.graph.research.validator as V
+
+    _build_verifiable(store)
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "under_verification"}])
+    store.commit(source="ResearchAgent",
+                 nodes=[{"type": "Evidence", "ref": "e", "attrs": {
+                     "subtype": "literature", "content": "подтверждающая работа"}}],
+                 edges=[{"type": "supports", "from": "#e", "to": "H1"}])
+
+    seen = {}
+
+    async def capture(system, user):
+        seen["system"] = system
+        return ('{"verdict":"refuted","reason":"нет",'
+                '"conclusion":"не подтверждено"}')
+
+    orig = V.research_graph
+    V.research_graph = store
+    try:
+        # One judgment only: it settles H1, so a second call would return at the
+        # `under_verification` guard and re-read the first call's prompt.
+        asyncio.run(V.judge_hypothesis("H1", complete=capture, language="ru"))
+    finally:
+        V.research_graph = orig
+
+    ru = seen["system"]
+    assert "RUSSIAN" in ru
+    # And the instruction leaves the machine-readable parts alone.
+    assert "node ids" in ru and "untranslated" in ru
+
+    from CoScientist.agents.callbacks.report_language import graph_text_rule
+    assert graph_text_rule("en") == "",         "an English study must not be told to write Russian"
+    # A missing key is a Russian study, which is what every entrypoint that
+    # does not set one has always produced.
+    assert graph_text_rule(None) == graph_text_rule("ru")
+
+
 def test_a_refused_confirmation_leaves_the_branch_open_for_the_missing_measurement(store):
     """A refusal is not a verdict, and the difference decides the study.
 
@@ -849,7 +948,7 @@ def test_background_validator_retries_after_failed_judgment(monkeypatch):
     outcomes = [None, {"ok": True}]
     calls = []
 
-    async def fake_judge(hypothesis, *, graph, expected_research_id):
+    async def fake_judge(hypothesis, *, graph, expected_research_id, language=None):
         calls.append((hypothesis, expected_research_id))
         return outcomes.pop(0)
 
@@ -926,7 +1025,7 @@ def test_background_validator_dedup_tracks_related_evidence_and_research_id(
     }
     calls = []
 
-    async def fake_judge(hypothesis, *, graph, expected_research_id):
+    async def fake_judge(hypothesis, *, graph, expected_research_id, language=None):
         calls.append((hypothesis, expected_research_id, tuple(item["related"])))
         return {"ok": True}
 
@@ -2307,3 +2406,152 @@ def test_the_page_stopped_offering_a_view_it_no_longer_draws():
 
     assert 'value="slide"' not in page
     assert "pollSlide" not in page
+
+
+def test_a_step_is_placed_by_what_it_does_not_by_what_it_mentions(store):
+    """Every plan step of one real study landed under the wrong stage heading.
+
+    The classifier read the whole of a step — title, description and notes — so
+    a step was filed under any stage its prose happened to name. A Tanimoto
+    clustering run went to the literature band because its description said
+    "merge with the literature SMILES from TASK-2"; a QSAR LD50 prediction went
+    to the report band because its description said the table then goes to the
+    final report. The operator read it exactly as it was drawn: "the step
+    «collect the literature» is at the framing stage, the step «predict ld50» is
+    in the report".
+
+    What a step IS is in its title. What it TOUCHES is in its description.
+    """
+    _init(store)
+    steps = [
+        # The two that were misfiled, verbatim from the study.
+        {"title": "Кластеризация литературных SMILES по структурному сходству",
+         "description": "Провести кластеризацию на литературных SMILES из TASK-2",
+         "assignee": "TaskExecutorAgent", "plan_task_id": "TASK-5"},
+        {"title": "QSAR-предсказания: LD50 по путям введения и домен применимости",
+         "description": "Передать таблицу к финальному отчёту исследования",
+         "assignee": "TaskExecutorAgent", "plan_task_id": "TASK-4"},
+        # A step that really is gathering, and says so in its title.
+        {"title": "Собрать литературные данные о метаболитах и их SMILES",
+         "description": "PubMed, PubChem, ChEMBL",
+         "assignee": "TaskExecutorAgent", "plan_task_id": "TASK-2"},
+    ]
+    store.commit(source="plan-mirror",
+                 nodes=[{"type": "PlanStep", "attrs": a} for a in steps])
+
+    stage = {n["id"]: n["stage"] for n in store.view_of(None)["nodes"]
+             if n["kind"] == "planstep"}
+    assert stage["PS1"] == "experiment", "clustering is a run, whatever it clusters"
+    assert stage["PS2"] == "experiment", "a prediction is not a write-up"
+    assert stage["PS3"] == "literature", "this one really is gathering sources"
+
+
+def test_an_agent_with_one_job_places_the_step_its_title_cannot(store):
+    """The assignee is the only part of a step the planner picks off a fixed
+    roster instead of writing as prose, so where it means something it decides.
+
+    Where it does not: TaskExecutorAgent describes itself as routing each task
+    to whatever can deliver it, and the planner hands it literature collection
+    as readily as a QSAR run — in one study four of five steps were its, across
+    three stages. A generic executor says nothing about the stage, so the
+    wording has to.
+    """
+    _init(store)
+    store.commit(source="plan-mirror", nodes=[
+        # Titled as a run, assigned to the agent whose whole job is reading.
+        {"type": "PlanStep", "attrs": {
+            "title": "Кластеризация по структурному сходству",
+            "assignee": "ResearchAgent", "plan_task_id": "TASK-1"}},
+        # Titled as gathering, assigned to the aggregator that writes the report.
+        {"type": "PlanStep", "attrs": {
+            "title": "Собрать литературу по фуранокумаринам",
+            "assignee": "ResultAggregatorAgent", "plan_task_id": "TASK-2"}},
+        # Nobody assigned it, so the title is all there is.
+        {"type": "PlanStep", "attrs": {
+            "title": "Обзор публикаций по фуранокумаринам",
+            "assignee": "unassigned", "plan_task_id": "TASK-3"}},
+    ])
+
+    stage = {n["id"]: n["stage"] for n in store.view_of(None)["nodes"]
+             if n["kind"] == "planstep"}
+    assert stage["PS1"] == "literature"
+    assert stage["PS2"] == "report"
+    assert stage["PS3"] == "literature"
+
+
+def test_a_band_is_sized_for_both_tracks_so_no_step_leaves_its_stage():
+    """The plan column used to be centred in whatever height the RECORD needed,
+    and allowed to overflow. Every study spends its first minutes as four plan
+    steps and two cards, and at that size the steps were pushed clean out of
+    their own band: one landed under the heading of the stage above, and two
+    from different stages landed on top of each other. Measured on the
+    operator's own study: 307x104 pixels of one card covered by another, and a
+    literature step 135 pixels inside the framing band.
+
+    A step drawn outside its band is worse than a step drawn small: the column's
+    only job is to say which stage the plan asked for, and outside its band it
+    says a different one. So the plan's height is measured BEFORE the bands are
+    sized, and the band is made tall enough to hold whichever track needs more.
+    """
+    from starlette.testclient import TestClient
+
+    from CoScientist.web.app import create_app
+
+    with TestClient(create_app()) as client:
+        page = client.get("/graph").text
+
+    assert "function planBlocks(place)" in page, \
+        "the plan's height has to be measurable before the bands are sized"
+    # Both stackers ask for it, and both take the larger of the two tracks.
+    assert page.count("planBlocks(place)") == 3, \
+        "ELK's stacker and the ELK-less fallback must both size for the plan"
+    assert page.count("Math.max(BAND_MIN_HEIGHT, recordH, planH)") == 2, \
+        "a band that ignores one of its two tracks lets that track overflow"
+    # And the column may no longer compute its own centring from the record's
+    # bands alone, which is what allowed the overflow.
+    assert "function planColumn(bands, leftEdge, blocks)" in page
+
+
+def test_the_stage_names_are_drawn_where_no_card_can_reach():
+    """The names used to be painted inside each band, at its top-left corner —
+    which is exactly where the plan column then put its first card. Three of the
+    five names were unreadable on the operator's study, including the two whose
+    bands had a step in them.
+
+    The names go in a rail of their own, left of every card in either track.
+    Nothing is ever seated there, so no rearrangement can bring this back.
+    """
+    from starlette.testclient import TestClient
+
+    from CoScientist.web.app import create_app
+
+    with TestClient(create_app()) as client:
+        page = client.get("/graph").text
+
+    assert "function railWidth()" in page
+    # Right-aligned OUTSIDE the band's left edge, not inset from it.
+    assert "const railX = b.left - RAIL_GAP" in page
+    assert "b.left + 16, b.top + 12" not in page, \
+        "a name inside the band is a name a card can cover"
+    # Every band carries the rail's edge, and the camera opens wide enough to
+    # show it — a name the reader has to pan to find is no better than a hidden
+    # one.
+    assert "function addRail(bands)" in page
+    assert page.count("addRail(bands);") == 2, \
+        "both stackers have to set it, or one of them draws names over cards"
+    assert "b.railLeft != null ? b.railLeft : b.left" in page
+
+
+def test_an_undrawn_card_is_not_treated_as_a_card_of_no_size():
+    """vis reports {0,0,0,0} for a node it has not drawn yet rather than
+    reporting nothing, so the truthiness test accepted it as a measurement. A
+    column of zero-height cards stacks every one of them at the same point.
+    """
+    from starlette.testclient import TestClient
+
+    from CoScientist.web.app import create_app
+
+    with TestClient(create_app()) as client:
+        page = client.get("/graph").text
+
+    assert "box.right - box.left > 1 && box.bottom - box.top > 1" in page

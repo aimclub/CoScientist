@@ -376,8 +376,33 @@ _READING_TEXT = re.compile(
     r"|\bpapers\b|\blit[_\s-]?review\b",
     re.IGNORECASE)
 #: The agents whose whole job is reading. A method one of them opened is a
-#: review even before it has produced anything to judge it by.
-_READING_AGENTS = {"ResearchAgent", "MedicalAgent"}
+#: review even before it has produced anything to judge it by. The dataset
+#: collector belongs here too: assembling a table out of ChEMBL, PubChem or
+#: HuggingFace is desk gathering, not a measurement.
+_READING_AGENTS = {"ResearchAgent", "MedicalAgent", "DatasetCollectorAgent"}
+#: A GATHERING verb. The literature pattern names the object — papers,
+#: publications, bibliography — and the object alone does not say what a step
+#: does with it: "Кластеризация литературных SMILES" clusters molecules that
+#: happen to have come out of the literature, and it is a run. So a step counts
+#: as reading only when it says it is GATHERING something bibliographic.
+#: Deliberately excludes download verbs: pulling a prepared dataset off S3 is
+#: not a literature search.
+_GATHERING_TEXT = re.compile(
+    r"\bсбор\w*|собра\w*|собер\w*|поиск\w*|\bнайти\b|найд\w*"
+    r"|извлеч\w*|подобра\w*|\bобзор\w*"
+    r"|\bcollect\w*|\bgather\w*|\bsearch\w*|\bretriev\w*"
+    r"|\breview\b|\bsurvey\b",
+    re.IGNORECASE)
+#: The rest of the roster, by what a step assigned to it is a step OF. Only the
+#: three remaining non-experiment roles are named: everything else in the
+#: roster — every executor, coder, tool pipeline and FEDOT agent, and whatever
+#: the roster grows next — RUNS something, and running something is the
+#: experiment band. So a new agent lands in the right band without being added
+#: here, which is the direction the roster actually grows; the cost is that a
+#: new READING agent would have to be added, and that is rarer.
+_FRAMING_AGENTS = {"ContextInitAgent"}
+_HYPOTHESIS_AGENTS = {"HypothesesAgent"}
+_REPORTING_AGENTS = {"ResultAggregatorAgent"}
 
 #: The bar itself, as opposed to the prose around it. Once a measurement is
 #: aimed at a criterion these stop being editable: a threshold that follows the
@@ -471,6 +496,47 @@ def _reads_like_review(attrs: Dict[str, Any]) -> bool:
     return bool(_READING_TEXT.search(text))
 
 
+def _step_stage(attrs: Dict[str, Any]) -> str:
+    """Which stage a plan step ASKS FOR, so the plan column reads alongside the
+    research it planned.
+
+    An assignee with ONE job decides it: the planner picks the roster entry, it
+    is the one part of a step that is not prose, and `create_plan` refuses a
+    task without one.
+
+    An assignee whose job is "whatever this turns out to need" decides nothing.
+    TaskExecutorAgent describes itself as routing each task to the path that can
+    deliver it, and the planner hands it literature collection as readily as a
+    QSAR run — four of the five steps of one real study were its, across three
+    different stages. So for a generic executor, and for a step nobody assigned,
+    the WORDING decides.
+
+    And only the TITLE. What a step IS is in its title; what it TOUCHES is in
+    its description. Reading descriptions put a Tanimoto clustering run in the
+    literature band, because its description said "merge with the literature
+    SMILES from TASK-2", and a QSAR LD50 prediction in the report band, because
+    its description said the table goes on to the final report. Both then drew a
+    step under the wrong stage heading, which is worse than drawing it plainly:
+    the column's only job is to say which stage the plan asked for.
+    """
+    assignee = str(attrs.get("assignee") or "").strip()
+    if assignee in _HYPOTHESIS_AGENTS:
+        return "hypotheses"
+    if assignee in _READING_AGENTS:
+        return "literature"
+    if assignee in _REPORTING_AGENTS:
+        return "report"
+    if assignee in _FRAMING_AGENTS:
+        return "framing"
+    title = str(attrs.get("title") or "")
+    # Reporting first: "собрать итоговый отчёт по литературе" is a write-up.
+    if _REPORTING_TEXT.search(title):
+        return "report"
+    if _READING_TEXT.search(title) and _GATHERING_TEXT.search(title):
+        return "literature"
+    return "experiment"
+
+
 def _stages_of(raw_nodes: Dict[str, Dict[str, Any]],
                raw_edges: List[Dict[str, Any]]) -> Dict[str, str]:
     """Which stage band each drawn node belongs in.
@@ -509,21 +575,7 @@ def _stages_of(raw_nodes: Dict[str, Dict[str, Any]],
             else:
                 stage[nid] = "experiment"
         elif kind == "PlanStep":
-            # A step is drawn at the height of the stage it ASKS FOR, so the
-            # plan column reads alongside the research it planned. The assignee
-            # is the most reliable signal the plan carries — the planner picks
-            # it from the real roster — and the wording is the fallback.
-            assignee = str(attrs.get("assignee") or "")
-            text = " ".join(str(attrs.get(k) or "")
-                            for k in ("title", "description", "notes"))
-            if assignee == "HypothesesAgent":
-                stage[nid] = "hypotheses"
-            elif assignee in _READING_AGENTS or _READING_TEXT.search(text):
-                stage[nid] = "literature"
-            elif _REPORTING_TEXT.search(text):
-                stage[nid] = "report"
-            else:
-                stage[nid] = "experiment"
+            stage[nid] = _step_stage(attrs)
         else:
             stage[nid] = _STAGE_BY_TYPE[kind]
     return stage

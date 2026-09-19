@@ -98,8 +98,24 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
         "Conclusion", "CL", 1,
         statuses=("draft", "approved"), creatable=("draft",),
         attr_docs={
-            "synthesis": "the synthesized finding",
-            "validity_bounds": "limits of validity",
+            # The conclusion is what a reader takes AWAY from the study, and
+            # what the next study starts from — so it carries the chain, not
+            # just the answer. One paragraph of prose was all it used to hold,
+            # which meant the reader had to re-walk the graph to learn how the
+            # answer had been reached, and a follow-up study had nothing to
+            # begin with.
+            "synthesis": "THE ANSWER, in one or two sentences — this is the "
+                         "card's headline, so it must stand alone",
+            "how_established": "the chain that produced it, by stage: what the "
+                               "reading established, what was run, with which "
+                               "instrument, and the numbers it returned",
+            "against_criteria": "each ConfirmationCriteria by id, the value "
+                                "measured against it, and whether it was met",
+            "validity_bounds": "limits of validity: the population, the "
+                               "conditions, the model, what it does NOT cover",
+            "open_questions": "what the next study should do first — the "
+                              "measurement that was missing, the bar that was "
+                              "not reached, the branch nobody tested",
             "new_question": "optional follow-up question text",
         },
     ),

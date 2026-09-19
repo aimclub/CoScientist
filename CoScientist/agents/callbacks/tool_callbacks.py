@@ -827,7 +827,14 @@ def _study_generation(graph: Any) -> str:
     """
     try:
         full = graph.full()
-        return f"{full.get('root_id')}:{full.get('created_at')}"
+        # `research_id`, not the timestamp. `init_research` mints it with a
+        # uuid, so two studies started in quick succession differ — whereas
+        # `created_at` is a wall clock that ticks every ~15 ms on Windows, so a
+        # fast re-init produced the SAME key, the memo was kept, and the mirror
+        # decided the new study's steps had already been drawn. It surfaced as
+        # an order-dependent test failure; in a run it would have silently left
+        # the new study with no plan column at all.
+        return f"{full.get('research_id')}:{full.get('root_id')}"
     except Exception:  # noqa: BLE001
         return ""
 

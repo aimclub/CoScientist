@@ -33,6 +33,27 @@ REPORT_LANGUAGES = ("ru", "en")
 DEFAULT_REPORT_LANGUAGE = "ru"
 
 
+def graph_text_rule(raw) -> str:
+    """The language rule for text WRITTEN INTO THE GRAPH, not into a report.
+
+    The report blocks below are for a document with headings and figures. The
+    background validator writes a Conclusion node instead, and it is not an
+    agent — it has no ADK state and never received `{report_language_block?}`,
+    so it wrote its conclusions in English into a Russian study and the reader
+    met an English paragraph on the one card that answers the question.
+    """
+    if normalize_report_language(raw) != "ru":
+        return ""
+    return (
+        "\n\nLANGUAGE. Write every text field of your answer in RUSSIAN. "
+        "These instructions are English; your output is not. Leave untranslated: "
+        "numbers, units and formulas; node ids (H1, E3, CC2); tool, agent and "
+        "parameter identifiers; file paths, links and citation strings. For a "
+        "domain term whose Russian form is ambiguous, give the Russian and the "
+        "English in parentheses at first use."
+    )
+
+
 def normalize_report_language(raw) -> str:
     """Map any input to a supported language code.
 

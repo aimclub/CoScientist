@@ -436,11 +436,11 @@
       // recollection.
       if (n.instruments)
         L.push(String(n.instruments).split(",").slice(0, 4)
-               .map(x => "<code>" + visSafe(x.trim().slice(0, 22)) + "</code>")
+               .map(x => "<code>" + visSafe(x.trim().slice(0, 34)) + "</code>")
                .join(" "));
       if (n.kind === "planstep" && n.input && n.input.tools)
         L.push(String(n.input.tools).split(",").slice(0, 4)
-               .map(x => "<code>" + visSafe(x.trim().slice(0, 22)) + "</code>")
+               .map(x => "<code>" + visSafe(x.trim().slice(0, 34)) + "</code>")
                .join(" "));
       if (n.criterion)
         L.push(visSafe("🎯 " + t('graph.card.criterion') + " "
@@ -586,6 +586,37 @@
     // stops fitting a screen at a readable zoom.
     const BAND_WIDTH = 2160, BAND_PAD = 38, BAND_MIN_HEIGHT = 128;
 
+    // ── the stage rail ────────────────────────────────────────────────────────
+    // The stage names used to be painted INSIDE each band, at its top-left
+    // corner. That is exactly where the plan column then put its first card, so
+    // the one thing a reader needs in order to know which stage they are
+    // looking at was the one thing a card was guaranteed to cover: on a real
+    // study three of the five names were unreadable. The names now live in a
+    // rail of their own, left of every card in either track, and nothing is
+    // ever seated in it — so this cannot come back by rearrangement.
+    const RAIL_GAP = 30, RAIL_MIN = 140;
+    const STAGE_FONT = "600 26px -apple-system, Segoe UI, sans-serif";
+    const STAGE_NOTE_FONT = "400 18px -apple-system, Segoe UI, sans-serif";
+    //: Measured off an offscreen context rather than assumed, because the
+    //: widest name is a translation: "Анализ литературы" is half again as wide
+    //: as "Hypotheses", and a rail sized for one clips the other.
+    let railMeasure;
+    function railWidth(){
+      if (railMeasure === undefined) {
+        try { railMeasure = document.createElement("canvas").getContext("2d"); }
+        catch (err) { railMeasure = null; }
+      }
+      if (!railMeasure) return 260;
+      let w = RAIL_MIN;
+      railMeasure.font = STAGE_FONT;
+      STAGE_ORDER.forEach(s => {
+        w = Math.max(w, railMeasure.measureText(t('graph.stage.' + s, s)).width);
+      });
+      railMeasure.font = STAGE_NOTE_FONT;
+      w = Math.max(w, railMeasure.measureText(t('graph.stage.empty')).width);
+      return Math.ceil(w) + RAIL_GAP;
+    }
+
     // The four stages, painted behind the cards as the rows of one page. A band
     // with nothing in it is still drawn: an empty "report" row says the study
     // has not got there yet, which is the question a reader opens the graph
@@ -619,28 +650,40 @@
           ctx.stroke();
           ctx.setLineDash([]);
         }
-        ctx.fillStyle = tint.line;
-        ctx.font = "600 26px -apple-system, Segoe UI, sans-serif";
-        ctx.textBaseline = "top";
+        // In the rail: right-aligned against the band's edge and centred on
+        // the band, so it reads as the label of the row whatever the row holds.
         const name = t('graph.stage.' + b.stage, b.stage);
-        // Measured under the heading font, before the note switches it.
-        const nameWidth = ctx.measureText(name).width;
-        ctx.fillText(name, b.left + 16, b.top + 12);
-        if (!b.count) {
-          ctx.font = "400 20px -apple-system, Segoe UI, sans-serif";
+        const railX = b.left - RAIL_GAP, mid = (b.top + b.bottom) / 2;
+        ctx.textAlign = "right";
+        ctx.fillStyle = tint.line;
+        ctx.font = STAGE_FONT;
+        if (b.count) {
+          ctx.textBaseline = "middle";
+          ctx.fillText(name, railX, mid);
+        } else {
+          // Two lines for a stage nobody has reached: the name, and what the
+          // empty row means.
+          ctx.textBaseline = "bottom";
+          ctx.fillText(name, railX, mid - 3);
+          ctx.font = STAGE_NOTE_FONT;
           ctx.fillStyle = "rgba(148,163,184,0.55)";
-          ctx.fillText(t('graph.stage.empty'), b.left + 26 + nameWidth, b.top + 15);
+          ctx.textBaseline = "top";
+          ctx.fillText(t('graph.stage.empty'), railX, mid + 5);
         }
+        ctx.textAlign = "left";
       });
-      // One heading for the whole plan track, above its column.
+      // One heading for the whole plan track, centred over its column.
       const withPlan = stageBands.filter(b => b.planRight != null);
       if (withPlan.length) {
         const top = Math.min.apply(null, withPlan.map(b => b.top));
         const left = Math.min.apply(null, withPlan.map(b => b.left));
         ctx.fillStyle = "rgba(148,163,184,0.75)";
         ctx.font = "600 22px -apple-system, Segoe UI, sans-serif";
+        ctx.textAlign = "center";
         ctx.textBaseline = "bottom";
-        ctx.fillText(t('graph.plan.title'), left + 16, top - 12);
+        ctx.fillText(t('graph.plan.title'),
+                     (left + withPlan[0].planRight) / 2, top - 12);
+        ctx.textAlign = "left";
       }
       ctx.restore();
     }
@@ -735,20 +778,23 @@
         e.bottom = Math.max(e.bottom, c.y + c.height);
         e.count += 1;
       });
+      // What the plan needs of each band, BEFORE the bands are sized — see
+      // planBlocks. A band too short for its own steps pushed them into the
+      // band above and the band below.
+      const blocks = planBlocks(place);
       const shift = {}, bands = [];
       let cursor = 0;
       STAGE_ORDER.forEach(stage => {
         const e = extent[stage];
-        if (!e) {
-          bands.push({ stage: stage, top: cursor,
-                       bottom: cursor + BAND_MIN_HEIGHT, count: 0 });
-          cursor += BAND_MIN_HEIGHT;
-          return;
-        }
-        const height = (e.bottom - e.top) + BAND_PAD * 2;
-        shift[stage] = cursor + BAND_PAD - e.top;
+        const recordH = e ? e.bottom - e.top : 0;
+        const planH = blocks[stage] ? blocks[stage].height : 0;
+        const inner = Math.max(BAND_MIN_HEIGHT, recordH, planH);
+        const height = inner + BAND_PAD * 2;
+        // Both blocks are centred in the band. Top-aligning the record left a
+        // hole under it whenever the band had grown for the plan's sake.
+        if (e) shift[stage] = cursor + BAND_PAD + (inner - recordH) / 2 - e.top;
         bands.push({ stage: stage, top: cursor, bottom: cursor + height,
-                     count: e.count });
+                     count: e ? e.count : 0 });
         cursor += height;
       });
       const seats = {};
@@ -765,12 +811,21 @@
       // and the bands are then widened to run behind the column: the tint is
       // what makes "this step belongs to the literature stage" unambiguous
       // rather than a guess from vertical position.
-      const plan = planColumn(place, bands, x0 - BAND_PAD);
+      const plan = planColumn(bands, x0 - BAND_PAD, blocks);
       if (plan.used) {
         Object.keys(plan.seats).forEach(id => { seats[id] = plan.seats[id]; });
         bands.forEach(b => { b.left = plan.left - BAND_PAD; b.planRight = plan.right; });
       }
+      addRail(bands);
       return { seats: seats, bands: bands };
+    }
+
+    // Where the rail starts. Kept on the band so frameStudy can open the camera
+    // wide enough to show it: a name the reader has to pan to find is no better
+    // than a name a card sits on.
+    function addRail(bands){
+      const rail = railWidth();
+      bands.forEach(b => { b.railLeft = b.left - rail; });
     }
 
     // ── the plan column ───────────────────────────────────────────────────────
@@ -784,40 +839,60 @@
     // in the band flow, which is exactly the conflation this separation exists
     // to undo — and the `realises` links would then drag the record's cards
     // toward the plan instead of ordering them by the argument.
-    const PLAN_WIDTH = 300, PLAN_GAP = 72, PLAN_ROW_GAP = 16;
+    const PLAN_GAP = 72, PLAN_ROW_GAP = 16;
 
-    function planColumn(place, bands, leftEdge){
-      const byStage = {};
+    // What the plan track needs of each band, measured before the bands are
+    // sized. Getting this order wrong is the defect the operator hit: the plan
+    // used to be centred in whatever height the RECORD happened to need, and
+    // allowed to overflow. A study with four steps and two cards — which is
+    // every study in its first minutes — then pushed its steps clean out of
+    // their own band, so "collect the literature" was drawn under the heading
+    // «Постановка» and two steps from different stages landed on top of each
+    // other. A step drawn outside its band is worse than a step drawn small:
+    // the column exists to say which stage the plan asked for, and outside its
+    // band it says the wrong one.
+    function planBlocks(place){
+      const blocks = {};
       Object.keys(place).forEach(id => {
         if (place[id].track !== "plan" || !nodes.get(id)) return;
-        (byStage[place[id].stage] = byStage[place[id].stage] || []).push(id);
+        const stage = place[id].stage;
+        (blocks[stage] = blocks[stage] || { ids: [], height: 0 }).ids.push(id);
       });
-      const ids = Object.keys(byStage);
-      if (!ids.length) return { seats: {}, right: leftEdge, used: false };
+      Object.keys(blocks).forEach(stage => {
+        const block = blocks[stage];
+        block.ids.sort((a, b) => (place[a].order || 0) - (place[b].order || 0)
+                              || String(a).localeCompare(String(b)));
+        block.height = block.ids.reduce((sum, id) => sum + measuredSize(id).h, 0)
+                     + PLAN_ROW_GAP * (block.ids.length - 1);
+      });
+      return blocks;
+    }
+
+    function planColumn(bands, leftEdge, blocks){
+      const stages = Object.keys(blocks);
+      if (!stages.length)
+        return { seats: {}, right: leftEdge, left: leftEdge, used: false };
       const right = leftEdge - PLAN_GAP;
+      // One axis for the whole column, taken from the widest card there is, so
+      // the column reads as a column and its widest card still clears the
+      // record track by the gap.
+      let widest = 0;
+      stages.forEach(s => blocks[s].ids.forEach(id => {
+        widest = Math.max(widest, measuredSize(id).w);
+      }));
+      const axis = right - widest / 2;
       const seats = {};
       bands.forEach(band => {
-        const steps = (byStage[band.stage] || [])
-          .sort((a, b) => (place[a].order || 0) - (place[b].order || 0)
-                       || String(a).localeCompare(String(b)));
-        if (!steps.length) return;
-        const sizes = steps.map(id => measuredSize(id));
-        const tall = sizes.reduce((sum, s) => sum + s.h, 0)
-                   + PLAN_ROW_GAP * (steps.length - 1);
-        // Centred in its band, and allowed to overflow it: a stage with six
-        // steps and one card is common, and clipping the column would hide
-        // steps rather than the other way round.
-        let y = (band.top + band.bottom) / 2 - tall / 2;
-        steps.forEach((id, i) => {
-          seats[id] = { x: right - sizes[i].w / 2, y: y + sizes[i].h / 2 };
-          y += sizes[i].h + PLAN_ROW_GAP;
+        const block = blocks[band.stage];
+        if (!block) return;
+        // Centred in a band that was sized to hold it, so this cannot overflow.
+        let y = (band.top + band.bottom) / 2 - block.height / 2;
+        block.ids.forEach(id => {
+          seats[id] = { x: axis, y: y + measuredSize(id).h / 2 };
+          y += measuredSize(id).h + PLAN_ROW_GAP;
         });
       });
-      let far = right;
-      Object.keys(seats).forEach(id => {
-        far = Math.min(far, seats[id].x - measuredSize(id).w / 2);
-      });
-      return { seats: seats, right: right, left: far, used: true };
+      return { seats: seats, right: right, left: axis - widest / 2, used: true };
     }
 
     // First pass, on nominal sizes: vis reports a real box only once it has
@@ -897,7 +972,11 @@
     function measuredSize(id){
       try {
         const box = network.getBoundingBox(id);
-        if (box) return { w: box.right - box.left, h: box.bottom - box.top };
+        // A card vis has not drawn yet reports {0,0,0,0} rather than nothing,
+        // and a zero-height card makes a column stack every one of its cards at
+        // the same point. A degenerate box is not a measurement.
+        if (box && box.right - box.left > 1 && box.bottom - box.top > 1)
+          return { w: box.right - box.left, h: box.bottom - box.top };
       } catch (err) { /* not drawn yet */ }
       return { w: LEVEL_SEPARATION - CARD_GAP, h: NODE_PITCH - CARD_GAP };
     }
@@ -1031,7 +1110,7 @@
         if (nodes.get(id) && place[id].track !== "plan")
           byStage.get(place[id].stage).push(id);
       });
-      const seats = {}, bands = [];
+      const seats = {}, bands = [], blocks = planBlocks(place);
       // The bands hug the widest row there actually is, not the wrap width: a
       // study of six cards drawn inside 2160px of band ran the rows off the
       // side of the screen with nothing in them.
@@ -1040,31 +1119,44 @@
         const ids = byStage.get(stage)
           .sort((a, b) => place[a].order - place[b].order);
         const top = y;
-        let x = 0, rowTop = y + BAND_PAD, rowHeight = 0, reach = 0;
+        // Flowed from a local origin, then moved as one block, so the record
+        // can be centred in a band that grew to fit the plan beside it.
+        const local = {};
+        let x = 0, rowTop = 0, rowHeight = 0, reach = 0;
         ids.forEach(id => {
           const { w, h } = sizeOf(id);
           if (x > 0 && x + w > BAND_WIDTH) {        // wrap within the band
             x = 0; rowTop += rowHeight + CARD_GAP; rowHeight = 0;
           }
-          seats[id] = { x: x + w / 2, y: rowTop + h / 2 };
+          local[id] = { x: x + w / 2, y: rowTop + h / 2 };
           x += w + CARD_GAP;
           reach = Math.max(reach, x - CARD_GAP);
           rowHeight = Math.max(rowHeight, h);
         });
-        const filled = ids.length ? (rowTop + rowHeight) - (top + BAND_PAD) : 0;
-        const height = Math.max(BAND_MIN_HEIGHT, filled + BAND_PAD * 2);
+        const recordH = ids.length ? rowTop + rowHeight : 0;
+        const planH = blocks[stage] ? blocks[stage].height : 0;
+        const inner = Math.max(BAND_MIN_HEIGHT, recordH, planH);
+        const height = inner + BAND_PAD * 2;
+        const offset = top + BAND_PAD + (inner - recordH) / 2;
+        ids.forEach(id => {
+          seats[id] = { x: local[id].x, y: local[id].y + offset };
+        });
         widest = Math.max(widest, reach);
         bands.push({ stage, top, bottom: top + height, count: ids.length });
         y = top + height;
       });
       // One width for every band, so they read as stacked rows of one page
-      // rather than four unrelated boxes.
+      // rather than four unrelated boxes. At least one card wide even with
+      // nothing in the record track yet, or the five bands come out as slivers
+      // beside the plan.
+      widest = Math.max(widest, LEVEL_SEPARATION - CARD_GAP);
       bands.forEach(b => { b.left = -BAND_PAD; b.right = widest + BAND_PAD; });
-      const plan = planColumn(place, bands, -BAND_PAD);
+      const plan = planColumn(bands, -BAND_PAD, blocks);
       if (plan.used) {
         Object.keys(plan.seats).forEach(id => { seats[id] = plan.seats[id]; });
         bands.forEach(b => { b.left = plan.left - BAND_PAD; b.planRight = plan.right; });
       }
+      addRail(bands);
       return { seats: seats, bands: bands };
     }
 
@@ -1366,7 +1458,8 @@
         // answer to "how far has this got" — so the frame has to hold them too,
         // or the camera centres on the cards and cuts the row off.
         stageBands.forEach(b => {
-          x0 = Math.min(x0, b.left); x1 = Math.max(x1, b.right);
+          x0 = Math.min(x0, b.railLeft != null ? b.railLeft : b.left);
+          x1 = Math.max(x1, b.right);
           y0 = Math.min(y0, b.top);  y1 = Math.max(y1, b.bottom);
         });
         if (!(x1 > x0 && y1 > y0)) { network.fit({ animation: false }); return; }

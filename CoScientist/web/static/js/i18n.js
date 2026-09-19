@@ -1339,6 +1339,9 @@ const i18n = {
   'graph.field.limitations': { en: 'Known weaknesses', ru: 'Известные слабости' },
   'graph.field.threshold': { en: 'Threshold', ru: 'Порог' },
   'graph.field.tools': { en: 'Tools', ru: 'Инструменты' },
+  'graph.field.how_established': { en: 'How it was established', ru: 'Как установлено' },
+  'graph.field.against_criteria': { en: 'Against the criteria', ru: 'По критериям' },
+  'graph.field.open_questions': { en: 'What remains', ru: 'Что осталось' },
   'graph.field.title': { en: 'Step', ru: 'Шаг' },
   'graph.field.reproducibility': { en: 'Reproducibility', ru: 'Воспроизводимость' },
   'graph.field.confirmations_needed': { en: 'Confirmations needed', ru: 'Нужно подтверждений' },
@@ -1387,7 +1390,7 @@ const i18n = {
   'graph.stage.hypotheses': { en: 'Hypotheses', ru: 'Гипотезы' },
   'graph.stage.experiment': { en: 'Experiments', ru: 'Эксперименты' },
   'graph.stage.report': { en: 'Report', ru: 'Отчёт' },
-  'graph.stage.empty': { en: '— not reached yet', ru: '— этап не начат' },
+  'graph.stage.empty': { en: 'not reached yet', ru: 'этап не начат' },
   // What the record is missing — said out loud, because an empty canvas looked
   // the same whether nobody wrote anything or every write was refused.
   'graph.gap.no_root': { en: 'no root question', ru: 'нет корневого вопроса' },
