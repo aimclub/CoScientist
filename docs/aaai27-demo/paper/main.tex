@@ -74,9 +74,6 @@ hypotheses \citep{gottweis2026coscientist}, run experiments
 \citep{mitchener2025kosmos}. Such a run leaves a report, code, and logs; the environment in which a
 published method finally ran is rebuilt by the next run.
 
-Research code makes this costly: of eight published methods in our case study,
-four run.
-
 We present \textbf{CoScientist}, in which a research run (i) keeps questions,
 hypotheses, evidence, and artefacts in a typed research graph, (ii) obtains
 tools by reuse first: a local server, then a public catalogue, then a
@@ -94,10 +91,9 @@ Repository-to-tool systems produce a function
 \citep{ouyang2026code2mcp,miao2026paper2agent,di2026toolrosella}. DFAgent builds a governed catalogue of MCP tools from logged code
 \citep{gantayat2026dfagent}; ToolSmith generates and validates enterprise
 tools \citep{vakudavathu2026toolsmith}. Engineering agents exist for mechanics and materials
-\citep{ni2024mechagents,kang2024chatmof}. CoScientist combines these lines: conversion happens inside a research run,
-its product is a runnable image in a public catalogue that grows as a
-by-product of agent work, and servers, session, and graph together let a study
-continue after a negative result. Earlier versions targeted chemistry \citep{solovev2025chemcoscientist,solovev2025madd}.
+\citep{ni2024mechagents,kang2024chatmof}. CoScientist converts inside a research run, publishes the image to a catalogue that grows as a
+by-product of agent work, and keeps servers, session, and graph so a study
+continues after a negative result. Earlier versions targeted chemistry \citep{solovev2025chemcoscientist,solovev2025madd}.
 
 \section{System Overview}
 
@@ -121,8 +117,7 @@ hypothesis verdicts, and the final report is generated from the graph.
 
 \textbf{Agents.} A research agent searches the web and OpenAlex; a coder agent
 collects data and trains models in a sandbox; ready tools are found by
-retrieval over a catalogue of MCP servers and called by an experiment agent,
-with large results passed as object-store references.
+retrieval over a catalogue of MCP servers and called by an experiment agent.
 
 \textbf{Alembic.} Given a repository URL, Alembic runs five stages in a
 container: it proposes tools from the repository's documentation, builds the
@@ -132,13 +127,13 @@ is stored with its arguments and result.
 
 \textbf{Reuse before build.} A tool request goes through a cascade: a server
 on the host, then an image in the public Docker Hub namespace, then a
-conversion. An automatic upload never replaces a build with more passing tools. The catalogue holds 19 servers from chemistry,
+conversion. The catalogue holds 19 servers from chemistry,
 materials, climate, geoscience, physiology, cognitive science, and
 biomedical imaging; pulling one takes no model calls.
 
 \section{Case Study: Tyre Rubber Compounds}
 
-Tyre producers keep recipes secret. We asked CoScientist whether published
+Tyre producers keep recipes secret. We asked whether published
 methods and open data allow a recipe to be designed computationally.
 The prompt gives the goal, 3,774 compounds parsed from 337 patents (recipe in
 phr, ingredient grades, process parameters, twelve properties), and eight
@@ -146,11 +141,20 @@ published methods. It names neither MCP nor Alembic. The model is
 GLM-5.3. Table~\ref{tab:runs} sets the run against a coding agent (opencode) on the
 same prompt and model, and against a chemist's manual study.
 
-\textbf{Which methods run.} The system installed and ran each method. Four of seven run: polyBERT \citep{kuenneth2023polybert},
+\textbf{Which methods run.} Four of seven methods run: polyBERT \citep{kuenneth2023polybert},
 PolymerGNN \citep{queen2023polymergnn}, TransPolymer, and the Wan et al.
 models \citep{wan2024coco}, whose Keras weights the system found in a
 repository our chemist had not run.
 The rest \citep{hu2024jmi,roychoudhury2025jrr} publish neither code nor data.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/graph_hypotheses.png}
+  \caption{The tyre study in the graph viewer: six hypotheses with verdicts,
+  the methods that tested them, and evidence with its tool calls; code and data
+  are folded into the cards they belong to.}
+  \label{fig:graph}
+\end{figure}
 
 \begin{table}[t]
 \centering
@@ -207,11 +211,8 @@ blend fingerprints match to six decimals values computed by hand.
 \section{Demonstration and Limitations}
 
 Visitors pull a server from the catalogue and call a tool from the browser,
-browse the tyre session (hypotheses, verdicts, evidence, tool calls), and see
-the follow-up session answer with a catalogue server. CoScientist treats the tools and the
-record of a study as its products: the next tyre study starts from running
-servers and a graph of what was tried. Limits: internal validation, one case,
-analysis on par with a coding agent.
+then browse the tyre session (Figure~\ref{fig:graph}) and its follow-up.
+Limits: internal validation, one case, analysis on par with a coding agent.
 
 \bibliography{references}
 

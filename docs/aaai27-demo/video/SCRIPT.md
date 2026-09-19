@@ -10,7 +10,7 @@
 |---|---|---|---|
 | 1 | 0:00–0:40 | Титул, затем схема архитектуры (`paper/figures/architecture.pdf`) | 95 |
 | 2 | 0:40–1:15 | Веб-интерфейс: новая сессия, вставка промпта, прикрепление датасета | 85 |
-| 3 | 1:15–2:05 | Граф исследования: вопрос, гипотезы, появление свидетельств (ускоренно) | 120 |
+| 3 | 1:15–2:05 | Граф исследования (новая проекция): счётчики вердиктов, полосы Framing → Literature review → Hypotheses → Report, карточки гипотез с вердиктами, раскрытие свидетельства с вызовами инструментов | 120 |
 | 4 | 2:05–2:50 | Лента событий `trial-polybert-3` или `tyre-main-1`: поиск по каталогу, вызовы `embed_blend`, `read_result`, передача кодеру | 110 |
 | 5 | 2:50–3:25 | Ход 2 сессии `tyre-main-2`: запрос, два билда `rubber-mechanical-properties-prediction-1c872d` и `TransPolymer-acee03` на странице билдов, карточка инструмента, история вызовов | 90 |
 | 6 | 3:25–4:00 | Отчёт: таблица R², кандидаты рецептур с оговорками | 90 |
@@ -45,7 +45,7 @@
 
 **7. The catalogue**
 
-> What remains is the point of the system. The catalogue on Docker Hub now holds nineteen servers from chemistry, materials, climate, geoscience, physiology, and medical imaging. Anyone can pull one and call a tool in a minute, with no model calls. The next agent that needs the method finds it here: a new session asked for the properties of one candidate recipe, found the Wan server in the catalogue, and answered in four minutes for fourteen cents, with nothing installed.
+> What remains after the run is the catalogue. On Docker Hub it now holds nineteen servers from chemistry, materials, climate, geoscience, physiology, and medical imaging. Anyone can pull one and call a tool in a minute, with no model calls. The next agent that needs the method finds it here: a new session asked for the properties of one candidate recipe, found the Wan server in the catalogue, and answered in four minutes for fourteen cents, with nothing installed.
 
 **8. Closing**
 
@@ -53,7 +53,7 @@
 
 ## Кадры, которые нужно снять
 1. Главная страница чата: новая сессия, промпт, окно прикрепления датасета.
-2. `/graph` для сессии `tyre-main-2`: общий вид, наведение на H3, раскрытие узла Evidence.
+2. `/graph?view=research` для импортированной сессии `tyre-main-2` (id в `shots/baked_session.txt`): общий вид сверху вниз (счётчики `1 confirmed · 1 refuted · 1 inconclusive · 3 postponed`, полосы стадий), клик по Hypothesis 2 (refuted, статус с причиной), клик по Evidence 2 (6 вызовов кодера, 2 вложения). Образец кадра: `shots/graph_proj_en_tall.png`, фрагмент в статье: `paper/figures/graph_hypotheses.png`.
 3. `/trace` или лента чата: `retrieve_tools`, `embed_blend`, делегирование кодеру.
 4. `/alembic/builds`: список, страница билда (инструменты, история вызовов, вызов инструмента со страницы).
 5. `/alembic/hub`: список серверов, Pull & start.
@@ -62,10 +62,16 @@
 8. Кнопка экспорта сессии.
 
 ## Замечания
-- Интерфейс в кадре должен быть на английском: язык отчёта `en`, заголовки сессий на английском.
+- Интерфейс в кадре должен быть на английском: переключатель языка на главной странице в `en` (граф читает его же), язык отчёта `en`, заголовки сессий на английском.
 - Сессии под пользователем `demo`. Остальные сессии в списке лучше скрыть.
 - В кадр не должны попадать `.env`, ключи, адрес `10.32.1.36`.
 - polyBERT в кадре показываем как локальный сервер. На странице Hub его нет.
-- Сцена 3: граф хода 1 сессии `tyre-main-2` (40 узлов) сейчас в архиве `graph_runs/sessions/<user>/<session>/research_Q1_20260918-022027_*.json` и в экспорте `runs/tyre-main-2_*.cossession.zip`; активный граф в интерфейсе относится к позднему ходу. Для съёмки импортировать экспорт в новую сессию или показать граф из экспорта.
+- Сцена 3: граф берётся из импортированной сессии (`runs/tyre-main-2_*.cossession.zip`, текущий id в `shots/baked_session.txt`). После каждого перезапуска сервера бандл импортируется заново: `curl -X POST localhost:8000/api/users/x/import-session -F file=@runs/tyre-main-2_e7fa204e.cossession.zip`. Проекция показывает 18 карточек и 30 рёбер из 40 узлов записи, в шапке так и написано. Подписи карточек (тип, статус) следуют языку интерфейса, переключить на английский до записи; текст гипотез и методов внутри карточек агенты писали по-русски, свидетельства и выводы по-английски.
 - Сцена 4: в `tyre-main-2` вызовов серверов не было, кодер всё считал сам. Повторное использование polyBERT показываем по сессии `trial-polybert-3` (вызовы `embed_blend`, `read_result`) без утверждения, что это часть основного прогона.
 - Сцена 5: сборки запущены во втором ходе сессии по прямой просьбе пользователя. В тексте так и сказано («one request»).
+
+## Автономная запись (19 сентября)
+- `tts.py`: озвучка через Space `Qwen/Qwen3-TTS` (`/generate_custom_voice`, голос Ryan, модель 1.7B). Анонимная квота ZeroGPU кончилась после пяти сцен, поэтому сцены 6–8 сделаны `tts_local.py` на локальной модели `Qwen3-TTS-12Hz-0.6B-CustomVoice` (1.7B в 4 ГБ видеопамяти не входит). Полный набор 0.6B лежит в `audio_06b/` для сравнения на слух.
+- `record.py`: восемь сцен в безголовом Chrome 1600×900, по одному webm на сцену, длительность по клипу озвучки. Сцены 2, 3, 5, 6, 8 показывают импортированные сессии (id в `shots/baked_session.txt`), сцена 4 показывает `/trace` сессии `trial-polybert-3`, сцена 7 хаб, Docker Hub и импортированную `tyre-followup-1`, начало сцены 5 берётся из исходной `tyre-main-2` (в бандле нет запроса второго хода).
+- `montage.sh [audio_dir] [out.mp4]`: 1920×1080, 30 fps, h264 + aac, пауза 0,6 с после сцены; сцена 5 обрезана на 3,5 с в начале (лента чата успокаивается).
+- Пересъёмка одной сцены: `python record.py --only 6 && ./montage.sh`.

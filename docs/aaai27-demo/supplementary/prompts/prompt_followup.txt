@@ -1,0 +1,1 @@
+Build an MCP server from the repository https://github.com/Vanguer/rubber-mechanical-properties-prediction (the Wan et al. 2024 models that ran in this study), so that a follow-up study can call its predictions as tools. Then build an MCP server from https://github.com/ChangwenXu98/TransPolymer for polymer embeddings. Report each server's address and its exact tool names.

@@ -37,9 +37,9 @@
 
 ## F. Статья и видео
 - [x] F1. Рисунок архитектуры: `paper/figures/architecture.tex` (TikZ, собирается в PDF), вставлен в статью
-- [~] F2. Статья `paper/main.tex`: 2 страницы + ссылки, все числа прогонов вписаны (таблица CoScientist vs opencode, серверы Wan и TransPolymer, follow-up за 4 мин и 0,14 $). Осталось: авторы и e-mail, bib-запись Typed Research Graph, ссылка на видео
-- [~] F3. Сценарий видео с числами прогонов: `video/SCRIPT.md`; запись экрана за вами
-- [ ] F4. Озвучка через Qwen3-TTS, монтаж, до 5 минут
+- [~] F2. Статья `paper/main.tex`: 2 страницы + ссылки, все числа прогонов вписаны (таблица CoScientist vs opencode vs manual, серверы Wan и TransPolymer, follow-up за 4 мин и 0,14 $), авторы и e-mail, рисунок 2 с графом из нового просмотрщика (`paper/figures/graph_hypotheses.png`, английские подписи). Осталось: ссылка на видео
+- [x] F3. Сценарий `video/SCRIPT.md`; запись экрана автономно: `video/record.py` (Playwright, 8 сцен, webm в `video/build/`), титулы в `video/cards/`
+- [x] F4. Озвучка Qwen3-TTS: `video/tts.py` (Space, сцены 1–5, модель 1.7B) и `video/tts_local.py` (локально 0.6B, сцены 6–8; полный набор 0.6B в `video/audio_06b/`), монтаж `video/montage.sh`. Итог: `video/build/coscientist_aaai27_demo.mp4` (4:46, 1920×1080) и вариант `_voice06b.mp4` (4:54). Ждёт просмотра; возможна замена голоса клоном (Base-модель)
 - [ ] F5. Подача в OpenReview (supplementary собран в `supplementary/`: промпты, оба отчёта, сводка прогона, постановка, датасет, инструкция по каталогу)
 
 - [x] C7. mordred-community: `mordred-community-10e89b`, 5/5 perfect (descriptors_from_smiles, descriptors_by_name, list_descriptors, descriptors_from_file, mixture_descriptor), зарегистрирован в каталоге. Запись билда осталась в статусе running из-за перезапуска веб-сервера во время сборки; загружен в хаб: `peanutbuttermilk/alembic-tool-mordred-community` (запись билда восстановлена вручную). Проверка пользы: прироста R² по патентам нет (таблица в `tyre-case/TASK_DEFINITION.md`)
