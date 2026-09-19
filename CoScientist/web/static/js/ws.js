@@ -192,6 +192,20 @@
             addSystemMsg('Report language rejected: ' + data.message);
             addTelemetry('REPORT LANG :: rejected');
             break;
+          case 'checkpoint_created':
+            if (window.CheckpointsModal) CheckpointsModal.onCreated(data);
+            addTelemetry('CHECKPOINT :: ' + (data.title || data.agent || '?'));
+            break;
+          case 'checkpoint_restored':
+            addSystemMsg(
+              `Состояние восстановлено перед стадией ${Number(data.stage_index) + 1}`
+              + ` из ${data.stage_count || '?'}: ${data.title || data.agent || 'stage'}.`
+              + (data.continue ? '\nПродолжение запущено автоматически.' : '')
+            , data.timestamp);
+            applyDatasetUrl(data.dataset_url || '');
+            applyReportLanguage(data.report_language || '');
+            addTelemetry('CHECKPOINT RESTORE :: ' + (data.title || data.agent || '?'));
+            break;
           case 'chat_accepted': {
             const input = document.getElementById('chat-input');
             if (input.value.trim() === String(data.message_text || '').trim()) {
@@ -212,4 +226,3 @@
         }
       };
     }
-

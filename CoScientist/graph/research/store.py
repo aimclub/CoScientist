@@ -495,6 +495,42 @@ class ResearchGraphStore:
         with self._lock:
             return self._serialize()
 
+    def restore(self, data: Dict[str, Any], archive: bool = True) -> Optional[str]:
+        """Replace the active blackboard with a checkpointed snapshot.
+
+        The displaced graph is archived by default, so rollback never destroys
+        the later research branch even though it is removed from active state.
+        """
+        if not isinstance(data, dict):
+            raise ValueError("research graph snapshot must be an object")
+        nodes = data.get("nodes", [])
+        edges = data.get("edges", [])
+        if not isinstance(nodes, list) or not isinstance(edges, list):
+            raise ValueError("research graph nodes and edges must be arrays")
+        graph = nx.MultiDiGraph()
+        for node in nodes:
+            if not isinstance(node, dict) or not node.get("id"):
+                raise ValueError("every research graph node must have an id")
+            graph.add_node(str(node["id"]), **dict(node))
+        for edge in edges:
+            if not isinstance(edge, dict) or not edge.get("from") or not edge.get("to"):
+                raise ValueError("every research graph edge must have from and to")
+            value = dict(edge)
+            source = str(value.pop("from"))
+            target = str(value.pop("to"))
+            edge_type = value.get("type")
+            graph.add_edge(source, target, key=edge_type, **value)
+        with self._lock:
+            archived = None
+            if archive and self._g.number_of_nodes():
+                archived = self._archive_data(self._serialize())
+            self._g = graph
+            self._research_id = data.get("research_id", "research")
+            self._created_at = data.get("created_at", time.time())
+            self._root_id = data.get("root_id")
+            self._save()
+        return archived
+
     def full_graph(self) -> nx.MultiDiGraph:
         """Snapshot copy for the trigger queries. NetworkX ``copy()`` copies the
         structure and the attribute dicts one level deep — safe against this

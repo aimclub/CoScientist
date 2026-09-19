@@ -388,6 +388,10 @@ class WebRuntime:
         self.hitl_handler.set_recorder(self.record_event)
         self.sockets: dict[SessionKey, list[WebSocket]] = defaultdict(list)
         self.active_runs: dict[SessionKey, asyncio.Task] = {}
+        # Metadata for the invocation currently producing automatic stage
+        # checkpoints.  The checkpoint plugin itself is Web-agnostic; its sink
+        # reads this table to attach the original query and event baseline.
+        self.run_contexts: dict[SessionKey, dict[str, Any]] = {}
         # Run execution times (start to finish) per session
         self.run_times: dict[SessionKey, dict[str, Any]] = {}
 
@@ -639,6 +643,7 @@ class WebRuntime:
                     "dataset_url": self.dataset_urls.get(key, ""),
                     "report_language": self.report_languages.get(key, ""),
                     "pipeline_stages": _pipeline_stages(),
+                    "checkpoints": self.list_checkpoints(key),
                 })
             except Exception:
                 self.detach_socket(key, ws)
@@ -761,6 +766,12 @@ class WebRuntime:
             *(manager.close() for manager in self.managers.values()),
             return_exceptions=True,
         )
+
+    @staticmethod
+    def list_checkpoints(key: SessionKey) -> list[dict[str, Any]]:
+        from CoScientist.web.checkpoints import list_checkpoints
+
+        return list_checkpoints(*key)
 
 
 def _wire_hitl(runtime: WebRuntime) -> None:
@@ -936,6 +947,46 @@ def _wire_tool_activity(runtime: WebRuntime) -> None:
     set_tool_activity_sink(deliver)
 
 
+def _wire_checkpoints(runtime: WebRuntime) -> None:
+    """Persist the state emitted before every configured pipeline stage."""
+    from CoScientist.agents.checkpoint_plugin import set_checkpoint_sink
+    from CoScientist.web.checkpoints import save_checkpoint
+
+    async def deliver(key: SessionKey, payload: dict[str, Any]) -> None:
+        # A CLI/A2A runner in the same process has no Web-owned invocation.
+        run = runtime.run_contexts.get(key)
+        if run is None:
+            return
+        record = {
+            **payload,
+            "run_version": run.get("run_version", 0),
+            "ui_event_index": len(runtime.agent_events.get(key, [])),
+            "adk_event_baseline": run.get("adk_event_baseline", 0),
+            "root_query": run.get("root_query", ""),
+        }
+        # State and graph blackboards form one logical stage boundary.  Keeping
+        # only state would let a resumed agent read findings produced after the
+        # selected checkpoint through graph tools.
+        try:
+            from CoScientist.graph.memory import get_knowledge_graph
+            record["execution_graph"] = get_knowledge_graph(
+                user_id=key[0], session_id=key[1],
+            ).full()
+        except Exception:  # noqa: BLE001 - state checkpoint is still useful
+            pass
+        try:
+            from CoScientist.graph.research.store import get_research_graph
+            record["research_graph"] = get_research_graph(
+                user_id=key[0], session_id=key[1],
+            ).full()
+        except Exception:  # noqa: BLE001
+            pass
+        public = await asyncio.to_thread(save_checkpoint, key[0], key[1], record)
+        await runtime.send(key, {"type": "checkpoint_created", **public})
+
+    set_checkpoint_sink(deliver)
+
+
 def _wire_tz_snapshots(runtime: WebRuntime) -> None:
     """Stream the microfluidics ТЗ into the ТЗ panel while it is being built.
 
@@ -1065,6 +1116,7 @@ def create_app() -> FastAPI:
     _wire_sandbox_links(runtime)
     _wire_sandbox_plan(runtime)
     _wire_tool_activity(runtime)
+    _wire_checkpoints(runtime)
     _wire_agent_output(runtime)
     _wire_metrics(runtime)
     _wire_tz_snapshots(runtime)
@@ -1333,6 +1385,174 @@ def create_app() -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse({"session": session})
+
+    # --- Automatic stage checkpoints ---
+    @app.get("/api/users/{user_id}/sessions/{session_id}/checkpoints")
+    async def get_session_checkpoints(user_id: str, session_id: str):
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({
+            "checkpoints": runtime.list_checkpoints((user_id, session_id)),
+            "pipeline_stages": _pipeline_stages(),
+        })
+
+    @app.post(
+        "/api/users/{user_id}/sessions/{session_id}/checkpoints/"
+        "{checkpoint_id}/restore"
+    )
+    async def restore_session_checkpoint(
+        user_id: str,
+        session_id: str,
+        checkpoint_id: str,
+        data: dict,
+    ):
+        """Restore one stage boundary and optionally continue immediately.
+
+        Later ADK events are removed from model context, but the UI transcript
+        remains append-only for auditability and receives an explicit rollback
+        marker.  Graph state is restored alongside ADK state.
+        """
+        from CoScientist.agents.checkpoint_plugin import CHECKPOINT_RESUME_STATE_KEY
+        from CoScientist.graph.session_scope import (
+            GRAPH_SCOPE_SESSION_KEY,
+            GRAPH_SCOPE_USER_KEY,
+        )
+        from CoScientist.web.checkpoints import load_checkpoint
+
+        key = (user_id, session_id)
+        try:
+            runtime.registry.require_session(user_id, session_id)
+            checkpoint = await asyncio.to_thread(
+                load_checkpoint, user_id, session_id, checkpoint_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+        continue_run = bool(data.get("continue", True))
+        async with runtime.control_lock(key):
+            current = runtime.active_runs.get(key)
+            if current is not None and not current.done():
+                raise HTTPException(
+                    status_code=409,
+                    detail="Stop the active run before restoring a checkpoint.",
+                )
+
+            manager = await runtime.get_manager(user_id, session_id)
+            adk_session = await runtime.session_service.get_session(
+                app_name=APP_NAME, user_id=user_id, session_id=session_id,
+            )
+            if adk_session is None:
+                raise HTTPException(status_code=404, detail="ADK session not found.")
+
+            restored_state = dict(checkpoint["state"])
+            restored_state[GRAPH_SCOPE_USER_KEY] = user_id
+            restored_state[GRAPH_SCOPE_SESSION_KEY] = session_id
+            restored_state[CHECKPOINT_RESUME_STATE_KEY] = {
+                "checkpoint_id": checkpoint_id,
+                "stage_index": checkpoint.get("stage_index", 0),
+                "agent": checkpoint.get("agent"),
+            }
+            adk_session.state.clear()
+            adk_session.state.update(restored_state)
+
+            # All events from the old invocation are unsafe after a rollback:
+            # they can mention outputs from stages later than this snapshot.
+            baseline = max(0, int(checkpoint.get("adk_event_baseline") or 0))
+            del adk_session.events[min(baseline, len(adk_session.events)):]
+
+            execution_graph = checkpoint.get("execution_graph")
+            if isinstance(execution_graph, dict):
+                from CoScientist.graph.memory import get_knowledge_graph
+                await asyncio.to_thread(
+                    get_knowledge_graph(
+                        user_id=user_id, session_id=session_id,
+                    ).restore,
+                    execution_graph,
+                )
+            research_graph = checkpoint.get("research_graph")
+            if isinstance(research_graph, dict):
+                from CoScientist.graph.research.store import get_research_graph
+                await asyncio.to_thread(
+                    get_research_graph(
+                        user_id=user_id, session_id=session_id,
+                    ).restore,
+                    research_graph,
+                )
+
+            runtime.tz_snapshots.pop(key, None)
+            runtime.tool_full_values.pop(key, None)
+            dataset_url = str(restored_state.get(DATASET_URL_STATE_KEY) or "")
+            if dataset_url:
+                runtime.dataset_urls[key] = dataset_url
+            else:
+                runtime.dataset_urls.pop(key, None)
+            language = str(restored_state.get(REPORT_LANGUAGE_STATE_KEY) or "")
+            if language in REPORT_LANGUAGES:
+                runtime.report_languages[key] = language
+            else:
+                runtime.report_languages.pop(key, None)
+            runtime.registry.touch_session(user_id, session_id, status="idle")
+
+        stage_index = int(checkpoint.get("stage_index") or 0)
+        marker = {
+            "type": "checkpoint_restored",
+            "checkpoint_id": checkpoint_id,
+            "stage_index": stage_index,
+            "stage_count": int(checkpoint.get("stage_count") or 0),
+            "agent": checkpoint.get("agent"),
+            "title": checkpoint.get("title") or checkpoint.get("agent"),
+            "pipeline_stages": _pipeline_stages(),
+            "dataset_url": runtime.dataset_urls.get(key, ""),
+            "report_language": runtime.report_languages.get(key, ""),
+            "continue": continue_run,
+            "timestamp": datetime.now().isoformat(),
+        }
+        runtime.record_event(key, marker)
+        await runtime.send(key, marker)
+
+        started = False
+        if continue_run:
+            root_query = str(checkpoint.get("root_query") or "").strip()
+            resume_message = (
+                "Continue the original task from the restored pipeline "
+                f"checkpoint immediately before stage {stage_index + 1} "
+                f"({marker['title']}). Use the restored session state as the "
+                "authoritative output of all earlier stages. Do not recreate "
+                "earlier work; the runtime will fast-forward any earlier "
+                "stages that a containing workflow enters. Execute the target "
+                "stage and every later required stage, then produce the final "
+                "deliverable."
+            )
+            if root_query:
+                resume_message += f"\n\nOriginal user request:\n{root_query}"
+            started = await runtime.start_run(key, {
+                "message": resume_message,
+                "_checkpoint_resume": True,
+                "_checkpoint_root_query": root_query or resume_message,
+            })
+            if not started:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Checkpoint was restored, but another run claimed the "
+                        "session before continuation could start."
+                    ),
+                )
+
+        return JSONResponse({
+            "status": "restored",
+            "checkpoint": {
+                key: marker[key]
+                for key in (
+                    "checkpoint_id", "stage_index", "stage_count", "agent", "title"
+                )
+            },
+            "continued": started,
+        })
 
     # --- Session export / import / save / restore ---
     @app.post("/api/users/{user_id}/sessions/{session_id}/export")
@@ -2158,6 +2378,7 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
     resumes the workflow by calling run_async with a FunctionResponse message.
     """
     query = data.get("message", "").strip()
+    internal_resume = bool(data.get("_checkpoint_resume"))
     run_status_version = int(
         data.get("_run_status_version", runtime.run_versions[key])
     )
@@ -2173,14 +2394,17 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
 
     user_id, session_id = key
 
-    # Echo user message
-    user_event = {
-        "type": "user_message",
-        "message": query,
-        "timestamp": datetime.now().isoformat(),
-    }
-    runtime.record_event(key, user_event)
-    await runtime.send(key, user_event)
+    # A checkpoint continuation is a control instruction generated by the
+    # server, not a new user utterance.  The restore marker already visible in
+    # chat describes it; do not pretend the internal prompt came from the user.
+    if not internal_resume:
+        user_event = {
+            "type": "user_message",
+            "message": query,
+            "timestamp": datetime.now().isoformat(),
+        }
+        runtime.record_event(key, user_event)
+        await runtime.send(key, user_event)
 
     try:
         manager = await runtime.get_manager(user_id, session_id)
@@ -2191,6 +2415,14 @@ async def _handle_chat(runtime: WebRuntime, key: SessionKey, data: dict):
         # Same reason as the attachment above: the language may have been picked
         # before the ADK session existed.
         await runtime.apply_report_language(key)
+        adk_session = await runtime.session_service.get_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id,
+        )
+        runtime.run_contexts[key] = {
+            "run_version": run_status_version,
+            "adk_event_baseline": len(adk_session.events) if adk_session else 0,
+            "root_query": data.get("_checkpoint_root_query") or query,
+        }
         runtime.registry.touch_session(user_id, session_id, status="processing")
         execution_lock = runtime.execution_locks[key]
 

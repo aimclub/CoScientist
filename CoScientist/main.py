@@ -208,6 +208,7 @@ class CoScientistManager:
             from CoScientist.verify.gate_plugin import ArtifactGatePlugin
             from CoScientist.agents.loop_guard_plugin import RepeatCallGuardPlugin
             from CoScientist.tools.session_scope_plugin import SessionScopePlugin
+            from CoScientist.agents.checkpoint_plugin import CheckpointPlugin
 
             # Build the agent system (reads start_mode + tunable params from settings).
             system = build_for_mode()
@@ -216,6 +217,9 @@ class CoScientistManager:
                 name=self.app_name,
                 root_agent=system.run_root,
                 plugins=[
+                    # Stage boundary snapshots and deterministic fast-forward
+                    # must run before observers and agent-local callbacks.
+                    CheckpointPlugin(),
                     # First: deterministically refuse training on a fabricated
                     # dataset (before_tool gate) — fabrication buys nothing.
                     ArtifactGatePlugin(),

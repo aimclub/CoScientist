@@ -1020,6 +1020,16 @@
         }
         break;
 
+      case 'checkpoint_restored':
+        if (Array.isArray(msg.pipeline_stages)) setPipeline(msg.pipeline_stages);
+        st.stage = Math.max(0, Number(msg.stage_index) || 0);
+        st.stageEnded = false;
+        st.outcome = null;
+        st.lastAuthor = msg.agent || null;
+        st.agent = msg.agent || null;
+        st.note = null;
+        break;
+
       case 'tz_snapshot':
         readTz(msg);
         break;

@@ -304,6 +304,7 @@
       // previous session's spend until the next push.
       resetMetrics();
       renderMetrics(snapshot.metrics);
+      if (window.CheckpointsModal) CheckpointsModal.onSnapshot(snapshot.checkpoints || []);
 
       // The attachment belongs to the session the snapshot describes.
       applyDatasetUrl(snapshot.dataset_url);
