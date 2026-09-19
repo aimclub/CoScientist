@@ -50,10 +50,13 @@ agents:
     callbacks:
       # main's chain plus the module's: pipeline-scope HITL, and the structural
       # fan-out merge that keeps one ask from becoming several module calls.
-      before_agent: [ask_pipeline_scope, before_get_task, inject_graph_root, inject_research_context, user_links]
+      # mirror_plan_before_agent sits where main puts it, right after
+      # before_get_task: it reads the tracker the task fetch just refreshed, so
+      # the plan column advances with the run instead of freezing at "todo".
+      before_agent: [ask_pipeline_scope, before_get_task, mirror_plan_before_agent, inject_graph_root, inject_research_context, user_links]
       before_model: [save_uploaded_artifacts, seed_coder_workspace, redact_link_urls]
       before_tool: [resolve_link_refs]
-      after_tool: [mark_pipeline_scope_lane, register_tool_result_links]
+      after_tool: [mark_pipeline_scope_lane, register_tool_result_links, mirror_plan_after_create]
       # expand_link_refs first: it is the egress point for the agent's own text,
       # and a later callback that returns a response short-circuits the chain.
       after_model: [expand_link_refs, enforce_pipeline_scope_hops, coalesce_experiment_module_calls, suppress_experiment_module_after_completed, guard_unknown_tools]

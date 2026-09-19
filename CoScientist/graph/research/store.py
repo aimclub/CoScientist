@@ -129,12 +129,13 @@ _KIND_WORDS = {
     "CostModel": "Стоимость", "EfficiencyMetric": "Эффективность",
     "EfficiencyJustification": "Обоснование эффективности",
     # The plan track, beside the record rather than part of it.
-    "PlanStep": "Шаг плана",
+    "PlanStep": "Шаг плана", "ExperimentTask": "Задача эксперимента",
     # Derived cards, projected rather than written.
     "Framing": "Постановка", "Outcome": "Итог",
 }
 
 _STATUS_WORDS = {
+    "skipped": "пропущена",
     "open": "открыт", "decomposed": "разбит на части", "closed": "закрыт",
     "formulated": "предложена", "under_verification": "проверяется",
     "confirmed": "подтверждена", "refuted": "опровергнута",
@@ -306,7 +307,8 @@ def _fields(attrs: Dict[str, Any], headline: str,
 #: band flow, keyed on `track: "plan"`. It still has to be projected, or the
 #: reader cannot see what was intended and what came of it.
 _STORY_TYPES = ("ResearchQuestion", "Hypothesis", "VerificationMethod",
-                "Evidence", "Conclusion", "Framing", "Outcome", "PlanStep")
+                "Evidence", "Conclusion", "Framing", "Outcome", "PlanStep",
+                "ExperimentTask")
 #: Products of one finding — they belong to whatever they were derived from.
 _ARTIFACT_FOLD_TYPES = ("CodeArtifact", "GeneratedData", "Spec",
                         "EfficiencyJustification", "Report", "Publication")
@@ -329,7 +331,13 @@ _LEVEL = {"Framing": 0, "ResearchQuestion": 0, "Hypothesis": 1,
           "VerificationMethod": 2, "Evidence": 3, "Conclusion": 4, "Outcome": 5,
           # Off the argument's ladder entirely: a step is an intention, so it
           # gets the level of the work it asks for and is drawn beside the band.
-          "PlanStep": 2}
+          "PlanStep": 2, "ExperimentTask": 2}
+
+#: Which lane of the plan track a node belongs in, coarsest first. Two
+#: intentions at different grains must not share a column: stacked together a
+#: reader cannot tell the step the study planned from the task the experiment
+#: module designed under it, which is the distinction the two types exist for.
+_PLAN_LANE = {"PlanStep": 0, "ExperimentTask": 1}
 
 #: The stages a study moves through, in the order a reader meets them. The
 #: viewer draws one band per stage, top to bottom, and puts a card in the band
@@ -576,6 +584,11 @@ def _stages_of(raw_nodes: Dict[str, Dict[str, Any]],
                 stage[nid] = "experiment"
         elif kind == "PlanStep":
             stage[nid] = _step_stage(attrs)
+        elif kind == "ExperimentTask":
+            # Always the experiment band: the module plans experiments. Its
+            # research/medical routes gather for one, and the card says which
+            # route it took, so the band stays the truthful one.
+            stage[nid] = "experiment"
         else:
             stage[nid] = _STAGE_BY_TYPE[kind]
     return stage
@@ -1363,9 +1376,17 @@ class ResearchGraphStore:
         # What each plan step turned into. A step with nothing pointing at it is
         # an intention nobody carried out, and the reader should see that.
         realised_by: Dict[str, List[str]] = {}
+        # And which detailed tasks were designed under it. A general step with
+        # no task under it is a step the experiment module never planned for,
+        # which is a different thing from a step nobody carried out.
+        elaborated_by: Dict[str, List[str]] = {}
+        elaborates: Dict[str, str] = {}
         for e in raw_edges:
             if e.get("type") == "realises":
                 realised_by.setdefault(e.get("dst"), []).append(e.get("src"))
+            elif e.get("type") == "elaborates":
+                elaborated_by.setdefault(e.get("dst"), []).append(e.get("src"))
+                elaborates[e.get("src")] = e.get("dst")
 
         # WITH WHAT a method was run — the part of "method" that was missing
         # altogether. A method is a method OF a claim, FOR settling it, BY some
@@ -1471,15 +1492,26 @@ class ResearchGraphStore:
                 node["criterion"] = criterion
             if kind == "Hypothesis":
                 node["origin"] = _origin_of(nid, raw_edges)
-            if kind == "PlanStep":
+            if kind in _PLAN_LANE:
                 # The plan is a parallel track, not a card in the band: the
                 # viewer draws it in a column beside the stages, at the height
                 # of the stage the step serves. Mixing the two is what made the
                 # graph unreadable — a reader could not tell the intention from
                 # the record.
                 node["track"] = "plan"
+                node["lane"] = _PLAN_LANE[kind]
                 if realised_by.get(nid):
                     node["realised_by"] = sorted(realised_by[nid], key=_id_order)
+                if elaborated_by.get(nid):
+                    node["elaborated_by"] = sorted(elaborated_by[nid],
+                                                   key=_id_order)
+                # The general step this detailed task serves, by the words the
+                # outer plan used — a bare "PS3" tells a reader nothing.
+                step = elaborates.get(nid)
+                if step and step in raw_nodes:
+                    node["elaborates"] = _short(
+                        _headline("PlanStep", raw_nodes[step].get("attrs") or {}),
+                        90)
             if kind == "VerificationMethod":
                 if tests_for.get(nid):
                     node["tests"] = tests_for[nid]

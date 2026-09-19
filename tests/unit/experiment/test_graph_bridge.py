@@ -5,6 +5,10 @@ from types import SimpleNamespace
 
 from CoScientist.graph.research.store import ResearchGraphStore
 
+from CoScientist.experiments.runtime.graph_bridge import (
+    _XT_IDS_KEY as _XT_KEY,
+)
+
 from .helpers import NOW, _approved_state, _plan, _task
 
 
@@ -442,3 +446,167 @@ def test_evidence_from_a_run_that_names_nothing_says_so(tmp_path):
     assert _measured_on("EXP-7", None, {}, "") == (
         "experiment task EXP-7: the run record names no dataset, route or artifact"
     )
+
+
+# ── the detailed plan as its own nodes ────────────────────────────────────────
+
+def _with_outer_plan(store, task_id="TASK-3", assignee="ExperimentModuleAgent",
+                     status="in_progress"):
+    """A study whose OUTER plan already has the step the module elaborates."""
+    store.commit(
+        source="plan-mirror",
+        nodes=[{"type": "PlanStep", "status": "in_progress", "attrs": {
+            "title": "Run the computational experiments",
+            "plan_task_id": task_id, "assignee": assignee}}],
+    )
+    return [{"id": task_id, "title": "Run the computational experiments",
+             "assignee": assignee, "status": status}]
+
+
+def test_the_detailed_plan_gets_its_own_nodes_under_the_general_step(tmp_path):
+    """The outer planner writes five one-line steps; the module then designs a
+    detailed task under the experimental ones, with its question, its dataset,
+    its bar and its artifacts. Both are intentions at two grains, and the graph
+    had a type for only the coarse one — so the design a human approved existed
+    nowhere a reader could see it.
+    """
+    from CoScientist.experiments.runtime.graph_bridge import (
+        publish_plan_detail_to_graph,
+    )
+
+    store = _seeded_store(tmp_path)
+    state = _approved_state(_plan(_task("EXP-1"), _task("EXP-2",
+                                                        depends_on=["EXP-1"])))
+    state["_master_active_tasks"] = _with_outer_plan(store)
+
+    publish_plan_detail_to_graph(store, state)
+
+    by_type = _nodes_by_type(store)
+    assert len(by_type.get("ExperimentTask", [])) == 2, by_type
+    # Each one points at the general step it serves — and by `elaborates`, not
+    # `realises`: a finer intention is not a record of the coarser one.
+    step = by_type["PlanStep"][0]
+    links = {(e["from"], e["type"], e["to"]) for e in store.full()["edges"]}
+    for xt in by_type["ExperimentTask"]:
+        assert (xt, "elaborates", step) in links, links
+    # And it carries the design, not just a name and a route.
+    attrs = {n["id"]: n["attrs"] for n in store.full()["nodes"]}
+    first = attrs[by_type["ExperimentTask"][0]]
+    assert first["experiment_task_id"] == "EXP-1"
+    assert first["plan_task_id"] == "TASK-3"
+    assert first["success_criteria"] and first["expected_artifacts"]
+    assert first["hypothesis_refs"] == "H1"
+
+
+def test_republishing_the_plan_amends_the_tasks_rather_than_doubling_them(tmp_path):
+    """A plan is revised and re-approved, and the module publishes again. The
+    tasks must be the same cards with new contents: `_stage_merge` consults the
+    ACL table whatever the privilege flag says, so without a table entry this
+    path was refused — and refused silently, because every failure here is
+    swallowed by contract.
+    """
+    from CoScientist.experiments.runtime.graph_bridge import (
+        publish_plan_detail_to_graph,
+    )
+
+    store = _seeded_store(tmp_path)
+    state = _approved_state(_plan(_task("EXP-1")))
+    state["_master_active_tasks"] = _with_outer_plan(store)
+    publish_plan_detail_to_graph(store, state)
+    first = _nodes_by_type(store)["ExperimentTask"]
+
+    revised = _task("EXP-1")
+    revised["name"] = "Chemical computation EXP-1, rerun on the wider set"
+    state2 = _approved_state(_plan(revised))
+    state2["_master_active_tasks"] = state["_master_active_tasks"]
+    state2[_XT_KEY] = state[_XT_KEY]
+    # How far it got is the runtime's record, not the plan's.
+    state2.setdefault("experiment_runtime", {}).setdefault("tasks", {})[
+        "EXP-1"] = {"status": "running"}
+    publish_plan_detail_to_graph(store, state2)
+
+    assert _nodes_by_type(store)["ExperimentTask"] == first, "a second card"
+    node = next(n for n in store.full()["nodes"] if n["id"] == first[0])
+    assert node["attrs"]["title"].endswith("wider set"), node["attrs"]["title"]
+    assert node["status"] == "running"
+
+
+def test_the_detailed_plan_is_still_drawn_when_there_is_no_outer_step(tmp_path):
+    """A module run with no outer plan — or one whose steps went to somebody
+    else — must still record its tasks. Inventing a PlanStep to hang them off
+    would put a step in the graph that no planner ever wrote.
+    """
+    from CoScientist.experiments.runtime.graph_bridge import (
+        publish_plan_detail_to_graph,
+    )
+
+    store = _seeded_store(tmp_path)
+    state = _approved_state(_plan(_task("EXP-1")))
+    state["_master_active_tasks"] = []
+
+    publish_plan_detail_to_graph(store, state)
+
+    by_type = _nodes_by_type(store)
+    assert len(by_type.get("ExperimentTask", [])) == 1, by_type
+    assert "PlanStep" not in by_type
+    assert not [e for e in store.full()["edges"] if e["type"] == "elaborates"]
+
+
+def test_the_plan_column_can_tell_the_two_plans_apart(tmp_path):
+    """Both plans are intentions, so both are drawn beside the bands rather
+    than in them — but in two lanes, coarsest first. Stacked in one column a
+    reader cannot tell the step the study planned from the task the module
+    designed under it, which is the whole reason there are two types.
+    """
+    from CoScientist.experiments.runtime.graph_bridge import (
+        publish_plan_detail_to_graph,
+    )
+
+    store = _seeded_store(tmp_path)
+    state = _approved_state(_plan(_task("EXP-1")))
+    state["_master_active_tasks"] = _with_outer_plan(store)
+    publish_plan_detail_to_graph(store, state)
+
+    lanes = {n["kind"]: (n.get("track"), n.get("lane"))
+             for n in store.view_of(None)["nodes"]
+             if n["kind"] in ("planstep", "experimenttask")}
+    assert lanes["planstep"] == ("plan", 0)
+    assert lanes["experimenttask"] == ("plan", 1)
+    # The detailed card names the step in the step's own words, because "PS1"
+    # tells a reader nothing.
+    task = next(n for n in store.view_of(None)["nodes"]
+                if n["kind"] == "experimenttask")
+    assert task["elaborates"].startswith("Run the computational")
+
+
+def test_a_finished_task_says_so_on_its_own_card(tmp_path):
+    """The method advances when a result lands, but a reader looking at the
+    plan column wants to know which of the plan's tasks are still outstanding
+    without cross-referencing the methods. And a card that says a thing failed
+    without saying why is the gap the graph reports as `unreasoned_failures`.
+    """
+    from CoScientist.experiments.runtime.graph_bridge import (
+        publish_plan_detail_to_graph,
+        publish_plan_to_graph,
+        publish_result_to_graph,
+    )
+
+    store = _seeded_store(tmp_path)
+    state = _approved_state(_plan(_task("EXP-1"), _task("EXP-2")))
+    state["_master_active_tasks"] = _with_outer_plan(store)
+    publish_plan_to_graph(store, state)
+    publish_plan_detail_to_graph(store, state)
+
+    publish_result_to_graph(store, state, "EXP-1",
+                            {"status": "success", "route_used": "fedot_mas"})
+    publish_result_to_graph(store, state, "EXP-2",
+                            {"status": "failed",
+                             "error": "the MCP server refused the call"})
+
+    cards = {n["id"]: n for n in store.full()["nodes"]
+             if n["type"] == "ExperimentTask"}
+    by_task = {(c["attrs"] or {}).get("experiment_task_id"): c
+               for c in cards.values()}
+    assert by_task["EXP-1"]["status"] == "done"
+    assert by_task["EXP-2"]["status"] == "failed"
+    assert "refused the call" in by_task["EXP-2"]["attrs"]["failure_reason"]

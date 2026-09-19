@@ -37,14 +37,22 @@ _EVIDENCE_ROUTES = frozenset({"research", "medical"})
 
 
 def _publish_approved_plan_to_graph(ctx: InvocationContext, state: Any) -> None:
-    """Best-effort: mirror the approved plan into the research graph
-    (VerificationMethod per task + Hypothesis —tested_by→ VM). A graph failure
-    must never break the approve itself."""
+    """Best-effort: mirror the approved plan into the research graph — the
+    method per task (VerificationMethod + Hypothesis —tested_by→ VM), and the
+    task itself as the plan wrote it (ExperimentTask —elaborates→ PlanStep).
+    Two commits, because they are two different claims about the study: what
+    was intended, and by what means it will be tested. A graph failure must
+    never break the approve itself."""
     try:
-        from CoScientist.experiments.runtime.graph_bridge import publish_plan_to_graph
+        from CoScientist.experiments.runtime.graph_bridge import (
+            publish_plan_detail_to_graph,
+            publish_plan_to_graph,
+        )
         from CoScientist.graph.research.store import get_research_graph
 
-        publish_plan_to_graph(get_research_graph(ctx), state)
+        graph = get_research_graph(ctx)
+        publish_plan_to_graph(graph, state)
+        publish_plan_detail_to_graph(graph, state)
     except Exception as exc:  # noqa: BLE001 — approve wins over graph mirroring
         audit(logger, f"EXPERIMENT_GRAPH_PLAN_PUBLISH_FAILED error={exc}",
               level=logging.WARNING)

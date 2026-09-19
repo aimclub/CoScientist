@@ -1262,6 +1262,10 @@ const i18n = {
   'graph.type.outcome': { en: 'Outcome', ru: 'Итог' },
   'graph.type.planstep': { en: 'Plan step', ru: 'Шаг плана' },
   'graph.plan.title': { en: 'Research plan', ru: 'План исследования' },
+  'graph.plan.experiments': { en: 'Experiment plan', ru: 'План экспериментов' },
+  'graph.type.experimenttask': { en: 'Experiment task', ru: 'Задача эксперимента' },
+  'graph.card.elaborates': { en: 'for step:', ru: 'к шагу:' },
+  'graph.edge.elaborates': { en: 'details', ru: 'детализирует' },
   // Research edge labels
   'graph.edge.motivates': { en: 'motivates', ru: 'мотивирует' },
   'graph.edge.tested_by': { en: 'tested by', ru: 'проверяется' },

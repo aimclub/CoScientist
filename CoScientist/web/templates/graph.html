@@ -232,6 +232,10 @@
       framing:              "#d29922",  // the setup, agreed with the operator
       researchquestion:     "#3b82f6",  // what was asked
       planstep:             "#64748b",  // the intention: background, not record
+      // The same track one grain finer, and deliberately NOT a shade of the
+      // step's slate: a reader has to tell the general plan from the detailed
+      // one at a glance, and magenta is the one hue no other card here uses.
+      experimenttask:       "#e879f9",
       confirmationcriteria: "#8b5cf6",  // the bar
       verificationmethod:   "#14b8a6",  // by what means
       tool:                 "#a9682a",
@@ -446,7 +450,14 @@
         L.push(String(n.instruments).split(",").slice(0, 4)
                .map(x => "<code>" + visSafe(x.trim().slice(0, 34)) + "</code>")
                .join(" "));
-      if (n.kind === "planstep" && n.input && n.input.tools)
+      // A detailed task names the general step it serves. Without it the two
+      // lanes read as two unrelated lists.
+      if (n.kind === "experimenttask" && n.elaborates)
+        L.push(visSafe("↳ " + t('graph.card.elaborates') + " " + n.elaborates));
+      if (n.kind === "experimenttask" && n.input && n.input.route)
+        L.push("<code>" + visSafe(String(n.input.route).slice(0, 34)) + "</code>");
+      if ((n.kind === "planstep" || n.kind === "experimenttask")
+          && n.input && n.input.tools)
         L.push(String(n.input.tools).split(",").slice(0, 4)
                .map(x => "<code>" + visSafe(x.trim().slice(0, 34)) + "</code>")
                .join(" "));
@@ -602,6 +613,7 @@
     // study three of the five names were unreadable. The names now live in a
     // rail of their own, left of every card in either track, and nothing is
     // ever seated in it — so this cannot come back by rearrangement.
+    const PLAN_LANE_TITLE = ['graph.plan.title', 'graph.plan.experiments'];
     const RAIL_GAP = 30, RAIL_MIN = 140;
     const STAGE_FONT = "600 26px -apple-system, Segoe UI, sans-serif";
     const STAGE_NOTE_FONT = "400 18px -apple-system, Segoe UI, sans-serif";
@@ -680,17 +692,21 @@
         }
         ctx.textAlign = "left";
       });
-      // One heading for the whole plan track, centred over its column.
+      // A heading per lane that has anything in it, so the reader is told
+      // which plan each column is: the study's general steps, and the
+      // experiment module's detailed tasks under them.
       const withPlan = stageBands.filter(b => b.planRight != null);
-      if (withPlan.length) {
+      if (withPlan.length && Array.isArray(withPlan[0].planLanes)) {
         const top = Math.min.apply(null, withPlan.map(b => b.top));
-        const left = Math.min.apply(null, withPlan.map(b => b.left));
         ctx.fillStyle = "rgba(148,163,184,0.75)";
         ctx.font = "600 22px -apple-system, Segoe UI, sans-serif";
         ctx.textAlign = "center";
         ctx.textBaseline = "bottom";
-        ctx.fillText(t('graph.plan.title'),
-                     (left + withPlan[0].planRight) / 2, top - 12);
+        withPlan[0].planLanes.forEach((lane, i) => {
+          if (!lane) return;
+          ctx.fillText(t(PLAN_LANE_TITLE[i], PLAN_LANE_TITLE[i]),
+                       (lane.left + lane.right) / 2, top - 12);
+        });
         ctx.textAlign = "left";
       }
       ctx.restore();
@@ -822,7 +838,8 @@
       const plan = planColumn(bands, x0 - BAND_PAD, blocks);
       if (plan.used) {
         Object.keys(plan.seats).forEach(id => { seats[id] = plan.seats[id]; });
-        bands.forEach(b => { b.left = plan.left - BAND_PAD; b.planRight = plan.right; });
+        bands.forEach(b => { b.left = plan.left - BAND_PAD; b.planRight = plan.right;
+                             b.planLanes = plan.lanes; });
       }
       addRail(bands);
       return { seats: seats, bands: bands };
@@ -859,19 +876,35 @@
     // other. A step drawn outside its band is worse than a step drawn small:
     // the column exists to say which stage the plan asked for, and outside its
     // band it says the wrong one.
+    //: The plan track reads left to right by GRAIN: the general step the outer
+    //: planner wrote, then the detailed task the experiment module designed
+    //: under it, then the record. Two intentions at different grains must not
+    //: share a column — stacked together a reader cannot tell which plan a
+    //: card came from, which is the whole reason the two types exist.
+    //: `lane` comes from the server (store._PLAN_LANE); 0 when it says nothing,
+    //: so a study recorded before lanes existed still draws.
+    const PLAN_LANES = 2;
     function planBlocks(place){
       const blocks = {};
       Object.keys(place).forEach(id => {
         if (place[id].track !== "plan" || !nodes.get(id)) return;
         const stage = place[id].stage;
-        (blocks[stage] = blocks[stage] || { ids: [], height: 0 }).ids.push(id);
+        const lane = Math.max(0, Math.min(PLAN_LANES - 1, place[id].lane || 0));
+        const byStage = blocks[stage] = blocks[stage] || { lanes: [], height: 0 };
+        (byStage.lanes[lane] = byStage.lanes[lane] || { ids: [], height: 0 })
+          .ids.push(id);
       });
       Object.keys(blocks).forEach(stage => {
-        const block = blocks[stage];
-        block.ids.sort((a, b) => (place[a].order || 0) - (place[b].order || 0)
-                              || String(a).localeCompare(String(b)));
-        block.height = block.ids.reduce((sum, id) => sum + measuredSize(id).h, 0)
-                     + PLAN_ROW_GAP * (block.ids.length - 1);
+        const byStage = blocks[stage];
+        byStage.lanes.forEach(lane => {
+          if (!lane) return;
+          lane.ids.sort((a, b) => (place[a].order || 0) - (place[b].order || 0)
+                                || String(a).localeCompare(String(b)));
+          lane.height = lane.ids.reduce((s, id) => s + measuredSize(id).h, 0)
+                      + PLAN_ROW_GAP * (lane.ids.length - 1);
+          // The band has to hold the FULLEST lane, not their sum.
+          byStage.height = Math.max(byStage.height, lane.height);
+        });
       });
       return blocks;
     }
@@ -879,28 +912,50 @@
     function planColumn(bands, leftEdge, blocks){
       const stages = Object.keys(blocks);
       if (!stages.length)
-        return { seats: {}, right: leftEdge, left: leftEdge, used: false };
+        return { seats: {}, right: leftEdge, left: leftEdge, lanes: [],
+                 used: false };
+      // One axis per lane, each sized by the widest card in THAT lane, so a
+      // lane of short cards does not leave a hole beside a lane of long ones.
+      // The rightmost lane's widest card ends exactly at `right`, clearing the
+      // record track by PLAN_GAP.
+      const widest = [];
+      for (let lane = 0; lane < PLAN_LANES; lane++) {
+        let w = 0;
+        stages.forEach(s => ((blocks[s].lanes[lane] || {}).ids || [])
+          .forEach(id => { w = Math.max(w, measuredSize(id).w); }));
+        widest[lane] = w;
+      }
       const right = leftEdge - PLAN_GAP;
-      // One axis for the whole column, taken from the widest card there is, so
-      // the column reads as a column and its widest card still clears the
-      // record track by the gap.
-      let widest = 0;
-      stages.forEach(s => blocks[s].ids.forEach(id => {
-        widest = Math.max(widest, measuredSize(id).w);
-      }));
-      const axis = right - widest / 2;
+      // Laid out from the right edge backwards, so the detailed lane sits
+      // against the record it produced and the general one outside it.
+      const axis = [];
+      let edge = right;
+      for (let lane = PLAN_LANES - 1; lane >= 0; lane--) {
+        if (!widest[lane]) { axis[lane] = edge; continue; }
+        axis[lane] = edge - widest[lane] / 2;
+        edge -= widest[lane] + PLAN_GAP;
+      }
       const seats = {};
       bands.forEach(band => {
-        const block = blocks[band.stage];
-        if (!block) return;
-        // Centred in a band that was sized to hold it, so this cannot overflow.
-        let y = (band.top + band.bottom) / 2 - block.height / 2;
-        block.ids.forEach(id => {
-          seats[id] = { x: axis, y: y + measuredSize(id).h / 2 };
-          y += measuredSize(id).h + PLAN_ROW_GAP;
+        const byStage = blocks[band.stage];
+        if (!byStage) return;
+        const mid = (band.top + band.bottom) / 2;
+        byStage.lanes.forEach((lane, i) => {
+          if (!lane) return;
+          // Each lane centred independently in a band that was sized to hold
+          // the fullest of them, so no lane can overflow.
+          let y = mid - lane.height / 2;
+          lane.ids.forEach(id => {
+            seats[id] = { x: axis[i], y: y + measuredSize(id).h / 2 };
+            y += measuredSize(id).h + PLAN_ROW_GAP;
+          });
         });
       });
-      return { seats: seats, right: right, left: axis - widest / 2, used: true };
+      const lanes = axis.map((x, i) => widest[i]
+        ? { left: x - widest[i] / 2, right: x + widest[i] / 2 } : null);
+      const far = Math.min.apply(null,
+        lanes.filter(Boolean).map(l => l.left).concat([right]));
+      return { seats: seats, right: right, left: far, lanes: lanes, used: true };
     }
 
     // First pass, on nominal sizes: vis reports a real box only once it has
@@ -920,6 +975,7 @@
           || String(a.id).localeCompare(String(b.id)));
         group.forEach((n, i) => {
           place[n.id] = { stage, order: i, track: n.track || "record",
+                          lane: n.lane || 0,
                           x: (i % perRow) * LEVEL_SEPARATION,
                           y: y + BAND_PAD + Math.floor(i / perRow) * NODE_PITCH };
         });
@@ -1162,7 +1218,8 @@
       const plan = planColumn(bands, -BAND_PAD, blocks);
       if (plan.used) {
         Object.keys(plan.seats).forEach(id => { seats[id] = plan.seats[id]; });
-        bands.forEach(b => { b.left = plan.left - BAND_PAD; b.planRight = plan.right; });
+        bands.forEach(b => { b.left = plan.left - BAND_PAD; b.planRight = plan.right;
+                             b.planLanes = plan.lanes; });
       }
       addRail(bands);
       return { seats: seats, bands: bands };
@@ -1338,7 +1395,7 @@
                 ? { type: "curvedCW", roundness: 0.22 } : false;
             }
           }
-          if (research && e.type === "realises") {
+          if (research && (e.type === "realises" || e.type === "elaborates")) {
             edge.color = { color: "#4b5563", highlight: "#6b7280" };
             edge.dashes = [2, 4]; edge.width = 1;
             edge.font = { color: "#6b7280", size: 11, strokeWidth: 4,
@@ -1489,26 +1546,17 @@
           Math.min(1, availW / (x1 - x0), availH / (y1 - y0)));
         // Hung from the top of the band, because a reader starts at the top.
         // Across, the centre of the bounding box is right only while the whole
-        // study fits. Past that it can be empty canvas: the layout puts the
-        // question wherever its children's barycentre falls, so on a wide study
-        // a reader opened the graph looking at a blank stretch between cards
-        // with the question and the hypothesis off to one side. So when the
-        // study does NOT fit, the camera opens on the spine — the question and
-        // the hypothesis, the two cards the rest of the study hangs off.
+        // study fits. Past that it used to be empty canvas — the layout puts the
+        // question wherever its children's barycentre falls — so the camera
+        // opened on the spine instead, the question and the hypothesis.
+        //
+        // The left edge is the better anchor now that there IS something there:
+        // the stage names in the rail, the study's general steps, and the
+        // experiment module's detailed tasks under them. That is where reading
+        // starts, it cannot be blank, and unlike a barycentre it does not move.
         let cx = (x0 + x1) / 2;
-        if (scale <= MIN_READABLE_SCALE + 1e-6) {
-          // From `pinned`, not from getBoundingBox: vis reports a box one frame
-          // behind the positions it was just given, and the first-pass grid puts
-          // the only card of each band at x = 0 — so measuring here read both
-          // spine cards at zero and opened the study on blank canvas beside it.
-          let sum = 0, seen = 0;
-          Object.keys(pinned).forEach(id => {
-            const d = nodeData[id];
-            if (!d || (d.kind !== "researchquestion" && d.kind !== "hypothesis")) return;
-            sum += pinned[id].x; seen += 1;
-          });
-          if (seen) cx = sum / seen;
-        }
+        if (scale <= MIN_READABLE_SCALE + 1e-6)
+          cx = x0 + availW / (2 * scale);
         network.moveTo({ scale: scale, position: {
           x: cx,
           y: y0 + (canvas.clientHeight / 2 - top) / scale,

@@ -169,6 +169,52 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
             "notes": "anything the plan attached to the step",
         },
     ),
+    # One task of the experiment module's own plan: the detailed grain under a
+    # general step. Prefix "XT" rather than "ET" — the E space is already
+    # crowded (E, EB, EJ, EM) and "ET3" reads as an Evidence variant to a
+    # person even though the code is unambiguous.
+    NodeTypeSpec(
+        "ExperimentTask", "XT", 2,
+        # The runtime's own vocabulary, collapsed to what a reader needs:
+        # pending/ready → planned, running/retry_pending/fallback_pending →
+        # running, done/done_with_warnings → done. All creatable, for
+        # PlanStep's reason: a re-publish after a replan may first meet a task
+        # that has already finished.
+        statuses=("planned", "running", "done", "failed", "skipped"),
+        creatable=("planned", "running", "done", "failed", "skipped"),
+        attr_docs={
+            "title": "the task as the plan names it — the card's headline",
+            "description": "what the task asks for",
+            "rationale": "why the plan included it",
+            "experiment_task_id": "the id the experiment plan gave it (EXP-n)",
+            "plan_task_id": "the OUTER plan's step it elaborates (TASK-n)",
+            "plan_id": "which experiment plan, and which revision of it",
+            "plan_revision": "the revision number the human approved",
+            "experiment_run_id": "the run the plan belongs to (EXRUN-…)",
+            "route": "how it will be executed — react_tools / fedot_mas / "
+                     "coder / alembic_build / research / medical",
+            "question": "the experimental question this task answers",
+            "hypothesis_refs": "the claims it tests, as the plan names them "
+                               "(the graph link itself is on the method)",
+            "operation_ref": "the framing operation it covers (OP-n)",
+            "dataset": "the data it runs on, and where that lives",
+            "baselines": "what the result is compared against",
+            "metrics": "what is measured, and which direction is better",
+            "success_criteria": "the bar, as the plan set it: metric, "
+                                "comparison and target",
+            "expected_artifacts": "what it must produce to count as done",
+            "tools": "the MCP servers and tools it will call, 'server:tool'",
+            "input_data": "what it consumes, including which earlier task "
+                          "produced it",
+            "depends_on": "the tasks that must finish first",
+            "cost": "the plan's own estimate of how long it takes",
+            "limitations": "what the plan already knows is wrong with it",
+            "optional": "written only when the plan marked it optional",
+            "failure_reason": "why it failed — required when you move it to "
+                              "failed, or the card says a thing went wrong "
+                              "and not what",
+        },
+    ),
     NodeTypeSpec(
         "VerificationMethod", "VM", 2,
         statuses=("planned", "running", "done", "failed"), creatable=("planned",),
@@ -304,6 +350,14 @@ STATUS_TRANSITIONS: Dict[str, FrozenSet[Tuple[str, str]]] = {
                            ("in_progress", "blocked"), ("in_progress", "todo"),
                            ("blocked", "in_progress"), ("blocked", "todo"),
                            ("done", "in_progress")}),
+    # `failed → planned` is not cosmetic: retry_task and fallback_task put the
+    # runtime status back to ready, and a card stuck on "failed" would then
+    # contradict a task that is running again.
+    "ExperimentTask": frozenset({("planned", "running"), ("planned", "skipped"),
+                                 ("planned", "failed"), ("planned", "done"),
+                                 ("running", "done"), ("running", "failed"),
+                                 ("running", "skipped"), ("failed", "planned"),
+                                 ("failed", "skipped"), ("done", "running")}),
     "Tool": frozenset({("needs_adaptation", "available"),
                        ("needs_adaptation", "being_created"),
                        ("being_created", "available"),
@@ -351,10 +405,19 @@ EDGE_TYPES: Dict[str, Tuple[Tuple[str, str], ...]] = {
     # nothing pointing at it is visibly unrealised. A step can be realised by
     # more than the method: "formulate a testable hypothesis" is realised by the
     # hypothesis itself, and "write the report" by the conclusion.
+    # A finer intention under a coarser one. Deliberately NOT `realises`:
+    # that one means record → intention ("this work carried out that"), and an
+    # ExperimentTask is not a record. Reusing it would rebuild the very
+    # conflation the PlanStep type exists to undo.
+    "elaborates": (("ExperimentTask", "PlanStep"),),
     "realises": (("VerificationMethod", "PlanStep"),
                  ("Hypothesis", "PlanStep"),
                  ("Evidence", "PlanStep"),
-                 ("Conclusion", "PlanStep")),
+                 ("Conclusion", "PlanStep"),
+                 # …and the record may attach to the detailed task instead of
+                 # the general step, which is where it actually came from.
+                 ("VerificationMethod", "ExperimentTask"),
+                 ("Evidence", "ExperimentTask")),
     "regulates": (("Constraint", "VerificationMethod"),
                   ("Constraint", "ConfirmationCriteria")),
     "constrains": (("Constraint", "Hypothesis"),
@@ -379,6 +442,7 @@ RU_ALIASES: Dict[str, str] = {
     "свидетельство": "Evidence",
     "заключение": "Conclusion",
     "метод_проверки": "VerificationMethod", "методы_проверки": "VerificationMethod",
+    "задача_эксперимента": "ExperimentTask", "шаг_эксперимента": "ExperimentTask",
     "условия_подтверждения": "ConfirmationCriteria", "условие_подтверждения": "ConfirmationCriteria",
     "инструмент": "Tool",
     "ресурс": "Resource",
@@ -672,6 +736,34 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         # states. It still judges nothing and runs nothing.
         transitions=_transitions("PlanStep"),
         edges=_edges("realises"),
+    ),
+    # The same idea one grain down: the experiment module's approved plan,
+    # mirrored task by task. A source of its own, so a reader who sees it knows
+    # no model chose these cards.
+    "experiment-plan-mirror": AgentPerm(
+        create=frozenset({"ExperimentTask"}),
+        update_attrs=frozenset({"ExperimentTask"}),
+        transitions=_transitions("ExperimentTask"),
+        edges=_edges("elaborates",
+                     ("realises", "VerificationMethod", "ExperimentTask"),
+                     ("realises", "Evidence", "ExperimentTask")),
+    ),
+    # The module's own deterministic writes — the methods, tools, evidence and
+    # data it records once a task has actually run. Those commits go through the
+    # privileged path (`enforce_permissions=False`), so this entry is mostly
+    # documentation — except that `_stage_merge` consults the table whatever the
+    # flag says, so WITHOUT it the bridge's re-approval path (an id-only attrs
+    # merge onto the method it already wrote) is refused on every replan, and
+    # refused silently, because the bridge swallows the error by contract.
+    "ExperimentModule": AgentPerm(
+        create=frozenset({"VerificationMethod", "Tool", "Evidence",
+                          "GeneratedData"}),
+        update_attrs=frozenset({"VerificationMethod"}),
+        transitions=_transitions("VerificationMethod", "Tool",
+                                 ("Hypothesis", "formulated", "postponed"),
+                                 ("Hypothesis", "postponed", "formulated")),
+        edges=_edges("tested_by", "uses", "produces", "relates_to",
+                     "derived_from"),
     ),
     # The pre-stage context-initialization agent seeds the framing frame at the
     # start of a run. It writes the whole context star through the PRIVILEGED

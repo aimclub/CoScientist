@@ -66,12 +66,17 @@ def test_permissions_reference_known_types_edges_transitions():
 def test_permission_agents_exist_in_system(request):
     """Every AGENT_PERMISSIONS key must be a real agent in system.yaml, EXCEPT
     the virtual write-sources: 'human' (writes via HITL), 'ValidatorAgent'
-    (writes via the fully-async background validator plugin, not a sub-agent)
-    and 'plan-mirror' (deterministic code that mirrors the registered plan into
-    planned methods — deliberately not attributed to a model)."""
+    (writes via the fully-async background validator plugin, not a sub-agent),
+    'plan-mirror' (deterministic code that mirrors the registered plan into
+    plan steps — deliberately not attributed to a model), and its two
+    counterparts one grain down: 'experiment-plan-mirror', which mirrors the
+    experiment module's approved plan task by task, and 'ExperimentModule',
+    the module's own deterministic bridge (the AGENT is ExperimentModuleAgent;
+    the write source is the code)."""
     from CoScientist.assembly.schema import get_config
     agents = set(get_config().agents)
-    virtual = {"human", "ValidatorAgent", "plan-mirror"}
+    virtual = {"human", "ValidatorAgent", "plan-mirror",
+               "experiment-plan-mirror", "ExperimentModule"}
     for name in schema.AGENT_PERMISSIONS:
         if name in virtual:
             continue
@@ -2564,3 +2569,52 @@ def test_an_undrawn_card_is_not_treated_as_a_card_of_no_size():
         page = client.get("/graph").text
 
     assert "box.right - box.left > 1 && box.bottom - box.top > 1" in page
+
+
+def test_the_two_plans_get_a_lane_each_and_a_colour_each():
+    """A study now carries two plans: the outer planner's general steps and the
+    experiment module's detailed tasks under them. Both are intentions, so both
+    are drawn beside the bands rather than in them — but stacked in one column
+    a reader cannot tell which plan a card came from, which is the whole reason
+    there are two types. So the plan track has a lane per grain, coarsest
+    first, each with its own heading and its own colour.
+    """
+    from starlette.testclient import TestClient
+
+    from CoScientist.graph.research.store import _PLAN_LANE
+    from CoScientist.web.app import create_app
+
+    with TestClient(create_app()) as client:
+        page = client.get("/graph").text
+
+    assert _PLAN_LANE == {"PlanStep": 0, "ExperimentTask": 1}
+    assert "const PLAN_LANES = 2;" in page,         "the page must reserve as many lanes as the server can send"
+    # The lane reaches the layout, and the layout gives each one its own axis.
+    assert "lane: n.lane || 0," in page
+    assert "for (let lane = PLAN_LANES - 1; lane >= 0; lane--)" in page
+    # A heading per lane, or the reader is not told which plan is which.
+    assert "const PLAN_LANE_TITLE = ['graph.plan.title', 'graph.plan.experiments'];" in page
+    # And a colour of its own, not a shade of the step's.
+    assert 'experimenttask:       "#e879f9",' in page
+    # The link to the step is drawn like `realises` — both point at a coarser
+    # intention — and it is NOT realises, which would mean "a record of".
+    assert 'e.type === "realises" || e.type === "elaborates"' in page
+
+
+def test_the_edge_from_the_detailed_plan_is_not_the_one_for_records():
+    """`realises` is record → intention: this work carried out that step.
+    An ExperimentTask is not a record, it is a finer intention, so reusing
+    `realises` for it would rebuild the very conflation PlanStep exists to
+    undo. It gets `elaborates`, and the record may then point at either grain.
+    """
+    from CoScientist.graph.research import schema
+
+    assert schema.EDGE_TYPES["elaborates"] == (("ExperimentTask", "PlanStep"),)
+    assert ("ExperimentTask", "PlanStep") not in schema.EDGE_TYPES["realises"]
+    # The work may realise the detailed task it actually came from.
+    assert ("VerificationMethod", "ExperimentTask") in schema.EDGE_TYPES["realises"]
+    assert ("Evidence", "ExperimentTask") in schema.EDGE_TYPES["realises"]
+    # The mirror writing the detailed plan may not touch anything else.
+    perm = schema.AGENT_PERMISSIONS["experiment-plan-mirror"]
+    assert perm.create == frozenset({"ExperimentTask"})
+    assert all(e[0] in ("elaborates", "realises") for e in perm.edges), perm.edges

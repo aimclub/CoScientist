@@ -29,7 +29,12 @@ from CoScientist.experiments.runtime.shared import audit
 logger = logging.getLogger(__name__)
 
 _SOURCE = "ExperimentModule"
+_PLAN_SOURCE = "experiment-plan-mirror"
+#: The agents the outer planner gives an experimental step to. The detailed plan
+#: hangs off whichever of the tracker's steps is theirs.
+_EXECUTOR_ASSIGNEES = ("ExperimentModuleAgent", "TaskExecutorAgent")
 _VM_IDS_KEY = "experiment_graph_vm_ids"  # state-level: survives replans
+_XT_IDS_KEY = "experiment_graph_task_ids"  # EXP-n -> XT id, survives replans
 _TOOL_IDS_KEY = "experiment_graph_tool_ids"  # tool key -> Tool node id
 _RUNTIME_KEY = "experiment_runtime"
 _MAX_GENERATED_DATA = 5
@@ -63,6 +68,13 @@ def _graph_nodes(store: Any) -> dict[str, dict[str, Any]]:
 
 def _vm_ids(state: MutableMapping[str, Any]) -> dict[str, str]:
     raw = state.get(_VM_IDS_KEY)
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items() if k and v}
+
+
+def _xt_ids(state: MutableMapping[str, Any]) -> dict[str, str]:
+    raw = state.get(_XT_IDS_KEY)
     if not isinstance(raw, dict):
         return {}
     return {str(k): str(v) for k, v in raw.items() if k and v}
@@ -226,6 +238,216 @@ def _vm_attrs(task: dict[str, Any], plan_id: str) -> dict[str, Any]:
     if task.get("optional"):
         attrs["optional"] = True
     return attrs
+
+
+#: Runtime status -> the five a reader needs. `blocked` is a wait on an
+#: upstream task, so it has not started: "planned", not "running".
+_TASK_STATUS = {
+    "pending": "planned", "ready": "planned", "blocked": "planned",
+    "running": "running", "retry_pending": "running",
+    "fallback_pending": "running",
+    "done": "done", "done_with_warnings": "done",
+    "failed": "failed", "skipped": "skipped",
+}
+
+
+def _task_status(state: MutableMapping[str, Any], task_id: str) -> str:
+    """The runtime's status for this task, mapped onto the graph's five.
+
+    Read from the RUNTIME, not from the plan: `ExperimentPlan` forbids a status
+    field on a task — the plan is what was intended, and how far it got is a
+    separate record. Reading the plan therefore reported every task as
+    "planned" forever, including the ones that had already run.
+    """
+    runtime = state.get(_RUNTIME_KEY) or {}
+    record = (runtime.get("tasks") or {}).get(task_id) or {}
+    return _TASK_STATUS.get(str(record.get("status") or "").strip().lower(),
+                            "planned")
+
+
+def _task_attrs(task: dict[str, Any], plan: dict[str, Any],
+                step_task_id: str) -> dict[str, Any]:
+    """The task as the plan wrote it. Rendered the same way `_vm_attrs` renders
+    the method's copy, so the two cards read alike where they overlap.
+
+    Anything the plan left unset stays out, for the reason `_vm_attrs` gives:
+    an attribute whose value is "" reads as measured and empty.
+    """
+    design = task.get("design") or {}
+    dataset = design.get("dataset") or {}
+    duration = task.get("est_duration_min")
+    tools: list[str] = []
+    for srv in task.get("mcp_servers") or []:
+        if not isinstance(srv, dict):
+            continue
+        server = str(srv.get("name") or srv.get("server_id") or "").strip()
+        for entry in srv.get("tools") or []:
+            name = (entry.get("name") if isinstance(entry, dict)
+                    else entry) or ""
+            name = str(name).strip()
+            if name:
+                tools.append(f"{server}:{name}" if server else name)
+    attrs = {
+        "title": _clean(task.get("name"), 200),
+        "description": _clean(task.get("description")),
+        "rationale": _clean(task.get("rationale")),
+        "experiment_task_id": str(task.get("id") or ""),
+        "plan_task_id": step_task_id,
+        "plan_id": _clean(plan.get("plan_id"), 80),
+        "plan_revision": str(plan.get("revision") or ""),
+        "experiment_run_id": _clean(plan.get("experiment_run_id"), 80),
+        "route": str(task.get("route") or ""),
+        "question": _clean(design.get("experiment_question")),
+        "hypothesis_refs": ", ".join(_task_hypothesis_ids(design)),
+        "operation_ref": _clean(design.get("operation_ref"), 80),
+        "dataset": _clean(dataset.get("name") or dataset.get("source_ref"), 240),
+        "baselines": ", ".join(
+            _clean(f"{b.get('name')} ({b.get('kind')})", 120)
+            for b in (design.get("baselines") or [])
+            if isinstance(b, dict) and b.get("name")),
+        "metrics": ", ".join(
+            _clean(f"{m.get('name')} ({m.get('direction')})"
+                   if m.get("direction") else m.get("name"), 80)
+            for m in (design.get("metrics") or [])
+            if isinstance(m, dict) and m.get("name")),
+        "success_criteria": "; ".join(
+            _clean(f"{c.get('criterion_id')}: {c.get('description')}"
+                   + (f" [{c['metric']} {c['operator']} {c['target']}]"
+                      if c.get("metric") and c.get("operator")
+                      and c.get("target") is not None else ""), 240)
+            for c in (task.get("success_criteria") or [])
+            if isinstance(c, dict) and c.get("description")),
+        "expected_artifacts": ", ".join(
+            _clean(f"{a.get('name')} [{a.get('role')}]"
+                   if a.get("role") else a.get("name"), 120)
+            for a in (task.get("expected_artifacts") or [])
+            if isinstance(a, dict) and a.get("name")),
+        "tools": ", ".join(tools),
+        "input_data": ", ".join(
+            _clean(i.get("location") or i.get("source_artifact_id"), 160)
+            for i in (task.get("input_data") or [])
+            if isinstance(i, dict)),
+        "depends_on": ", ".join(str(d) for d in (task.get("depends_on") or []) if d),
+        "cost": f"≈{duration} min" if isinstance(duration, int) and duration > 0 else "",
+        "limitations": "; ".join(
+            _clean(w, 200) for w in (task.get("warnings") or []) if w),
+    }
+    attrs = {k: v for k, v in attrs.items() if v}
+    if task.get("optional"):
+        attrs["optional"] = True
+    return attrs
+
+
+def _outer_step(store: Any, state: MutableMapping[str, Any]) -> tuple[str, str]:
+    """The outer plan's step the detailed plan elaborates: (PlanStep id, TASK-n).
+
+    Nothing in the code carries an EXP-n -> TASK-n mapping — the experiment plan
+    renumbers its own tasks — so it is resolved here, through the one thing both
+    plans agree on: the tracker step the orchestrator handed to the executor.
+    Returns ("", "") when there is no outer plan or no step of its own, and the
+    tasks are then written without the link rather than hung off an invented
+    step.
+    """
+    steps = [t for t in (state.get("_master_active_tasks") or [])
+             if isinstance(t, dict)]
+    mine = [t for t in steps
+            if str(t.get("assignee") or "") in _EXECUTOR_ASSIGNEES]
+    if not mine:
+        return "", ""
+    running = [t for t in mine
+               if str(t.get("status") or "").strip().lower() == "in_progress"]
+    step = (running or mine)[0]
+    task_id = str(step.get("id") or "").strip()
+    if not task_id:
+        return "", ""
+    for node in (_graph_full(store).get("nodes") or []):
+        if not isinstance(node, dict) or node.get("type") != "PlanStep":
+            continue
+        if str((node.get("attrs") or {}).get("plan_task_id") or "") == task_id:
+            return str(node.get("id") or ""), task_id
+    return "", task_id
+
+
+def _graph_full(store: Any) -> dict[str, Any]:
+    try:
+        return store.full() or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def publish_plan_detail_to_graph(store: Any,
+                                 state: MutableMapping[str, Any]) -> None:
+    """Mirror the approved experiment plan, one ExperimentTask per task.
+
+    Best-effort by this module's contract: any failure is logged and swallowed,
+    because a graph problem must never break plan approval.
+    """
+    if not _enabled():
+        return
+    try:
+        tasks = _plan_tasks(state)
+        if not tasks:
+            return
+        plan = (state.get(_RUNTIME_KEY) or {}).get("plan") or {}
+        step_id, step_task_id = _outer_step(store, state)
+        known = _xt_ids(state)
+        graph_nodes = _graph_nodes(store)
+
+        nodes: list[dict[str, Any]] = []
+        edges: list[dict[str, Any]] = []
+        updates: list[dict[str, Any]] = []
+        ref_to_task: dict[str, str] = {}
+        for index, task in enumerate(tasks):
+            task_id = str(task.get("id") or "").strip()
+            if not task_id:
+                continue
+            attrs = _task_attrs(task, plan, step_task_id)
+            status = _task_status(state, task_id)
+            existing = known.get(task_id)
+            if existing and existing in graph_nodes:
+                # id-only draft = attrs merge on the node already there, which
+                # is what makes a re-approval after a replan idempotent.
+                nodes.append({"id": existing, "attrs": attrs})
+                if graph_nodes[existing].get("status") != status:
+                    updates.append({"id": existing, "status": status,
+                                    "reason": f"experiment plan revision "
+                                              f"{plan.get('revision') or '?'}"})
+                continue
+            ref = f"xt{index}"
+            ref_to_task[ref] = task_id
+            nodes.append({"type": "ExperimentTask", "ref": ref,
+                          "status": status, "attrs": attrs})
+            if step_id:
+                edges.append({"type": "elaborates", "from": f"#{ref}",
+                              "to": step_id})
+        if not nodes and not updates:
+            return
+
+        result = store.commit(source=_PLAN_SOURCE, nodes=nodes, edges=edges,
+                              status_updates=updates, partial_edges=True)
+        ok = bool(getattr(result, "ok", None) if not isinstance(result, dict)
+                  else result.get("ok"))
+        if not ok:
+            errors = (result.get("errors") if isinstance(result, dict)
+                      else getattr(result, "errors", None))
+            audit(logger,
+                  f"EXPERIMENT_GRAPH_TASKS_PUBLISH_FAILED errors={errors}",
+                  level=logging.WARNING)
+            return
+        committed = (result.get("committed") if isinstance(result, dict)
+                     else getattr(result, "committed", None)) or {}
+        for echo in committed.get("nodes") or []:
+            ref = str(echo.get("ref") or "")
+            if echo.get("id") and (task_id := ref_to_task.get(ref)):
+                known[task_id] = str(echo["id"])
+        state[_XT_IDS_KEY] = known
+        if not step_id:
+            # Said out loud: the cards are there and the link is not, which is
+            # a wiring fact about the run, not a fault of the plan.
+            audit(logger, "EXPERIMENT_GRAPH_TASKS_UNLINKED "
+                          f"count={len(known)} step={step_task_id or 'none'}")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("publishing the experiment plan detail failed: %s", exc)
 
 
 def _planned_tools(task: dict[str, Any]) -> list[dict[str, str]]:
@@ -466,6 +688,45 @@ def _measured_on(
     return _clean("; ".join(parts), 400)
 
 
+def _advance_task_card(store: Any, state: MutableMapping[str, Any],
+                       task_id: str, final: str, status: str,
+                       task_result: dict[str, Any]) -> None:
+    """Move the ExperimentTask card to done/failed, with the reason on failure.
+
+    Separate from the method's own transition: a method is the means and may be
+    reused; the task is the intention this one run was carrying out, and a
+    reader looking at the plan column wants to see which of its tasks are
+    still outstanding without cross-referencing the methods.
+    """
+    try:
+        xt_id = _xt_ids(state).get(str(task_id))
+        if not xt_id:
+            return
+        nodes = _graph_nodes(store)
+        current = nodes.get(xt_id, {})
+        if current.get("type") != "ExperimentTask":
+            return
+        if current.get("status") == final:
+            return
+        update: dict[str, Any] = {"id": xt_id, "status": final,
+                                  "reason": f"task {task_id} result: {status}"}
+        # A card that says a thing failed and not why is the gap the graph
+        # reports as `unreasoned_failures`, so the failure carries its message.
+        attrs = None
+        if final == "failed":
+            why = _clean(task_result.get("error")
+                         or task_result.get("message")
+                         or task_result.get("summary"), 600)
+            if why:
+                attrs = {"failure_reason": why}
+        # planned → done is legal for this type, so no intermediate hop.
+        store.commit(source=_PLAN_SOURCE,
+                     nodes=[{"id": xt_id, "attrs": attrs}] if attrs else None,
+                     status_updates=[update])
+    except Exception as exc:  # noqa: BLE001 — never break result recording
+        logger.warning("advancing the experiment task card failed: %s", exc)
+
+
 def publish_result_to_graph(
     store: Any,
     state: MutableMapping[str, Any],
@@ -552,6 +813,10 @@ def publish_result_to_graph(
             status_updates=status_updates, enforce_permissions=False,
         )
         ok = bool(getattr(result, "ok", None) if not isinstance(result, dict) else result.get("ok"))
+        # The detailed plan's own card moves with the run. Its own commit, under
+        # its own source, so the ACL governs it and a failure here cannot cost
+        # the evidence that has just been written.
+        _advance_task_card(store, state, task_id, final, status, task_result)
         if not ok:
             errors = (
                 result.get("errors") if isinstance(result, dict)
@@ -574,4 +839,5 @@ def publish_result_to_graph(
               level=logging.WARNING)
 
 
-__all__ = ["publish_plan_to_graph", "publish_result_to_graph"]
+__all__ = ["publish_plan_detail_to_graph", "publish_plan_to_graph",
+           "publish_result_to_graph"]
