@@ -1521,6 +1521,13 @@ def _sanitize_json_output():
     return sanitize_json_output
 
 
+def _microfluidics_evidence(name: str):
+    def factory(ctx):
+        from CoScientist.microfluidics import evidence
+        return getattr(evidence, name)
+    return factory
+
+
 def _save_tz_document():
     from CoScientist.microfluidics.tz_agent import save_tz_document
     return save_tz_document
@@ -1546,6 +1553,16 @@ def _collect_cfd_result():
 def _collect_economics_result():
     from CoScientist.microfluidics.economics import collect_economics_result
     return collect_economics_result
+
+
+def _microfluidics_requirements():
+    from CoScientist.microfluidics.requirements import compile_requirements_callback
+    return compile_requirements_callback
+
+
+def _microfluidics_route_compliance(name: str):
+    from CoScientist.microfluidics import route_compliance
+    return getattr(route_compliance, name)
 
 
 def _export_tz_and_queries():
@@ -1672,6 +1689,12 @@ _cb("finish_after_plan_registered", "after_model",
 # Trim prose/fences/trailing text around a JSON answer BEFORE strict
 # output_schema validation (providers don't always honour response_format).
 _cb("sanitize_json_output", "after_model", factory=lambda ctx: _sanitize_json_output())
+_cb("begin_evidence_verification", "before_agent",
+    factory=_microfluidics_evidence("begin_evidence_verification"))
+_cb("capture_evidence_verification", "after_tool",
+    factory=_microfluidics_evidence("capture_evidence_verification"))
+_cb("authenticate_evidence_verification", "after_agent",
+    factory=_microfluidics_evidence("authenticate_evidence_verification"))
 # Render the approved ТЗ into the reference Markdown document (state + file).
 _cb("save_tz_document", "after_agent", factory=lambda ctx: _save_tz_document())
 # Save the ТЗ + literature queries as shareable Markdown & HTML for hand-off.
@@ -1685,6 +1708,17 @@ _cb("inject_target_molecule", "before_agent",
     factory=_microfluidics_literature("inject_target_molecule"))
 _cb("pin_target_molecule", "after_agent",
     factory=_microfluidics_literature("pin_target_molecule"))
+# Compile the approved human-readable TZ into the only requirements contract
+# downstream chemistry stages may use.
+_cb("compile_requirements", "before_agent", factory=lambda ctx: _microfluidics_requirements())
+# Stage 4 proposals are assessed in code; stage 5 is skipped/guarded unless all
+# hard constraints passed.
+_cb("qualify_synthesis_routes", "after_agent",
+    factory=lambda ctx: _microfluidics_route_compliance("qualify_synthesis_routes"))
+_cb("gate_economics", "before_agent",
+    factory=lambda ctx: _microfluidics_route_compliance("gate_economics"))
+_cb("guard_economics_routes", "before_tool",
+    factory=lambda ctx: _microfluidics_route_compliance("guard_economics_routes"))
 # Microfluidics module B: keep the economics server's costing answers as given.
 _cb("collect_economics_result", "after_tool", factory=lambda ctx: _collect_economics_result())
 # Stage 3: a molecule fixed in the ТЗ is handed on as the only candidate — no design.

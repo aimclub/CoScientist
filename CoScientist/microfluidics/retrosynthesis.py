@@ -23,6 +23,7 @@ search does not block the event loop the other agents share.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -82,7 +83,7 @@ def forward_order(steps: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return ordered
 
 
-def compact_route(route: Dict[str, Any]) -> Dict[str, Any]:
+def compact_route(route: Dict[str, Any], target: str = "") -> Dict[str, Any]:
     steps = [
         {
             "reaction_smiles": s.get("reaction_smiles"),
@@ -103,8 +104,14 @@ def compact_route(route: Dict[str, Any]) -> Dict[str, Any]:
     for step in ordered:
         for p in step["products"]:
             p.pop("purchasable", None)
+    source_route_id = str(route.get("id") or "route")
+    target_key = hashlib.sha256(str(target or "unknown").encode("utf-8")).hexdigest()[:10].upper()
+    safe_source_id = "".join(ch if ch.isalnum() else "-" for ch in source_route_id).strip("-") or "ROUTE"
     return {
-        "route_id": route.get("id"),
+        # ASKCOS restarts numbering at route_1 for every target.  A target-derived
+        # prefix makes the ID globally unique before an LLM ever sees it.
+        "route_id": f"GPN-{target_key}-{safe_source_id.upper()}",
+        "source_route_id": source_route_id,
         "depth": route.get("depth"),
         "precursor_cost": route.get("precursor_cost"),
         "min_step_plausibility": route.get("min_step_plausibility"),
@@ -133,7 +140,7 @@ def shape_routes(raw: Any, smiles: str, mode: str, max_routes: int) -> Dict[str,
         "target": raw.get("target") or smiles,
         "mode": mode,
         "routes_found": len(routes),
-        "routes": [compact_route(r) for r in routes[:max_routes] if isinstance(r, dict)],
+        "routes": [compact_route(r, target=smiles) for r in routes[:max_routes] if isinstance(r, dict)],
     }
 
 

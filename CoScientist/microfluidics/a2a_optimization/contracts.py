@@ -5,9 +5,12 @@ import json
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from CoScientist.microfluidics.models import LiteratureAnalysis, SynthesisRoutes
+from CoScientist.microfluidics.models import LiteratureAnalysis, QualifiedRoutes, SynthesisRoutes
 
-INPUT_KEYS = ("structured_tz", "literature_analysis", "synthesis_routes", "economics", "economics_ranking")
+INPUT_KEYS = (
+    "structured_tz", "literature_analysis", "synthesis_routes", "qualified_routes",
+    "economics", "economics_ranking",
+)
 
 
 def _object(value: Any, name: str) -> dict:
@@ -35,19 +38,24 @@ def _number(value: Any, name: str, *, positive: bool = False) -> None:
 def prepare_inputs(state: Any) -> dict:
     """Require real, linked route rankings; preserve service numbers verbatim."""
     inputs = {key: state.get(key) for key in INPUT_KEYS}
-    for key in ("structured_tz", "literature_analysis", "synthesis_routes", "economics_ranking"):
+    for key in ("structured_tz", "literature_analysis", "synthesis_routes", "qualified_routes", "economics_ranking"):
         inputs[key] = _object(inputs[key], key)
     LiteratureAnalysis.model_validate(inputs["literature_analysis"])
-    routes = SynthesisRoutes.model_validate(inputs["synthesis_routes"]).routes
-    ids = [route.route_id for route in routes]
-    if not routes or any(not route_id.strip() for route_id in ids) or len(ids) != len(set(ids)):
+    proposals = SynthesisRoutes.model_validate(inputs["synthesis_routes"]).routes
+    proposal_ids = [route.route_id for route in proposals]
+    if not proposals or any(not route_id.strip() for route_id in proposal_ids) or len(proposal_ids) != len(set(proposal_ids)):
         raise ValueError("synthesis_routes: nonempty unique route_id values required")
-    if any(route.stub or not route.steps for route in routes):
+    if any(route.stub or not route.steps for route in proposals):
         raise ValueError("synthesis_routes: real routes with nonempty steps required")
+    qualified = QualifiedRoutes.model_validate(inputs["qualified_routes"])
+    routes = qualified.routes
+    ids = [route.route_id for route in routes]
+    if not routes or not set(ids).issubset(set(proposal_ids)):
+        raise ValueError("qualified_routes: nonempty eligible subset of synthesis_routes required")
     ranking = inputs["economics_ranking"]
     ranked = ranking.get("routes")
     if not isinstance(ranked, dict) or set(ranked) != set(ids):
-        raise ValueError("economics_ranking.routes must match synthesis_routes route_id values exactly")
+        raise ValueError("economics_ranking.routes must match qualified_routes route_id values exactly")
     _number(ranking.get("target_qty"), "economics_ranking.target_qty", positive=True)
     if ranking.get("target_unit") not in {"g", "kg", "mol", "mmol"}:
         raise ValueError("economics_ranking.target_unit must be g, kg, mol or mmol")

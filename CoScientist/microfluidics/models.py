@@ -22,9 +22,9 @@ JSON-like text instead of Enum reprs.
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Any, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # Field-status vocabulary is shared with the research frame intake — one name
 # for one thing. Re-exported here so existing importers keep working.
@@ -133,6 +133,42 @@ class NamedValue(BaseModel):
     name: str = Field(description="Напр. «ККМ» или «Температура»")
     value: str = Field(description="Значение с единицами, напр. «1.2 ммоль/л»")
     conditions: str = Field(default="", description="Условия измерения, если указаны")
+    evidence: List["EvidenceRef"] = Field(
+        default_factory=list,
+        description="Точные ссылки на источник значения; пусто означает, что значение не верифицировано",
+    )
+
+
+class EvidenceRef(BaseModel):
+    """A claim-level pointer into a real source, not a literature-task label."""
+
+    source_id: str = Field(min_length=1, description="ID из LiteratureAnalysis.source_records")
+    locator: str = Field(
+        default="",
+        description="Страница, раздел, таблица, номер абзаца патента или устойчивый фрагмент текста",
+    )
+    quote: str = Field(
+        default="",
+        description="Короткий подтверждающий фрагмент; не заменяет locator",
+    )
+    verification_status: Literal["unverified", "verified", "conflicting"] = "unverified"
+
+
+class SourceRecord(BaseModel):
+    """Resolvable bibliographic source used by one or more extracted claims."""
+
+    source_id: str = Field(min_length=1)
+    title: str = ""
+    url: str = ""
+    doi: str = ""
+    external_id: str = Field(default="", description="Patent/standard identifier when no DOI exists")
+    source_type: Literal["paper", "patent", "standard", "web", "other"] = "other"
+    full_text_available: bool = False
+    content_hash: str = Field(
+        default="", description="Hash of the exact full text/version inspected by a verifier"
+    )
+    verified_by: Literal["", "evidence_verifier"] = ""
+    verification_tool: str = ""
 
 
 class Analogue(BaseModel):
@@ -163,6 +199,7 @@ class RouteStep(BaseModel):
         default="", description="Выход стадии как в источнике, напр. «75 %»; пусто — не указан"
     )
     conditions: List[NamedValue] = Field(default_factory=list)
+    evidence: List[EvidenceRef] = Field(default_factory=list)
 
 
 class LiteratureRoute(BaseModel):
@@ -174,6 +211,7 @@ class LiteratureRoute(BaseModel):
         default="", description="Пригодность для проточного / микрофлюидного реактора"
     )
     sources: List[str] = Field(default_factory=list)
+    evidence: List[EvidenceRef] = Field(default_factory=list)
 
 
 class LiteratureFact(BaseModel):
@@ -182,18 +220,30 @@ class LiteratureFact(BaseModel):
     statement: str
     query_id: str = Field(default="", description="LIT-xx, по которой найден факт")
     sources: List[str] = Field(default_factory=list)
+    evidence: List[EvidenceRef] = Field(default_factory=list)
 
 
 class LiteratureAnalysis(BaseModel):
     """Итог модуля A (ТЗ + литература) — вход модуля дизайна и отчёта."""
 
     target_molecule: TargetMolecule = Field(default_factory=TargetMolecule)
+    source_records: List[SourceRecord] = Field(
+        default_factory=list,
+        description="Реальные URL/DOI/патенты, на которые ссылаются EvidenceRef",
+    )
     analogues: List[Analogue] = Field(default_factory=list)
     synthesis_routes: List[LiteratureRoute] = Field(default_factory=list)
     facts: List[LiteratureFact] = Field(default_factory=list)
     gaps: List[str] = Field(
         default_factory=list, description="Что не удалось найти в литературе"
     )
+
+    @model_validator(mode="after")
+    def unique_source_ids(self):
+        ids = [source.source_id for source in self.source_records]
+        if len(ids) != len(set(ids)):
+            raise ValueError("literature_analysis source_id values must be unique")
+        return self
 
 
 # ── Module B hand-off: design and synthesis routes ───────────────────────────
@@ -253,18 +303,88 @@ class ProcessStep(BaseModel):
     )
     products: List[Substance] = Field(default_factory=list)
     conditions: List[NamedValue] = Field(default_factory=list)
+    conditions_status: Literal["reported", "missing", "unverified"] = "missing"
+    conditions_missing_reason: str = ""
     yield_fraction: Optional[float] = Field(
         default=None, gt=0, le=1, description="Выход стадии, доля 0–1; нет данных — null"
     )
+    yield_status: Literal["reported", "missing", "unverified"] = "missing"
+    yield_missing_reason: str = ""
+    evidence: List[EvidenceRef] = Field(default_factory=list)
     flow_notes: str = Field(
         default="", description="Как стадия переносится на проточный реактор"
     )
+
+    @model_validator(mode="after")
+    def explain_missing_operating_data(self):
+        if self.conditions:
+            if self.conditions_status == "missing":
+                self.conditions_status = "reported"
+        elif self.conditions_status == "reported":
+            raise ValueError("conditions_status=reported requires nonempty conditions")
+        elif not self.conditions_missing_reason.strip():
+            raise ValueError("empty conditions require conditions_missing_reason")
+
+        if self.yield_fraction is not None:
+            if self.yield_status == "missing":
+                self.yield_status = "reported"
+        elif self.yield_status == "reported":
+            raise ValueError("yield_status=reported requires yield_fraction")
+        elif not self.yield_missing_reason.strip():
+            raise ValueError("yield_fraction=null requires yield_missing_reason")
+        return self
+
+
+class RequirementSource(BaseModel):
+    block: str
+    field: str
+    field_status: str
+    value: str
+
+
+class RequirementConstraint(BaseModel):
+    """One atomic, scoped and provenance-preserving requirement compiled from the TZ."""
+
+    constraint_id: str = Field(min_length=1)
+    scope: Literal["molecule", "feedstock", "step", "route", "product", "deliverable"]
+    kind: str = Field(min_length=1)
+    hardness: Literal["hard", "soft"]
+    operator: str = Field(min_length=1)
+    value: Any = None
+    unit: str = ""
+    resolution: Literal["confirmed", "needs_confirmation"] = "confirmed"
+    machine_evaluable: bool = False
+    source: RequirementSource
+
+
+class RequirementsSpec(BaseModel):
+    schema_version: str = "1.0"
+    constraints: List[RequirementConstraint] = Field(default_factory=list)
+    open_questions: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def unique_constraint_ids(self):
+        ids = [item.constraint_id for item in self.constraints]
+        if len(ids) != len(set(ids)):
+            raise ValueError("requirements_spec.constraint_id values must be unique")
+        return self
+
+
+class ComplianceCheck(BaseModel):
+    constraint_id: str
+    status: Literal["pass", "fail", "unknown", "not_applicable"]
+    reason: str
+    evidence_ids: List[str] = Field(default_factory=list)
+    evaluated_by: Literal["code", "human", "agent"] = "code"
 
 
 class SynthesisRoute(BaseModel):
     """Маршрут синтеза одного продукта."""
 
     route_id: str = Field(description="GPN-1, GPN-2… — ретросинтез; LIT-1… — из литературы")
+    source_route_id: str = Field(
+        default="", description="Идентификатор маршрута во внешнем сервисе/источнике"
+    )
     product: Substance
     source: str = Field(default="ретросинтез", description="«ретросинтез» или «литература»")
     steps: List[ProcessStep] = Field(
@@ -273,6 +393,9 @@ class SynthesisRoute(BaseModel):
     flow_suitability: str = Field(default="")
     bottlenecks: List[str] = Field(default_factory=list)
     sources: List[str] = Field(default_factory=list, description="Ссылки / DOI")
+    evidence: List[EvidenceRef] = Field(default_factory=list)
+    tz_compliance: List[ComplianceCheck] = Field(default_factory=list)
+    overall_status: Literal["unassessed", "eligible", "rejected", "blocked"] = "unassessed"
     stub: bool = Field(default=False, description="Маршрут получен от заглушки")
 
 
@@ -283,6 +406,43 @@ class SynthesisRoutes(BaseModel):
         description="Полные маршруты с операциями. Обязательное поле; [] только если маршруты не найдены."
     )
     gaps: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def unique_route_ids(self):
+        ids = [route.route_id.strip() for route in self.routes]
+        if any(not route_id for route_id in ids) or len(ids) != len(set(ids)):
+            raise ValueError("routes require nonempty globally unique route_id values")
+        return self
+
+
+class RouteDecision(BaseModel):
+    route_id: str
+    product: str = ""
+    overall_status: Literal["rejected", "blocked"]
+    reasons: List[str] = Field(default_factory=list)
+
+
+class QualifiedRoutes(BaseModel):
+    """Fail-closed result consumed by economics and the experiment hand-off."""
+
+    status: Literal["ok", "no_compliant_routes"]
+    routes: List[SynthesisRoute] = Field(default_factory=list)
+    rejected: List[RouteDecision] = Field(default_factory=list)
+    blocked: List[RouteDecision] = Field(default_factory=list)
+    gaps: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def status_matches_routes(self):
+        if self.status == "ok" and not self.routes:
+            raise ValueError("qualified_routes status=ok requires eligible routes")
+        if self.status == "no_compliant_routes" and self.routes:
+            raise ValueError("no_compliant_routes cannot contain eligible routes")
+        if any(route.overall_status != "eligible" for route in self.routes):
+            raise ValueError("qualified_routes.routes may contain only eligible routes")
+        ids = [route.route_id for route in self.routes]
+        if len(ids) != len(set(ids)):
+            raise ValueError("qualified_routes route_id values must be unique")
+        return self
 
 
 __all__ = [
@@ -297,8 +457,16 @@ __all__ = [
     "LiteratureQuery",
     "LiteratureRoute",
     "NamedValue",
+    "EvidenceRef",
+    "SourceRecord",
     "OPEN_STATUSES",
     "ProcessStep",
+    "RequirementConstraint",
+    "RequirementSource",
+    "RequirementsSpec",
+    "ComplianceCheck",
+    "QualifiedRoutes",
+    "RouteDecision",
     "RouteStep",
     "StructuredTZ",
     "Substance",

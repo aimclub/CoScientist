@@ -16,9 +16,10 @@
 #   │    ├─ PlannerAgent          -> create_plan(…), one task per LIT query
 #   │    ├─ LiteratureOrchestrator-> delegates each LIT task to ResearchAgent
 #   │    │                           (every answer -> state["literature_findings"])
-#   │    └─ LiteratureSynthesisAgent -> state["literature_analysis"] (structured
+#   │    ├─ LiteratureSynthesisAgent -> state["literature_analysis_draft"]
 #   │                                   hand-off: target molecule, analogues,
 #   │                                   routes + conditions, facts, gaps)
+#   │    └─ EvidenceVerifierAgent -> state["literature_analysis"] (authenticated)
 #   ├─ ModuleB_Design (sequential)            stages 3–5
 #   │    └─ MolDesignAgent → SynthRouteAgent → EconomicsAgent
 #   ├─ ModuleC_Experiment (sequential)        external experimental subsystem
@@ -88,6 +89,7 @@ agents:
       - PlannerAgent
       - LiteratureOrchestrator
       - LiteratureSynthesisAgent
+      - EvidenceVerifierAgent
 
   # ── ТЗ stage (ported from VibePAV) ─────────────────────────────────────────
   TZAgent:
@@ -251,12 +253,29 @@ agents:
       целевая молекула, аналоги (SMILES + свойства), маршруты синтеза с
       условиями, факты с источниками и пробелы.
     prompt: microfluidics_literature_synthesis
-    output_key: literature_analysis
+    output_key: literature_analysis_draft
     output_schema: literature_analysis
     callbacks:
       before_agent: [inject_target_molecule]
       after_model: [sanitize_json_output]
-      after_agent: [pin_target_molecule]
+
+  EvidenceVerifierAgent:
+    class: llm
+    title: Проверка источников
+    include_contents: none
+    description: >-
+      независимо сверяет числовые условия и выходы с полными
+      текстами источников; неподтверждённые claims оставляет unverified.
+    prompt: microfluidics_evidence_verifier
+    tools: [websearch, paper_analysis, papers_search]
+    output_key: literature_analysis
+    output_schema: literature_analysis
+    callbacks:
+      before_agent: [begin_evidence_verification]
+      before_tool: [WebSearchLimiter]
+      after_tool: [capture_evidence_verification]
+      after_model: [sanitize_json_output]
+      after_agent: [authenticate_evidence_verification, pin_target_molecule]
 
   # ── Module B — stages 3–5: design ──────────────────────────────────────────
   # Edge 4→5 stays inside B while 4→6 leaves for C: B runs to completion (the
@@ -289,7 +308,7 @@ agents:
     callbacks:
       # A molecule the customer fixed in the ТЗ is handed on as the only
       # candidate — no LLM call, no design.
-      before_agent: [use_fixed_target_molecule]
+      before_agent: [compile_requirements, use_fixed_target_molecule]
 
   SynthRouteAgent:
     class: llm
@@ -312,6 +331,9 @@ agents:
     # Structured hand-off (SynthesisRoutes): steps with reactants / agents /
     # products / conditions / yield — the shape the economics server costs.
     output_schema: synthesis_routes
+    callbacks:
+      before_agent: [compile_requirements]
+      after_agent: [qualify_synthesis_routes]
 
   # Economics feeds the optimization module and the final report.
   EconomicsAgent:
@@ -333,7 +355,8 @@ agents:
     work_order: true
     work_order_step_review: true
     callbacks:
-      before_agent: [inject_target_molecule]
+      before_agent: [compile_requirements, gate_economics, inject_target_molecule]
+      before_tool: [guard_economics_routes]
       # The server's numbers, as given, for the report: economics_ranking.
       after_tool: [collect_economics_result]
 

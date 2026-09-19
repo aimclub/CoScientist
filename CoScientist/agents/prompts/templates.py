@@ -492,6 +492,11 @@ RULES
 - Synthesize findings instead of copying abstracts
 - Be concise, try to fit the answer within 2000 characters
 - Use tools to answer, it is prohibited to answer directly without them
+- For every reported numeric condition, yield, purity, price, or performance
+  value, include the real DOI/URL/patent/standard identifier and a locator
+  (page, section, table, figure, or patent paragraph). A task label such as
+  LIT-02 is not a source. If the full text and locator were not inspected,
+  mark the claim unverified instead of presenting it as established.
 
 <<LANGUAGE>>
 --------------------------------------------------
@@ -2854,6 +2859,12 @@ LIT-08: {literature_finding_LIT_08?}
 {literature_report?}
 
 ### ЧТО ЗАПОЛНИТЬ
+- source_records: registry of every real source used. Each item has a stable
+  source_id, title, URL and/or DOI/external_id (patent or standard), source_type, whether full text was inspected,
+  and content_hash for the exact inspected version. LIT-xx is never source_id.
+  At this synthesis stage set verified_by and verification_tool to empty strings
+  and every evidence.verification_status to unverified: only the independent
+  verifier in the next stage may promote a claim.
 - target_molecule: если в ТЗ fixed=true — перенеси значения из ТЗ как есть
   (source «ТЗ»). Иначе, если литература указывает на одно лучшее вещество под
   ТЗ, заполни его с source «литература» и fixed=false; если нет — оставь поля
@@ -2867,19 +2878,43 @@ LIT-08: {literature_finding_LIT_08?}
   выход стадии как в источнике (yield_value, напр. «75 %»; нет в источнике —
   пусто), условия (температура, время, соотношения, растворитель,
   катализатор); пригодность для проточного/микрофлюидного реактора,
-  источники. Вещества называй так, чтобы их можно было однозначно найти:
+  источники. Каждое числовое условие и выход снабди evidence: source_id,
+  locator и verification_status. Без полного текста и locator статус только
+  unverified. Вещества называй так, чтобы их можно было однозначно найти:
   SMILES или английское название, если они есть в источнике, — рядом с
   русским.
-- facts: остальные существенные факты с query_id и источниками.
+- facts: остальные существенные факты с query_id, sources и claim-level evidence.
 - gaps: чего не нашли — какие данные из списков extract остались без ответа.
 
 ### ПРАВИЛА
 - Бери только то, что есть в результатах выше. Ничего не придумывай: нет
   значения — не заполняй поле, а отметь это в gaps.
-- Числа — с единицами, как в источнике. Источники — URL или DOI из результатов.
+- Числа — с единицами, как в источнике. Источники — URL/DOI/патент/стандарт из
+  результатов; LIT-xx обозначает задачу поиска и источником не считается.
 - Пустые результаты по задаче — это пробел (gaps), а не повод выдумать данные.
 
 Отвечай ТОЛЬКО валидным JSON по схеме, без пояснений и без обрамления ```.
+''')
+
+
+_static("microfluidics_evidence_verifier", '''
+Ты — независимый верификатор литературных условий. Не добавляй новых
+маршрутов или фактов. Для каждого числового условия и выхода открой
+реальный URL/DOI и сверь утверждение с полным текстом.
+
+### ЧЕРНОВОЙ СТРУКТУРИРОВАННЫЙ АНАЛИЗ
+{literature_analysis_draft?}
+
+### ПРАВИЛА
+- Обязательно используй инструмент чтения/анализа для каждого источника; одного
+  поискового snippet недостаточно.
+- verified ставь только если полный текст подтверждает именно это число/условие,
+  а locator точно указывает страницу, таблицу, рисунок, раздел или абзац.
+- Всё, что не удалось прочитать или сверить, оставь unverified и добавь в gaps.
+- Сохрани все остальные поля и идентификаторы. content_hash, verified_by и
+  verification_tool сам не выдумывай: их заполнит код из фактических tool results.
+
+Верни ТОЛЬКО полный JSON literature_analysis по схеме.
 ''')
 
 
@@ -3015,6 +3050,10 @@ previous one has delivered:
 ### RULES
 - Never skip a module and never reorder: a later module reads the state the
   earlier one writes, so running it early yields an empty result.
+- Module calls carry only the requested stage action. Never restate or
+  "clarify" numeric limits, prohibited substances, sources, or literature
+  findings in the AgentTool request: child modules read the versioned state and
+  a prose paraphrase can silently strengthen or weaken the approved TZ.
 - Call ONE module per turn and wait for its result before the next.
 - Do NOT redo a module that already returned a substantive result just to
   double-check it. Re-run one only if it returned nothing, errored, or
@@ -3041,6 +3080,9 @@ propose concrete target molecules to synthesise.
 ### ВХОД — СТРУКТУРИРОВАННОЕ ТЗ (источник требований)
 {structured_tz?}
 
+### МАШИННЫЙ КОНТРАКТ ТРЕБОВАНИЙ (единственный источник порогов и hard/soft)
+{requirements_spec?}
+
 ### ВХОД — ЦЕЛЕВАЯ МОЛЕКУЛА ИЗ ТЗ
 {target_molecule?}
 
@@ -3052,17 +3094,30 @@ propose concrete target molecules to synthesise.
 ### ЗАДАЧА
 Заказчик не задал конкретную молекулу (иначе эта стадия пропускается и дальше
 идёт сама молекула) — подбери кандидатов.
-1. Извлеки только явно заданные числовые и структурные ограничения ТЗ.
+1. Используй только молекулярные ограничения из `requirements_spec`. Не
+   извлекай их повторно из прозы и не повышай `soft`/`needs_confirmation` до
+   жёсткого подтверждённого ограничения.
    «Не задано» означает неизвестное ограничение, «не требуется» не задаёт
    критерия отбора. Не подставляй собственные пороги.
-2. Вызови `molecular_design` с requirements — JSON-строкой по контракту
+2. Сформируй стратегию **от доступного сырья к продукту**: сначала выдели
+   продукты верифицированных литературных превращений из разрешённого или
+   предпочтительного сырья, затем прочие литературные аналоги, и лишь затем
+   de novo/BRICS-гипотезы. Мягкое предпочтение по происхождению сырья влияет на
+   порядок, но не становится запретом; жёсткое ограничение исключает кандидат.
+   Наличие подходящих дескрипторов само по себе не доказывает синтезируемость.
+3. Вызови `molecular_design` с requirements — JSON-строкой по контракту
    инструмента: criteria, required_smarts, forbidden_smarts, generate,
    max_candidates. ТЗ и аналоги инструмент читает из состояния сам; не добавляй
-   их в requirements. Если явных ограничений нет, передай "{}".
-3. Используй только возвращённые candidates. Инструмент уже включает
+   их в requirements. Если явных ограничений нет, передай "{}". Включай
+   generate только когда подтверждённые литературные продукты не дают
+   достаточного пула; это не способ заполнить список любой ценой.
+4. Используй только возвращённые candidates. Инструмент уже включает
    литературные аналоги: не добавляй отклонённые структуры обратно вручную.
    При error или no_candidates верни пустой список и исходные gaps.
-4. Сохрани criteria_checks, ограничения и неопределённость в пояснениях.
+   Ранжируй сначала по наличию проверяемого маршрута из допустимого сырья,
+   затем по молекулярному соответствию; кандидат без маршрута явно остаётся
+   гипотезой и не вытесняет route-backed кандидат.
+5. Сохрани criteria_checks, ограничения и неопределённость в пояснениях.
    Расчётные дескрипторы RDKit — не измерения, BRICS-кандидаты — гипотезы,
    а не подтверждённые молекулы с требуемыми свойствами. Не переноси свойства
    исходных аналогов на новые структуры. ККМ, МПН и другие неизвестные свойства
@@ -3094,7 +3149,8 @@ gaps: результаты инструментов и текст update_work_st
 найдены, включи их операции в steps; routes: [] допустимо только когда ни одного
 маршрута не найдено, с объяснением в gaps. Перед финальным ответом заверши шаги
 плана и представь рабочий отчёт через submit_work_report, если он подключён.
-- routes[]: route_id, product (name, smiles), source, sources, stub,
+- routes[]: route_id (глобально уникальный), source_route_id (ID внешнего
+  сервиса, если есть), product (name, smiles), source, sources, evidence, stub,
   flow_suitability, bottlenecks и steps[] по порядку.
 - steps[]: operation; reactants — исходные вещества стадии: name (английское
   название, если известно) и smiles; на второй и следующих стадиях продукт
@@ -3102,7 +3158,11 @@ gaps: результаты инструментов и текст update_work_st
   растворители, катализаторы, среды (amount оставь пустым — его задаёт стадия
   экономики); products — что получается на стадии; conditions — температура,
   время, соотношения, давление с единицами; yield_fraction — выход долей
-  («75 %» → 0.75), нет данных — null; flow_notes.
+  («75 %» → 0.75), нет данных — null; flow_notes. Пустые conditions допустимы
+  только с conditions_status="missing" и непустым conditions_missing_reason.
+  yield_fraction=null допустим только с yield_status="missing" и непустым
+  yield_missing_reason. Для перенесённых из источника условий используй
+  evidence с source_id, locator и verification_status.
 - gaps: чего не хватает.
 SMILES не выдумывай: нет в инструменте или источнике — оставь пустым. Тексты —
 на русском, названия веществ — как в источнике плюс английское, если известно.'''
@@ -3122,13 +3182,18 @@ they are made — the route and the operating conditions of every operation.
 ### ВХОД — КАНДИДАТЫ (стадия 3)
 {design_candidates?}
 
+### МАШИННЫЙ КОНТРАКТ ТРЕБОВАНИЙ
+{requirements_spec?}
+
 ### ВХОД — МАРШРУТЫ И УСЛОВИЯ ИЗ ЛИТЕРАТУРЫ (synthesis_routes внутри)
 {literature_analysis?}
 
 ### ЗАДАЧА
 1. Для каждого кандидата найди в литературном анализе маршруты к нему (по
-   SMILES, иначе по названию) и перенеси их как LIT-1, LIT-2… (source
-   «литература», источники из анализа, stub false).
+   SMILES, иначе по названию) и перенеси их с глобально уникальными ID вида
+   LIT-<candidate>-<n> (source «литература», источники из анализа, stub false).
+   Сначала рассматривай маршруты от сырья, разрешённого/предпочтительного
+   requirements_spec; мягкое предпочтение влияет на порядок, а не на допуск.
 2. Кандидата, к которому в литературе маршрута нет, назови в gaps: «маршрут не
    найден, сервис ретросинтеза не подключён».
 3. Отметь операции, которые плохо переносятся на проточный/микрофлюидный
@@ -3153,6 +3218,9 @@ the retrosynthesis service and from the literature.
 ### ВХОД — КАНДИДАТЫ (стадия 3)
 {design_candidates?}
 
+### МАШИННЫЙ КОНТРАКТ ТРЕБОВАНИЙ
+{requirements_spec?}
+
 ### ВХОД — МАРШРУТЫ И УСЛОВИЯ ИЗ ЛИТЕРАТУРЫ (synthesis_routes внутри)
 {literature_analysis?}
 
@@ -3175,21 +3243,29 @@ the retrosynthesis service and from the literature.
 ### ПОРЯДОК РАБОТЫ (это и есть шаги твоего плана)
 1. **Литература.** Для каждого кандидата найди в литературном анализе маршруты
    к нему (по SMILES, иначе по названию). Описанный маршрут с условиями
-   перенеси как LIT-1, LIT-2… (source «литература», источники, stub false).
+   перенеси как LIT-<candidate>-<n> (глобально уникальный route_id; source
+   «литература», источники, stub false). Начинай с маршрутов от сырья,
+   разрешённого/предпочтительного requirements_spec. Не считай совпадением
+   близкий субстрат или похожий класс реакции.
 2. **Ретросинтез.** Для каждого кандидата со SMILES — `retrosynthesis_routes`
    (mode "balanced"). Нет маршрутов для соли — повтори для нейтральной формы;
    нет и так — «deep» один раз, затем отметь пробел. Кандидата без SMILES
    отметь в gaps.
-3. **Отбор.** Из маршрутов сервиса возьми не больше 3 на кандидата: все
+3. **Отбор предложений.** Из маршрутов сервиса возьми не больше 3 на кандидата: все
    стартовые вещества покупаемые, высокая min_step_plausibility, меньше
-   стадий, ниже precursor_cost. Это маршруты GPN-1, GPN-2… (source
-   «ретросинтез», stub false; в sources — "retrosynthesis service, route_id").
+   стадий, ниже precursor_cost. Сохрани глобально уникальный route_id, который
+   вернул инструмент, без перенумерации, и его source_route_id (source
+   «ретросинтез», stub false). Это предложения: пригодность по ТЗ после ответа
+   проверяет код, поэтому не называй неизвестное соответствием. ASKCOS — один
+   сигнал о синтезируемости, а не источник условий и не решающий критерий.
 4. **Названия стадий.** `classify_reactions` на reaction SMILES выбранных
    стадий — operation бери из reaction_name и reaction_classname.
 5. **Условия и выход.** Стадия маршрута сервиса совпадает по превращению со
-   стадией литературного маршрута — перенеси её условия и выход и укажи это
-   в flow_notes. Не совпадает — conditions пустые, yield_fraction null, и
-   назови это в gaps.
+   стадией литературного маршрута (те же структуры реагентов и продукта) —
+   перенеси её условия и выход и укажи это в flow_notes и приложи claim-level
+   evidence. Аналогия по классу реакции не является источником. Не совпадает — conditions
+   пустые с conditions_status="missing" и причиной; yield_fraction null с
+   yield_status="missing" и причиной; назови это в gaps.
 6. **Проверка (по необходимости).** Для литературной стадии с сомнительным
    продуктом — `predict_reaction_products`; расхождение с ожидаемым продуктом
    отметь в bottlenecks.
@@ -3221,8 +3297,8 @@ def microfluidics_economics(ctx: PromptContext) -> str:
 CoScientist microfluidics instance. You cost the synthesis routes and check
 that their reagents can actually be sourced in Russia.
 
-### ВХОД — МАРШРУТЫ СИНТЕЗА (стадия 4)
-{synthesis_routes?}
+### ВХОД — МАРШРУТЫ, ПРОШЕДШИЕ КОДОВЫЙ ШЛЮЗ ТЗ
+{qualified_routes?}
 
 <<TOOLS>>
 
@@ -3255,14 +3331,17 @@ economics server (supplier price lists) and compare them.
 ### ВХОД — ТЗ (масштаб, ограничения по себестоимости и поставкам)
 {structured_tz?}
 
+### МАШИННЫЙ КОНТРАКТ ТРЕБОВАНИЙ
+{requirements_spec?}
+
 ### ВХОД — ЦЕЛЕВАЯ МОЛЕКУЛА
 {target_molecule?}
 
 ### ВХОД — МАРШРУТЫ ИЗ ЛИТЕРАТУРЫ (synthesis_routes внутри)
 {literature_analysis?}
 
-### ВХОД — МАРШРУТЫ СИНТЕЗА МОДУЛЯ ДИЗАЙНА (стадия 4, structure routes[])
-{synthesis_routes?}
+### ВХОД — МАРШРУТЫ, ПРОШЕДШИЕ КОДОВЫЙ ШЛЮЗ ТЗ
+{qualified_routes?}
 
 <<TOOLS>>
 
@@ -3290,14 +3369,14 @@ economics server (supplier price lists) and compare them.
   Исправь вход по причине; тот же вызов повторять нельзя.
 
 ### ПОРЯДОК РАБОТЫ (это и есть шаги твоего плана)
-1. **Подготовка маршрутов.** Маршруты модуля дизайна (synthesis_routes.routes)
+1. **Подготовка маршрутов.** Используй ТОЛЬКО qualified_routes.routes
    уже в форме сервера: route_id, steps с reactants / agents / products /
    conditions / yield_fraction. Перенеси их как есть: вещество — {"smiles":
    ...}, если SMILES есть, иначе английское название; "@prev" — строкой;
    yield_fraction → yield. Маршруты из литературы (literature_analysis) с id,
-   которого нет в synthesis_routes.routes, не добавляй в рейтинг отдельно:
+   которого нет в qualified_routes.routes, не добавляй в рейтинг отдельно:
    сначала он должен быть оформлен стадией маршрутов с тем же route_id.
-   Набор route_id рейтинга должен соответствовать synthesis_routes.routes.
+   Набор route_id рейтинга должен точно соответствовать qualified_routes.routes.
    Маршрут без продуктов стадий посчитать нельзя: отметь пробел и верни на
    доработку, не создавай несвязанный с исходными маршрутами рейтинг.
 2. **Разрешение веществ** — `resolve_chemicals` одним вызовом для всех
@@ -3320,7 +3399,8 @@ economics server (supplier price lists) and compare them.
 - Целевое количество продукта: из ТЗ («Масштаб результата», «Минимальная масса
   образца»); только g, kg, mol или mmol. Если в ТЗ его нет — 100 g, и скажи,
   что это допущение.
-- Выходы стадий: из источника; где их нет — какое default_yield ты берёшь.
+- Выходы стадий: только из верифицированного источника. Маршрут с неизвестным
+  выходом не должен быть в qualified_routes; не заменяй его молча default_yield=1.
 - Растворители и катализаторы (agents): сервер их не покупает, пока у вещества
   нет amount. Если объём или загрузка есть в условиях маршрута (например,
   «ДХМ 10 мл на 1 г спирта»), пересчитай на целевое количество продукта и

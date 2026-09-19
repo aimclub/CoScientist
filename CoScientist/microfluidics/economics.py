@@ -84,6 +84,20 @@ def _route_summary(route: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _collect_ranking(state: Any, args: Dict[str, Any], result: Dict[str, Any]) -> None:
+    qualified = state.get("qualified_routes") or {}
+    allowed = {
+        str(route.get("route_id")) for route in qualified.get("routes") or []
+        if isinstance(route, dict) and route.get("route_id")
+    }
+    returned = {
+        str(route.get("route_id")) for route in result.get("routes") or []
+        if isinstance(route, dict) and route.get("route_id")
+    }
+    if not allowed or returned != allowed:
+        raise ValueError(
+            "economics result route_ids must match qualified_routes exactly: "
+            f"allowed={sorted(allowed)}, returned={sorted(returned)}"
+        )
     previous = state.get(RANKING_KEY) or {}
     routes = dict(previous.get("routes") or {})
     for route in result.get("routes") or []:

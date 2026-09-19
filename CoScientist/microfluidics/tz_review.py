@@ -7,8 +7,9 @@ in the ТЗ panel of the web UI:
     what the human is expected to fill; sections that are complete follow, in
     ascending section order (the panel moves a section down as soon as its
     empty fields are filled);
-  * every field can be edited; a value typed by the operator becomes
-    «уточнено оператором» (the agent's own inferences are «автоподбор»);
+  * every field can be edited; a non-empty value submitted by the operator
+    becomes «уточнено оператором» even when it is unchanged (the
+    agent's own unreviewed inferences are «автоподбор»);
   * a field the operator leaves EMPTY goes to the agent — it fills it through
     ``fill_agent_fields`` as «заполнено агентом», and the ТЗ comes back to the
     operator with those fields highlighted. Round after round, until the
@@ -148,8 +149,8 @@ def apply_operator_values(tz: StructuredTZ, form_values: Any) -> OperatorAnswers
 
     Per field present in the form: «не задавать» (``NOT_REQUIRED_VALUE`` or
     «не требуется») -> «не требуется», never handed to the agent; a new
-    non-empty value -> «уточнено оператором»; the same value as before ->
-    unchanged (an agent value the operator kept stays «заполнено агентом»);
+    non-empty value -> «уточнено оператором»; submitting an
+    unchanged generated value therefore explicitly confirms it;
     an empty value -> left to the agent (the field becomes «не задано» until
     the agent fills it). Fields «рассчитывается агентом» are deferred to later
     stages, so leaving them empty keeps them as they are. Fields missing from
@@ -178,7 +179,7 @@ def apply_operator_values(tz: StructuredTZ, form_values: Any) -> OperatorAnswers
                     continue
                 f.value, f.status = "Не задано", AWAITING_STATUS
                 left.append(f.name)
-            elif f.status == AWAITING_STATUS or new != f.value.strip():
+            elif f.status not in {OPERATOR_STATUS, "задано заказчиком"} or new != f.value.strip():
                 f.value, f.status = new, OPERATOR_STATUS
                 answers.set_by_operator += 1
         if left:
