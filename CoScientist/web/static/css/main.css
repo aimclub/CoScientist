@@ -1,5 +1,5 @@
     body {
-      font-family: 'Inter', sans-serif;
+      font-family: 'IBM Plex Sans', sans-serif;
     }
 
     /* Readability floor: the dashboard leans on Tailwind arbitrary sizes as
@@ -315,7 +315,7 @@
       background: rgba(140, 144, 161, 0.15);
       border-radius: 4px;
       padding: 0.1em 0.35em;
-      font-family: 'JetBrains Mono', monospace;
+      font-family: 'IBM Plex Mono', monospace;
       font-size: 0.85em;
     }
 
