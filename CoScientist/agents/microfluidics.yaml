@@ -13,8 +13,8 @@
 #   │    ├─ TZAgent (sequential)              ported from VibePAV
 #   │    │    ├─ TZSpecAgent      -> state["structured_tz"]         (ТЗ, by section)
 #   │    │    └─ TZQueryGenAgent  -> state["tz_literature_queries"] (LIT-01…)
-#   │    ├─ PlannerAgent          -> create_plan(…), one task per LIT query
-#   │    ├─ LiteratureOrchestrator-> delegates each LIT task to ResearchAgent
+#   │    ├─ LiteratureOrchestrator-> delegates each LIT query directly to
+#   │    │                           ResearchAgent (no duplicate planning step)
 #   │    │                           (every answer -> state["literature_findings"])
 #   │    ├─ LiteratureSynthesisAgent -> state["literature_analysis_draft"]
 #   │                                   hand-off: target molecule, analogues,
@@ -86,7 +86,6 @@ agents:
       analogues, synthesis routes with conditions, and facts.
     children:
       - TZAgent
-      - PlannerAgent
       - LiteratureOrchestrator
       - LiteratureSynthesisAgent
       - EvidenceVerifierAgent
@@ -169,8 +168,11 @@ agents:
       # Save the ТЗ + literature queries as shareable Markdown & HTML files.
       after_agent: [export_tz_and_queries]
 
-  # ── Planning ───────────────────────────────────────────────────────────────
+  # The query generator already produces executable LIT-* requests. A separate
+  # planner only copied those requests into create_plan tasks, so it is kept
+  # available for shared/default profiles but disabled here.
   PlannerAgent:
+    enabled: false
     class: custom:session
     title: План исследования
     description: >-
@@ -182,9 +184,9 @@ agents:
     hitl: true
 
   # ── Execution (inside module A) ────────────────────────────────────────────
-  # Was the root OrchestratorAgent when the profile stopped at literature.
-  # It now lives INSIDE module A: the 1→2 edge is internal to the module, so
-  # routing it through RootOrchestrator would break the module boundary.
+  # The 1→2 edge is direct: TZQueryGenAgent writes tz_literature_queries and
+  # this agent delegates those exact requests to ResearchAgent. There is no
+  # intermediate roadmap/planner stage.
   LiteratureOrchestrator:
     class: llm
     title: Анализ литературы
@@ -194,7 +196,6 @@ agents:
       delegating independent literature tasks to ResearchAgent in parallel and
       sums up the findings against the ТЗ.
     prompt: microfluidics_orchestrator
-    tools: [task_tracker]
     # Its closing summary across all LIT tasks — kept, not just posted.
     output_key: literature_report
     subordinates:

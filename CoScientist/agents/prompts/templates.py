@@ -2402,8 +2402,8 @@ keys and the "verdict" values in English, exactly as the contract specifies.
 # Microfluidics profile (CoScientist/agents/microfluidics.yaml)
 #
 # Pipeline: TZAgent (ТЗ + literature queries, ported from VibePAV) →
-# PlannerAgent (roadmap FROM the ТЗ) → OrchestratorAgent (delegates the
-# literature queries to ResearchAgent and composes the final report).
+# LiteratureOrchestrator (delegates the generated literature queries directly
+# to ResearchAgent and composes the final report).
 #
 # `{structured_tz?}` / `{tz_literature_queries?}` are ADK session-state
 # injections written by the TZ agents' output_key; the trailing `?` keeps a
@@ -2946,9 +2946,9 @@ def microfluidics_orchestrator(ctx: PromptContext) -> str:
     return render_template('''You are the orchestrator agent of the CoScientist
 microfluidics instance. The pipeline of this deployment is fixed:
 the ТЗ agent has already produced a structured ТЗ (техническое задание) and
-the planner has already registered a roadmap of literature tasks. Your job is
-to EXECUTE that roadmap by delegating to the agents below and to compose the
-final report.
+TZQueryGenAgent has already produced the executable LIT-* literature queries.
+There is no separate planning step. Your job is to execute those exact
+queries by delegating to the agents below and to compose the final report.
 
 ### CASE CONTEXT — STRUCTURED ТЗ (produced by the TZAgent)
 {structured_tz?}
@@ -2956,9 +2956,9 @@ final report.
 ### TARGET MOLECULE FROM THE ТЗ (fixed=true — the customer named it)
 {target_molecule?}
 
-### TASK_MANAGEMENT
-Context of tasks:
-{active_tasks}
+### GENERATED LITERATURE QUERIES
+These are the source of truth for the literature batch:
+{tz_literature_queries?}
 
 Available tools from agents:
 
@@ -2966,25 +2966,22 @@ Available tools from agents:
 
 ### Instructions
 
-1. Execute all independent literature tasks (LIT-xx) in parallel. First mark
-   every pending LIT task IN_PROGRESS. Then, in ONE model response, emit one
-   ResearchAgent tool call per task so ADK runs the calls concurrently. Pass
-   each task's description VERBATIM with its list of data to extract; do not
-   paraphrase away domain terms from the ТЗ. Do not wait for one ResearchAgent
-   result before emitting the next call.
+1. Execute every generated LIT-* query exactly once as an independent
+   literature task. In ONE model response, emit one ResearchAgent tool call per
+   query so ADK runs the calls concurrently. Pass each query's `id`, `task`
+   and `extract` list VERBATIM; do not paraphrase away domain terms from the
+   ТЗ. Do not wait for one ResearchAgent result before emitting the next call.
 2. Route by the nature of the work:
 
 <<ROUTING>>
 
-3. After the parallel batch returns, mark every completed task DONE with brief
-   result notes. Never leave finished tasks not updated.
-4. If some ResearchAgent calls return nothing useful, retry only those failed
+3. If some ResearchAgent calls return nothing useful, retry only those failed
    queries ONCE. Emit all such retries together in one model response so that
    they also run in parallel; then move on — do not loop.
-5. When delegating, keep the task id (LIT-xx) at the start of the request —
+4. When delegating, keep the query id (LIT-xx) at the start of the request —
    it is how each answer is filed. If the target molecule is fixed, name it
    (name, SMILES, CAS) in every request that concerns it.
-6. After all tasks are done, compose the literature summary in Russian,
+5. After all queries are done, compose the literature summary in Russian,
    structured by the ТЗ (it is saved and read by the next stage): for each literature query — the key findings (classes of
    compounds, properties like IFT/CMC, synthesis routes and their suitability
    for flow/microfluidic setups, limitations), plus overall conclusions and

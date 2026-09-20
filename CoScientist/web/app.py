@@ -1038,6 +1038,13 @@ def _wire_agent_output(runtime: WebRuntime) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     print("[CoScientist Web] Starting up …")
+    try:
+        from CoScientist.agents.common import verify_proxy_reachable
+        await verify_proxy_reachable()
+    except Exception as exc:
+        logging.getLogger("CoScientist.web").warning(
+            "Proxy pre-flight check failed on startup: %s", exc
+        )
     yield
     print("[CoScientist Web] Shutting down …")
     await app.state.runtime.close()

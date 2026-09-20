@@ -16,7 +16,7 @@ def test_microfluidics_delegates_experiments_as_one_external_stage():
     stages = config.linear_stages()
 
     assert [s["agent"] for s in stages] == [
-        "TZSpecAgent", "TZQueryGenAgent", "PlannerAgent", "LiteratureOrchestrator",
+        "TZSpecAgent", "TZQueryGenAgent", "LiteratureOrchestrator",
         "LiteratureSynthesisAgent", "EvidenceVerifierAgent", "MolDesignAgent", "SynthRouteAgent",
         "EconomicsAgent", "OptimizerAgent", "ReportAgent",
     ]
@@ -24,6 +24,7 @@ def test_microfluidics_delegates_experiments_as_one_external_stage():
     # Everything working inside a stage counts as that stage.
     by_agent = {s["agent"]: s["members"] for s in stages}
     assert "ResearchAgent" in by_agent["LiteratureOrchestrator"]
+    assert "PlannerAgent" not in by_agent
     assert by_agent["OptimizerAgent"] == ["OptimizerAgent"]
     assert stages[-2]["title"] == "Внешняя оптимизация и эксперименты"
 
