@@ -9,6 +9,8 @@ The YAML declares every agent of the system in one place. Per agent:
                 a disabled agent is still BUILT (so it can be served standalone
                 over A2A) but is not attached to / advertised by its parents
   model:        "main" | "coder" | a literal litellm model string
+  reasoning:    model "thinking" for this agent — false/"off" to switch it off,
+                or "minimal"|"low"|"medium"|"high"; unset inherits defaults
   prompt:       name of a registered prompt template
   tools:        registered tool names
   subordinates: agents attached as AgentTool (and rendered into <<AGENTS>>/<<ROUTING>>)
@@ -16,8 +18,24 @@ The YAML declares every agent of the system in one place. Per agent:
   callbacks:    {before_model|after_model|before_tool|after_tool|before_agent|after_agent: [names]}
   hitl:         whether the agent uses human-in-the-loop (tools + prompt section
                 for llm agents, review-loop handler for session agents)
+  work_order:   before acting, the agent declares a Work Order (goal, assumptions,
+                steps, tools, side effects) for the human to review, and
+                a guard keeps it inside the approved contract (llm agents with
+                hitl only; see CoScientist/hitl/work_order.py)
+  work_order_step_review: every finished step of the Work Order goes before the
+                human — what was sent, expected and found (needs work_order)
+  critic:       an LLM critic reviews the agent's output once and it rewrites
+                on request (session agents only; bool or "${settings.path}")
+  report_output: the agent's final answer is a deliverable — show it in the chat
+  internal:     plumbing agent (pipeline stage, composite wrapper) — hidden in the web UI
   output_key / output_schema / planner / options: passthrough constructor config
+                (an ``options`` value may be "${settings.path}" too)
   a2a:          how the agent is exposed as an A2A service (key, port, skill, env)
+
+A config may also start with ``extends: <name-or-path>``, inheriting another
+config and overriding only the agents and fields it names — so a variant of the
+system (a limited profile, a deployment with one agent off) is a short overlay
+rather than a copy that drifts from the original. See :func:`_merge_raw`.
 """
 from __future__ import annotations
 
@@ -45,6 +63,10 @@ CONFIG_ENV_VAR = "COSCIENTIST_CONFIG"
 # Classes that only sequence `children` and carry no prompt/tools of their own.
 COMPOSITE_CLASSES = ("sequential", "parallel", "loop")
 
+# Name of the SequentialAgent the assembler wraps around pipeline.pre + root +
+# pipeline.post. It is not declared in YAML, so it cannot carry `internal:`.
+PIPELINE_ROOT_NAME = "ResearchPipeline"
+
 
 def resolve_config_path(ref: Optional[str] = None) -> Path:
     """Resolve a config reference: explicit ref, $COSCIENTIST_CONFIG, or default."""
@@ -57,19 +79,51 @@ def resolve_config_path(ref: Optional[str] = None) -> Path:
     return CONFIG_DIR / f"{ref}.yaml"
 
 
+def _is_setting_ref(value: Any) -> bool:
+    return (
+        isinstance(value, str)
+        and value.strip().startswith("${")
+        and value.strip().endswith("}")
+    )
+
+
+def _setting_value(ref: str) -> Any:
+    """The live value behind a "${dotted.settings.path}" reference."""
+    obj: Any = get_settings()
+    for part in ref.strip()[2:-1].split("."):
+        obj = getattr(obj, part)
+    return obj
+
+
 def _resolve_setting_ref(value: Union[bool, str]) -> bool:
     """Resolve an ``enabled`` value: a bool, or "${dotted.settings.path}"."""
     if isinstance(value, bool):
         return value
-    text = value.strip()
-    if not (text.startswith("${") and text.endswith("}")):
+    if not _is_setting_ref(value):
         raise ValueError(
             f"enabled must be a bool or '${{settings.path}}', got {value!r}"
         )
-    obj: Any = get_settings()
-    for part in text[2:-1].split("."):
-        obj = getattr(obj, part)
-    return bool(obj)
+    return bool(_setting_value(value))
+
+
+# Accepted ``reasoning:`` values (mirrors CoScientist.agents.common, which
+# turns them into provider kwargs — validated here so a typo fails at config
+# load, not on the first model call).
+REASONING_EFFORTS = ("minimal", "low", "medium", "high")
+REASONING_OFF = ("off", "none", "disabled")
+
+
+def _validate_reasoning(value: Any) -> Any:
+    """A ``reasoning:`` declaration: unset, a bool, or an effort/off keyword."""
+    if value is None or isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in REASONING_OFF or normalized in REASONING_EFFORTS:
+        return normalized
+    raise ValueError(
+        f"reasoning must be a bool, one of {REASONING_OFF} or {REASONING_EFFORTS}, "
+        f"got {value!r}"
+    )
 
 
 class SkillConfig(BaseModel):
@@ -118,7 +172,17 @@ class AgentConfig(BaseModel):
     enabled: Union[bool, str] = True
     root: bool = False
     model: Optional[str] = None
+    llm_timeout: Optional[float] = None
+    # Model reasoning ("thinking") for THIS agent: false / "off" to switch it
+    # off entirely (fastest), or "minimal"|"low"|"medium"|"high" to turn it
+    # down. Unset inherits `defaults.reasoning`, and an unset default leaves the
+    # provider's own behaviour alone. Only hybrid models can be silenced — one
+    # that always reasons (deepseek-r1, o-series) ignores the request.
+    reasoning: Optional[Union[bool, str]] = None
     description: str = ""
+    # Short human name, e.g. «Техническое задание» — the stage label in the web
+    # status indicator of a linear pipeline (falls back to the agent's name).
+    title: str = ""
     # How a PARENT's prompt routes work to this agent (one routing bullet).
     routing: str = ""
     # How the planner's roster describes this agent (defaults to description).
@@ -129,6 +193,24 @@ class AgentConfig(BaseModel):
     children: List[str] = Field(default_factory=list)
     callbacks: CallbacksConfig = Field(default_factory=CallbacksConfig)
     hitl: bool = False
+    # Declare a Work Order before acting; a guard enforces it (needs hitl).
+    work_order: bool = False
+    # Each finished Work Order step is reviewed by the human: sent / expected /
+    # found, with the calls the system recorded for it (needs work_order).
+    work_order_step_review: bool = False
+    # An LLM critic reviews my proposed output once before it is accepted, and
+    # I rewrite it if the critic asks (session-style custom agents only — the
+    # review loop is theirs). Independent of the orchestrator's pre/post-action
+    # critic callbacks. Accepts "${settings.path}" like `enabled`.
+    critic: Union[bool, str] = False
+    # My final answer is a deliverable in its own right (hypotheses, a research
+    # summary): report it to the chat instead of leaving it buried in the
+    # delegation's function_response. See logging/agent_output.py.
+    report_output: bool = False
+    # Plumbing, not a participant the user reasons about (a composite wrapper,
+    # a tool-pipeline stage): the web UI hides it from the activity rail and
+    # the agent tree.
+    internal: bool = False
     include_contents: Optional[str] = "default"
     mode: Optional[str] = None
     output_key: Optional[str] = None
@@ -137,6 +219,10 @@ class AgentConfig(BaseModel):
     # Extra constructor kwargs for custom agent classes (e.g. plan_file_path).
     options: Dict[str, Any] = Field(default_factory=dict)
     a2a: Optional[A2AConfig] = None
+
+    _check_reasoning = field_validator("reasoning")(
+        classmethod(lambda cls, v: _validate_reasoning(v))
+    )
 
     @field_validator("cls")
     @classmethod
@@ -154,29 +240,96 @@ class AgentConfig(BaseModel):
         if composite:
             if not self.children:
                 raise ValueError(f"{self.cls} agent needs non-empty children")
-            for forbidden in ("tools", "subordinates", "prompt", "model"):
+            for forbidden in ("tools", "subordinates", "prompt", "model", "llm_timeout"):
                 if getattr(self, forbidden):
                     raise ValueError(
                         f"{self.cls} agent cannot have {forbidden} (got {getattr(self, forbidden)!r})"
                     )
-        elif self.children:
+            # Checked separately: `reasoning: false` is a real declaration but
+            # a falsy one, so the truthiness loop above would let it through.
+            if self.reasoning is not None:
+                raise ValueError(
+                    f"{self.cls} agent cannot have reasoning (it has no model of its own)"
+                )
+        elif self.children and not self.cls.startswith("custom:"):
+            # custom: classes may take children too (e.g. an executor switch that
+            # runs exactly one of them); everything else is a leaf.
             raise ValueError(f"{self.cls} agent cannot have children")
+        if self.work_order and (self.cls != "llm" or not self.hitl):
+            # The contract is declared through tools and reviewed through the
+            # HITL channel: only a plain llm agent with hitl has both.
+            raise ValueError("work_order needs class: llm and hitl: true")
+        if self.work_order_step_review and not self.work_order:
+            raise ValueError("work_order_step_review needs work_order: true")
         return self
 
     def is_enabled(self) -> bool:
         return _resolve_setting_ref(self.enabled)
+
+    def uses_critic(self) -> bool:
+        return _resolve_setting_ref(self.critic)
+
+    def resolved_options(self) -> Dict[str, Any]:
+        """``options`` with every "${settings.path}" value replaced by the value.
+
+        Lets a constructor kwarg follow a runtime setting the way ``enabled``
+        and ``critic`` do — e.g. the plan critic's round budget, which the web
+        UI writes to settings — instead of being frozen in the YAML. Values
+        keep their own type (int stays int); only strings are inspected.
+        """
+        return {
+            key: _setting_value(value) if _is_setting_ref(value) else value
+            for key, value in self.options.items()
+        }
 
 
 class DefaultsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     model: str = "main"
+    # System-wide reasoning default; per-agent `reasoning:` overrides it.
+    reasoning: Optional[Union[bool, str]] = None
+
+    _check_reasoning = field_validator("reasoning")(
+        classmethod(lambda cls, v: _validate_reasoning(v))
+    )
+
+
+class PipelineConfig(BaseModel):
+    """System lifecycle flow around the root orchestrator.
+
+    ``pre`` stages run (in order) BEFORE the root agent, ``post`` stages run
+    AFTER it — each as its own pass over the SAME session, so state flows
+    between them. Stage agents are ordinary agents declared in ``agents``; they
+    need not be attached to any parent (the assembler builds every declared
+    agent regardless). This keeps the delegation tree (root + subordinates)
+    separate from the run lifecycle instead of forcing flow through a
+    ``SequentialAgent`` root.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    pre: List[str] = Field(default_factory=list)
+    post: List[str] = Field(default_factory=list)
+    # The root runs its subordinates one after another, in the declared order
+    # (e.g. the microfluidics modules), so "stage k of N" is a meaningful thing
+    # to show the user — see SystemConfig.linear_stages(). Off for an
+    # orchestrator that picks subordinates freely.
+    linear: bool = False
+
+    def stage_names(self) -> List[str]:
+        return list(self.pre) + list(self.post)
 
 
 class SystemConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     defaults: DefaultsConfig = Field(default_factory=DefaultsConfig)
+    pipeline: PipelineConfig = Field(default_factory=PipelineConfig)
+    # Tool names (as the model calls them) that serve the system rather than the
+    # task: a Work Order allows them without declaring, and the web card never
+    # shows them — even when the agent lists them anyway.
+    internal_tools: List[str] = Field(default_factory=list)
     agents: Dict[str, AgentConfig]
 
     @model_validator(mode="after")
@@ -190,7 +343,23 @@ class SystemConfig(BaseModel):
         if len(roots) != 1:
             raise ValueError(f"Exactly one agent must have root: true, got {roots}")
 
+        for stage in self.pipeline.stage_names():
+            if stage not in self.agents:
+                raise ValueError(f"pipeline references unknown agent {stage!r}")
+            if stage == roots[0]:
+                raise ValueError(
+                    f"pipeline stage {stage!r} is the root — the root runs on its "
+                    "own, do not list it as a pre/post stage"
+                )
+
         for agent in self.agents.values():
+            # The critic's review→revise round needs an agent that can re-run
+            # itself; only the session-style custom classes have that loop.
+            if agent.critic and not agent.cls.startswith("custom:"):
+                raise ValueError(
+                    f"{agent.name}: critic: is supported only by custom "
+                    f"session agents, not by a {agent.cls!r} agent"
+                )
             for ref in agent.subordinates + agent.children:
                 if ref not in self.agents:
                     raise ValueError(f"{agent.name}: unknown agent reference {ref!r}")
@@ -251,11 +420,111 @@ class SystemConfig(BaseModel):
         ]
 
     def parents_of(self, name: str) -> List[AgentConfig]:
-        return [a for a in self.agents.values() if name in a.subordinates]
+        return [
+            a for a in self.agents.values()
+            if name in a.subordinates or name in a.children
+        ]
+
+    def agent_hierarchy_map(self) -> Dict[str, Any]:
+        """Return the complete static agent hierarchy (child -> parent and parent -> children)."""
+        parents: Dict[str, str] = {}
+        children: Dict[str, List[str]] = {}
+
+        for a in self.agents.values():
+            # A disabled agent is never attached, so it is nobody's parent at
+            # runtime (PlanningPipelineAgent would otherwise claim the root).
+            if not a.is_enabled():
+                continue
+            direct_children = list(a.subordinates) + list(a.children)
+            if direct_children:
+                children[a.name] = direct_children
+            for child_name in direct_children:
+                parents[child_name] = a.name
+
+        # Pipeline pre/post stages belong to the main orchestration lifecycle
+        root_name = self.root.name if hasattr(self, "root") and self.root else "OrchestratorAgent"
+        for pre in self.pipeline.pre:
+            if pre not in parents:
+                parents[pre] = root_name
+        for post in self.pipeline.post:
+            if post not in parents:
+                parents[post] = root_name
+
+        return {
+            "parents": parents,
+            "children": children,
+            "root": root_name,
+            "pipeline_pre": list(self.pipeline.pre),
+            "pipeline_post": list(self.pipeline.post),
+        }
+
+    def linear_stages(self) -> List[Dict[str, Any]]:
+        """The run as a list of stages, when ``pipeline.linear`` says it is one.
+
+        Stages, in order: the ``pre`` stages, then the root's enabled
+        subordinates with every sequential composite unrolled into its children
+        (a module is not a stage, its steps are), then the ``post`` stages.
+        Anything else — an LLM agent, a loop — is one stage, and every agent in
+        its subtree (children and subordinates) counts as that stage's work.
+        Each stage is ``{"agent", "title", "members"}``; [] when not linear.
+        """
+        if not self.pipeline.linear:
+            return []
+
+        def unroll(name: str) -> List[str]:
+            agent = self.agent(name)
+            if not agent.is_enabled():
+                return []
+            if agent.cls == "sequential":
+                return [s for child in agent.children for s in unroll(child)]
+            return [name]
+
+        def subtree(name: str, seen: set) -> List[str]:
+            if name in seen:
+                return []
+            seen.add(name)
+            out = [name]
+            for dep in self.deps(name):
+                out.extend(subtree(dep, seen))
+            return out
+
+        names = list(self.pipeline.pre)
+        for sub in self.root.subordinates:
+            names.extend(unroll(sub))
+        names.extend(self.pipeline.post)
+
+        claimed: set = set()
+        stages = []
+        for name in names:
+            agent = self.agent(name)
+            # An agent shared by several stages counts toward the first one.
+            members = [m for m in subtree(name, set()) if m not in claimed]
+            claimed.update(members)
+            stages.append({
+                "agent": name,
+                "title": agent.title or name,
+                "members": members,
+            })
+        return stages
 
     def delegatable_names(self) -> set:
         """Names of every agent that some agent delegates to via AgentTool."""
         return {s for a in self.agents.values() for s in a.subordinates}
+
+    def reported_output_agents(self) -> frozenset:
+        """Enabled agents whose final answer is shown in the chat."""
+        return frozenset(
+            a.name for a in self.agents.values()
+            if a.report_output and a.is_enabled()
+        )
+
+    def internal_agent_names(self) -> frozenset:
+        """Agents the web UI hides: those marked ``internal`` plus the
+        synthesized pipeline wrapper, which has no config entry of its own."""
+        return frozenset(
+            {a.name for a in self.agents.values() if a.internal}
+            | {PIPELINE_ROOT_NAME}
+        )
 
     def a2a_agents(self) -> List[AgentConfig]:
         return [a for a in self.agents.values() if a.a2a]
@@ -268,11 +537,55 @@ class SystemConfig(BaseModel):
         raise KeyError(f"No agent with a2a key {key!r}. Known: {known}")
 
 
+def _merge_raw(base: Dict[str, Any], overlay: Dict[str, Any]) -> Dict[str, Any]:
+    """Lay an overlay config's raw dict over a base's.
+
+    ``defaults`` merges shallowly. ``agents`` merges per agent — a named
+    agent's fields update the base agent's, so a profile can flip only
+    ``enabled`` without re-declaring the agent, and an agent the base does not
+    have is added whole. Every other top-level section (``pipeline``, and
+    anything added later) is taken from the overlay when it declares one, so a
+    new section can never be silently dropped on the way through an overlay.
+    """
+    merged: Dict[str, Any] = {
+        **base,
+        **{k: v for k, v in overlay.items() if k not in ("defaults", "agents")},
+    }
+    if "defaults" in overlay:
+        merged["defaults"] = {**(base.get("defaults") or {}), **overlay["defaults"]}
+    agents = dict(base.get("agents") or {})
+    for name, cfg in (overlay.get("agents") or {}).items():
+        if isinstance(cfg, dict) and isinstance(agents.get(name), dict):
+            agents[name] = {**agents[name], **cfg}
+        else:
+            agents[name] = cfg
+    merged["agents"] = agents
+    return merged
+
+
+def _load_raw(path: Path, _seen: frozenset = frozenset()) -> Dict[str, Any]:
+    """Load a config's raw dict, resolving an optional ``extends`` overlay.
+
+    A profile sets ``extends: <name-or-path>`` to inherit another config and
+    override only what it names (see :func:`_merge_raw`) instead of copying the
+    whole system — a copy starts drifting from the original the day it is made.
+    ``extends`` chains are followed; a cycle is an error.
+    """
+    path = Path(path).resolve()
+    if path in _seen:
+        raise ValueError(f"Config 'extends' cycle involving {path}")
+    with open(path, encoding="utf-8") as f:
+        raw = yaml.safe_load(f) or {}
+    base_ref = raw.pop("extends", None)
+    if base_ref is None:
+        return raw
+    base = _load_raw(resolve_config_path(str(base_ref)), _seen | {path})
+    return _merge_raw(base, raw)
+
+
 def load_config(path: Optional[Path] = None) -> SystemConfig:
     path = Path(path) if path else resolve_config_path()
-    with open(path, encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
-    return SystemConfig.model_validate(raw)
+    return SystemConfig.model_validate(_load_raw(path))
 
 
 @lru_cache(maxsize=1)
@@ -289,6 +602,7 @@ __all__ = [
     "CONFIG_ENV_VAR",
     "DEFAULT_CONFIG_PATH",
     "DefaultsConfig",
+    "PipelineConfig",
     "SkillConfig",
     "SystemConfig",
     "get_config",

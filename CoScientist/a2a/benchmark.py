@@ -261,7 +261,7 @@ async def _send_call(client: httpx.AsyncClient, url: str, text: str, timeout: fl
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 
-async def main() -> None:
+async def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description="A2A smoke-test / perf client")
     parser.add_argument("--agent", default="hypotheses",
                         help=f"Target agent ({', '.join(AGENT_PORTS)})")
@@ -271,7 +271,7 @@ async def main() -> None:
     parser.add_argument("--no-stream", dest="stream", action="store_false",
                         help="Disable event streaming; just measure latency")
     parser.set_defaults(stream=True)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     url = _endpoint(args.agent)
     mode = "stream (live events)" if args.stream else "send (latency only)"

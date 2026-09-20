@@ -13,6 +13,7 @@ from google.adk.tools.base_toolset import BaseToolset
 from google.adk.agents.readonly_context import ReadonlyContext
 
 from CoScientist.config import get_settings
+from CoScientist.logging.metrics import record_completion
 
 settings = get_settings()
 
@@ -34,7 +35,9 @@ async def _llm_json(prompt: str) -> dict:
         messages=[{"role": "user", "content": prompt}],
         response_format={"type": "json_object"},
         temperature=0.0,
+        timeout=settings.llm.request_timeout,
     )
+    record_completion(response, model=settings.llm.main_model, agent="MedicalAgent")
     return json.loads(response.choices[0].message.content)
 
 

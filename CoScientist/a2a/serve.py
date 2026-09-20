@@ -12,11 +12,11 @@ import argparse
 import os
 
 
-def main() -> None:
+def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("key", help="a2a key of the agent to serve (see system.yaml)")
     parser.add_argument("--host", default="0.0.0.0")
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Only the light-weight config is imported before env defaults are applied:
     # some agents need env set before their tool modules load (e.g. the coder's
@@ -26,6 +26,12 @@ def main() -> None:
     agent_cfg = get_config().a2a_agent_by_key(args.key)
     for name, value in agent_cfg.a2a.env.items():
         os.environ.setdefault(name, value)
+
+    # Served over A2A: HITL must not block on a console that isn't there. Set
+    # BEFORE build_system() so the assembler attaches the A2A (long-running)
+    # HITL tools, which put the task into `input-required` for the caller to
+    # answer instead of hanging the server.
+    os.environ.setdefault("COSCIENTIST_A2A_MODE", "1")
 
     import uvicorn
 

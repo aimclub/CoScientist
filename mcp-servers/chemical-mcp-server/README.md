@@ -56,10 +56,10 @@ docker run -p 7331:7331 --env-file .env chemical-mcp-server
 | `RETROSYNTHESIS_SERVICES_HOST` | Host of the retrosynthesis/ASKCOS API | `localhost` |
 | `RETROSYNTHESIS_SERVICES_PORT` | Port of the retrosynthesis/ASKCOS API | `8001` |
 | `RETROSYNTHESIS_REQUEST_TIMEOUT` | Request timeout for retrosynthesis API (seconds) | `60` |
-| `S3_ENDPOINT_URL` | S3-compatible storage endpoint URL | — |
-| `S3_BUCKET_NAME` | S3 bucket for storing images and visualizations | — |
-| `S3_ACCESS_KEY` | S3 access key | — |
-| `S3_SECRET_KEY` | S3 secret key | — |
+| `S3__ENDPOINT_URL` | S3-compatible storage endpoint URL | — |
+| `S3__BUCKET_NAME` | S3 bucket for storing images and visualizations | — |
+| `S3__ACCESS_KEY` | S3 access key | — |
+| `S3__SECRET_KEY` | S3 secret key | — |
 | `CHEM_MCP_HOST` | MCP server bind address | `0.0.0.0` |
 | `CHEM_MCP_PORT` | MCP server port | `7331` |
 | `CHEM_MCP_PATH` | MCP server HTTP path | `/mcp` |

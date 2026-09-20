@@ -5,14 +5,20 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12.11"
 dependencies = [
+    "a2a-sdk==0.3.26",
     "beautifulsoup4>=4.15.0",
     "boto3>=1.43.32",
     "fedotmas",
     "google-adk>=2.3.0",
+    "greenlet>=3.5.2",
     "json-repair>=0.30.0",
     "langchain-text-splitters>=1.1.2",
+    "langfuse>=4.14.0",
     "metapub>=0.7.4",
+    "motor>=3.3.2",
+    "networkx>=3.4",
     "opik>=2.0.70",
+    "pymongo>=4.6.3",
     "rag-tools",
     "rank-bm25>=0.2.2",
     "rdkit>=2024.3.1",
@@ -25,3 +31,9 @@ fedotmas = { git = "https://github.com/ITMO-NSS-team/FEDOT.MAS.git", subdirector
 
 [tool.setuptools]
 packages = ["CoScientist"]
+
+[tool.pytest.ini_options]
+# Put the repo root on sys.path so `pytest` works the same as `python -m pytest`
+# (CoScientist is imported in-place, not installed).
+pythonpath = ["."]
+testpaths = ["tests"]

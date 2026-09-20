@@ -1,25 +1,19 @@
-"""STUB tools for the microfluidics stages 3–11 — and the real ones.
+"""STUB tools for the microfluidics stages 3–11 — and the one real tool.
 
-Stages 3–11 (molecular design, retrosynthesis, CFD, the rig) are wired against
-the stubs below BEFORE those services exist, so the graph can be assembled and
-run end to end today. Every stub returns a static, canonical answer for the
-ПАВ / МУН case, marked ``"stub": True`` so a stubbed value stays recognisable
-in the session state and in the final report.
+Stages 3–11 (molecular design, economics, CFD, the rig) are wired against the
+services below BEFORE those services exist, so the graph can be assembled and
+run end to end today. Retrosynthesis has no stub: stage 4 works on the real
+service, or from the literature alone when the service is not configured. Every stub returns a static, canonical
+answer for the ПАВ / МУН case, marked ``"stub": True`` so a stubbed value stays
+recognisable in the session state and in the final report.
 
 Connecting a real service later means replacing the BODY of one function: the
 name stays registered in ``assembly/bindings.py``, so neither the YAML nor the
 graph changes. Keep the return shape — the downstream node reads it (see
 ``tests/unit/test_microfluidics_stubs.py`` for the contracts).
 
-Economics (stage 5) has already graduated: it is wired to the real chemquote
-MCP service (see ``CoScientist/tools/economics_tools.py`` and
-``MCP_Economic_model.md``), not a local-function body swap like the others —
-chemquote is a remote MCP server with its own multi-tool surface, so its
-ToolEntry (key ``"economics"``) replaces the stub entry outright rather than
-reusing this module.
-
-``finish_optimization`` is NOT a stub either: it is the real escape hatch of
-the 7⇄8 optimization loop.
+``finish_optimization`` is NOT a stub: it is the real escape hatch of the 7⇄8
+optimization loop.
 """
 from __future__ import annotations
 
@@ -77,52 +71,36 @@ def molecular_design_stub(requirements: str) -> Dict[str, Any]:
     }
 
 
-def retrosynthesis_stub(smiles: str) -> Dict[str, Any]:
-    """STUB. Plan a synthesis route to a target molecule.
+def economics_mcp_stub(route: str) -> Dict[str, Any]:
+    """STUB. Cost the synthesis route and check reagent supply in Russia.
 
     Args:
-        smiles: SMILES of the target molecule.
+        route: the synthesis route with its reagents.
 
     Returns:
-        The route as ordered steps; each step carries the operation and the
-        operating conditions the experiment planner (node 6) plans against.
+        Cost per kg of product, per-reagent availability in Russia, and the
+        supply risks that the report flags to the customer.
     """
     return {
         "stub": True,
-        "target_smiles": smiles,
-        "confidence": 0.78,
-        "steps": [
-            {
-                "num": 1,
-                "operation": "Сульфатирование додеканола хлорсульфоновой кислотой",
-                "reagents": ["додеканол-1", "хлорсульфоновая кислота"],
-                "conditions": {
-                    "Температура, °C": 25,
-                    "Время, мин": 90,
-                    "Мольное соотношение": "1 : 1.05",
-                    "Среда": "безводный дихлорметан",
-                },
-            },
-            {
-                "num": 2,
-                "operation": "Нейтрализация водным раствором NaOH",
-                "reagents": ["NaOH (20 % водн.)"],
-                "conditions": {
-                    "Температура, °C": 30,
-                    "Время, мин": 30,
-                    "pH на выходе": 8.5,
-                },
-            },
-            {
-                "num": 3,
-                "operation": "Отгонка растворителя и сушка продукта",
-                "reagents": [],
-                "conditions": {
-                    "Температура, °C": 60,
-                    "Давление, мбар": 40,
-                    "Время, мин": 120,
-                },
-            },
+        "route": route,
+        "cost_rub_per_kg": 4200.0,
+        "cost_breakdown_rub": {
+            "Реагенты": 2600.0,
+            "Энергия": 450.0,
+            "Растворители и утилизация": 700.0,
+            "Трудозатраты": 450.0,
+        },
+        "availability_ru": [
+            {"reagent": "додеканол-1", "status": "производится в РФ",
+             "lead_time_days": 14},
+            {"reagent": "хлорсульфоновая кислота", "status": "производится в РФ",
+             "lead_time_days": 21},
+            {"reagent": "NaOH", "status": "производится в РФ", "lead_time_days": 7},
+        ],
+        "risks": [
+            "Хлорсульфоновая кислота — прекурсор, нужен допуск на обращение.",
+            "Цена додеканола-1 привязана к курсу пальмоядрового сырья (±25 % за год).",
         ],
     }
 

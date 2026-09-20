@@ -2,23 +2,48 @@ from typing import Literal, TypeAlias
 
 
 ResearchDomain: TypeAlias = Literal[
-    "Chemistry"
+    "Physical Sciences",
+    "Social Sciences",
+    "Life Sciences",
+    "Health Sciences",
 ]
 
 
 DOMAIN_TO_SUBDOMAINS: dict[str, list[str]] = {
-    "Chemistry": [
-        "Polymer Chemistry",
-        "Organic Chemistry",
-        "Nanomaterials",
-        "Molecular Dynamics",
-        "Membrane Chemistry",
-        "Electrochemistry",
-        "DFT",
-        "Biological Macromolecules",
-        "Biological Chemistry",
-        "Analytical Chemistry"
-    ]
+    "Physical Sciences": [
+        "Earth and Planetary Sciences",
+        "Physics and Astronomy",
+        "Environmental Science",
+        "Chemistry",
+        "Engineering",
+        "Computer Science",
+        "Energy",
+        "Mathematics",
+        "Materials Science",
+        "Chemical Engineering"
+    ],
+    "Social Sciences": [
+        "Business, Management and Accounting",
+        "Economics, Econometrics and Finance",
+        "Social Sciences",
+        "Arts and Humanities",
+        "Decision Sciences",
+        "Psychology"
+    ],
+    "Life Sciences": [
+        "Agricultural and Biological Sciences",
+        "Biochemistry, Genetics and Molecular Biology",
+        "Immunology and Microbiology",
+        "Neuroscience",
+        "Pharmacology, Toxicology and Pharmaceutics"
+    ],
+    "Health Sciences": [
+        "Medicine",
+        "Dentistry",
+        "Health Professions",
+        "Nursing",
+        "Veterinary"
+    ],
 }
 
 

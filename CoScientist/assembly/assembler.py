@@ -11,7 +11,8 @@ constructs every declared agent:
   * ``loop``        -> LoopAgent over ``children``, repeating them until one
                        escalates (``options.max_iterations`` bounds the loop)
   * ``custom:<x>``  -> the registered class (e.g. SessionAgent), passing
-                       ``options`` through as constructor kwargs
+                       ``options`` through as constructor kwargs; ``critic:``
+                       hands it a plan critic for its review loop
 
 Disabled agents are still BUILT (so they can be served standalone over A2A);
 ``enabled`` only controls whether parents attach/advertise them.
@@ -40,11 +41,16 @@ from google.adk.tools.agent_tool import AgentTool
 import CoScientist.assembly.bindings  # noqa: F401  (registration side effect)
 import CoScientist.agents.prompts.templates  # noqa: F401  (registration side effect)
 
-from CoScientist.assembly.bindings import HITL_TOOL_DOCS
+from CoScientist.assembly.bindings import (
+    HITL_TOOL_DOCS,
+    WORK_ORDER_TOOL_DOCS,
+    make_plan_critic,
+)
 from CoScientist.assembly.prompting import PromptContext
 from CoScientist.assembly.registry import REGISTRY, ToolEntry
 from CoScientist.assembly.schema import (
     COMPOSITE_CLASSES,
+    PIPELINE_ROOT_NAME,
     AgentConfig,
     SystemConfig,
     get_config,
@@ -68,10 +74,40 @@ class AgentSystem:
 
     config: SystemConfig
     agents: Dict[str, BaseAgent] = field(default_factory=dict)
+    _run_root: Optional[BaseAgent] = field(default=None, init=False, repr=False)
 
     @property
     def root(self) -> BaseAgent:
         return self.agents[self.config.root.name]
+
+    @property
+    def run_root(self) -> BaseAgent:
+        if self._run_root is not None:
+            return self._run_root
+        pipeline_pre = [
+            self.agents[n]
+            for n in self.config.pipeline.pre
+            if self.config.agent(n).is_enabled()
+        ]
+        pipeline_post = [
+            self.agents[n]
+            for n in self.config.pipeline.post
+            if self.config.agent(n).is_enabled()
+        ]
+        if pipeline_pre or pipeline_post:
+            from google.adk.agents.sequential_agent import SequentialAgent
+
+            self._run_root = SequentialAgent(
+                name=PIPELINE_ROOT_NAME,
+                description=(
+                    "Full research lifecycle: orchestrator run then report"
+                    " synthesis."
+                ),
+                sub_agents=[*pipeline_pre, self.root, *pipeline_post],
+            )
+        else:
+            self._run_root = self.root
+        return self._run_root
 
     def agent(self, name: str) -> BaseAgent:
         if name not in self.agents:
@@ -83,11 +119,15 @@ def _resolve_model(cfg: AgentConfig, system: SystemConfig):
     from CoScientist.agents.common import make_coder_llm, make_llm
 
     ref = cfg.model or system.defaults.model
+    deadline_s = cfg.llm_timeout
+    # An agent that says nothing about reasoning inherits `defaults.reasoning`;
+    # an unset default sends no reasoning kwargs at all.
+    reasoning = cfg.reasoning if cfg.reasoning is not None else system.defaults.reasoning
     if ref == "main":
-        return make_llm()
+        return make_llm(deadline_s=deadline_s, reasoning=reasoning)
     if ref == "coder":
-        return make_coder_llm()
-    return make_llm(ref)
+        return make_coder_llm(deadline_s=deadline_s, reasoning=reasoning)
+    return make_llm(ref, deadline_s=deadline_s, reasoning=reasoning)
 
 
 def _resolve_tools(cfg: AgentConfig) -> List[ToolEntry]:
@@ -109,8 +149,8 @@ def _flatten(tool_obj) -> list:
 
 
 def _hitl_enabled() -> bool:
-    from CoScientist.agents.common import hitl_enabled
-    return hitl_enabled
+    from CoScientist.config import get_settings
+    return get_settings().web.hitl_enabled
 
 
 def _resolve_callback(name: str, expected_kind: str, ctx: PromptContext):
@@ -133,6 +173,60 @@ def _callback_kwargs(cfg: AgentConfig, ctx: PromptContext) -> dict:
     return kwargs
 
 
+def _work_order_tool_names(
+    cfg: AgentConfig, system: SystemConfig, tool_entries: List[ToolEntry]
+) -> Optional[Set[str]]:
+    """The tool names a Work Order may plan: the agent's documented tools plus
+    its subordinate AgentTools. None when the surface is resolved at runtime (a
+    placeholder doc such as "<dynamic MCP tools>") — names can't be checked."""
+    docs = [d for e in tool_entries for d in e.resolved_docs()]
+    if any(d.name.startswith("<") for d in docs):
+        return None
+    names = {d.name for d in docs}
+    names |= {s.name for s in system.enabled_subordinates(cfg.name)}
+    return names
+
+
+def _attach_work_order_callbacks(
+    kwargs: dict, agent_name: str, internal_tools: List[str], step_review: bool = False
+) -> None:
+    """Reset the contract and enforce it FIRST: on agent start, before anything
+    reads the state; before a tool, so a call the contract blocks never reaches
+    the other callbacks (a WebSearchLimiter would count it against the quota).
+    Link refs are not resolved yet then, which does not matter: the guard keys
+    on tool names and shell verbs, not on URLs."""
+    from CoScientist.hitl.work_order_guard import (
+        make_reset_work_order,
+        make_work_order_guard,
+        make_work_report_fallback,
+        make_work_step_journal,
+    )
+
+    def as_list(value) -> list:
+        if value is None:
+            return []
+        return list(value) if isinstance(value, list) else [value]
+
+    kwargs["before_agent_callback"] = (
+        [make_reset_work_order(agent_name)] + as_list(kwargs.get("before_agent_callback"))
+    )
+    kwargs["before_tool_callback"] = (
+        [make_work_order_guard(agent_name, internal_tools=internal_tools)] + as_list(kwargs.get("before_tool_callback"))
+    )
+    if step_review:
+        # First after the tool: the journal records the answer as the tool gave
+        # it, before any other callback could replace it.
+        kwargs["after_tool_callback"] = (
+            [make_work_step_journal(agent_name, internal_tools=internal_tools)]
+            + as_list(kwargs.get("after_tool_callback"))
+        )
+    # Last after the agent: the other after_agent callbacks (e.g. collectors)
+    # see the answer as the agent gave it; the human's verdict may replace it.
+    kwargs["after_agent_callback"] = (
+        as_list(kwargs.get("after_agent_callback")) + [make_work_report_fallback(agent_name)]
+    )
+
+
 def _render_instruction(cfg: AgentConfig, ctx: PromptContext) -> str:
     instruction = REGISTRY.prompt(cfg.prompt)(ctx)
     leftover = _PLACEHOLDER_RE.findall(instruction)
@@ -151,7 +245,9 @@ def _check_tool_consistency(cfg: AgentConfig, ctx: PromptContext, tools: list) -
     ``runtime_resolved`` are excluded (their docs are trusted as written).
     """
     documented: Set[str] = {
-        d.name for e in ctx.tool_entries if not e.runtime_resolved for d in e.docs
+        d.name
+        for e in ctx.tool_entries if not e.runtime_resolved
+        for d in e.resolved_docs()
     }
     attached: Set[str] = set()
     for t in tools:
@@ -177,16 +273,31 @@ def _build_llm_agent(
 ) -> LlmAgent:
     tool_entries = _resolve_tools(cfg)
     hitl_attached = bool(cfg.hitl and _hitl_enabled())
+    work_order_attached = bool(cfg.work_order and hitl_attached)
 
     tools: list = []
     for entry in tool_entries:
         tools.extend(_flatten(entry.factory()))
 
+    if work_order_attached:
+        from CoScientist.hitl.work_order_tools import make_work_order_tools
+        tools.extend(make_work_order_tools(
+            cfg.name, _work_order_tool_names(cfg, system, tool_entries),
+            internal_tools=system.internal_tools,
+            step_review=cfg.work_order_step_review,
+        ))
+
     if hitl_attached:
         from CoScientist.hitl.tool import get_hitl_tools
-        tools.extend(get_hitl_tools())
+        # Only the A2A ROOT can use the native pause: a pause inside a sub-agent
+        # is swallowed by the parent's AgentTool (see get_hitl_tools).
+        tools.extend(get_hitl_tools(a2a_root=bool(cfg.root)))
         tool_entries = tool_entries + [
             ToolEntry(key="hitl", factory=lambda: None, docs=HITL_TOOL_DOCS)
+        ]
+    if work_order_attached:
+        tool_entries = tool_entries + [
+            ToolEntry(key="work_order", factory=lambda: None, docs=WORK_ORDER_TOOL_DOCS)
         ]
 
     ctx = PromptContext(
@@ -194,6 +305,7 @@ def _build_llm_agent(
         system=system,
         tool_entries=tool_entries,
         hitl_attached=hitl_attached,
+        work_order_attached=work_order_attached,
     )
 
     for sub in ctx.subordinates:
@@ -201,12 +313,19 @@ def _build_llm_agent(
 
     _check_tool_consistency(cfg, ctx, tools)
 
+    callbacks = _callback_kwargs(cfg, ctx)
+    if work_order_attached:
+        _attach_work_order_callbacks(
+            callbacks, cfg.name, system.internal_tools,
+            step_review=cfg.work_order_step_review,
+        )
+
     kwargs = dict(
         name=cfg.name,
         model=_resolve_model(cfg, system),
         description=cfg.description,
         tools=tools,
-        **_callback_kwargs(cfg, ctx),
+        **callbacks,
     )
     if cfg.prompt:
         kwargs["instruction"] = _render_instruction(cfg, ctx)
@@ -220,7 +339,7 @@ def _build_llm_agent(
         kwargs["output_schema"] = REGISTRY.output_schema(cfg.output_schema)
     if cfg.planner:
         kwargs["planner"] = REGISTRY.planner(cfg.planner)()
-    kwargs.update(cfg.options)
+    kwargs.update(cfg.resolved_options())
     return LlmAgent(**kwargs)
 
 
@@ -240,10 +359,17 @@ def _subordinate_instance(
 
 
 def _build_custom_agent(
-    cfg: AgentConfig, system: SystemConfig, class_key: str
+    cfg: AgentConfig,
+    system: SystemConfig,
+    class_key: str,
+    built: Optional[Dict[str, BaseAgent]] = None,
 ) -> BaseAgent:
     cls = REGISTRY.agent_class(class_key)
     kwargs = dict(name=cfg.name, description=cfg.description)
+    if cfg.children and built is not None:
+        kwargs["sub_agents"] = [
+            built[c] for c in cfg.children if system.agent(c).is_enabled()
+        ]
     if issubclass(cls, LlmAgent):
         tool_entries = _resolve_tools(cfg)
         ctx = PromptContext(config=cfg, system=system, tool_entries=tool_entries)
@@ -264,7 +390,20 @@ def _build_custom_agent(
             # Session-style agents take a review-loop handler instead of tools.
             from CoScientist.agents.common import hitl_handler
             kwargs["hitl_handler"] = hitl_handler
-    kwargs.update(cfg.options)
+        if cfg.uses_critic():
+            # An LLM critic reviews the agent's output inside that same loop,
+            # independently of HITL (see agents/callbacks/critic.py).
+            if "plan_critic" not in getattr(cls, "model_fields", {}):
+                raise ValueError(
+                    f"{cfg.name}: class {cls.__name__} declares no `plan_critic` "
+                    f"field — it cannot run a critic review loop"
+                )
+            kwargs["plan_critic"] = make_plan_critic(ctx)
+    elif cfg.uses_critic():
+        raise ValueError(
+            f"{cfg.name}: critic: needs an LlmAgent-based class, got {cls.__name__}"
+        )
+    kwargs.update(cfg.resolved_options())
     return cls(**kwargs)
 
 
@@ -285,14 +424,19 @@ def build_system(
             agent = _build_llm_agent(cfg, config, built, remote_subagents)
         elif cfg.cls in COMPOSITE_CLASSES:
             cls = _COMPOSITE_AGENT_CLASSES[cfg.cls]
+            sub_agents = [built[c] for c in cfg.children] if cfg.is_enabled() else []
+            ctx = PromptContext(config=cfg, system=config)
             agent = cls(
                 name=cfg.name,
                 description=cfg.description,
-                sub_agents=[built[c] for c in cfg.children],
-                **cfg.options,
+                sub_agents=sub_agents,
+                **_callback_kwargs(cfg, ctx),
+                **cfg.resolved_options(),
             )
         else:  # custom:<key>
-            agent = _build_custom_agent(cfg, config, cfg.cls.split(":", 1)[1])
+            agent = _build_custom_agent(
+                cfg, config, cfg.cls.split(":", 1)[1], built
+            )
         built[name] = agent
 
     return AgentSystem(config=config, agents=built)
@@ -311,6 +455,8 @@ def load_config_cli() -> None:  # pragma: no cover — `python -m` helper
     """Validate the config and print a build summary (no LLM calls)."""
     config = get_config()
     print(f"OK: {len(config.agents)} agents, root={config.root.name}")
+    if config.pipeline.pre or config.pipeline.post:
+        print(f"  pipeline: pre={config.pipeline.pre} post={config.pipeline.post}")
     for name in config.build_order():
         cfg = config.agent(name)
         bits = [cfg.cls]
@@ -324,6 +470,10 @@ def load_config_cli() -> None:  # pragma: no cover — `python -m` helper
             bits.append(f"children={cfg.children}")
         if cfg.hitl:
             bits.append("hitl")
+        if cfg.work_order:
+            bits.append("work_order+step_review" if cfg.work_order_step_review else "work_order")
+        if cfg.uses_critic():
+            bits.append("critic")
         if cfg.a2a:
             bits.append(f"a2a={cfg.a2a.key}:{cfg.a2a.port}")
         print(f"  {name}: " + ", ".join(bits))

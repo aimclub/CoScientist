@@ -8,27 +8,27 @@ Create a `.env` file in this directory based on `.env.example`.
 
 This server exposes two MCP tools:
 
-### 1. `explore_chemistry_database`
+### 1. `explore_scientific_database`
 
 - Purpose: Answer general chemistry questions using the indexed chemistry papers database (Chroma).
 - Input:
-	- `task` (string): user question.
+ 	- `task` (string): user question.
 - Output:
-	- JSON with `answer` and supporting context/metadata.
+ 	- JSON with `answer` and supporting context/metadata.
 - Use when:
-	- you need database-backed chemistry answers not tied to a specific user-uploaded paper set.
+ 	- you need database-backed chemistry answers not tied to a specific user-uploaded paper set.
 
 ### 2. `explore_my_papers`
 
 - Purpose: Answer questions about user-provided PDF papers, including figures/reactions/molecules and paper metadata.
 - Input:
-	- `task` (string): user question about uploaded papers.
-	- `config` (RunnableConfig): used for MCP session context (includes `session_id`).
+ 	- `task` (string): user question about uploaded papers.
+ 	- `config` (RunnableConfig): used for MCP session context (includes `session_id`).
 - Output:
-	- JSON with `answer` and metadata.
-	- Returns `{"answer": "No papers provided for search."}` if no PDFs are found.
+ 	- JSON with `answer` and metadata.
+ 	- Returns `{"answer": "No papers provided for search."}` if no PDFs are found.
 - Use when:
-	- the question is about the current uploaded paper set, specific document details, or cross-paper comparison.
+ 	- the question is about the current uploaded paper set, specific document details, or cross-paper comparison.
 
 ## Run With uv
 

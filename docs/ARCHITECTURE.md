@@ -52,12 +52,14 @@ CoScientist is a multi-agent system designed for scientific discovery and resear
 │                       │              │                                  │
 │                       │              │     ┌──────────────────────┐     │
 │                       │              │────▶│ TaskExecutorAgent    │     │
+│                       │              │     │      (router)        │     │
 │                       │              │     │  ┌──────────────┐    │     │
-│                       │              │     │  │ToolRetriever │    │     │
+│                       │              │     │  │ ToolPipeline │    │     │
+│                       │              │     │  │  Agent       │    │     │
+│                       │              │     │  │ (prep → run) │    │     │
 │                       │              │     │  └──────────────┘    │     │
 │                       │              │     │  ┌──────────────┐    │     │
-│                       │              │     │  │ Experiment   │    │     │
-│                       │              │     │  │  Agent       │    │     │
+│                       │              │     │  │ CoderAgent   │    │     │
 │                       │              │     │  └──────────────┘    │     │
 │                       └──────────────┘     └──────────────────────┘     │
 │                                                                         │
@@ -87,9 +89,15 @@ CoScientist Agents
 ├── OrchestratorAgent (Root)
 │   ├── HypothesesAgent
 │   ├── ResearchAgent
-│   └── TaskExecutorAgent (Sequential)
-│       ├── ToolRetrieverAgent
-│       └── ExperimentAgent (FEDOT)
+│   ├── MedicalAgent
+│   └── TaskExecutorAgent (LLM router)
+│       ├── ToolPipelineAgent (Sequential)
+│       │   ├── ToolPreparerAgent (retrieve → rerank → deploy MCP servers)
+│       │   └── ExecutorSwitchAgent (runs exactly one of:)
+│       │       ├── ExperimentAgent (runs the deployed MCP tools)
+│       │       └── FedotAgent (fallback: reranker produced no usable ranking)
+│       └── CoderAgent
+│           └── DatasetCollectorAgent
 ```
 
 ### Agent Specifications
@@ -160,16 +168,34 @@ if task_needs_computation:
 3. Hybrid reranking (BM25 + API Reranker)
 4. Top-k selection
 
-#### 5. ExperimentAgent (FEDOT)
+#### 5. ExecutorSwitchAgent (ExperimentAgent / FedotAgent)
 
-**Purpose**: Execute computational experiments
+**Purpose**: Execute computational experiments with the prepared MCP tools
 
 **Architecture**:
-- Type: `LlmAgent`
-- Output Key: `fedot_results`
-- Tools: `fedot_toolset_instance`
+- Type: `custom:executor_switch` — runs exactly ONE of its two children
+- Children: `ExperimentAgent` (default), `FedotAgent` (fallback)
 
-**Execution Flow**:
+`ExperimentAgent` is a ReAct `LlmAgent` (`output_key: fedot_results`) that calls
+the task's selected MCP servers directly through `dynamic_tools`, resolved from
+`filtered_tools` + `deployed_mcps` on every turn.
+
+`FedotAgent` (`tools: [fedot, ...]`, same `output_key`) runs only when the tool
+reranker never actually JUDGED the retrieved candidates — its reply was
+unreadable, or carried no usable `{index, score}` pair, and the local
+cross-encoder could not stand in for it. `filtered_tools` is then empty for a
+reason that says nothing about relevance, so abstaining to `CoderAgent` would
+discard tools retrieval found correctly. Instead `fedot_tool` receives the whole
+unfiltered `accumulated_tools` pool and FEDOT.MAS's meta-agent does the
+selection itself — with a bounded time budget, since a malformed model reply
+rather than a deliberate choice triggered the run. Gated by
+`EXECUTOR__FEDOT_FALLBACK`.
+
+A switch rather than two siblings in the sequence because `AgentTool` returns
+the LAST content-bearing event of the agent it wraps, and a stood-down sibling
+still emits one — it would overwrite the executor's answer.
+
+**Execution Flow (FedotAgent)**:
 1. Receive task description
 2. Build FEDOT.MAS pipeline
 3. Connect to MCP servers
@@ -178,11 +204,20 @@ if task_needs_computation:
 
 #### 6. TaskExecutorAgent
 
-**Purpose**: Sequential execution of tool retrieval and experiments
+**Purpose**: Route a task to the execution path that can deliver it
 
 **Architecture**:
-- Type: `SequentialAgent`
-- Sub-agents: [ToolRetrieverAgent, ExperimentAgent]
+- Type: `LlmAgent` (router — no tools of its own)
+- Output Key: `executor_results`
+- Subordinates (AgentTools):
+  - `ToolPipelineAgent` (`SequentialAgent`: [ToolPreparerAgent,
+    ExecutorSwitchAgent]) — runs the task with EXISTING MCP tools
+  - `CoderAgent` — writes and runs code in the sandbox when no tool matches
+
+**Routing**: engineering work goes straight to the coder; tool-shaped work goes
+to the pipeline. If the pipeline abstains with `NO_MATCHING_TOOL` (see
+`redirect_when_no_tools`), the router re-issues the same task to the coder
+instead of bubbling the abstention up to the orchestrator.
 
 ---
 
