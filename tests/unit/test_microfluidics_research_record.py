@@ -175,9 +175,20 @@ def test_literature_markdown_has_summary_and_tables():
     assert "сводка оркестратора" in md and "нет данных по кинетике" in md
 
 
-def test_publish_literature_summary_sets_state_and_posts():
+def test_publish_literature_summary_sets_state_and_posts(monkeypatch):
+    import asyncio
+    from CoScientist.logging import agent_output
+
+    posted = []
+
+    async def fake_report(context, payload):
+        posted.append(payload)
+
+    monkeypatch.setattr(agent_output, "report_output", fake_report)
     state = {"literature_analysis": ANALYSIS}
-    content = publish_literature_summary(_Ctx(state))
-    assert MARKDOWN_KEY in state and content is not None
-    assert content.parts[0].text == state[MARKDOWN_KEY]
-    assert publish_literature_summary(_Ctx({})) is None
+    # No Content is returned: the agent has an output_schema, and ADK would
+    # save an after_agent Content event to output_key through that schema.
+    assert asyncio.run(publish_literature_summary(_Ctx(state))) is None
+    assert MARKDOWN_KEY in state
+    assert posted and posted[0]["content"] == state[MARKDOWN_KEY]
+    assert asyncio.run(publish_literature_summary(_Ctx({}))) is None

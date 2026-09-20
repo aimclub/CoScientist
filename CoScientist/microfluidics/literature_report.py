@@ -15,7 +15,6 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from google.adk.agents.callback_context import CallbackContext
-from google.genai import types
 
 logger = logging.getLogger(__name__)
 
@@ -198,9 +197,15 @@ def render_literature_markdown(analysis: Any, literature_report: Any = None,
     return "\n".join(lines)
 
 
-def publish_literature_summary(callback_context: CallbackContext) -> Optional[types.Content]:
+async def publish_literature_summary(callback_context: CallbackContext) -> None:
     """After EvidenceVerifierAgent: render the literature section, keep it in
-    state for the report and post it to the chat."""
+    state for the report and post it to the chat.
+
+    Posted through ``report_output`` (the agent-output sink), NOT returned as
+    after_agent Content: that agent carries ``output_schema``, and ADK saves
+    an after_agent Content event to ``output_key`` through the schema — the
+    Markdown would then be validated as LiteratureAnalysis and fail the run.
+    """
     state = callback_context.state
     analysis = state.get("literature_analysis")
     if not analysis:
@@ -213,7 +218,17 @@ def publish_literature_summary(callback_context: CallbackContext) -> Optional[ty
         logger.warning("literature_report: render failed: %s", exc)
         return None
     state[MARKDOWN_KEY] = markdown
-    return types.Content(role="model", parts=[types.Part(text=markdown)])
+    try:
+        from CoScientist.logging.agent_output import report_output
+        await report_output(callback_context, {
+            "agent": getattr(callback_context, "agent_name", None) or "EvidenceVerifierAgent",
+            "caller": "ModuleA_TZLiterature",
+            "call_id": f"literature_summary-{getattr(callback_context, 'invocation_id', '')}",
+            "content": markdown,
+        })
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("literature_report: could not post the summary: %s", exc)
+    return None
 
 
 __all__ = ["MARKDOWN_KEY", "publish_literature_summary", "render_literature_markdown"]

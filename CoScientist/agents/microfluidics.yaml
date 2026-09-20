@@ -280,8 +280,9 @@ agents:
       after_model: [sanitize_json_output]
       # Then: literature → research graph Evidence; then the literature
       # agent's summary + tables (state["literature_markdown"], posted to the
-      # chat and inserted verbatim into the final report). The publisher
-      # returns Content, so it is last.
+      # chat via the agent-output sink and inserted verbatim into the final
+      # report). Neither returns Content: this agent has an output_schema and
+      # ADK would save an after_agent Content to output_key through it.
       after_agent: [authenticate_evidence_verification, pin_target_molecule,
                     record_literature_evidence, publish_literature_summary]
 
