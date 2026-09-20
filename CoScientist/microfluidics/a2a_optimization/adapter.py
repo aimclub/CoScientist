@@ -118,7 +118,7 @@ async def optimization_start(tool_context: ToolContext, planning_only: bool = Fa
     if previous:
         return previous
     try:
-        inputs = prepare_inputs(tool_context.state)
+        inputs = prepare_inputs(tool_context.state, planning_only=planning_only)
     except (ValueError, TypeError) as exc:
         result = {"state": "invalid_input", "error": str(exc)}
         tool_context.state[RESULT_KEY] = result
@@ -146,7 +146,11 @@ async def optimization_start(tool_context: ToolContext, planning_only: bool = Fa
         "Недостающие данные и необходимые подтверждения запрашивай в этой задаче. "
     )
     if planning_only:
-        instruction += "РЕЖИМ ТОЛЬКО ПЛАНИРОВАНИЯ: не запускай CFD, оборудование или эксперименты. Построй план и запроси подтверждение."
+        instruction += (
+            "РЕЖИМ ТОЛЬКО ПЛАНИРОВАНИЯ/СКРИНИНГА: не запускай CFD, оборудование "
+            "или эксперименты. Построй план верификации маршрута, явно свяжи каждое "
+            "измерение с незакрытым ограничением и запроси подтверждение."
+        )
     else:
         instruction += "Выполни задачу в пределах заданных требований и ограничений."
     text = instruction + "\n\n" + json.dumps(inputs, ensure_ascii=False, allow_nan=False)

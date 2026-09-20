@@ -314,14 +314,14 @@ agents:
     class: llm
     title: Маршруты синтеза
     description: >-
-      ретросинтез — строит маршруты синтеза кандидатов с условиями каждой
-      операции и оценивает их пригодность для проточного реактора.
+      отбирает подтверждённые литературные маршруты кандидатов с условиями
+      каждой операции и оценивает их пригодность для проточного реактора.
     reasoning: medium
     prompt: microfluidics_synth_route
-    # The retrosynthesis service (HOSTS_PORTS__RETROSYNTHESIS_SERVICES_HOST/PORT,
-    # not 0.0.0.0). No stub: without the service the agent works from the
-    # literature routes alone and says so.
-    tools: [retrosynthesis]
+    # The external retrosynthesis proposals are intentionally disabled here:
+    # this stage only transfers route-backed literature evidence.  The template
+    # switches to its literature-only branch when this list is empty.
+    tools: []
     output_key: synthesis_routes
     # It sends target structures to an external service: the human sees the
     # plan (what goes out), every step and the report. Needs HITL__ENABLED=true.

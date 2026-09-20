@@ -35,10 +35,18 @@ def _number(value: Any, name: str, *, positive: bool = False) -> None:
         raise ValueError(f"{name}: finite {'positive' if positive else 'nonnegative'} number required") from exc
 
 
-def prepare_inputs(state: Any) -> dict:
-    """Require real, linked route rankings; preserve service numbers verbatim."""
+def prepare_inputs(state: Any, *, planning_only: bool = False) -> dict:
+    """Prepare either a production hand-off or a non-executing screening plan.
+
+    Production needs fully qualified routes and cost rankings.  Screening is
+    intentionally narrower: it may carry real routes with open evidence/yield
+    gaps so the external system can design the measurements that close them.
+    """
     inputs = {key: state.get(key) for key in INPUT_KEYS}
-    for key in ("structured_tz", "literature_analysis", "synthesis_routes", "qualified_routes", "economics_ranking"):
+    required = ("structured_tz", "literature_analysis", "synthesis_routes", "qualified_routes")
+    if not planning_only:
+        required = (*required, "economics_ranking")
+    for key in required:
         inputs[key] = _object(inputs[key], key)
     LiteratureAnalysis.model_validate(inputs["literature_analysis"])
     proposals = SynthesisRoutes.model_validate(inputs["synthesis_routes"]).routes
@@ -49,9 +57,17 @@ def prepare_inputs(state: Any) -> dict:
         raise ValueError("synthesis_routes: real routes with nonempty steps required")
     qualified = QualifiedRoutes.model_validate(inputs["qualified_routes"])
     routes = qualified.routes
+    if planning_only and not routes:
+        routes = qualified.experimental_routes
     ids = [route.route_id for route in routes]
     if not routes or not set(ids).issubset(set(proposal_ids)):
-        raise ValueError("qualified_routes: nonempty eligible subset of synthesis_routes required")
+        mode = "eligible or experimental" if planning_only else "eligible"
+        raise ValueError(f"qualified_routes: nonempty {mode} subset of synthesis_routes required")
+    if planning_only:
+        inputs["handoff_mode"] = "screening"
+        inputs["selected_route_ids"] = ids
+        return json.loads(json.dumps(inputs, ensure_ascii=False, allow_nan=False))
+
     ranking = inputs["economics_ranking"]
     ranked = ranking.get("routes")
     if not isinstance(ranked, dict) or set(ranked) != set(ids):

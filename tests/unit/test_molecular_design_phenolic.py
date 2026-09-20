@@ -98,6 +98,23 @@ def test_empty_literature_does_not_invent_candidates(case):
     assert result["candidates"] == []
 
 
+def test_route_product_with_explicit_smiles_is_a_route_backed_candidate(case):
+    product = "O=C1NC(=O)NC(=O)C1=Cc1ccc(O)c(OC)c1"
+    case["literature_analysis"]["analogues"] = []
+    case["literature_analysis"]["synthesis_routes"] = [{
+        "route_id": "LIT-ROUTE-01",
+        "product": "Продукт конденсации",
+        "product_smiles": product,
+        "sources": ["paper-1"],
+    }]
+    result = run(case, generate=False)
+    assert result["status"] == "ok"
+    assert len(result["candidates"]) == 1
+    candidate = result["candidates"][0]
+    assert candidate["route_ids"] == ["LIT-ROUTE-01"]
+    assert candidate["derivation"] == "Продукт литературного маршрута"
+
+
 @pytest.mark.parametrize("pattern", ["", "invalid[", "[c"])
 def test_invalid_smarts_returns_explicit_error(case, pattern):
     result = run(case, required_smarts=[pattern])

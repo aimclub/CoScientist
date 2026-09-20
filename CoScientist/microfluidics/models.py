@@ -205,7 +205,15 @@ class RouteStep(BaseModel):
 class LiteratureRoute(BaseModel):
     """Маршрут синтеза, описанный в литературе."""
 
+    route_id: str = Field(
+        default="",
+        description="Устойчивый ID литературного маршрута, например LIT-ROUTE-01",
+    )
     product: str = Field(description="Какое вещество получают (название / SMILES)")
+    product_smiles: str = Field(
+        default="",
+        description="SMILES целевого продукта маршрута, если структура однозначно установлена",
+    )
     steps: List[RouteStep] = Field(default_factory=list)
     flow_suitability: str = Field(
         default="", description="Пригодность для проточного / микрофлюидного реактора"
@@ -277,6 +285,10 @@ class DesignCandidate(BaseModel):
     )
     sources: List[str] = Field(default_factory=list, description="Источники литературных свойств")
     derivation: str = Field(default="", description="Происхождение структуры; не маршрут синтеза")
+    route_ids: List[str] = Field(
+        default_factory=list,
+        description="Литературные маршруты, непосредственно ведущие к кандидату",
+    )
     stub: bool = Field(default=False, description="Данные получены от заглушки")
 
 
@@ -395,7 +407,7 @@ class SynthesisRoute(BaseModel):
     sources: List[str] = Field(default_factory=list, description="Ссылки / DOI")
     evidence: List[EvidenceRef] = Field(default_factory=list)
     tz_compliance: List[ComplianceCheck] = Field(default_factory=list)
-    overall_status: Literal["unassessed", "eligible", "rejected", "blocked"] = "unassessed"
+    overall_status: Literal["unassessed", "eligible", "experimental", "rejected", "blocked"] = "unassessed"
     stub: bool = Field(default=False, description="Маршрут получен от заглушки")
 
 
@@ -418,15 +430,16 @@ class SynthesisRoutes(BaseModel):
 class RouteDecision(BaseModel):
     route_id: str
     product: str = ""
-    overall_status: Literal["rejected", "blocked"]
+    overall_status: Literal["experimental", "rejected", "blocked"]
     reasons: List[str] = Field(default_factory=list)
 
 
 class QualifiedRoutes(BaseModel):
-    """Fail-closed result consumed by economics and the experiment hand-off."""
+    """Route qualification split between production costing and experimental screening."""
 
-    status: Literal["ok", "no_compliant_routes"]
+    status: Literal["ok", "screening_only", "no_compliant_routes"]
     routes: List[SynthesisRoute] = Field(default_factory=list)
+    experimental_routes: List[SynthesisRoute] = Field(default_factory=list)
     rejected: List[RouteDecision] = Field(default_factory=list)
     blocked: List[RouteDecision] = Field(default_factory=list)
     gaps: List[str] = Field(default_factory=list)
@@ -435,11 +448,15 @@ class QualifiedRoutes(BaseModel):
     def status_matches_routes(self):
         if self.status == "ok" and not self.routes:
             raise ValueError("qualified_routes status=ok requires eligible routes")
-        if self.status == "no_compliant_routes" and self.routes:
-            raise ValueError("no_compliant_routes cannot contain eligible routes")
+        if self.status == "screening_only" and (self.routes or not self.experimental_routes):
+            raise ValueError("screening_only requires experimental routes and no eligible routes")
+        if self.status == "no_compliant_routes" and (self.routes or self.experimental_routes):
+            raise ValueError("no_compliant_routes cannot contain hand-off routes")
         if any(route.overall_status != "eligible" for route in self.routes):
             raise ValueError("qualified_routes.routes may contain only eligible routes")
-        ids = [route.route_id for route in self.routes]
+        if any(route.overall_status != "experimental" for route in self.experimental_routes):
+            raise ValueError("qualified_routes.experimental_routes may contain only experimental routes")
+        ids = [route.route_id for route in [*self.routes, *self.experimental_routes]]
         if len(ids) != len(set(ids)):
             raise ValueError("qualified_routes route_id values must be unique")
         return self

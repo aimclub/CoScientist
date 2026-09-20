@@ -405,13 +405,19 @@ def evaluate_route(
     checks.extend(_completeness_checks(route, records))
 
     hard = {constraint.constraint_id for constraint in spec.constraints if constraint.hardness == "hard"}
-    hard.update({"SYS-CONDITIONS-COMPLETE", "SYS-YIELDS-COMPLETE"})
+    system_checks = {"SYS-CONDITIONS-COMPLETE", "SYS-YIELDS-COMPLETE"}
+    hard.update(system_checks)
     if any(check.constraint_id in hard and check.status == "fail" for check in checks):
         status = "rejected"
-    elif any(check.constraint_id in hard and check.status != "pass" and check.status != "not_applicable" for check in checks):
-        status = "blocked"
-    else:
+    elif all(check.constraint_id not in hard or check.status in {"pass", "not_applicable"} for check in checks):
         status = "eligible"
+    else:
+        # A real route with no known hard violation can be sent to the external
+        # system for planning and evidence-generation, but never to production
+        # costing or autonomous equipment execution.  This avoids the circular
+        # dependency where experiments are needed to learn a yield, while an
+        # already known yield is required to plan the experiment.
+        status = "experimental"
     return route.model_copy(update={"tz_compliance": checks, "overall_status": status})
 
 
@@ -425,6 +431,7 @@ def qualify_routes(
     records = [record if isinstance(record, SourceRecord) else SourceRecord.model_validate(record) for record in source_records]
     assessed = [evaluate_route(route, requirements, records) for route in proposals.routes]
     eligible = [route for route in assessed if route.overall_status == "eligible"]
+    experimental = [route for route in assessed if route.overall_status == "experimental"]
 
     def decisions(status: str) -> list[RouteDecision]:
         result = []
@@ -444,11 +451,12 @@ def qualify_routes(
         return result
 
     gaps = list(proposals.gaps)
-    if not eligible:
+    if not eligible and not experimental:
         gaps.append("Нет маршрута, для которого все жёсткие ограничения ТЗ подтверждены.")
     return QualifiedRoutes(
-        status="ok" if eligible else "no_compliant_routes",
+        status="ok" if eligible else ("screening_only" if experimental else "no_compliant_routes"),
         routes=eligible,
+        experimental_routes=experimental,
         rejected=decisions("rejected"),
         blocked=decisions("blocked"),
         gaps=list(dict.fromkeys(gaps)),

@@ -2773,8 +2773,20 @@ CoScientist (кейс «микрофлюидика»).
 - обязательно одна задача — измеренные свойства этого вещества против
   требований ТЗ (со значениями, единицами и условиями измерения);
 - остальные — ближайшие структурные аналоги и ограничения.
-Если молекула не задана — ищи классы веществ-кандидатов, но в задачах на
-аналоги всё равно требуй SMILES, свойства с единицами и маршруты с условиями.
+Если молекула не задана, сформируй две НЕЗАВИСИМЫЕ обязательные задачи:
+- **route-first discovery**: начни от доступного/предпочтительного сырья из ТЗ
+  и найди продукты конкретных превращений, совместимых с ограничениями
+  процесса. Ищи по функциональным группам исходного сырья и классам реакций
+  (конденсации, окисления, нейтрализации, присоединения и т.п.), а не только по
+  названию области применения. Для каждого найденного продукта потребуй SMILES,
+  первичный источник, условия каждой операции и выход.
+- **application validation**: отдельно проверь найденные продукты как компоненты
+  конечной среды: антиоксидантную активность, совместимость, растворимость и
+  термостабильность. Отсутствие прикладной статьи не отменяет продукт из первого
+  поиска, а создаёт явный пробел для экспериментального скрининга.
+Остальные задачи покрывают аналоги, безопасность и масштабирование. Не
+ограничивай поиск заранее перечисленными примерами веществ из ТЗ: это примеры,
+а не закрытый список кандидатов.
 
 Отвечай ТОЛЬКО валидным JSON вида:
 {"queries": [{"id": "...", "task": "...", "extract": ["...", "..."]}]}
@@ -2866,14 +2878,15 @@ LIT-08: {literature_finding_LIT_08?}
   and every evidence.verification_status to unverified: only the independent
   verifier in the next stage may promote a claim.
 - target_molecule: если в ТЗ fixed=true — перенеси значения из ТЗ как есть
-  (source «ТЗ»). Иначе, если литература указывает на одно лучшее вещество под
-  ТЗ, заполни его с source «литература» и fixed=false; если нет — оставь поля
-  пустыми, source «не задано».
+  (source «ТЗ»). Иначе оставь name/SMILES/CAS пустыми, source «не задано»:
+  литературный обзор не назначает победителя вместо отдельной стадии отбора.
 - analogues: каждое вещество-аналог из результатов — название, SMILES (только
   если он есть в источнике или однозначно следует из названия), класс,
   свойства (значение с единицами и условиями измерения), чем полезен для ТЗ,
   источники.
-- synthesis_routes: каждый описанный маршрут — продукт, операции по порядку:
+- synthesis_routes: каждый описанный маршрут — route_id вида LIT-ROUTE-01,
+  product (читаемое название) и product_smiles (если структура однозначно
+  установлена), операции по порядку:
   реагенты, продукты стадии (products — что получается на этой стадии),
   выход стадии как в источнике (yield_value, напр. «75 %»; нет в источнике —
   пусто), условия (температура, время, соотношения, растворитель,
@@ -3028,6 +3041,9 @@ nodes directly.
 ### CASE CONTEXT — STRUCTURED ТЗ (empty until module A has run)
 {structured_tz?}
 
+### ROUTE QUALIFICATION (empty until ModuleB has run)
+{qualified_routes?}
+
 ### MODULES
 
 <<AGENTS>>
@@ -3041,15 +3057,16 @@ previous one has delivered:
    facts).
 2. **ModuleB_Design** — after A. Turns the ТЗ + literature into molecule
    candidates, synthesis routes and their economics.
-3. **ModuleC_Experiment** — after B, taking the synthesis routes and their
-   operating conditions and economic ranking. Delegates the whole experimental
-   subsystem to one A2A task: planning, CFD, equipment and optimization.
-4. **ReportAgent** — last, once C is finished (or once it is clear no further
-   optimization is needed). Composes the final report for the customer.
+3. **ModuleC_Experiment** — after B only when `qualified_routes.status` is
+   `ok` (production execution) or `screening_only` (planning-only verification).
+   For `no_compliant_routes` do not call C: there is no safe hand-off payload.
+4. **ReportAgent** — always last. Run it after C, or immediately after B when
+   no A2A hand-off is possible; it must report the blockers rather than end the
+   session without a customer-facing result.
 
 ### RULES
-- Never skip a module and never reorder: a later module reads the state the
-  earlier one writes, so running it early yields an empty result.
+- Never run a module early. The only allowed branch is to skip ModuleC when
+  `qualified_routes.status="no_compliant_routes"`; ReportAgent still runs.
 - Module calls carry only the requested stage action. Never restate or
   "clarify" numeric limits, prohibited substances, sources, or literature
   findings in the AgentTool request: child modules read the versioned state and
@@ -3110,7 +3127,9 @@ propose concrete target molecules to synthesise.
    max_candidates. ТЗ и аналоги инструмент читает из состояния сам; не добавляй
    их в requirements. Если явных ограничений нет, передай "{}". Включай
    generate только когда подтверждённые литературные продукты не дают
-   достаточного пула; это не способ заполнить список любой ценой.
+   достаточного пула; это не способ заполнить список любой ценой. Продукты
+   литературных маршрутов уже добавляет сам инструмент; не исключай их только
+   потому, что они не повторены в `analogues`.
 4. Используй только возвращённые candidates. Инструмент уже включает
    литературные аналоги: не добавляй отклонённые структуры обратно вручную.
    При error или no_candidates верни пустой список и исходные gaps.
@@ -3447,6 +3466,8 @@ steps locally and do not rewrite its plan or measurement results.
 {literature_analysis?}
 ### МАРШРУТЫ
 {synthesis_routes?}
+### КВАЛИФИКАЦИЯ МАРШРУТОВ
+{qualified_routes?}
 ### ЭКОНОМИЧЕСКИЙ РЕЙТИНГ
 {economics_ranking?}
 ### ТЕКУЩАЯ ЗАДАЧА A2A
@@ -3455,11 +3476,15 @@ steps locally and do not rewrite its plan or measurement results.
 <<TOOLS>>
 <<HITL>>
 
-1. Вызови optimization_start(planning_only=False) для выполнения задачи;
-   planning_only=True — только если пользователь запросил исключительно план.
-   Инструмент проверяет ТЗ, литературу, маршруты и рейтинг стоимости, затем
-   передаёт исходные данные. При invalid_input исправь данные на предыдущем
-   этапе или сообщи о пробеле; не выдумывай стоимость и не запускай обходной путь.
+1. Сначала прочитай `qualified_routes` и экономический рейтинг. При
+   status="ok" вызови optimization_start(planning_only=False) для выполнения
+   задачи. При status="screening_only" вызови optimization_start(planning_only=True):
+   это план верификации маршрута с неполными выходами/источниками, а не запуск
+   оборудования. При status="no_compliant_routes" не вызывай A2A и кратко
+   объясни, какие нарушения не позволяют даже планировать скрининг.
+   Инструмент проверяет передаваемые данные. При invalid_input исправь данные
+   на предыдущем этапе или сообщи о пробеле; не выдумывай стоимость и не
+   запускай обходной путь.
    Повторный вызов возвращает ту же задачу даже после завершения.
 2. submitted/working: sleep_tool на 5 секунд и optimization_get_status.
    Не больше 12 опросов за проход; после этого сообщи «ещё выполняется» и task_id.

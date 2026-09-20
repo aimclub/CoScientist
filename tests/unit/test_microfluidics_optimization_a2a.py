@@ -17,14 +17,18 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def inputs():
+    route = {
+        "route_id": "r1", "product": {"name": "fixture"}, "overall_status": "eligible",
+        "steps": [{"operation": "fixture reaction", "reactants": [{"name": "A"}],
+                   "products": [{"name": "fixture"}],
+                   "conditions": [{"name": "Среда", "value": "water"}],
+                   "yield_fraction": 0.8}],
+    }
     return {
         "structured_tz": {"target": "fixture molecule"},
         "literature_analysis": {"facts": [{"statement": "fixture fact", "sources": ["fixture"]}]},
-        "synthesis_routes": {"routes": [{
-            "route_id": "r1", "product": {"name": "fixture"},
-            "steps": [{"operation": "fixture reaction", "reactants": [{"name": "A"}],
-                       "products": [{"name": "fixture"}]}],
-        }]},
+        "synthesis_routes": {"routes": [route]},
+        "qualified_routes": {"status": "ok", "routes": [copy.deepcopy(route)]},
         "economics": "Partial cost, not a complete price",
         "economics_ranking": {"target_qty": 100, "target_unit": "g",
             "preferred_currency": "RUB", "rank_by": "per_unit", "routes": {
@@ -72,7 +76,7 @@ def test_complete_inputs_are_preserved_and_sent_once(client):
     assert first["inputs"]["economics_ranking"]["routes"]["r1"]["cost_per_unit"] == "42.10"
 
 
-@pytest.mark.parametrize("key", ["structured_tz", "literature_analysis", "synthesis_routes", "economics_ranking"])
+@pytest.mark.parametrize("key", ["structured_tz", "literature_analysis", "synthesis_routes", "qualified_routes", "economics_ranking"])
 def test_missing_required_inputs_do_not_send(client, key):
     ctx = context()
     del ctx.state[key]
@@ -110,9 +114,43 @@ def test_route_ids_and_non_stub_steps_are_required():
 
 def test_json_state_values_are_supported_without_changing_numbers():
     data = inputs()
-    for key in ("literature_analysis", "synthesis_routes", "economics_ranking"):
+    for key in ("literature_analysis", "synthesis_routes", "qualified_routes", "economics_ranking"):
         data[key] = json.dumps(data[key])
     assert prepare_inputs(data) == inputs()
+
+
+def test_screening_handoff_accepts_real_experimental_route_without_costing(client):
+    data = inputs()
+    route = data["synthesis_routes"]["routes"][0]
+    route["overall_status"] = "experimental"
+    route["steps"][0].pop("yield_fraction")
+    route["steps"][0]["yield_status"] = "missing"
+    route["steps"][0]["yield_missing_reason"] = "Выход должен быть измерен"
+    data["qualified_routes"] = {
+        "status": "screening_only", "routes": [], "experimental_routes": [copy.deepcopy(route)],
+    }
+    del data["economics_ranking"]
+    handoff = prepare_inputs(data, planning_only=True)
+    assert handoff["handoff_mode"] == "screening"
+    assert handoff["selected_route_ids"] == ["r1"]
+
+    ctx = SimpleNamespace(state=data)
+    asyncio.run(adapter.optimization_start(ctx, planning_only=True))
+    text = client.send_message.call_args.kwargs["text"]
+    assert "СКРИНИНГА" in text
+    assert '"handoff_mode": "screening"' in text
+
+
+def test_production_handoff_rejects_screening_only_route_without_costing():
+    data = inputs()
+    route = data["synthesis_routes"]["routes"][0]
+    route["overall_status"] = "experimental"
+    data["qualified_routes"] = {
+        "status": "screening_only", "routes": [], "experimental_routes": [copy.deepcopy(route)],
+    }
+    del data["economics_ranking"]
+    with pytest.raises(ValueError):
+        prepare_inputs(data)
 
 
 def test_wire_contract_preserves_role_and_domain(monkeypatch):
