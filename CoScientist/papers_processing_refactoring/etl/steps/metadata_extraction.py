@@ -90,10 +90,15 @@ class MetadataExtractionStep(ETLStep):
                 operation=f"extract metadata for article {article_id}",
             )
 
-        doi = find_doi_by_title(
-            paper_metadata.paper_title,
-            paper_metadata.publication_year,
-        )
+        article_metadata = ctx.article.metadata or {}
+        doi = article_metadata.get("doi") if article_metadata.get("source") == "sapphire" else None
+        if not isinstance(doi, str) or not doi.strip() or doi.strip().lower() == "unknown":
+            doi = find_doi_by_title(
+                paper_metadata.paper_title,
+                paper_metadata.publication_year,
+            )
+        else:
+            doi = doi.strip()
         openalex_metadata = get_openalex_metadata(
             doi=doi,
             title=paper_metadata.paper_title,
