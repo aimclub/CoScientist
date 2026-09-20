@@ -412,6 +412,26 @@ class ResearchGraphStore:
                 self._save()
             return result
 
+    def record(self, source: str,
+               nodes: Optional[List[Dict[str, Any]]] = None,
+               edges: Optional[List[Dict[str, Any]]] = None,
+               status_updates: Optional[List[Dict[str, Any]]] = None) -> CommitResult:
+        """Privileged write for DETERMINISTIC stage recorders (code, not an LLM).
+
+        Same transaction as :meth:`commit`, but the per-agent ACL is skipped —
+        exactly like the context star in :meth:`init_research`. Structural
+        validation (node types, subtypes, edge endpoints, status vocabularies)
+        still applies. ``source`` is recorded on every node as the writer, so
+        the graph still shows which stage produced what.
+        """
+        with self._lock:
+            result = self._commit_locked(source, list(nodes or []),
+                                         list(edges or []), list(status_updates or []),
+                                         enforce_permissions=False)
+            if result.ok:
+                self._save()
+            return result
+
     # ── reads ─────────────────────────────────────────────────────────────────
 
     def get_context_slice(self, node_id: str, depth: int = 1,
