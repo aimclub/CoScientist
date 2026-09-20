@@ -390,8 +390,9 @@ of them to be tested — <<BACKLOG_RULE>>.
 Context of tasks:
 {active_tasks}
 
-Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
-Update task status to "done" immediately upon completion of each work item.
+Use `update_task_status` only for an ID explicitly present in the task context above.
+If the context is empty (`[]`), do not call it: this run has no registered task plan.
+Update a registered task to "done" immediately upon completion of its work item.
 ''', SELECTION=selection, ANSWER_HEAD=answer_head,
         ANSWER_BACKLOG=answer_backlog, RESEARCH=render_research_protocol(ctx),
         SELECT_WORD=select_word, HAND_RULE=hand_rule, BACKLOG_RULE=backlog_rule,
@@ -533,8 +534,9 @@ You have a STRICT LIMIT of <<MAX_SEARCHES>> search calls. Plan your search caref
 Context of tasks:
 {active_tasks}
 
-Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
-Update task status to "done" immediately upon completion of each work item.
+Use `update_task_status` only for an ID explicitly present in the task context above.
+If the context is empty (`[]`), do not call it: this run has no registered task plan.
+Update a registered task to "done" immediately upon completion of its work item.
 
 <<RESEARCH>>
 
@@ -798,8 +800,9 @@ Candidate tools for this task:
 Context of tasks:
 {active_tasks}
 
-Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
-Update task status to "done" immediately upon completion of each work item.
+Use `update_task_status` only for an ID explicitly present in the task context above.
+If the context is empty (`[]`), do not call it: this run has no registered task plan.
+Update a registered task to "done" immediately upon completion of its work item.
 
 Do NOT solve the task manually — delegate to FEDOT.MAS.
 
@@ -849,7 +852,9 @@ loop without sleeping in between.
 Context of tasks:
 {active_tasks}
 
-Use update_task_status REGULARLY; set a task to DONE immediately on completion.
+Use `update_task_status` only for an ID explicitly present in the task context above.
+If the context is empty (`[]`), do not call it: this run has no registered task plan.
+Set a registered task to DONE immediately on completion.
 
 <<RESEARCH>>
 
@@ -2798,7 +2803,10 @@ CoScientist (кейс «микрофлюидика»).
 Если целевая молекула задана (fixed=true), задачи строятся ВОКРУГ неё:
 - обязательно одна задача — известные маршруты синтеза именно этого вещества
   (по названию, SMILES, CAS) с условиями каждой операции (температура, время,
-  соотношения, растворитель, катализатор) и опытом проточного синтеза;
+  соотношения, растворитель, катализатор), выходом и чистотой целевого продукта,
+  идентичностью продукта и опытом проточного синтеза; если источник сравнивает
+  варианты в таблице, извлеки все существенные варианты и критерии сравнения,
+  а не только заявленный авторами «основной» результат;
 - обязательно одна задача — измеренные свойства этого вещества против
   требований ТЗ (со значениями, единицами и условиями измерения);
 - остальные — ближайшие структурные аналоги и ограничения.
@@ -2922,11 +2930,18 @@ LIT-08: {literature_finding_LIT_08?}
   катализатор); пригодность для проточного/микрофлюидного реактора,
   источники. Каждое числовое условие и выход снабди evidence: source_id,
   locator и verification_status. Без полного текста и locator статус только
-  unverified. Вещества называй так, чтобы их можно было однозначно найти:
+  unverified. Сохрани variant_label (строка/условие таблицы или устойчивое
+  описание варианта) и comparison_notes. Вещества называй так, чтобы их можно было однозначно найти:
   SMILES или английское название, если они есть в источнике, — рядом с
   русским.
 - facts: остальные существенные факты с query_id, sources и claim-level evidence.
 - gaps: чего не нашли — какие данные из списков extract остались без ответа.
+
+Не переноси выход, чистоту, растворимость, антиоксидантную активность,
+стабильность или пригодность к протоку с аналога, другой стадии или другого
+варианта. Расчёты времени пребывания, объёма, производительности,
+масштабирования или температуры, сделанные агентом, помечай как extrapolation
+в facts/gaps, а не как данные источника.
 
 ### ПРАВИЛА
 - Бери только то, что есть в результатах выше. Ничего не придумывай: нет
@@ -2940,18 +2955,24 @@ LIT-08: {literature_finding_LIT_08?}
 
 
 _static("microfluidics_evidence_verifier", '''
-Ты — независимый верификатор литературных условий. Не добавляй новых
-маршрутов или фактов. Для каждого числового условия и выхода открой
-реальный URL/DOI и сверь утверждение с полным текстом.
+Ты — узкий верификатор критичных числовых литературных claims. Не добавляй
+новых маршрутов или фактов и НЕ выполняй повторный широкий поиск литературы.
+Проверяй только числовые условия операций и выходы стадий, которые уже есть в
+черновике. Для каждого такого claim используй URL/DOI/идентификатор источника,
+указанный в черновике, и сверь его с полным текстом.
 
 ### ЧЕРНОВОЙ СТРУКТУРИРОВАННЫЙ АНАЛИЗ
 {literature_analysis_draft?}
 
 ### ПРАВИЛА
-- Обязательно используй инструмент чтения/анализа для каждого источника; одного
-  поискового snippet недостаточно.
+- Не ищи новые источники и не расширяй список маршрутов. `papers_search` можно
+  использовать только чтобы получить полный текст уже указанного DOI/источника.
+- Для числового условия или выхода обязательно используй инструмент
+  чтения/анализа полного текста; одного поискового snippet недостаточно.
 - verified ставь только если полный текст подтверждает именно это число/условие,
   а locator точно указывает страницу, таблицу, рисунок, раздел или абзац.
+- Качественные facts, пригодность к протоку, описание аналога и библиографию не
+  повышай до verified: они остаются unverified и не требуют отдельного поиска.
 - Всё, что не удалось прочитать или сверить, оставь unverified и добавь в gaps.
 - Сохрани все остальные поля и идентификаторы. content_hash, verified_by и
   verification_tool сам не выдумывай: их заполнит код из фактических tool results.
@@ -3195,7 +3216,8 @@ gaps: результаты инструментов и текст update_work_st
 маршрута не найдено, с объяснением в gaps. Перед финальным ответом заверши шаги
 плана и представь рабочий отчёт через submit_work_report, если он подключён.
 - routes[]: route_id (глобально уникальный), source_route_id (ID внешнего
-  сервиса, если есть), product (name, smiles), source, sources, evidence, stub,
+  сервиса, если есть), product (name, smiles), source, variant_label,
+  selection_rationale, product_purity_percent/status/evidence, sources, evidence, stub,
   flow_suitability, bottlenecks и steps[] по порядку.
 - steps[]: operation; reactants — исходные вещества стадии: name (английское
   название, если известно) и smiles; на второй и следующих стадиях продукт

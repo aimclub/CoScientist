@@ -16,6 +16,7 @@ _DOI = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.I)
 _PATENT = re.compile(r"\b(?:WO|EP|US|RU)\s*[-/]?\s*\d{5,}[A-Z]\d?\b", re.I)
 _STANDARD = re.compile(r"\b(?:ASTM|ISO|EN|GOST|ГОСТ)\s+[A-ZА-Я0-9][A-ZА-Я0-9.:-]*", re.I)
 _FULL_TEXT_TOOL = re.compile(r"(?:extract|explore|analy[sz]|read|full.?text)", re.I)
+_NUMERIC_CLAIM = re.compile(r"\d")
 
 
 def _serialized(value: Any) -> str:
@@ -81,7 +82,13 @@ def capture_evidence_verification(
 
 
 def authenticate_analysis(analysis: Any, trace: Any) -> LiteratureAnalysis:
-    """Accept `verified` only when a full-text-capable tool observed the source."""
+    """Authenticate only high-impact numeric route claims at the tool boundary.
+
+    The verifier is deliberately not a second literature-discovery agent:
+    qualitative facts and broad route provenance stay ``unverified`` even if a
+    source was opened. Numeric operation conditions and stage yields can be
+    promoted only when the tool trace proves that the exact source was read.
+    """
     model = analysis if isinstance(analysis, LiteratureAnalysis) else LiteratureAnalysis.model_validate(analysis or {})
     entries = [
         entry for entry in (trace or [])
@@ -113,22 +120,32 @@ def authenticate_analysis(analysis: Any, trace: Any) -> LiteratureAnalysis:
         source.verification_tool = str(match.get("tool") or "")
         authenticated[source.source_id] = match
 
-    def secure_refs(refs: list[Any]) -> None:
+    def mark_unverified(refs: list[Any]) -> None:
+        for ref in refs:
+            ref.verification_status = "unverified"
+
+    def secure_numeric_refs(refs: list[Any]) -> None:
         for ref in refs:
             if ref.source_id not in authenticated or not ref.locator.strip():
                 ref.verification_status = "unverified"
 
     for analogue in model.analogues:
         for prop in analogue.properties:
-            secure_refs(prop.evidence)
+            mark_unverified(prop.evidence)
     for route in model.synthesis_routes:
-        secure_refs(route.evidence)
+        mark_unverified(route.evidence)
         for step in route.steps:
-            secure_refs(step.evidence)
+            if _NUMERIC_CLAIM.search(step.yield_value or ""):
+                secure_numeric_refs(step.evidence)
+            else:
+                mark_unverified(step.evidence)
             for condition in step.conditions:
-                secure_refs(condition.evidence)
+                if _NUMERIC_CLAIM.search(condition.value or ""):
+                    secure_numeric_refs(condition.evidence)
+                else:
+                    mark_unverified(condition.evidence)
     for fact in model.facts:
-        secure_refs(fact.evidence)
+        mark_unverified(fact.evidence)
     return model
 
 

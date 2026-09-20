@@ -47,6 +47,7 @@ def _disable_adk_mcp_mtls_probe() -> None:
 _disable_adk_mcp_mtls_probe()
 
 _SSE_READ_TIMEOUT = 60 * 5.0
+_MCP_REQUEST_TIMEOUT = float(os.getenv("MCP__REQUEST_TIMEOUT", "60"))
 
 
 class DynamicMCPToolset(BaseToolset):
@@ -99,7 +100,11 @@ class DynamicMCPToolset(BaseToolset):
             ts = self._by_url.get(url)
             if ts is None:
                 ts = McpToolset(
-                    connection_params=StreamableHTTPConnectionParams(url=url, sse_read_timeout=_SSE_READ_TIMEOUT)
+                    connection_params=StreamableHTTPConnectionParams(
+                        url=url,
+                        timeout=_MCP_REQUEST_TIMEOUT,
+                        sse_read_timeout=_SSE_READ_TIMEOUT,
+                    )
                 )
                 self._by_url[url] = ts
             try:

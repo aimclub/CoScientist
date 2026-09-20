@@ -36,7 +36,7 @@ from CoScientist.utils.text import strip_thinking
 
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
-from google.adk.sessions import InMemorySessionService
+from CoScientist.web.durable_sessions import DurableSessionService
 from google.genai import types
 from google.adk.agents.run_config import RunConfig
 from google.adk.workflow.utils._workflow_hitl_utils import (
@@ -117,6 +117,18 @@ TEMPLATE_PATH = WEB_DIR / "templates" / "index.html"
 APP_NAME = "coscientist_app"
 SessionKey = tuple[str, str]
 SOCKET_SEND_TIMEOUT_SECONDS = 5.0
+
+
+def _web_session_service() -> DurableSessionService:
+    """Create the durable ADK session store used by the web runtime.
+
+    Session files live beside the web registry, so state, ADK events and
+    checkpoint state are kept on the same durable volume.
+    """
+    from CoScientist.web.session_store import state_dir
+    return DurableSessionService(state_dir())
+
+
 # Tool records replayed to a reconnecting tab. Chat messages live in the same
 # log and are never dropped, so only the tool stream is capped.
 MAX_TOOL_ACTIVITY_EVENTS = 600
@@ -348,11 +360,15 @@ class WebRuntime:
     """Process-local users, ADK sessions, managers, sockets, and event logs."""
 
     def __init__(self) -> None:
-        # Identifies this server process. A tab whose remembered session was
-        # opened under a different boot id is looking at a previous run, and
-        # starts fresh instead of reopening it.
+        # Identifies this server process for diagnostics and frontend cache
+        # compatibility. It no longer controls session selection: sessions are
+        # durable and must reopen after a restart.
         self.boot_id = uuid4().hex
-        self.session_service = InMemorySessionService()
+        # The UI catalogue and graph files are durable, so the ADK session must
+        # be durable as well.  InMemorySessionService made a browser reconnect
+        # look healthy while the next invocation silently received an empty
+        # state/event history after a server restart.
+        self.session_service = _web_session_service()
         self.registry = LocalSessionRegistry()
         self.managers: dict[SessionKey, CoScientistManager] = {}
         self.manager_lock = asyncio.Lock()
@@ -392,6 +408,9 @@ class WebRuntime:
         # checkpoints.  The checkpoint plugin itself is Web-agnostic; its sink
         # reads this table to attach the original query and event baseline.
         self.run_contexts: dict[SessionKey, dict[str, Any]] = {}
+        # Installed by _wire_checkpoints; also used for HITL interrupt pauses
+        # which do not pass through the stage checkpoint plugin.
+        self.checkpoint_hitl = None
         # Run execution times (start to finish) per session
         self.run_times: dict[SessionKey, dict[str, Any]] = {}
 
@@ -957,6 +976,27 @@ def _wire_checkpoints(runtime: WebRuntime) -> None:
         run = runtime.run_contexts.get(key)
         if run is None:
             return
+        payload = dict(payload)
+        if not isinstance(payload.get("state"), dict):
+            session = await runtime.session_service.get_session(
+                app_name=APP_NAME, user_id=key[0], session_id=key[1],
+            )
+            if session is None:
+                return
+            payload["state"] = dict(session.state)
+
+        stages = _pipeline_stages()
+        agent = payload.get("agent") or payload.get("agent_name")
+        if payload.get("stage_index") is None:
+            payload["stage_index"] = next(
+                (i for i, stage in enumerate(stages)
+                 if stage.get("agent") == agent),
+                -1,
+            )
+        payload.setdefault("stage_count", len(stages))
+        payload.setdefault("title", f"HITL: {payload.get('message') or agent or 'decision'}")
+        payload.setdefault("agent", agent)
+        payload.setdefault("created_at", datetime.now().isoformat())
         record = {
             **payload,
             "run_version": run.get("run_version", 0),
@@ -984,6 +1024,8 @@ def _wire_checkpoints(runtime: WebRuntime) -> None:
         public = await asyncio.to_thread(save_checkpoint, key[0], key[1], record)
         await runtime.send(key, {"type": "checkpoint_created", **public})
 
+    runtime.checkpoint_hitl = deliver
+    runtime.hitl_handler.set_checkpoint_sink(deliver)
     set_checkpoint_sink(deliver)
 
 
@@ -1470,6 +1512,9 @@ def create_app() -> FastAPI:
             # they can mention outputs from stages later than this snapshot.
             baseline = max(0, int(checkpoint.get("adk_event_baseline") or 0))
             del adk_session.events[min(baseline, len(adk_session.events)):]
+            replace_session = getattr(runtime.session_service, "replace_session", None)
+            if replace_session is not None:
+                await replace_session(adk_session)
 
             execution_graph = checkpoint.get("execution_graph")
             if isinstance(execution_graph, dict):
@@ -2633,6 +2678,12 @@ async def _run_chat_invocation(
                             "session_key": key,
                             "payload": hitl_payload,
                         }
+                    if runtime.checkpoint_hitl is not None:
+                        await runtime.checkpoint_hitl(key, {
+                            **hitl_payload,
+                            "agent": event.author or "system",
+                            "hitl_kind": "request_input",
+                        })
                     runtime.record_event(key, hitl_payload)
                     await runtime.send(key, hitl_payload)
 

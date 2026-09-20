@@ -19,6 +19,7 @@ _PAPER_STATE_KEY = "uploaded_paper_s3_keys"
 _USER_ID_ENV = "USER_ID"
 _SESSION_ID_ENV = "SESSION_ID"
 _UPLOADED_PAPERS_PATH_ENV = "STORAGE__UPLOADED_PAPERS"
+_UPLOADED_PAPER_S3_KEYS_ENV = "STORAGE__UPLOADED_PAPER_S3_KEYS"
 _DEFAULT_LOCAL_PAPERS_ROOT = Path(__file__).resolve().parents[2] / "local_papers"
 
 _upload_locks: dict[str, asyncio.Lock] = {}
@@ -72,8 +73,42 @@ async def ensure_local_papers_uploaded(callback_context: CallbackContext) -> Non
     _upload_locks.setdefault(scope_key, asyncio.Lock())
 
     async with _upload_locks[scope_key]:
-        if callback_context.state.get(_PAPER_STATE_KEY):
+        configured_keys = _configured_uploaded_paper_s3_keys()
+        if configured_keys:
+            # Useful when the CoScientist process cannot reach the S3 endpoint
+            # but the remote paper-analysis MCP can.  The values are object
+            # keys (not bucket/key paths) and deliberately may belong to an
+            # older session.
+            callback_context.state[_PAPER_STATE_KEY] = configured_keys
+            logger.info(
+                "Using %d explicitly configured uploaded-paper S3 key(s).",
+                len(configured_keys),
+            )
             return
+
+        current_prefix = f"{user_id}/{session_id}/uploaded_papers/"
+        existing_state = callback_context.state.get(_PAPER_STATE_KEY, [])
+        if existing_state:
+            # AgentTool child sessions inherit the parent state.  A previous
+            # run can therefore leave keys from another session in this state;
+            # passing those keys to the remote paper-analysis MCP produces a
+            # misleading `No valid papers could be loaded from S3` response.
+            # Only reuse keys belonging to the current upload namespace.
+            valid_state = [
+                key
+                for key in existing_state
+                if isinstance(key, str) and key.startswith(current_prefix)
+            ]
+            if len(valid_state) == len(existing_state):
+                return
+
+            logger.warning(
+                "Discarding stale uploaded-paper S3 keys for %s:%s: %s",
+                user_id,
+                session_id,
+                existing_state,
+            )
+            callback_context.state[_PAPER_STATE_KEY] = []
 
         papers_dir = _resolve_local_papers_dir()
         if papers_dir is None or not papers_dir.exists() or not papers_dir.is_dir():
@@ -91,7 +126,7 @@ async def ensure_local_papers_uploaded(callback_context: CallbackContext) -> Non
         else:
             logger.info("Found %d local PDF(s) for upload in %s", len(pdf_files), papers_dir)
 
-        prefix = f"{user_id}/{session_id}/uploaded_papers"
+        prefix = current_prefix.rstrip("/")
         uploaded_keys: List[str] = []
 
         if pdf_files:
@@ -109,7 +144,15 @@ async def ensure_local_papers_uploaded(callback_context: CallbackContext) -> Non
                     )
 
         if not uploaded_keys:
-            existing_keys = s3_service.list_objects(prefix)
+            try:
+                existing_keys = s3_service.list_objects(prefix)
+            except Exception as exc:
+                logger.warning(
+                    "Could not list uploaded papers under S3 prefix %s: %s",
+                    prefix,
+                    exc,
+                )
+                existing_keys = []
             if existing_keys:
                 uploaded_keys = existing_keys
                 logger.info(
@@ -126,6 +169,16 @@ async def ensure_local_papers_uploaded(callback_context: CallbackContext) -> Non
                 "Registered uploaded paper S3 keys in session state: %s",
                 uploaded_keys,
             )
+
+
+def _configured_uploaded_paper_s3_keys() -> List[str]:
+    """Read comma- or newline-separated pre-existing paper keys from ``.env``."""
+    raw = os.getenv(_UPLOADED_PAPER_S3_KEYS_ENV, "")
+    return [
+        key.strip()
+        for key in raw.replace("\n", ",").split(",")
+        if key.strip()
+    ]
 
 
 def cleanup_uploaded_papers(user_id: Optional[str] = None, session_id: Optional[str] = None) -> None:

@@ -265,10 +265,13 @@ agents:
     title: Проверка источников
     include_contents: none
     description: >-
-      независимо сверяет числовые условия и выходы с полными
-      текстами источников; неподтверждённые claims оставляет unverified.
+      точечно аутентифицирует критичные числовые claims синтеза (условия и
+      выходы) по полным текстам; не повторяет поиск литературы.
     prompt: microfluidics_evidence_verifier
-    tools: [websearch, paper_analysis, papers_search]
+    # This is a provenance gate, not a second literature search. It may fetch
+    # the exact DOI/source already named in the draft, but never broadens the
+    # search with general web queries.
+    tools: [paper_analysis, papers_search]
     output_key: literature_analysis
     output_schema: literature_analysis
     callbacks:

@@ -432,14 +432,25 @@
   }
 
   // ── inbound ────────────────────────────────────────────────────────────
-  function onHitlRequest(data) {
-    request = data;
-    resetDraft();
+  function onHitlRequest(data, { history = false } = {}) {
+    if (history) {
+      // Transcript replay is informational. Keep no editable form state;
+      // an unresolved request is supplied again as a live redelivery.
+      request = null;
+      draft = {};
+      stash = {};
+    } else {
+      request = data;
+      resetDraft();
+    }
     const form = data.form || {};
     const counts = form.counts || {};
 
     const panel = document.getElementById('hitl-panel');
-    if (panel) {
+    // A historical request is not actionable. Do not leave the old
+    // "Оставить пустым" controls visible after the run has continued.
+    if (panel && history) panel.classList.add('hidden');
+    if (panel && !history) {
       panel.classList.remove('hidden');
       panel.innerHTML = `
         <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-2">
@@ -450,8 +461,8 @@
           </button>
         </div>`;
     }
-    appendMsgToFeed(`
-      <div class="my-6 relative msg-enter" id="tz-hitl-card-${esc(data.request_id)}">
+    const cardHtml = `
+      <div class="my-6 relative msg-enter" id="tz-hitl-card-${esc(data.request_id)}" data-hitl-card="${esc(data.request_id)}">
         <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
           <div class="flex items-center gap-3 mb-2">
             <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
@@ -466,14 +477,21 @@
             <span class="px-2 py-0.5 rounded-full border border-outline-variant/30 text-outline-variant">разделов: ${esc(counts.sections || 0)}</span>
           </div>
           <div class="mt-4 pl-11 flex items-center gap-3">
-            <button onclick="openTzPanel()" class="flex items-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+            <button ${history ? 'disabled' : 'onclick="openTzPanel()"'} class="flex items-center gap-2 ${history ? 'bg-surface-container-high text-outline-variant cursor-not-allowed' : 'bg-primary text-on-primary shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95'} px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] transition-all">
               <span class="material-symbols-outlined text-base">assignment</span> Открыть ТЗ
             </button>
             <span id="tz-hitl-status-${esc(data.request_id)}" class="text-[10px] text-outline-variant font-mono"></span>
           </div>
         </div>
-      </div>`);
-    openTzPanel();
+      </div>`;
+    const previousCard = document.getElementById(`tz-hitl-card-${CSS.escape(data.request_id || '')}`);
+    if (previousCard) previousCard.outerHTML = cardHtml;
+    else appendMsgToFeed(cardHtml);
+    // Requests replayed from the session transcript are historical entries.
+    // They must not reopen the modal on every page load. A live request is
+    // redelivered separately after the snapshot and is the only event that
+    // should interrupt the operator with the ТЗ form.
+    if (!history) openTzPanel();
   }
 
   function clearRequest(requestId, note) {

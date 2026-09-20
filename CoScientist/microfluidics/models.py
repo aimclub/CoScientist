@@ -214,6 +214,14 @@ class LiteratureRoute(BaseModel):
         default="",
         description="SMILES целевого продукта маршрута, если структура однозначно установлена",
     )
+    variant_label: str = Field(
+        default="",
+        description="Идентификатор или краткое имя варианта процедуры/строки таблицы",
+    )
+    comparison_notes: str = Field(
+        default="",
+        description="С чем сравнивался вариант и почему он выбран или отклонён",
+    )
     steps: List[RouteStep] = Field(default_factory=list)
     flow_suitability: str = Field(
         default="", description="Пригодность для проточного / микрофлюидного реактора"
@@ -399,6 +407,14 @@ class SynthesisRoute(BaseModel):
     )
     product: Substance
     source: str = Field(default="ретросинтез", description="«ретросинтез» или «литература»")
+    variant_label: str = Field(
+        default="",
+        description="Идентификатор варианта процедуры/строки таблицы, если источник их различает",
+    )
+    selection_rationale: str = Field(
+        default="",
+        description="Сопоставление с другими вариантами маршрута; не заменяет числовые данные",
+    )
     steps: List[ProcessStep] = Field(
         min_length=1, description="Все операции маршрута по порядку; обязательное непустое поле"
     )
@@ -406,6 +422,12 @@ class SynthesisRoute(BaseModel):
     bottlenecks: List[str] = Field(default_factory=list)
     sources: List[str] = Field(default_factory=list, description="Ссылки / DOI")
     evidence: List[EvidenceRef] = Field(default_factory=list)
+    product_purity_percent: Optional[float] = Field(
+        default=None, ge=0, le=100,
+        description="Измеренная чистота выделенного продукта, %, если сообщена",
+    )
+    product_purity_status: Literal["reported", "missing", "unverified"] = "missing"
+    product_purity_evidence: List[EvidenceRef] = Field(default_factory=list)
     tz_compliance: List[ComplianceCheck] = Field(default_factory=list)
     overall_status: Literal["unassessed", "eligible", "experimental", "rejected", "blocked"] = "unassessed"
     stub: bool = Field(default=False, description="Маршрут получен от заглушки")

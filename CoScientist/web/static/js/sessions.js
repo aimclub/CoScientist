@@ -50,9 +50,9 @@
       return created.session;
     }
 
-    // startFresh: the remembered session belongs to a previous server run, so
-    // do not reopen it. Prefer a session that is running right now, then an
-    // untouched one (so restarts do not pile up empty sessions), else create.
+    // startFresh is kept for callers that explicitly want a blank session.
+    // A server restart must not imply a new conversation: the ADK session and
+    // its checkpoints are durable and the remembered session should reopen.
     async function ensureUserSession(user, preferredSessionId = null, { startFresh = false } = {}) {
       activeUser = user;
       const sessions = await loadSessions(user);
@@ -240,13 +240,9 @@
           openIdentityModal();
           return;
         }
-        // Reopen the remembered session only if it was opened under this
-        // server process (a plain page reload); after a restart start fresh.
-        const sameServerRun = !!serverBootId && localStorage.getItem(BOOT_STORAGE_KEY) === serverBootId;
         await ensureUserSession(
           savedUser,
-          sameServerRun ? localStorage.getItem(SESSION_STORAGE_KEY) : null,
-          { startFresh: true },
+          localStorage.getItem(SESSION_STORAGE_KEY),
         );
       } catch (error) {
         addSystemMsg('Failed to initialize local sessions: ' + error.message);

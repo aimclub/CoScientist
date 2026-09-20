@@ -111,14 +111,51 @@ def _route_evidence(route: SynthesisRoute, records: dict[str, SourceRecord]) -> 
 
 
 def _step_evidence(route: SynthesisRoute, records: dict[str, SourceRecord]) -> list[list[str]]:
-    route_refs = list(route.evidence)
     result: list[list[str]] = []
     for step in route.steps:
-        refs = route_refs + list(step.evidence)
+        # Route-level evidence can establish provenance of the route, but must
+        # not silently certify every individual operation.  Numeric conditions
+        # and yields need a claim-level pointer on that step (or its condition).
+        refs = list(step.evidence)
         for condition in step.conditions:
             refs.extend(condition.evidence)
         result.append(_verified_evidence(refs, records))
     return result
+
+
+def _check_product_purity(
+    constraint: RequirementConstraint,
+    route: SynthesisRoute,
+    records: dict[str, SourceRecord],
+) -> ComplianceCheck:
+    if constraint.resolution != "confirmed" or not constraint.machine_evaluable:
+        return ComplianceCheck(
+            constraint_id=constraint.constraint_id,
+            status="unknown",
+            reason="Порог чистоты не подтверждён как машинно проверяемое требование.",
+        )
+    minimum = float(constraint.value)
+    if (
+        route.product_purity_percent is None
+        or route.product_purity_status != "reported"
+        or not _verified_evidence(route.product_purity_evidence, records)
+    ):
+        return ComplianceCheck(
+            constraint_id=constraint.constraint_id,
+            status="unknown",
+            reason="Для выделенного продукта нет верифицированного измерения чистоты.",
+        )
+    if route.product_purity_percent < minimum:
+        return ComplianceCheck(
+            constraint_id=constraint.constraint_id,
+            status="fail",
+            reason=f"Чистота продукта {route.product_purity_percent:g} % ниже требуемых {minimum:g} %.",
+        )
+    return ComplianceCheck(
+        constraint_id=constraint.constraint_id,
+        status="pass",
+        reason="Измеренная чистота продукта достигает минимального порога.",
+    )
 
 
 def _check_temperature(
@@ -385,7 +422,7 @@ def evaluate_route(
         "solvent_hazard_policy": _check_solvent_policy,
     }
     for constraint in spec.constraints:
-        if constraint.scope not in {"step", "route", "feedstock"}:
+        if constraint.scope not in {"step", "route", "feedstock", "product", "deliverable"}:
             checks.append(ComplianceCheck(
                 constraint_id=constraint.constraint_id,
                 status="not_applicable",
@@ -395,6 +432,9 @@ def evaluate_route(
         handler = handlers.get(constraint.kind)
         if handler is not None:
             checks.append(handler(constraint, route, evidence_ids))
+            continue
+        if constraint.kind == "minimum_product_purity":
+            checks.append(_check_product_purity(constraint, route, records))
             continue
         checks.append(ComplianceCheck(
             constraint_id=constraint.constraint_id,

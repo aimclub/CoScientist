@@ -1,4 +1,5 @@
 """Tools for websearch / literature research (MCP toolsets)."""
+import os
 from typing import Any, Callable, Optional
 
 from google.adk.tools.mcp_tool import McpToolset
@@ -14,11 +15,16 @@ VAULT_URL = settings.mcp.vault_url
 MICROFLUIDICS_URL = settings.mcp.microfluidics_url
 
 
-_PAPER_ANALYSIS_TIMEOUT = 60 * 15.0  # 30 min — processing many PDFs is slow
+# ADK applies ``StreamableHTTPConnectionParams.timeout`` to *both* tool
+# discovery and calls.  Its 5-second default is too short for remote MCPs on
+# the first request, causing an entire toolset to disappear from an agent.
+_MCP_REQUEST_TIMEOUT = float(os.getenv("MCP__REQUEST_TIMEOUT", "60"))
+_PAPER_ANALYSIS_TIMEOUT = float(os.getenv("MCP__PAPER_ANALYSIS_TIMEOUT", str(60 * 15)))
 
 def _http_mcp_toolset(
     url: Optional[str],
     sse_read_timeout: float = 60 * 5.0,
+    timeout: Optional[float] = None,
     headers: Optional[dict] = None,
     tool_filter: Optional[list] = None,
     httpx_client_factory: Optional[Callable] = None,
@@ -36,6 +42,7 @@ def _http_mcp_toolset(
         return None
     conn_kwargs: dict[str, Any] = {
         "url": url,
+        "timeout": timeout if timeout is not None else _MCP_REQUEST_TIMEOUT,
         "sse_read_timeout": sse_read_timeout,
         "headers": headers or {},
     }
@@ -112,6 +119,7 @@ ECONOMICS_MCP_TOOLS = [
 microfluidic_economic_toolset_instance = _http_mcp_toolset(
     settings.mcp.microfluidic_economic_url,
     sse_read_timeout=_ECONOMICS_TIMEOUT,
+    timeout=_ECONOMICS_TIMEOUT,
     tool_filter=ECONOMICS_MCP_TOOLS,
 )
 
@@ -130,6 +138,7 @@ microfluidic_cfd_toolset_instance = _http_mcp_toolset(
     # Above the run's own wait_seconds (600 by default): the call returns
     # "pending" on its own instead of the client timing out first.
     sse_read_timeout=_CFD_TIMEOUT,
+    timeout=_CFD_TIMEOUT,
     tool_filter=CFD_MCP_TOOLS,
     headers=(
         {"X-API-Key": settings.mcp.microfluidic_cfd_api_key}
@@ -140,7 +149,11 @@ microfluidic_cfd_toolset_instance = _http_mcp_toolset(
 
 # Optional paper-analysis / paper-search MCP servers — only built when configured
 # (MCP__PAPER_ANALYSIS_URL / MCP__PAPERS_SEARCH_URL in .env).
-paper_analysis_toolset_instance = _http_mcp_toolset(PAPER_ANALYSIS_URL, sse_read_timeout=_PAPER_ANALYSIS_TIMEOUT)
+paper_analysis_toolset_instance = _http_mcp_toolset(
+    PAPER_ANALYSIS_URL,
+    sse_read_timeout=_PAPER_ANALYSIS_TIMEOUT,
+    timeout=_PAPER_ANALYSIS_TIMEOUT,
+)
 
 # Per-user OpenAlex credentials forwarded as HTTP headers so the shared remote
 # container uses each caller's own rate-limit quota instead of the server's env.
