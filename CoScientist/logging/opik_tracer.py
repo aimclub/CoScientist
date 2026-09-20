@@ -49,6 +49,7 @@ def get_multi_agent_tracer():
             url_override=url_override or None,
             project_name=project_name,
             use_local=False,
+            force=True,
             #install_mcp=False,
             #automatic_approvals=True,
         )

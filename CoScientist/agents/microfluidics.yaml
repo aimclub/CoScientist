@@ -224,7 +224,7 @@ agents:
       LIT-xx query). It searches scientific literature and the web and
       extracts the requested data (classes, IFT/CMC, synthesis routes,
       limitations, analogues).
-    prompt: research
+    prompt: microfluidics_research
     tools: [websearch, paper_analysis, papers_search, task_tracker]
     output_key: search_results
     # Runs concurrently for all LIT-xx tasks under LiteratureOrchestrator. HITL review is done
@@ -236,7 +236,7 @@ agents:
     callbacks:
       before_agent: [before_get_task]
       before_model: [inject_uploaded_papers]
-      before_tool: [WebSearchLimiter]
+      before_tool: [PaperSearchGuard, WebSearchLimiter]
       after_tool: [log_research_tool_calls]
       # Keep every LIT-xx answer under a collision-free per-query state key.
       after_agent: [collect_literature_finding]

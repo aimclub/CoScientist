@@ -407,8 +407,7 @@ Update task status to "done" immediately upon completion of each work item.
 # advertising an absent MCP tool makes the model call it and ADK then
 # hard-errors with "Tool not found", killing the run.
 
-@_register("research")
-def research(ctx: PromptContext) -> str:
+def _research(ctx: PromptContext, *, cost_constrained: bool = False) -> str:
     from CoScientist.config import get_settings
 
     paper_analysis = ctx.has_tool("paper_analysis")
@@ -423,25 +422,43 @@ def research(ctx: PromptContext) -> str:
             "have actual S3 keys — never invent S3 keys."
         )
         n += 1
-        # 2) Otherwise (or if no uploaded papers) always call explore_scientific_database first
-        steps.append(
-            f"{n}. If there are NO user-uploaded papers, ALWAYS call `explore_scientific_database` before other literature tools. "
-            "Do this even if you plan to use `search_papers` or `download_papers_from_search` afterwards."
-        )
+        if cost_constrained:
+            steps.append(
+                f"{n}. Use `explore_scientific_database` only when the task needs evidence from "
+                "the indexed full-text database and metadata search is insufficient; do not call it as a preflight."
+            )
+        else:
+            steps.append(
+                f"{n}. If there are NO user-uploaded papers, ALWAYS call `explore_scientific_database` before other literature tools. "
+                "Do this even if you plan to use `search_papers` or `download_papers_from_search` afterwards."
+            )
     n += 1
     
     # 3) Use papers search
     if papers_search:
-        steps.append(
-            f"{n}. If evidence is still insufficient: use `download_papers_from_search`"
-        + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else ".")
-        + " When calling `download_papers_from_search`, aim to find at least *10* "
-        "papers that might contain the answer. OpenAlex indexes n-grams: pass keywords "
-        "as a single space-separated string, no quotes around phrases. "
-        "Use up to 3 short exact phrases (2–3 words each) taken verbatim from the query; "
-        "do not paraphrase, stem, or replace Unicode symbols."
-        "If no papers found, retry up to 3 times with shorter or differently-split phrase combinations."
-        )
+        if cost_constrained:
+            steps.append(
+                f"{n}. Start with exactly one `search_papers` metadata search (limit=5). "
+            + "If evidence is still insufficient and the task needs full-text verification: use `download_papers_from_search`"
+            + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else ".")
+            + " Set `limit=3`; do not download more papers merely to broaden coverage. "
+            "OpenAlex indexes n-grams: pass keywords as a single space-separated string, no quotes around phrases. "
+            "Use up to 3 short exact phrases (2–3 words each) taken verbatim from the query; "
+            "do not paraphrase, stem, or replace Unicode symbols. "
+            "Do not repeat an identical query. If the first search is empty, make at most one "
+            "different, narrower retry; otherwise report the evidence gap."
+            )
+        else:
+            steps.append(
+                f"{n}. If evidence is still insufficient: use `download_papers_from_search`"
+            + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else ".")
+            + " When calling `download_papers_from_search`, aim to find at least *10* "
+            "papers that might contain the answer. OpenAlex indexes n-grams: pass keywords "
+            "as a single space-separated string, no quotes around phrases. "
+            "Use up to 3 short exact phrases (2–3 words each) taken verbatim from the query; "
+            "do not paraphrase, stem, or replace Unicode symbols."
+            "If no papers found, retry up to 3 times with shorter or differently-split phrase combinations."
+            )
         n += 1
 
     # 4) Final fallback to tavily
@@ -534,6 +551,18 @@ Update task status to "done" immediately upon completion of each work item.
         HITL=ctx.render_hitl(),
         LANGUAGE=_LANGUAGE_REQUIREMENT,
     )
+
+
+@_register("research")
+def research(ctx: PromptContext) -> str:
+    """Default research workflow, retained for the main system."""
+    return _research(ctx)
+
+
+@_register("microfluidics_research")
+def microfluidics_research(ctx: PromptContext) -> str:
+    """Budget-conscious literature workflow used only by the microfluidics app."""
+    return _research(ctx, cost_constrained=True)
 
 
 # ── ToolRetrieverAgent ───────────────────────────────────────────────────────
@@ -2746,7 +2775,7 @@ CoScientist (кейс «микрофлюидика»).
 ЦЕЛЕВАЯ МОЛЕКУЛА ИЗ ТЗ (fixed=true — заказчик задал конкретное вещество):
 {target_molecule?}
 
-Твоя задача: превратить это ТЗ в набор из 4–6 конкретных поисковых задач для
+Твоя задача: превратить это ТЗ в набор из 3–4 конкретных поисковых задач для
 литературного агента (не общий запрос «найти ПАВ для нефтегаза», а точечные
 задачи: классы веществ, рецептуры, синтетические маршруты — в т.ч. проточные/
 микрофлюидные, ограничения, аналоги).
@@ -2820,7 +2849,7 @@ steps and reference agents — you do NOT execute anything yourself.
       the "extract" list (what data to pull from sources). The description is
       exactly what ResearchAgent will receive, so it must be self-contained;
       ResearchAgent composes the search queries itself.
-- If the queries block above is empty, derive 4–6 focused literature tasks
+- If the queries block above is empty, derive 3–4 focused literature tasks
   directly from the ТЗ fields (target product, conditions, required
   properties, raw-material and technology constraints).
 - Prefer the smallest possible plan that still covers all queries (never

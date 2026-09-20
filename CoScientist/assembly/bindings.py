@@ -1516,6 +1516,11 @@ def _web_search_limiter():
     return SearchLimiter(max_searches=get_settings().web.max_searches).limit_searches
 
 
+def _paper_search_guard():
+    from CoScientist.agents.callbacks.tool_callbacks import PaperSearchGuard
+    return PaperSearchGuard().guard_paper_search
+
+
 def _sanitize_json_output():
     from CoScientist.agents.callbacks import sanitize_json_output
     return sanitize_json_output
@@ -1680,6 +1685,8 @@ _cb("hitl_before_agent", "before_agent", factory=lambda ctx: _hitl_before_model(
 _cb("hitl_before_tool", "before_tool", factory=lambda ctx: _hitl_before_tool())
 # Limit web search calls per agent turn.
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
+# Clamp OpenAlex result sets before the request reaches the remote papers MCP.
+_cb("PaperSearchGuard", "before_tool", factory=lambda ctx: _paper_search_guard())
 # Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.
 _cb("guard_unknown_tools", "after_model", factory=_guard_unknown_tools)
 # End the planner's turn once its plan is registered, so it cannot loop

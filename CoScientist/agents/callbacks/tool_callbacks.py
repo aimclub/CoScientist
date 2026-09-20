@@ -736,6 +736,30 @@ class SearchLimiter:
             }
         return None
 
+
+class PaperSearchGuard:
+    """Clamp paper-search MCP result sets before they reach OpenAlex."""
+
+    metadata_limit = 5
+    download_limit = 3
+
+    def guard_paper_search(self, tool, args: dict, tool_context: ToolContext) -> None:
+        del tool_context  # callback API parity; this guard needs no session state
+        if tool.name == "search_papers":
+            args["limit"] = min(self._positive_int(args.get("limit"), self.metadata_limit),
+                                self.metadata_limit)
+        elif tool.name == "download_papers_from_search":
+            args["limit"] = min(self._positive_int(args.get("limit"), self.download_limit),
+                                self.download_limit)
+
+    @staticmethod
+    def _positive_int(value: Any, default: int) -> int:
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return default
+        return parsed if parsed > 0 else default
+
 def inject_original_query(
     callback_context: CallbackContext, llm_request: LlmRequest
 ) -> None:
