@@ -25,7 +25,7 @@ from uuid import uuid4
 import httpx
 from google.adk.agents import BaseAgent
 from google.adk.agents.invocation_context import InvocationContext
-from google.adk.events import Event
+from google.adk.events import Event, EventActions
 from google.genai import types
 
 from CoScientist.config import get_settings
@@ -364,7 +364,12 @@ class MasdaDatasetsAgent(BaseAgent):
     async def _run_async_impl(
         self, ctx: InvocationContext
     ) -> AsyncGenerator[Event, None]:
+        state_delta: dict[str, Any] = {}
         try:
+            from CoScientist.a2a.acquisition import (
+                assigned_masda_task_id, build_receipt, record_success,
+            )
+            coscientist_task_id = assigned_masda_task_id(ctx.session.state)
             result = await acquire_dataset(
                 _delegated_request(ctx),
                 state=ctx.session.state,
@@ -372,6 +377,13 @@ class MasdaDatasetsAgent(BaseAgent):
                 card_url=self.card_url,
                 a2a_version=self.a2a_version,
                 timeout_s=self.timeout_s,
+            )
+            receipt = build_receipt(
+                state=ctx.session.state, server_task_id=result.task_id,
+                path=result.workspace_path, record_count=result.record_count,
+            )
+            state_delta = record_success(
+                ctx.session.state, receipt, coscientist_task_id
             )
             text = result.as_text()
         except MasdaError as exc:
@@ -382,4 +394,5 @@ class MasdaDatasetsAgent(BaseAgent):
             invocation_id=ctx.invocation_id,
             branch=ctx.branch,
             content=types.Content(role="model", parts=[types.Part.from_text(text=text)]),
+            actions=EventActions(state_delta=state_delta),
         )

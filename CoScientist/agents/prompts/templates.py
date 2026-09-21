@@ -2299,6 +2299,8 @@ itself records that the run was about reproducing or benchmarking against it.
 A starting digest of the graph:
 {research_context?}
 
+{dataset_acquisition_report_context?}
+
 {links_context?}
 
 ### Procedure
@@ -2330,6 +2332,12 @@ A starting digest of the graph:
    papering over it.
 5. **No placeholders.** The report must render on its own — every referenced figure
    and table must be one `format_results` actually collected.
+6. **Report dataset acquisition from verified state.** When the **Verified dataset
+   acquisition** block is present, use it for the receipt, task linkage, integrity,
+   and completion status. A receipt is session state and need not exist as a
+   separate JSON file. Never infer successful MASDA acquisition from prose or from
+   a CSV alone. Do not claim successful MASDA acquisition unless that block records
+   a completed gate and a validated receipt.
 
 {report_language_block?}
 

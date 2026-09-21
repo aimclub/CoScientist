@@ -14,6 +14,7 @@ from typing import Any, Dict, Optional
 from google.adk.tools import FunctionTool
 from google.adk.tools.tool_context import ToolContext
 
+from CoScientist.config import get_settings
 from CoScientist.config.report import ReportConfig
 from CoScientist.graph.session_scope import session_key
 from CoScientist.reporting.collect import collect_artifacts
@@ -97,16 +98,24 @@ async def format_results(tool_context: ToolContext) -> Dict[str, Any]:
     state = _state_to_dict(getattr(tool_context, "state", {}))
     session_id = _session_id(tool_context)
     cfg = ReportConfig.from_mapping(state.get("report_config"))
+    allowed_table_paths = None
+    if get_settings().dataset.provider == "masda":
+        from CoScientist.a2a.acquisition import validated_masda_paths
+        allowed_table_paths = validated_masda_paths(state)
 
     # With a remote code-exec host the sandbox files are not on this disk, so
     # collect_artifacts would find nothing there. Push them to S3 first. This has
     # to run BEFORE collection, not at finalize: a figure reaches the report only
     # through the call below.
     synced = set()
-    try:
-        synced = await sync_workspace_to_s3(tool_context, state)
-    except Exception as exc:  # noqa: BLE001 - a failed sync must not stop a report
-        logger.warning("format_results: workspace sync failed (%s)", exc)
+    # MASDA materializes its verified artifact on this host. A generic remote
+    # workspace scan could upload unrelated CSVs and erase their local identity,
+    # making it impossible to compare them with the receipt allowlist.
+    if allowed_table_paths is None:
+        try:
+            synced = await sync_workspace_to_s3(tool_context, state)
+        except Exception as exc:  # noqa: BLE001 - a failed sync must not stop a report
+            logger.warning("format_results: workspace sync failed (%s)", exc)
 
     # Off the event loop. Collection downloads every artifact over the network,
     # and each dead link costs a vault round trip on top. On the loop thread all
@@ -126,6 +135,7 @@ async def format_results(tool_context: ToolContext) -> Dict[str, Any]:
         # this host, because both sides use code_exec.workspace_root. Naming them
         # keeps a file whose upload failed reachable from disk.
         synced_files=synced,
+        allowed_table_paths=allowed_table_paths,
     )
     logger.info(
         "format_results: session=%s figures=%d tables=%d files=%d",

@@ -925,6 +925,12 @@ def _before_get_task():
     from CoScientist.agents.callbacks import before_get_task
     return before_get_task
 
+
+def _require_masda_acquisition():
+    from CoScientist.a2a.acquisition import require_masda_acquisition
+    return require_masda_acquisition
+
+
 def _inject_original_query():
     from CoScientist.agents.callbacks import inject_original_query
     return inject_original_query
@@ -1086,6 +1092,8 @@ _cb("redirect_when_no_tools", "before_agent", factory=lambda ctx: _redirect_when
 _cb("inject_fedot_candidates", "before_agent", factory=lambda ctx: _inject_fedot_candidates())
 # Load active tasks into agent state before the agent runs.
 _cb("before_get_task", "before_agent", factory=lambda ctx: _before_get_task())
+_cb("require_masda_acquisition", "before_agent",
+    factory=lambda ctx: _require_masda_acquisition())
 _cb("inject_original_query", "before_model", factory=lambda ctx: _inject_original_query())
 # Give the orchestrator/planner the knowledge-graph root (agents + history) up front.
 _cb("inject_graph_root", "before_agent", factory=lambda ctx: _inject_graph_root())

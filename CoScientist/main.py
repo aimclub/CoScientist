@@ -325,12 +325,14 @@ class CoScientistManager:
         # the same session (graph + workspace persist) with a nudge instead of
         # stopping — bounded so a persistently-confused model can't loop forever.
         _GUARD_SIG = "not in your tool list"
+        from CoScientist.a2a.acquisition import INCOMPLETE_MARKER
         _nudge = types.Content(role="user", parts=[types.Part(text=(
             "Continue the task — do not stop. Call ONLY tools you actually have: "
             "delegate literature/research to ResearchAgent and coding/experiments "
             "to CoderAgent or TaskExecutorAgent instead of calling their tools "
             "yourself. Keep working until the concrete deliverable is produced."))])
         msg = content
+        masda_corrections = 0
 
         # The report is the LAST final-response text of the run — i.e. the terminal
         # aggregator stage. If a mid-run failure (e.g. a slow MCP tool's 300s
@@ -374,7 +376,20 @@ class CoScientistManager:
                 )
                 msg = _nudge
                 continue
+            if (self._run_error is None and INCOMPLETE_MARKER in (report_markdown or "")
+                    and masda_corrections < 2):
+                masda_corrections += 1
+                msg = types.Content(role="user", parts=[types.Part(text=(
+                    "The required MASDA acquisition is incomplete. Continue the existing plan "
+                    "and actually call MasdaDatasetsAgent. Do not claim success without its "
+                    "server task id and verified workspace artifact."
+                ))])
+                continue
             break
+
+        # The marker is an internal continuation signal, not report content.
+        if INCOMPLETE_MARKER in report_markdown:
+            report_markdown = report_markdown.replace(INCOMPLETE_MARKER, "", 1).lstrip()
 
         # Read session state once, for the S3 fallback and reference extraction.
         try:

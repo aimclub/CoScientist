@@ -248,7 +248,7 @@ agents:
     # figures/tables collected by format_results, not from the raw transcript.
     include_contents: none
     callbacks:
-      before_agent: [inject_research_context, inject_report_language, user_links]
+      before_agent: [require_masda_acquisition, inject_research_context, inject_report_language, user_links]
       before_model: [redact_link_urls]
       after_model: [expand_link_refs]
       before_tool: [resolve_link_refs]

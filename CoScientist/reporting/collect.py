@@ -227,6 +227,7 @@ def collect_artifacts(
     index_key: Optional[tuple] = None,
     resolve_url: Optional[Callable[[str], Optional[str]]] = None,
     synced_files: Optional[Set[str]] = None,
+    allowed_table_paths: Optional[Set[str]] = None,
 ) -> Dict[str, Any]:
     """Copy/download run artifacts into the report folder; return markdown blocks.
 
@@ -258,6 +259,9 @@ def collect_artifacts(
                        use ``code_exec.workspace_root``. A file the sync failed
                        to upload is NOT in this set and is still walked, which is
                        the point of naming them instead of skipping the walk.
+        allowed_table_paths: when set, include workspace tables only when their
+                       resolved path is in this set and ignore indexed table URLs.
+                       ``None`` preserves the normal builtin-provider behaviour.
 
     Returns a dict with ``report_dir``, ``figures``, ``tables``, ``files``, and
     ``blocks_markdown`` (the concatenation the agent should embed).
@@ -357,6 +361,8 @@ def collect_artifacts(
             figure_blocks.append(f"### {label}\n\n![{label}]({link})")
             _note_source(art, dest)
         elif _looks_like(url, _TABLE_EXTS):
+            if allowed_table_paths is not None:
+                continue
             name = f"{label}_{_url_filename(url, '.csv')}"
             dest = tables_dir / name
             if not _download(url, dest):
@@ -424,6 +430,9 @@ def collect_artifacts(
                     figure_blocks.append(f"### {stem}\n\n![{stem}]({link})")
                     ws_figures += 1
                 elif _looks_like(fname, _TABLE_EXTS):
+                    if (allowed_table_paths is not None
+                            and str(src.resolve()) not in allowed_table_paths):
+                        continue
                     if ws_tables >= _MAX_WORKSPACE_FILES:
                         continue
                     dest = tables_dir / fname

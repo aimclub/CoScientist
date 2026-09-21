@@ -42,6 +42,7 @@ from CoScientist.agents.callbacks.tool_callbacks import (
     print_research_agent_tool_call,
     redirect_when_no_tools,
 )
+from CoScientist.a2a.acquisition import require_masda_acquisition
 
 __all__ = [
     "make_pre_action_critique",
@@ -63,6 +64,7 @@ __all__ = [
     "make_plan_registration_guard",
     "inject_original_query",
     "before_get_task",
+    "require_masda_acquisition",
     "inject_graph_root",
     "inject_dataset_context",
     "inject_fedot_candidates",
