@@ -31,6 +31,13 @@ _RANGE_C = re.compile(
     r"([+-]?\d+(?:[.,]\d+)?)\s*(?:[–—-]|\.\.)\s*"
     r"([+-]?\d+(?:[.,]\d+)?)\s*°?\s*[CcСс]"
 )
+# A temperature-labelled condition ("температура: 50–70"): the number carries
+# no °C, so read it from the value once the FIELD is known to be temperature.
+_TEMP_LABEL = re.compile(r"температур|temperature|\btemp\b|t\s*[,=]|t\s*°", re.I)
+_RANGE_BARE = re.compile(
+    r"([+-]?\d+(?:[.,]\d+)?)\s*(?:[–—-]|\.\.|to|до)\s*([+-]?\d+(?:[.,]\d+)?)"
+)
+_NUMBER_BARE = re.compile(r"[+-]?\d+(?:[.,]\d+)?")
 _WATER = re.compile(r"\b(?:water|aqueous|вод(?:а|ы|е|у|ой)|водн\w*)\b", re.I)
 _ALCOHOL_MEDIUM = re.compile(
     r"(?:спирт\w*|этанол\w*|метанол\w*|изопропанол\w*|alcohol|ethanol|methanol|isopropanol|EtOH|MeOH|iPrOH)",
@@ -41,7 +48,16 @@ _SOLVENT_DECLARATION = re.compile(
 )
 _NO_CATALYST = re.compile(
     r"(?:без|отсутств\w*)[^.;]{0,50}(?:металл\w*\s+)?катализ|"
-    r"(?:no|without)\s+(?:metal(?:-containing)?\s+)?catalyst",
+    r"катализ\w*[^.;]{0,30}(?:не\s+(?:требуетс\w*|нужн\w*|использ\w*|примен\w*)|отсутств\w*)|"
+    r"(?:no|without)\s+(?:metal(?:-containing)?\s+)?catalyst|"
+    r"catalyst[- ]free",
+    re.I,
+)
+# A catalyst FIELD whose value says "none / not needed" — an explicit absence.
+_NO_CATALYST_VALUE = re.compile(
+    r"(?:не\s+(?:требуетс\w*|нужн\w*|использ\w*|примен\w*)|"
+    r"отсутств\w*|^\s*нет\s*$|^\s*none\s*$|"
+    r"not\s+(?:required|needed|used)|catalyst[- ]free)",
     re.I,
 )
 _METAL_SYMBOL = re.compile(
@@ -72,13 +88,33 @@ def _metal_named(value: str) -> bool:
 
 
 def _temperature_values(step: Any) -> list[float]:
+    """Temperatures declared for a step, °C.
+
+    A condition whose NAME marks it as temperature ("температура", "temperature",
+    "T") has its numbers read even without a °C unit — the model often writes
+    ``температура: 50–70``. Any other condition contributes only numbers that
+    explicitly carry °C, so a bare "время: 3–6" never leaks in as a temperature.
+    """
     values: list[float] = []
     for condition in step.conditions:
-        text = f"{condition.name} {condition.value}"
+        name = str(condition.name or "")
+        value = str(condition.value or "")
+        is_temp_field = bool(_TEMP_LABEL.search(name))
+        if is_temp_field:
+            ranges = list(_RANGE_BARE.finditer(value))
+            if ranges:
+                for match in ranges:
+                    values.extend(float(v.replace(",", ".")) for v in match.groups())
+                continue
+            nums = _NUMBER_BARE.findall(value)
+            if nums:
+                values.extend(float(n.replace(",", ".")) for n in nums)
+                continue
+        text = f"{name} {value}"
         ranges = list(_RANGE_C.finditer(text))
         if ranges:
             for match in ranges:
-                values.extend(float(value.replace(",", ".")) for value in match.groups())
+                values.extend(float(v.replace(",", ".")) for v in match.groups())
             continue
         values.extend(float(match.group(1).replace(",", ".")) for match in _NUMBER_C.finditer(text))
     return values
@@ -290,7 +326,8 @@ def _check_metal_catalyst(
         explicit_absence.append(
             any(
                 _CATALYST_LABEL.search(condition.name)
-                and _NO_METAL_VALUE.search(condition.value)
+                and (_NO_METAL_VALUE.search(condition.value)
+                     or _NO_CATALYST_VALUE.search(condition.value))
                 for condition in step.conditions
             )
             or bool(_NO_CATALYST.search(_condition_text(step)))

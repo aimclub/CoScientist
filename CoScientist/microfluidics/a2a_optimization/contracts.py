@@ -38,7 +38,7 @@ def _number(value: Any, name: str, *, positive: bool = False) -> None:
 def prepare_inputs(state: Any) -> dict:
     """Require real, linked route rankings; preserve service numbers verbatim."""
     inputs = {key: state.get(key) for key in INPUT_KEYS}
-    for key in ("structured_tz", "literature_analysis", "synthesis_routes", "qualified_routes", "economics_ranking"):
+    for key in ("structured_tz", "literature_analysis", "synthesis_routes", "qualified_routes"):
         inputs[key] = _object(inputs[key], key)
     LiteratureAnalysis.model_validate(inputs["literature_analysis"])
     proposals = SynthesisRoutes.model_validate(inputs["synthesis_routes"]).routes
@@ -52,7 +52,21 @@ def prepare_inputs(state: Any) -> dict:
     ids = [route.route_id for route in routes]
     if not routes or not set(ids).issubset(set(proposal_ids)):
         raise ValueError("qualified_routes: nonempty eligible subset of synthesis_routes required")
-    ranking = inputs["economics_ranking"]
+
+    # economics_ranking is OPTIONAL: when the costing server did not run (no
+    # numbers to rank), hand the routes off UNRANKED for planning/CFD instead
+    # of failing — a missing ranking must not dead-end the experiment stage
+    # (and drive the orchestrator into a design↔routes↔economics loop).
+    raw_ranking = state.get("economics_ranking")
+    ranking_available = bool(raw_ranking) and (
+        not isinstance(raw_ranking, dict) or bool(raw_ranking.get("routes"))
+    )
+    if not ranking_available:
+        inputs["economics_ranking"] = None
+        inputs["economics_ranking_available"] = False
+        return json.loads(json.dumps(inputs, ensure_ascii=False, allow_nan=False))
+    ranking = _object(raw_ranking, "economics_ranking")
+    inputs["economics_ranking"] = ranking
     ranked = ranking.get("routes")
     if not isinstance(ranked, dict) or set(ranked) != set(ids):
         raise ValueError("economics_ranking.routes must match qualified_routes route_id values exactly")
