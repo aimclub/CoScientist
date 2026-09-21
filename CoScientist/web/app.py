@@ -174,7 +174,15 @@ _FEDOT_DEMO_OFFLINE_PAGE = """<!DOCTYPE html>
   <code>{upstream}</code> никто не слушает.</p>
   <ol>
     <li><code>git submodule update --init infrastructure/fedot-mas-gui</code></li>
-    <li>поднять его по инструкции в этом каталоге (порт по умолчанию 4173)</li>
+    <li><code>cd infrastructure/fedot-mas-gui &amp;&amp; uv sync &amp;&amp;
+        uv pip install -r gui/requirements.txt</code> — своё окружение
+        обязательно: fedotmas ищет локальные MCP-серверы, поднимаясь от места
+        своей установки до <code>pyproject.toml</code> с
+        <code>[tool.uv.workspace]</code>, и в ядровом venv такого корня нет —
+        стенд тогда стартует, но отвечает 500 на <code>/api/status</code></li>
+    <li><code>GUI_PORT=4173 ./.venv/Scripts/python.exe gui/run.py</code> —
+        ключ провайдера стенд читает из <code>.env</code> как
+        <code>OPENAI_API_KEY</code> и <code>OPENAI_BASE_URL</code></li>
     <li>другой адрес задаётся переменной <code>FEDOT_GUI_URL</code></li>
   </ol>
   <p>Живой прогон <code>fedot_tool</code> рисуется на этой же странице через
@@ -268,6 +276,28 @@ def _validated_report_language(raw: Any) -> str:
             "Report language must be one of: " + ", ".join(REPORT_LANGUAGES) + "."
         )
     return lang
+
+
+class _RevalidatingStatic(StaticFiles):
+    """Serve the front end with "ask me every time".
+
+    `index()` below already sends `no-store` for exactly this reason — but the
+    dozen modules the page then pulls in went out with no `Cache-Control` at
+    all, so a browser applied heuristic freshness to them. A restarted server
+    could therefore still be driving yesterday's JavaScript, and that failure
+    is invisible: nothing errors, the new thing simply is not there. Seen on
+    2026-09-21, when two rail rows merged half an hour earlier were reported
+    missing from a page whose server had them.
+
+    `no-cache` is not `no-store`: the browser still keeps the file and still
+    asks, and the ETag turns the answer into a 304 with no body. The 1.6 MB of
+    vendored ELK is downloaded once, not once per page.
+    """
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers.setdefault("Cache-Control", "no-cache")
+        return response
 
 
 def _apply_frontend_settings(frontend: dict) -> None:
@@ -1192,7 +1222,8 @@ def create_app() -> FastAPI:
     # offline / behind a VPN without any CDN.
     _static_dir = WEB_DIR / "static"
     if _static_dir.exists():
-        app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+        app.mount("/static", _RevalidatingStatic(directory=str(_static_dir)),
+                  name="static")
 
     # --- HTML endpoint ---
     @app.get("/", response_class=HTMLResponse)

@@ -98,6 +98,8 @@ def test_a_browser_gets_a_page_and_a_script_gets_json(client):
     body = page.text
     # What the operator needs in order to do something about it.
     assert "git submodule update --init infrastructure/fedot-mas-gui" in body
+    assert "uv pip install -r gui/requirements.txt" in body, "no way to build it"
+    assert "gui/run.py" in body, "no way to start it"
     assert "FEDOT_GUI_URL" in body and "127.0.0.1:4173" in body
     assert "/fedot-trace" in body, "no way back to the thing that does work"
 
@@ -129,3 +131,27 @@ def test_the_trace_page_and_the_live_stream_stand_on_their_own(client):
     assert trace.status_code == 200
     # Unconfigured is an empty state, never an error the page has to handle.
     assert trace.json()["status"] in {"unconfigured", "empty", "ok", "error"}
+
+
+def test_the_front_end_is_never_served_from_a_stale_cache(client):
+    """The rail rows above were reported missing from a page whose server had
+    them: `index.html` goes out `no-store`, but the modules it loads went out
+    with no `Cache-Control` at all, so a browser was free to keep its own copy
+    for as long as its heuristic allowed."""
+    for path in ("/static/js/activity_rail.js", "/static/js/i18n.js",
+                 "/static/css/main.css", "/static/vis-network.min.js"):
+        r = client.get(path)
+        assert r.status_code == 200, path
+        assert "no-cache" in r.headers.get("cache-control", ""), path
+        assert r.headers.get("etag"), f"{path} has nothing to revalidate WITH"
+
+    # And revalidation is what it costs — not the file again.
+    first = client.get("/static/js/activity_rail.js")
+    again = client.get("/static/js/activity_rail.js",
+                       headers={"If-None-Match": first.headers["etag"]})
+    assert again.status_code == 304 and not again.content
+
+    # The page itself is stricter still, and stays that way.
+    page = client.get("/")
+    assert "no-store" in page.headers.get("cache-control", "")
+
