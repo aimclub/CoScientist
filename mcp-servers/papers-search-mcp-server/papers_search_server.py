@@ -199,7 +199,7 @@ def download_papers_from_search(
         file_name = f"{_sanitize_filename(str(title))}.pdf"
         s3_key = f"{s3_prefix.rstrip('/')}/{file_name}"
 
-        response = client.request_with_retry(endpoint=pdf_url, params={"api_key": api_key})
+        response = client.request_with_retry(endpoint=pdf_url)
         destination_path = f"{s3_prefix.rstrip('/')}/{file_name}"
         s3_client.upload_fileobj(BytesIO(response.content), s3_service.bucket_name, destination_path)
         logging.info(f"Uploaded paper '{title}' to S3 at {destination_path}")

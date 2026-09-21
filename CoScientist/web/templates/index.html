@@ -5,9 +5,7 @@
   <meta charset="utf-8" />
   <meta content="width=device-width, initial-scale=1.0" name="viewport" />
   <title>CoScientist — Orchestrator</title>
-  <link
-    href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
-    rel="stylesheet" />
+  <link rel="stylesheet" href="/static/css/fonts.css" />
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
     rel="stylesheet" />
   <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
@@ -38,8 +36,8 @@
             "on-error-container": "#ffdad6", "error-container": "#93000a",
           },
           fontFamily: {
-            headline: ["Space Grotesk"], body: ["Inter"],
-            label: ["Space Grotesk"], mono: ["JetBrains Mono"]
+            headline: ["Source Sans 3", "sans-serif"], body: ["Source Sans 3", "sans-serif"],
+            label: ["Source Sans 3", "sans-serif"], mono: ["UI Mono", "IBM Plex Mono", "monospace"]
           }
         },
       },
@@ -52,7 +50,7 @@
 
   <!-- SideNavBar -->
   <aside id="side-nav"
-    class="w-64 h-full fixed left-0 top-0 border-r border-outline-variant/10 bg-[#191c22] flex flex-col h-screen py-6 font-['Space_Grotesk'] tracking-tight z-50">
+    class="w-64 h-full fixed left-0 top-0 border-r border-outline-variant/10 bg-[#191c22] flex flex-col h-screen py-6 font-headline tracking-tight z-50">
     <div class="px-6 mb-8">
       <h1 class="text-xl font-bold tracking-widest text-[#00daf3] uppercase">CoScientist</h1>
       <p class="text-[10px] text-outline-variant tracking-widest mt-1" id="version-label">MAS v1.0.0</p>
@@ -126,7 +124,7 @@
       <div data-i18n="nav.orchestrator" class="font-black text-[#00daf3] font-headline tracking-tighter">ORCHESTRATOR
       </div>
       <div
-        class="hidden md:flex items-center gap-6 font-['Space_Grotesk'] text-[10px] uppercase tracking-widest font-bold">
+        class="hidden md:flex items-center gap-6 font-headline text-[10px] uppercase tracking-widest font-bold">
         <span id="status-badge" class="text-outline-variant">Status: Idle</span>
         <span id="event-count" class="text-outline-variant">Events: 0</span>
       </div>

@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
+  <link rel="stylesheet" href="/static/css/fonts.css" />
   <title data-i18n="graph.title">CoScientist — Research Graph</title>
   <script src="/static/vis-network.min.js"></script>
   <!-- Placement only: ELK computes coordinates, vis-network draws. -->
@@ -18,7 +19,7 @@
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
-      font-family: -apple-system, "Segoe UI", Roboto, Inter, sans-serif; font-size: 13px; }
+      font-family: "Source Sans 3", -apple-system, "Segoe UI", Roboto, sans-serif; font-size: 13px; }
 
     /* top bar */
     #bar { position: fixed; top: 0; left: 0; right: 0; height: 46px; display: flex;
@@ -92,7 +93,7 @@
     #detail .prov { background: var(--bg); border: 1px solid var(--line); border-left: 3px solid var(--accent);
       border-radius: 8px; padding: 9px 11px; margin: 6px 0; cursor: pointer; transition: border-color .12s, background .12s; }
     #detail .prov:hover { border-color: var(--accent); background: #1a1f28; }
-    #detail .prov .tool { font-weight: 700; color: var(--accent); font-family: ui-monospace, monospace; font-size: 12px; }
+    #detail .prov .tool { font-weight: 700; color: var(--accent); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; }
     #detail .prov .jump { float: right; color: var(--accent); font-size: 10px; opacity: .65; }
     #detail .prov .res { color: var(--ink2); font-size: 11.5px; margin-top: 5px; line-height: 1.5;
       white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; }
@@ -103,14 +104,14 @@
     .kv .row { display: grid; grid-template-columns: minmax(64px, max-content) 1fr; gap: 2px 12px;
       padding: 5px 0; border-bottom: 1px solid var(--line); align-items: baseline; }
     .kv .row:last-child { border-bottom: 0; }
-    .kv .key { color: var(--ink2); font-size: 11.5px; font-family: ui-monospace, monospace;
+    .kv .key { color: var(--ink2); font-size: 11.5px; font-family: "IBM Plex Mono", ui-monospace, monospace;
       word-break: break-word; }
     .kv .val { color: var(--ink); font-size: 12.5px; line-height: 1.45; white-space: pre-wrap;
       overflow-wrap: anywhere; min-width: 0; }
     .kv .val.block { grid-column: 1 / -1; background: var(--bg); border: 1px solid var(--line);
       border-radius: 6px; padding: 7px 9px; max-height: 40vh; overflow-y: auto; }
     .kv .val.dim { color: var(--ink3); font-size: 11px; }
-    .kv .mono { font-family: ui-monospace, monospace; font-size: 11.5px; }
+    .kv .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11.5px; }
     .kv .nested { grid-column: 1 / -1; margin-left: 10px; padding-left: 10px;
       border-left: 2px solid var(--line); }
     .kv ol.items { margin: 0; padding-left: 18px; color: var(--ink); font-size: 12.5px; }
@@ -126,7 +127,7 @@
       user-select: none; }
     .call .hd:hover { background: #1a1f28; }
     .call .st { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-    .call .tool { font-family: ui-monospace, monospace; font-weight: 700; font-size: 12px;
+    .call .tool { font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 700; font-size: 12px;
       color: var(--accent); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
       white-space: nowrap; }
     .call .when { color: var(--ink3); font-size: 11px; font-variant-numeric: tabular-nums;
@@ -148,7 +149,7 @@
     .report h1, .report h2, .report h3, .report h4 { font-size: 13px; margin: 12px 0 4px; color: var(--ink); }
     .report h1 { font-size: 14px; }
     .report p, .report ul, .report ol { margin: 6px 0; } .report li { margin: 2px 0; }
-    .report code { font-family: ui-monospace, monospace; font-size: 11.5px; background: var(--surface2);
+    .report code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11.5px; background: var(--surface2);
       padding: 1px 4px; border-radius: 4px; }
     .report pre { max-height: none; margin: 6px 0; } .report pre code { background: none; padding: 0; }
     .report a { color: var(--accent); } .report img { max-width: 100%; border-radius: 6px; }
@@ -159,7 +160,7 @@
     .art { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
     .art:last-child { border-bottom: 0; }
     .art .ic { flex: none; }
-    .art .uri { font-family: ui-monospace, monospace; font-size: 11.5px; overflow-wrap: anywhere; color: var(--ink); }
+    .art .uri { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11.5px; overflow-wrap: anywhere; color: var(--ink); }
     .art a.uri { color: var(--accent); text-decoration: none; } .art a.uri:hover { text-decoration: underline; }
     .art .by { color: var(--ink3); font-size: 11px; white-space: nowrap; margin-left: auto; }
     #detail .note { color: var(--ink3); font-size: 11.5px; font-style: italic; margin: 2px 0 0; }

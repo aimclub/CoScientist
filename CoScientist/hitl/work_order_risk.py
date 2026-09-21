@@ -47,6 +47,10 @@ TOOL_TIERS: dict[str, Tier] = {
     "tavily_crawl": Tier.COMPUTE,
     "search_papers": Tier.READ,
     "download_papers_from_search": Tier.COMPUTE,
+    "explore_scientific_database": Tier.READ,
+    # The old name of the one above. PR 367 renamed it; the prompt still
+    # offers it as the fallback for a server that predates the rename, and an
+    # unlisted tool is priced COMPUTE — an approval prompt for a RAG read.
     "explore_chemistry_database": Tier.READ,
     "explore_my_papers": Tier.READ,
     # medical
