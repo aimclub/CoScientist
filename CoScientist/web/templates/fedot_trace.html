@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FEDOT.MAS Trace — CoScientist</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { margin: 0; font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+         background: #0f1115; color: #e6e6e6; }
+  header { padding: 20px 28px; border-bottom: 1px solid #262a33; display: flex;
+           align-items: baseline; gap: 14px; }
+  header h1 { font-size: 20px; margin: 0; }
+  header a { color: #6ea8fe; text-decoration: none; font-size: 13px; }
+  main { padding: 24px 28px; max-width: 1080px; }
+  .empty { color: #9aa0b0; padding: 40px 0; }
+  .muted { color: #9aa0b0; font-size: 12px; }
+  button.refresh { background: #1b1f27; color: #cfd3dc; border: 1px solid #2b303a;
+                   border-radius: 7px; padding: 6px 12px; cursor: pointer; font-size: 13px; }
+  button.refresh:hover { border-color: #6ea8fe; }
+  .meta { display: flex; gap: 18px; flex-wrap: wrap; margin-bottom: 18px; color: #9aa0b0; font-size: 13px; }
+  .meta b { color: #e6e6e6; font-weight: 600; }
+  .tree { border: 1px solid #21242c; border-radius: 10px; overflow: hidden; }
+  .node { border-bottom: 1px solid #21242c; }
+  .node:last-child { border-bottom: none; }
+  .row { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px; cursor: pointer; }
+  .row:hover { background: #161922; }
+  .type { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px;
+          font-weight: 600; text-transform: uppercase; letter-spacing: .03em; flex-shrink: 0; }
+  .type-span      { background: #1b2a3d; color: #6ea8fe; }
+  .type-agent     { background: #1b2a3d; color: #6ea8fe; }
+  .type-generation{ background: #123d24; color: #4ade80; }
+  .type-tool      { background: #3a2410; color: #fbbf24; }
+  .type-event     { background: #232538; color: #b7a6f7; }
+  .name { font-weight: 600; }
+  .dur { color: #9aa0b0; font-size: 12px; margin-left: auto; flex-shrink: 0; }
+  .err { color: #f87171; }
+  .detail { display: none; padding: 4px 14px 14px 44px; }
+  .detail.open { display: block; }
+  .detail pre { background: #0a0c10; border: 1px solid #21242c; border-radius: 8px; padding: 10px 12px;
+                white-space: pre-wrap; word-break: break-word; font-size: 12.5px; margin: 6px 0; }
+  .detail .label { color: #9aa0b0; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .children { padding-left: 22px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>FEDOT.MAS Trace</h1>
+  <a href="/">← chat</a>
+  <span style="flex:1"></span>
+  <a id="langfuse-link" href="#" target="_blank" style="display:none">Open in Langfuse ↗</a>
+  <button class="refresh" onclick="load()">Refresh</button>
+</header>
+<main>
+  <div id="content"><div class="empty">Loading…</div></div>
+</main>
+<script>
+function fmtDur(startIso, endIso) {
+  if (!startIso || !endIso) return '';
+  const ms = new Date(endIso) - new Date(startIso);
+  if (!isFinite(ms) || ms < 0) return '';
+  return ms < 1000 ? ms + 'ms' : (ms / 1000).toFixed(2) + 's';
+}
+
+function typeClass(type) {
+  const t = (type || '').toLowerCase();
+  if (t.includes('generation')) return 'type-generation';
+  if (t.includes('tool')) return 'type-tool';
+  if (t.includes('event')) return 'type-event';
+  if (t.includes('agent')) return 'type-agent';
+  return 'type-span';
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function renderNode(o, byParent, depth) {
+  const kids = byParent.get(o.id) || [];
+  const dur = fmtDur(o.start_time, o.end_time);
+  const errClass = o.level && o.level !== 'DEFAULT' ? ' err' : '';
+  const detailId = 'd-' + o.id;
+  let detail = '';
+  if (o.input) detail += '<div class="label">Input</div><pre>' + escapeHtml(o.input) + '</pre>';
+  if (o.output) detail += '<div class="label">Output</div><pre>' + escapeHtml(o.output) + '</pre>';
+  if (o.status_message) detail += '<div class="label">Status</div><pre>' + escapeHtml(o.status_message) + '</pre>';
+  if (o.usage) detail += '<div class="label">Tokens</div><pre>' + escapeHtml(JSON.stringify(o.usage)) + '</pre>';
+  if (!detail) detail = '<div class="muted">No input/output captured.</div>';
+
+  let html = '<div class="node">'
+    + '<div class="row" onclick="toggle(\'' + detailId + '\')">'
+    + '<span class="type ' + typeClass(o.type) + '">' + escapeHtml(o.type || '?') + '</span>'
+    + '<span class="name' + errClass + '">' + escapeHtml(o.name || '(unnamed)') + '</span>'
+    + (o.level && o.level !== 'DEFAULT' ? '<span class="muted err">' + escapeHtml(o.level) + '</span>' : '')
+    + '<span class="dur">' + dur + '</span>'
+    + '</div>'
+    + '<div class="detail" id="' + detailId + '">' + detail + '</div>';
+
+  if (kids.length) {
+    html += '<div class="children">' + kids.map(k => renderNode(k, byParent, depth + 1)).join('') + '</div>';
+  }
+  html += '</div>';
+  return html;
+}
+
+function toggle(id) {
+  document.getElementById(id).classList.toggle('open');
+}
+
+async function load() {
+  const box = document.getElementById('content');
+  const lfLink = document.getElementById('langfuse-link');
+  try {
+    const r = await fetch('/api/fedot-langfuse-trace');
+    const data = await r.json();
+
+    if (data.status === 'unconfigured') {
+      box.innerHTML = '<div class="empty">Langfuse is not configured — set LANGFUSE_PUBLIC_KEY / '
+        + 'LANGFUSE_SECRET_KEY in .env.</div>';
+      lfLink.style.display = 'none';
+      return;
+    }
+    if (data.status === 'empty') {
+      box.innerHTML = '<div class="empty">No FEDOT.MAS runs traced yet. Trigger one via the '
+        + 'fedot_tool or /api/fedot-debug-run.</div>';
+      lfLink.style.display = 'none';
+      return;
+    }
+    if (data.status === 'error') {
+      box.innerHTML = '<div class="empty">Failed to load trace from Langfuse: ' + escapeHtml(data.detail || '') + '</div>';
+      lfLink.style.display = 'none';
+      return;
+    }
+
+    if (data.langfuse_url) {
+      lfLink.href = data.langfuse_url;
+      lfLink.style.display = '';
+    } else {
+      lfLink.style.display = 'none';
+    }
+
+    const observations = data.observations || [];
+    const byParent = new Map();
+    const roots = [];
+    for (const o of observations) {
+      if (o.parent_id) {
+        if (!byParent.has(o.parent_id)) byParent.set(o.parent_id, []);
+        byParent.get(o.parent_id).push(o);
+      } else {
+        roots.push(o);
+      }
+    }
+
+    const meta = '<div class="meta">'
+      + '<span><b>' + escapeHtml(data.name || 'trace') + '</b></span>'
+      + '<span>' + escapeHtml(data.timestamp || '') + '</span>'
+      + (data.latency != null ? '<span>latency: ' + data.latency + 's</span>' : '')
+      + (data.total_cost != null ? '<span>cost: $' + Number(data.total_cost).toFixed(4) + '</span>' : '')
+      + '</div>';
+
+    if (!roots.length) {
+      box.innerHTML = meta + '<div class="empty">Trace has no observations yet.</div>';
+      return;
+    }
+    box.innerHTML = meta + '<div class="tree">' + roots.map(o => renderNode(o, byParent, 0)).join('') + '</div>';
+  } catch (e) {
+    box.innerHTML = '<div class="empty">Failed to load trace: ' + escapeHtml(String(e)) + '</div>';
+  }
+}
+load();
+setInterval(load, 5000);
+</script>
+</body>
+</html>

@@ -21,6 +21,12 @@ except ImportError:  # pragma: no cover - depends on the installed FEDOT.MAS
     # import is the whole application failing to start over telemetry.
     LangfusePlugin = None
 
+try:  # Same reason: a config check that only the newer FEDOT.MAS ships.
+    from fedotmas.control import run_config_guardrails
+except ImportError:  # pragma: no cover - depends on the installed FEDOT.MAS
+    run_config_guardrails = None
+
+from CoScientist.tools.fedot_live import FedotLivePlugin, fedot_live
 from CoScientist.logging.metrics import UsageMetricsPlugin
 from CoScientist.tools.fedot_artifact_plugin import ArtifactCapturePlugin, merge_artifacts
 from CoScientist.tools.fedot_artifact_handoff import (
@@ -170,7 +176,7 @@ class FedotMASToolset(BaseToolset):
         # F010.A3/A4: an after_tool_callback plugin captures S3 artifact links
         # (results_presigned_url) at the tool-call boundary, BEFORE FEDOT.MAS sub-agents
         # paraphrase them away / hallucinate molecules.
-        # NB: passing plugins= REPLACES MAS defaults, so re-include them.
+        # NB: passing plugins= REPLACES MAW defaults, so re-include them.
         cap = ArtifactCapturePlugin()
         from CoScientist.config import get_settings as get_app_settings
         web_search_limit = int(os.getenv("COSCIENTIST_FEDOT_WEB_SEARCH_LIMIT", "4"))
@@ -190,6 +196,7 @@ class FedotMASToolset(BaseToolset):
             fedot_timeout_s = float(env_timeout) if env_timeout else None
         result = None
         status, err = "success", None
+        fedot_live.event({"type": "run_start"})
         try:
             # openai/<id> for config validation; the patched engine strips it
             # again on the wire to the OpenAI-compatible proxy.
@@ -217,15 +224,48 @@ class FedotMASToolset(BaseToolset):
                     # Recovers a config the model answered with but ADK could not
                     # store — the single largest cause of FEDOT route failures here.
                     MetaJsonRecoveryPlugin(),
+                    # Narrates the run to /api/fedot-live-stream, which the
+                    # /fedot-demo page draws. No subscribers, no cost.
+                    FedotLivePlugin(fedot_live),
                     cap,
                     UsageMetricsPlugin(),
                 ],
             )
+            # The /fedot-demo page draws the pipeline from the config, which
+            # `run()` generates and keeps to itself. So wrap the generator
+            # rather than take the call sequence apart: `run()` stays the one
+            # entry point this toolset uses, which is also the only method a
+            # stubbed engine is expected to have.
+            _generate = getattr(mas, "generate_config", None)
+            if _generate is not None:
+                async def _generate_and_publish(task, _inner=_generate):
+                    config = await _inner(task)
+                    # MAW only: the check reads `config.pipeline`, which a
+                    # MASConfig has not got. What it reports is a fault in the
+                    # design — an unreferenced agent, a parallel tail — so it
+                    # fails the run before the pipeline is paid for.
+                    if engine != "mas" and run_config_guardrails is not None:
+                        if errors := run_config_guardrails(config):
+                            raise ValueError(
+                                f"Invalid pipeline config: {'; '.join(errors)}")
+                    # Published the instant it exists, so the bridge draws the
+                    # shape before a single agent has run.
+                    try:
+                        fedot_live.publish_config(config.model_dump())
+                    except Exception as exc:  # noqa: BLE001 — a demo, not a run
+                        import logging
+                        logging.getLogger(__name__).debug(
+                            "fedot live config not published: %r", exc)
+                    return config
+
+                mas.generate_config = _generate_and_publish
             result = await mas.run(task_description, timeout=fedot_timeout_s)
         except (asyncio.TimeoutError, TimeoutError):
             status, err = "timeout", f"FEDOT.MAS exceeded {fedot_timeout_s}s"
         except Exception as e:
             status, err = "error", f"FEDOT.MAS run failed: {e}"
+        finally:
+            fedot_live.event({"type": "run_end", "status": status, "error": err})
 
         # Fallback (F010.A4): scan the final MAS state for presigned URLs the
         # plugin's after_tool hook may have missed (only when a result actually
