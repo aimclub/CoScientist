@@ -60,7 +60,7 @@
         return `
           <div>
             <div class="flex justify-between gap-2">
-              <span class="truncate text-on-surface/80" title="${escHtml(agent.agent)}">${escHtml(agent.agent)}</span>
+            <span class="truncate text-on-surface/80" title="${escHtml((window.StatusIndicator && StatusIndicator.agentName) ? StatusIndicator.agentName(agent.agent) : agent.agent)}">${escHtml((window.StatusIndicator && StatusIndicator.agentName) ? StatusIndicator.agentName(agent.agent) : agent.agent)}</span>
               <span class="text-outline-variant whitespace-nowrap">${fmtTokens(agent.llm.total_tokens)} · ${fmtUsd(agent.cost_usd)}</span>
             </div>${child}
           </div>`;
@@ -311,4 +311,3 @@
       }
     };
     window.RunTimer = RunTimer;
-

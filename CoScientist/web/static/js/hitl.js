@@ -119,7 +119,7 @@ function showHITL(data, { history = false } = {}) {
   // The microfluidics ТЗ has its own panel, which owns both the form and the
   // running document; hand the request over and let it draw the card.
   if (data.form && data.form.kind === 'tz' && window.TZPanel) {
-    TZPanel.onHitlRequest(data);
+    TZPanel.onHitlRequest(data, { history });
     scrollChat();
     return;
   }
@@ -151,7 +151,10 @@ function showHITL(data, { history = false } = {}) {
 function renderHitlCard(panel, data) {
   const messageHtml = hitlDynamic(data, 'message', localizeHitlMessage(data));
   const viaHtml = hitlDynamic(data, 'via', describeHitlVia(data));
-  const agentHtml = `<span class="font-bold text-on-surface">${escHtml(data.agent_name || '—')}</span>`;
+  const displayAgent = (window.StatusIndicator && StatusIndicator.agentName)
+    ? StatusIndicator.agentName(data.agent_name)
+    : (data.agent_name || '—');
+  const agentHtml = `<span class="font-bold text-on-surface">${escHtml(displayAgent)}</span>`;
 
   let openRoadmapSidebarBtn = '';
   let openRoadmapChatBtn = '';
@@ -661,6 +664,9 @@ function workOrderDiff(ctx) {
 
 function woHeader(icon, titleKey, tier, agent, revision) {
   const tierCls = WO_TIER_STYLE[tier] || WO_TIER_STYLE.compute;
+  const displayAgent = (window.StatusIndicator && StatusIndicator.agentName)
+    ? StatusIndicator.agentName(agent)
+    : (agent || '—');
   return `
         <div class="flex items-center gap-3 flex-wrap">
           <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
@@ -668,7 +674,7 @@ function woHeader(icon, titleKey, tier, agent, revision) {
           </div>
           <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${hitlLabel(titleKey)}</h3>
           ${tier ? `<span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${tierCls}">${hitlLabel('workOrder.tier.' + tier)}</span>` : ''}
-          <span class="text-[11px] font-bold text-on-surface">${escHtml(agent || '—')}</span>
+          <span class="text-[11px] font-bold text-on-surface">${escHtml(displayAgent)}</span>
           <span class="font-mono text-[10px] text-outline-variant">rev ${escHtml(String(revision || 1))}</span>
         </div>`;
 }

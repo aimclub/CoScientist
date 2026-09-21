@@ -195,6 +195,67 @@ def _is_transient(err: Exception) -> bool:
     return any(s in msg for s in _RETRYABLE_SUBSTRINGS)
 
 
+_proxy_verified: bool = False
+_proxy_verify_lock: Optional[asyncio.Lock] = None
+
+
+def _get_proxy_verify_lock() -> asyncio.Lock:
+    global _proxy_verify_lock
+    if _proxy_verify_lock is None:
+        _proxy_verify_lock = asyncio.Lock()
+    return _proxy_verify_lock
+
+
+def reset_proxy_verification() -> None:
+    """Reset the proxy verification state so the next check performs a fresh probe."""
+    global _proxy_verified
+    _proxy_verified = False
+
+
+async def verify_proxy_reachable(force: bool = False) -> None:
+    """Fast HTTP probe to confirm the corporate proxy can reach upstream endpoints.
+
+    When a corporate VPN is not connected, the local proxy container accepts
+    TCP connections on localhost, but hangs indefinitely when trying to reach
+    upstream endpoints. litellm's default request_timeout is 6000s (100 min),
+    causing an infinite freeze in the UI. We probe an upstream endpoint THROUGH
+    the proxy during system initialization to fail fast when VPN is off.
+    Once verified, subsequent calls are no-ops unless force=True.
+    """
+    global _proxy_verified
+    if _proxy_verified and not force:
+        return
+
+    if not settings.web.use_proxy or not settings.services.proxy_url:
+        _proxy_verified = True
+        return
+
+    lock = _get_proxy_verify_lock()
+    async with lock:
+        if _proxy_verified and not force:
+            return
+
+        import httpx
+
+        probe_url = "https://openrouter.ai/api/v1/models"
+        try:
+            async with httpx.AsyncClient(
+                proxy=settings.services.proxy_url,
+                timeout=httpx.Timeout(15.0, connect=10.0, read=15.0)
+            ) as client:
+                async with client.stream("GET", probe_url) as response:
+                    pass
+            _proxy_verified = True
+            _logger.info("Proxy pre-flight check succeeded: proxy is reachable.")
+        except Exception as err:
+            _logger.warning("Proxy pre-flight probe failed: %s", err)
+            raise ConnectionError(
+                f"Error connecting to proxy server."
+                f"Please ensure the proxy container is running, corporate VPN is enabled (other - disabled), "
+                f"and proxy is accessible: {err}"
+            ) from err
+
+
 class RetryingLiteLlm(LiteLlm):
     """LiteLlm that retries the whole call on transient upstream errors.
 
@@ -234,34 +295,8 @@ class RetryingLiteLlm(LiteLlm):
         )
 
     @staticmethod
-    async def _verify_proxy_reachable() -> None:
-        """Fast HTTP probe to confirm the corporate proxy can reach the internet/VPN.
-
-        When a corporate VPN is not connected, the local proxy container accepts
-        TCP connections on localhost, but hangs indefinitely when trying to reach
-        upstream endpoints. litellm's default request_timeout is 6000s (100 min),
-        causing an infinite freeze in the UI. We probe an upstream endpoint THROUGH
-        the proxy with a 5s deadline to fail fast when VPN is off.
-        """
-        if not settings.web.use_proxy or not settings.services.proxy_url:
-            return
-
-        import httpx
-
-        probe_url = "https://openrouter.ai/api/v1/models"
-        try:
-            async with httpx.AsyncClient(
-                proxy=settings.services.proxy_url,
-                timeout=httpx.Timeout(5.0, connect=5.0)
-            ) as client:
-                await client.get(probe_url)
-        except Exception as err:
-            _logger.warning("Proxy pre-flight probe failed: %s", err)
-            raise ConnectionError(
-                f"Error connecting to proxy server."
-                f"Please ensure the proxy container is running, corporate VPN is enabled (other - disabled), "
-                f"and proxy is accessible: {err}"
-            ) from err
+    async def _verify_proxy_reachable(force: bool = False) -> None:
+        await verify_proxy_reachable(force=force)
 
     async def _stream(self, llm_request: LlmRequest, stream: bool):
         """Yield the upstream response, bounding the wait between chunks.
@@ -320,7 +355,8 @@ class RetryingLiteLlm(LiteLlm):
     async def generate_content_async(
         self, llm_request: LlmRequest, stream: bool = False
     ) -> AsyncGenerator[LlmResponse, None]:
-        await self._verify_proxy_reachable()
+        if not _proxy_verified:
+            await verify_proxy_reachable()
         effective_model = getattr(llm_request, "model", None) or getattr(self, "model", "") or ""
         self._apply_dynamic_openrouter_provider(effective_model)
         attempt = throttle_attempt = 0
@@ -460,6 +496,7 @@ def sync_proxy_session() -> None:
             _litellm_proxy.enable()
         else:
             _litellm_proxy.disable()
+            reset_proxy_verification()
 
 hitl_handler = DelegatingHITLHandler(ConsoleHITLHandler())
 

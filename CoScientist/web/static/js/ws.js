@@ -141,7 +141,7 @@
               currentPlannerHitlRequest = data;
               updateRoadmapModalButtons();
             }
-            addTelemetry('HITL :: ' + data.agent_name + ' requests ' + data.action_type);
+            addTelemetry('HITL :: ' + ((window.StatusIndicator && StatusIndicator.agentName) ? StatusIndicator.agentName(data.agent_name) : data.agent_name) + ' requests ' + data.action_type);
             break;
           case 'hitl_timeout':
             disableHitlControls(data.request_id);
@@ -150,7 +150,7 @@
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();
             addSystemMsg(hitlTimeoutSummary(data));
-            addTelemetry('HITL :: auto-approve on timeout (' + (data.agent_name || '?') + ')');
+            addTelemetry('HITL :: auto-approve on timeout (' + ((window.StatusIndicator && StatusIndicator.agentName) ? StatusIndicator.agentName(data.agent_name) : (data.agent_name || '?')) + ')');
             break;
           case 'hitl_hold':
             applyWorkOrderHold(data.request_id);
@@ -158,7 +158,7 @@
             break;
           case 'work_order_notice':
             renderWorkOrderNotice(data);
-            addTelemetry('WORK ORDER :: ' + (data.agent_name || '?') + ' ' + (data.kind || ''));
+            addTelemetry('WORK ORDER :: ' + ((window.StatusIndicator && StatusIndicator.agentName) ? StatusIndicator.agentName(data.agent_name) : (data.agent_name || '?')) + ' ' + (data.kind || ''));
             break;
           case 'hitl_cancelled':
             disableHitlControls(data.request_id);

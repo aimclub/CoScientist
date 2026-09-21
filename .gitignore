@@ -197,6 +197,7 @@ TZ_*.md
 conversations*/
 task_tracker_data.json
 *_report.md
+local_papers/
 
 # Reference PDFs and vendored templates pulled in for the write-up
 CoScientist/docs/*.pdf

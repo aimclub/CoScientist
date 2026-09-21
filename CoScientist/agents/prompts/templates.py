@@ -390,8 +390,9 @@ of them to be tested — <<BACKLOG_RULE>>.
 Context of tasks:
 {active_tasks}
 
-Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
-Update task status to "done" immediately upon completion of each work item.
+Use `update_task_status` only for an ID explicitly present in the task context above.
+If the context is empty (`[]`), do not call it: this run has no registered task plan.
+Update a registered task to "done" immediately upon completion of its work item.
 ''', SELECTION=selection, ANSWER_HEAD=answer_head,
         ANSWER_BACKLOG=answer_backlog, RESEARCH=render_research_protocol(ctx),
         SELECT_WORD=select_word, HAND_RULE=hand_rule, BACKLOG_RULE=backlog_rule,
@@ -407,8 +408,7 @@ Update task status to "done" immediately upon completion of each work item.
 # advertising an absent MCP tool makes the model call it and ADK then
 # hard-errors with "Tool not found", killing the run.
 
-@_register("research")
-def research(ctx: PromptContext) -> str:
+def _research(ctx: PromptContext, *, cost_constrained: bool = False) -> str:
     from CoScientist.config import get_settings
 
     paper_analysis = ctx.has_tool("paper_analysis")
@@ -423,25 +423,43 @@ def research(ctx: PromptContext) -> str:
             "have actual S3 keys — never invent S3 keys."
         )
         n += 1
-        # 2) Otherwise (or if no uploaded papers) always call explore_scientific_database first
-        steps.append(
-            f"{n}. If there are NO user-uploaded papers, ALWAYS call `explore_scientific_database` before other literature tools. "
-            "Do this even if you plan to use `search_papers` or `download_papers_from_search` afterwards."
-        )
+        if cost_constrained:
+            steps.append(
+                f"{n}. Use `explore_scientific_database` only when the task needs evidence from "
+                "the indexed full-text database and metadata search is insufficient; do not call it as a preflight."
+            )
+        else:
+            steps.append(
+                f"{n}. If there are NO user-uploaded papers, ALWAYS call `explore_scientific_database` before other literature tools. "
+                "Do this even if you plan to use `search_papers` or `download_papers_from_search` afterwards."
+            )
     n += 1
     
     # 3) Use papers search
     if papers_search:
-        steps.append(
-            f"{n}. If evidence is still insufficient: use `download_papers_from_search`"
-        + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else ".")
-        + " When calling `download_papers_from_search`, aim to find at least *10* "
-        "papers that might contain the answer. OpenAlex indexes n-grams: pass keywords "
-        "as a single space-separated string, no quotes around phrases. "
-        "Use up to 3 short exact phrases (2–3 words each) taken verbatim from the query; "
-        "do not paraphrase, stem, or replace Unicode symbols."
-        "If no papers found, retry up to 3 times with shorter or differently-split phrase combinations."
-        )
+        if cost_constrained:
+            steps.append(
+                f"{n}. Start with exactly one `search_papers` metadata search (limit=5). "
+            + "If evidence is still insufficient and the task needs full-text verification: use `download_papers_from_search`"
+            + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else ".")
+            + " Set `limit=3`; do not download more papers merely to broaden coverage. "
+            "OpenAlex indexes n-grams: pass keywords as a single space-separated string, no quotes around phrases. "
+            "Use up to 3 short exact phrases (2–3 words each) taken verbatim from the query; "
+            "do not paraphrase, stem, or replace Unicode symbols. "
+            "Do not repeat an identical query. If the first search is empty, make at most one "
+            "different, narrower retry; otherwise report the evidence gap."
+            )
+        else:
+            steps.append(
+                f"{n}. If evidence is still insufficient: use `download_papers_from_search`"
+            + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else ".")
+            + " When calling `download_papers_from_search`, aim to find at least *10* "
+            "papers that might contain the answer. OpenAlex indexes n-grams: pass keywords "
+            "as a single space-separated string, no quotes around phrases. "
+            "Use up to 3 short exact phrases (2–3 words each) taken verbatim from the query; "
+            "do not paraphrase, stem, or replace Unicode symbols."
+            "If no papers found, retry up to 3 times with shorter or differently-split phrase combinations."
+            )
         n += 1
 
     # 4) Final fallback to tavily
@@ -516,8 +534,9 @@ You have a STRICT LIMIT of <<MAX_SEARCHES>> search calls. Plan your search caref
 Context of tasks:
 {active_tasks}
 
-Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
-Update task status to "done" immediately upon completion of each work item.
+Use `update_task_status` only for an ID explicitly present in the task context above.
+If the context is empty (`[]`), do not call it: this run has no registered task plan.
+Update a registered task to "done" immediately upon completion of its work item.
 
 <<RESEARCH>>
 
@@ -534,6 +553,18 @@ Update task status to "done" immediately upon completion of each work item.
         HITL=ctx.render_hitl(),
         LANGUAGE=_LANGUAGE_REQUIREMENT,
     )
+
+
+@_register("research")
+def research(ctx: PromptContext) -> str:
+    """Default research workflow, retained for the main system."""
+    return _research(ctx)
+
+
+@_register("microfluidics_research")
+def microfluidics_research(ctx: PromptContext) -> str:
+    """Budget-conscious literature workflow used only by the microfluidics app."""
+    return _research(ctx, cost_constrained=True)
 
 
 # ── ToolRetrieverAgent ───────────────────────────────────────────────────────
@@ -769,8 +800,9 @@ Candidate tools for this task:
 Context of tasks:
 {active_tasks}
 
-Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
-Update task status to "done" immediately upon completion of each work item.
+Use `update_task_status` only for an ID explicitly present in the task context above.
+If the context is empty (`[]`), do not call it: this run has no registered task plan.
+Update a registered task to "done" immediately upon completion of its work item.
 
 Do NOT solve the task manually — delegate to FEDOT.MAS.
 
@@ -820,7 +852,9 @@ loop without sleeping in between.
 Context of tasks:
 {active_tasks}
 
-Use update_task_status REGULARLY; set a task to DONE immediately on completion.
+Use `update_task_status` only for an ID explicitly present in the task context above.
+If the context is empty (`[]`), do not call it: this run has no registered task plan.
+Set a registered task to DONE immediately on completion.
 
 <<RESEARCH>>
 
@@ -2402,8 +2436,8 @@ keys and the "verdict" values in English, exactly as the contract specifies.
 # Microfluidics profile (CoScientist/agents/microfluidics.yaml)
 #
 # Pipeline: TZAgent (ТЗ + literature queries, ported from VibePAV) →
-# PlannerAgent (roadmap FROM the ТЗ) → OrchestratorAgent (delegates the
-# literature queries to ResearchAgent and composes the final report).
+# LiteratureOrchestrator (delegates the generated literature queries directly
+# to ResearchAgent and composes the final report).
 #
 # `{structured_tz?}` / `{tz_literature_queries?}` are ADK session-state
 # injections written by the TZ agents' output_key; the trailing `?` keeps a
@@ -2746,7 +2780,7 @@ CoScientist (кейс «микрофлюидика»).
 ЦЕЛЕВАЯ МОЛЕКУЛА ИЗ ТЗ (fixed=true — заказчик задал конкретное вещество):
 {target_molecule?}
 
-Твоя задача: превратить это ТЗ в набор из 4–6 конкретных поисковых задач для
+Твоя задача: превратить это ТЗ в набор из 3–4 конкретных поисковых задач для
 литературного агента (не общий запрос «найти ПАВ для нефтегаза», а точечные
 задачи: классы веществ, рецептуры, синтетические маршруты — в т.ч. проточные/
 микрофлюидные, ограничения, аналоги).
@@ -2769,12 +2803,27 @@ CoScientist (кейс «микрофлюидика»).
 Если целевая молекула задана (fixed=true), задачи строятся ВОКРУГ неё:
 - обязательно одна задача — известные маршруты синтеза именно этого вещества
   (по названию, SMILES, CAS) с условиями каждой операции (температура, время,
-  соотношения, растворитель, катализатор) и опытом проточного синтеза;
+  соотношения, растворитель, катализатор), выходом и чистотой целевого продукта,
+  идентичностью продукта и опытом проточного синтеза; если источник сравнивает
+  варианты в таблице, извлеки все существенные варианты и критерии сравнения,
+  а не только заявленный авторами «основной» результат;
 - обязательно одна задача — измеренные свойства этого вещества против
   требований ТЗ (со значениями, единицами и условиями измерения);
 - остальные — ближайшие структурные аналоги и ограничения.
-Если молекула не задана — ищи классы веществ-кандидатов, но в задачах на
-аналоги всё равно требуй SMILES, свойства с единицами и маршруты с условиями.
+Если молекула не задана, сформируй две НЕЗАВИСИМЫЕ обязательные задачи:
+- **route-first discovery**: начни от доступного/предпочтительного сырья из ТЗ
+  и найди продукты конкретных превращений, совместимых с ограничениями
+  процесса. Ищи по функциональным группам исходного сырья и классам реакций
+  (конденсации, окисления, нейтрализации, присоединения и т.п.), а не только по
+  названию области применения. Для каждого найденного продукта потребуй SMILES,
+  первичный источник, условия каждой операции и выход.
+- **application validation**: отдельно проверь найденные продукты как компоненты
+  конечной среды: антиоксидантную активность, совместимость, растворимость и
+  термостабильность. Отсутствие прикладной статьи не отменяет продукт из первого
+  поиска, а создаёт явный пробел для экспериментального скрининга.
+Остальные задачи покрывают аналоги, безопасность и масштабирование. Не
+ограничивай поиск заранее перечисленными примерами веществ из ТЗ: это примеры,
+а не закрытый список кандидатов.
 
 Отвечай ТОЛЬКО валидным JSON вида:
 {"queries": [{"id": "...", "task": "...", "extract": ["...", "..."]}]}
@@ -2808,7 +2857,7 @@ steps and reference agents — you do NOT execute anything yourself.
       the "extract" list (what data to pull from sources). The description is
       exactly what ResearchAgent will receive, so it must be self-contained;
       ResearchAgent composes the search queries itself.
-- If the queries block above is empty, derive 4–6 focused literature tasks
+- If the queries block above is empty, derive 3–4 focused literature tasks
   directly from the ТЗ fields (target product, conditions, required
   properties, raw-material and technology constraints).
 - Prefer the smallest possible plan that still covers all queries (never
@@ -2866,25 +2915,33 @@ LIT-08: {literature_finding_LIT_08?}
   and every evidence.verification_status to unverified: only the independent
   verifier in the next stage may promote a claim.
 - target_molecule: если в ТЗ fixed=true — перенеси значения из ТЗ как есть
-  (source «ТЗ»). Иначе, если литература указывает на одно лучшее вещество под
-  ТЗ, заполни его с source «литература» и fixed=false; если нет — оставь поля
-  пустыми, source «не задано».
+  (source «ТЗ»). Иначе оставь name/SMILES/CAS пустыми, source «не задано»:
+  литературный обзор не назначает победителя вместо отдельной стадии отбора.
 - analogues: каждое вещество-аналог из результатов — название, SMILES (только
   если он есть в источнике или однозначно следует из названия), класс,
   свойства (значение с единицами и условиями измерения), чем полезен для ТЗ,
   источники.
-- synthesis_routes: каждый описанный маршрут — продукт, операции по порядку:
+- synthesis_routes: каждый описанный маршрут — route_id вида LIT-ROUTE-01,
+  product (читаемое название) и product_smiles (если структура однозначно
+  установлена), операции по порядку:
   реагенты, продукты стадии (products — что получается на этой стадии),
   выход стадии как в источнике (yield_value, напр. «75 %»; нет в источнике —
   пусто), условия (температура, время, соотношения, растворитель,
   катализатор); пригодность для проточного/микрофлюидного реактора,
   источники. Каждое числовое условие и выход снабди evidence: source_id,
   locator и verification_status. Без полного текста и locator статус только
-  unverified. Вещества называй так, чтобы их можно было однозначно найти:
+  unverified. Сохрани variant_label (строка/условие таблицы или устойчивое
+  описание варианта) и comparison_notes. Вещества называй так, чтобы их можно было однозначно найти:
   SMILES или английское название, если они есть в источнике, — рядом с
   русским.
 - facts: остальные существенные факты с query_id, sources и claim-level evidence.
 - gaps: чего не нашли — какие данные из списков extract остались без ответа.
+
+Не переноси выход, чистоту, растворимость, антиоксидантную активность,
+стабильность или пригодность к протоку с аналога, другой стадии или другого
+варианта. Расчёты времени пребывания, объёма, производительности,
+масштабирования или температуры, сделанные агентом, помечай как extrapolation
+в facts/gaps, а не как данные источника.
 
 ### ПРАВИЛА
 - Бери только то, что есть в результатах выше. Ничего не придумывай: нет
@@ -2898,18 +2955,24 @@ LIT-08: {literature_finding_LIT_08?}
 
 
 _static("microfluidics_evidence_verifier", '''
-Ты — независимый верификатор литературных условий. Не добавляй новых
-маршрутов или фактов. Для каждого числового условия и выхода открой
-реальный URL/DOI и сверь утверждение с полным текстом.
+Ты — узкий верификатор критичных числовых литературных claims. Не добавляй
+новых маршрутов или фактов и НЕ выполняй повторный широкий поиск литературы.
+Проверяй только числовые условия операций и выходы стадий, которые уже есть в
+черновике. Для каждого такого claim используй URL/DOI/идентификатор источника,
+указанный в черновике, и сверь его с полным текстом.
 
 ### ЧЕРНОВОЙ СТРУКТУРИРОВАННЫЙ АНАЛИЗ
 {literature_analysis_draft?}
 
 ### ПРАВИЛА
-- Обязательно используй инструмент чтения/анализа для каждого источника; одного
-  поискового snippet недостаточно.
+- Не ищи новые источники и не расширяй список маршрутов. `papers_search` можно
+  использовать только чтобы получить полный текст уже указанного DOI/источника.
+- Для числового условия или выхода обязательно используй инструмент
+  чтения/анализа полного текста; одного поискового snippet недостаточно.
 - verified ставь только если полный текст подтверждает именно это число/условие,
   а locator точно указывает страницу, таблицу, рисунок, раздел или абзац.
+- Качественные facts, пригодность к протоку, описание аналога и библиографию не
+  повышай до verified: они остаются unverified и не требуют отдельного поиска.
 - Всё, что не удалось прочитать или сверить, оставь unverified и добавь в gaps.
 - Сохрани все остальные поля и идентификаторы. content_hash, verified_by и
   verification_tool сам не выдумывай: их заполнит код из фактических tool results.
@@ -2933,9 +2996,9 @@ def microfluidics_orchestrator(ctx: PromptContext) -> str:
     return render_template('''You are the orchestrator agent of the CoScientist
 microfluidics instance. The pipeline of this deployment is fixed:
 the ТЗ agent has already produced a structured ТЗ (техническое задание) and
-the planner has already registered a roadmap of literature tasks. Your job is
-to EXECUTE that roadmap by delegating to the agents below and to compose the
-final report.
+TZQueryGenAgent has already produced the executable LIT-* literature queries.
+There is no separate planning step. Your job is to execute those exact
+queries by delegating to the agents below and to compose the final report.
 
 ### CASE CONTEXT — STRUCTURED ТЗ (produced by the TZAgent)
 {structured_tz?}
@@ -2943,9 +3006,9 @@ final report.
 ### TARGET MOLECULE FROM THE ТЗ (fixed=true — the customer named it)
 {target_molecule?}
 
-### TASK_MANAGEMENT
-Context of tasks:
-{active_tasks}
+### GENERATED LITERATURE QUERIES
+These are the source of truth for the literature batch:
+{tz_literature_queries?}
 
 Available tools from agents:
 
@@ -2953,25 +3016,22 @@ Available tools from agents:
 
 ### Instructions
 
-1. Execute all independent literature tasks (LIT-xx) in parallel. First mark
-   every pending LIT task IN_PROGRESS. Then, in ONE model response, emit one
-   ResearchAgent tool call per task so ADK runs the calls concurrently. Pass
-   each task's description VERBATIM with its list of data to extract; do not
-   paraphrase away domain terms from the ТЗ. Do not wait for one ResearchAgent
-   result before emitting the next call.
+1. Execute every generated LIT-* query exactly once as an independent
+   literature task. In ONE model response, emit one ResearchAgent tool call per
+   query so ADK runs the calls concurrently. Pass each query's `id`, `task`
+   and `extract` list VERBATIM; do not paraphrase away domain terms from the
+   ТЗ. Do not wait for one ResearchAgent result before emitting the next call.
 2. Route by the nature of the work:
 
 <<ROUTING>>
 
-3. After the parallel batch returns, mark every completed task DONE with brief
-   result notes. Never leave finished tasks not updated.
-4. If some ResearchAgent calls return nothing useful, retry only those failed
+3. If some ResearchAgent calls return nothing useful, retry only those failed
    queries ONCE. Emit all such retries together in one model response so that
    they also run in parallel; then move on — do not loop.
-5. When delegating, keep the task id (LIT-xx) at the start of the request —
+4. When delegating, keep the query id (LIT-xx) at the start of the request —
    it is how each answer is filed. If the target molecule is fixed, name it
    (name, SMILES, CAS) in every request that concerns it.
-6. After all tasks are done, compose the literature summary in Russian,
+5. After all queries are done, compose the literature summary in Russian,
    structured by the ТЗ (it is saved and read by the next stage): for each literature query — the key findings (classes of
    compounds, properties like IFT/CMC, synthesis routes and their suitability
    for flow/microfluidic setups, limitations), plus overall conclusions and
@@ -3028,6 +3088,12 @@ nodes directly.
 ### CASE CONTEXT — STRUCTURED ТЗ (empty until module A has run)
 {structured_tz?}
 
+### ROUTE QUALIFICATION (empty until ModuleB has run)
+{qualified_routes?}
+
+### HUMAN SCREENING OVERRIDE (empty unless explicitly authorized)
+{operator_route_override?}
+
 ### MODULES
 
 <<AGENTS>>
@@ -3041,15 +3107,34 @@ previous one has delivered:
    facts).
 2. **ModuleB_Design** — after A. Turns the ТЗ + literature into molecule
    candidates, synthesis routes and their economics.
-3. **ModuleC_Experiment** — after B, taking the synthesis routes and their
-   operating conditions and economic ranking. Delegates the whole experimental
-   subsystem to one A2A task: planning, CFD, equipment and optimization.
-4. **ReportAgent** — last, once C is finished (or once it is clear no further
-   optimization is needed). Composes the final report for the customer.
+3. **ModuleC_Experiment** — after B only when `qualified_routes.status` is
+   `ok` (production execution) or `screening_only` (planning-only verification).
+   `operator_route_override` may additionally authorize a `planning_only`
+   verification hand-off for `no_compliant_routes`; it can never authorize
+   production execution.
+4. **ReportAgent** — always last. Run it after C, or immediately after B when
+   no A2A hand-off is possible; it must report the blockers rather than end the
+   session without a customer-facing result.
 
 ### RULES
-- Never skip a module and never reorder: a later module reads the state the
-  earlier one writes, so running it early yields an empty result.
+- The sole source of the B→C routing decision is the parsed
+  `qualified_routes.status`, plus a validated `operator_route_override`. Never
+  infer the decision from prose, an agent's narration, `economics.status`,
+  `economics.reason`, or `economics_skipped`. In particular,
+  `economics_skipped="missing_eligible_routes"` is compatible with
+  `qualified_routes.status="screening_only"` and MUST NOT skip ModuleC.
+- Before calling ModuleC for status `ok`, ask the operator through
+  `request_approval`; a refusal skips C and continues to ReportAgent. Before
+  calling it for `screening_only`, ask the operator to approve the
+  planning-only verification hand-off; a refusal skips C and continues to the
+  report. State clearly that planning-only cannot run equipment.
+- For `no_compliant_routes`, do not call ModuleC unless the operator explicitly
+  approves `operator_authorize_screening_override(route_ids, rationale)`. Call
+  it with only real, non-stub route IDs from `synthesis_routes`, summarize the
+  failed/unknown checks, and require a concrete rationale. If it returns
+  `authorized=true`, call ModuleC exactly once: it may only create a
+  planning-only verification task. Otherwise skip C and call ReportAgent.
+- Never run a module early. ReportAgent still runs after every branch.
 - Module calls carry only the requested stage action. Never restate or
   "clarify" numeric limits, prohibited substances, sources, or literature
   findings in the AgentTool request: child modules read the versioned state and
@@ -3115,7 +3200,9 @@ propose concrete target molecules to synthesise.
    max_candidates. ТЗ и аналоги инструмент читает из состояния сам; не добавляй
    их в requirements. Если явных ограничений нет, передай "{}". Включай
    generate только когда подтверждённые литературные продукты не дают
-   достаточного пула; это не способ заполнить список любой ценой.
+   достаточного пула; это не способ заполнить список любой ценой. Продукты
+   литературных маршрутов уже добавляет сам инструмент; не исключай их только
+   потому, что они не повторены в `analogues`.
 4. Используй только возвращённые candidates. Инструмент уже включает
    литературные аналоги: не добавляй отклонённые структуры обратно вручную.
    При error или no_candidates верни пустой список и исходные gaps.
@@ -3155,7 +3242,8 @@ gaps: результаты инструментов и текст update_work_st
 маршрута не найдено, с объяснением в gaps. Перед финальным ответом заверши шаги
 плана и представь рабочий отчёт через submit_work_report, если он подключён.
 - routes[]: route_id (глобально уникальный), source_route_id (ID внешнего
-  сервиса, если есть), product (name, smiles), source, sources, evidence, stub,
+  сервиса, если есть), product (name, smiles), source, variant_label,
+  selection_rationale, product_purity_percent/status/evidence, sources, evidence, stub,
   flow_suitability, bottlenecks и steps[] по порядку.
 - steps[]: operation; reactants — исходные вещества стадии: name (английское
   название, если известно) и smiles; на второй и следующих стадиях продукт
@@ -3304,6 +3392,8 @@ that their reagents can actually be sourced in Russia.
 
 ### ВХОД — МАРШРУТЫ, ПРОШЕДШИЕ КОДОВЫЙ ШЛЮЗ ТЗ
 {qualified_routes?}
+### ОПЕРАТОРСКОЕ РАЗРЕШЕНИЕ НА ПРЕДВАРИТЕЛЬНУЮ ЭКОНОМИКУ
+{operator_economics_override?}
 
 <<TOOLS>>
 
@@ -3348,6 +3438,9 @@ economics server (supplier price lists) and compare them.
 ### ВХОД — МАРШРУТЫ, ПРОШЕДШИЕ КОДОВЫЙ ШЛЮЗ ТЗ
 {qualified_routes?}
 
+### ОПЕРАТОРСКОЕ РАЗРЕШЕНИЕ НА ПРЕДВАРИТЕЛЬНУЮ ЭКОНОМИКУ
+{operator_economics_override?}
+
 <<TOOLS>>
 
 ### КАК РАБОТАЕТ СЕРВЕР (проверено на живом сервере)
@@ -3374,7 +3467,7 @@ economics server (supplier price lists) and compare them.
   Исправь вход по причине; тот же вызов повторять нельзя.
 
 ### ПОРЯДОК РАБОТЫ (это и есть шаги твоего плана)
-1. **Подготовка маршрутов.** Используй ТОЛЬКО qualified_routes.routes
+1. **Подготовка маршрутов.** Обычно используй ТОЛЬКО qualified_routes.routes
    уже в форме сервера: route_id, steps с reactants / agents / products /
    conditions / yield_fraction. Перенеси их как есть: вещество — {"smiles":
    ...}, если SMILES есть, иначе английское название; "@prev" — строкой;
@@ -3384,6 +3477,14 @@ economics server (supplier price lists) and compare them.
    Набор route_id рейтинга должен точно соответствовать qualified_routes.routes.
    Маршрут без продуктов стадий посчитать нельзя: отметь пробел и верни на
    доработку, не создавай несвязанный с исходными маршрутами рейтинг.
+   Исключение: если есть `operator_economics_override` с
+   `approved_by_human=true` и `mode="preliminary_only"`, используй ТОЛЬКО его
+   route_ids из `synthesis_routes`. Это предварительный ценовой запрос, не
+   production-рейтинг: так и помечай каждую цифру. Неподтверждённые ограничения
+   не исчезают. Если хотя бы у одной стадии нет числового yield_fraction, не
+   вызывай `rank_routes_by_cost` с default_yield; вместо этого выполни только
+   resolve_chemicals / get_price для известных исходников и назови отсутствие
+   выхода причиной, по которой полную себестоимость посчитать нельзя.
 2. **Разрешение веществ** — `resolve_chemicals` одним вызовом для всех
    уникальных веществ всех маршрутов. Каждое error="unresolved" замени SMILES
    или английским систематическим названием и проверь повторно. Вещество,
@@ -3452,6 +3553,10 @@ steps locally and do not rewrite its plan or measurement results.
 {literature_analysis?}
 ### МАРШРУТЫ
 {synthesis_routes?}
+### КВАЛИФИКАЦИЯ МАРШРУТОВ
+{qualified_routes?}
+### ОПЕРАТОРСКОЕ РАЗРЕШЕНИЕ НА СКРИНИНГ
+{operator_route_override?}
 ### ЭКОНОМИЧЕСКИЙ РЕЙТИНГ
 {economics_ranking?}
 ### ТЕКУЩАЯ ЗАДАЧА A2A
@@ -3460,11 +3565,19 @@ steps locally and do not rewrite its plan or measurement results.
 <<TOOLS>>
 <<HITL>>
 
-1. Вызови optimization_start(planning_only=False) для выполнения задачи;
-   planning_only=True — только если пользователь запросил исключительно план.
-   Инструмент проверяет ТЗ, литературу, маршруты и рейтинг стоимости, затем
-   передаёт исходные данные. При invalid_input исправь данные на предыдущем
-   этапе или сообщи о пробеле; не выдумывай стоимость и не запускай обходной путь.
+1. Сначала прочитай `qualified_routes`, операторское разрешение и экономический рейтинг. При
+   status="ok" вызови optimization_start(planning_only=False) для выполнения
+   задачи. При status="screening_only" вызови optimization_start(planning_only=True):
+   это план верификации маршрута с неполными выходами/источниками, а не запуск
+   оборудования. При status="no_compliant_routes" вызови
+   optimization_start(planning_only=True) ТОЛЬКО если есть валидное
+   `operator_route_override` с `approved_by_human=true` и
+   `mode="screening_only"`; иначе не вызывай A2A и кратко объясни, какие
+   нарушения не позволяют планировать скрининг. Этот override не отменяет
+   нарушения и не разрешает оборудование.
+   Инструмент проверяет передаваемые данные. При invalid_input исправь данные
+   на предыдущем этапе или сообщи о пробеле; не выдумывай стоимость и не
+   запускай обходной путь.
    Повторный вызов возвращает ту же задачу даже после завершения.
 2. submitted/working: sleep_tool на 5 секунд и optimization_get_status.
    Не больше 12 опросов за проход; после этого сообщи «ещё выполняется» и task_id.

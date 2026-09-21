@@ -118,7 +118,7 @@ async def optimization_start(tool_context: ToolContext, planning_only: bool = Fa
     if previous:
         return previous
     try:
-        inputs = prepare_inputs(tool_context.state)
+        inputs = prepare_inputs(tool_context.state, planning_only=planning_only)
     except (ValueError, TypeError) as exc:
         result = {"state": "invalid_input", "error": str(exc)}
         tool_context.state[RESULT_KEY] = result
@@ -133,10 +133,7 @@ async def optimization_start(tool_context: ToolContext, planning_only: bool = Fa
     instruction = (
         "Ты — внешняя система оптимизации и выполнения экспериментов. "
         "Получаешь ТЗ с целевой молекулой, физико-химические свойства и маршруты "
-        "из литературы, маршруты синтеза и, если оно есть, ранжирование по "
-        "стоимости (economics_ranking_available=false — стоимость не считалась, "
-        "работай без рейтинга: планируй и считай CFD по всем прошедшим проверку "
-        "маршрутам). "
+        "из литературы, маршруты синтеза и ранжирование по стоимости. "
         "Самостоятельно управляй полным циклом: планирование, необходимые CFD "
         "через свой MCP, оборудование, сбор фактических результатов и оптимизация "
         "по выполненным опытам. Учти результаты последнего опыта перед завершением. "
@@ -149,7 +146,11 @@ async def optimization_start(tool_context: ToolContext, planning_only: bool = Fa
         "Недостающие данные и необходимые подтверждения запрашивай в этой задаче. "
     )
     if planning_only:
-        instruction += "РЕЖИМ ТОЛЬКО ПЛАНИРОВАНИЯ: не запускай CFD, оборудование или эксперименты. Построй план и запроси подтверждение."
+        instruction += (
+            "РЕЖИМ ТОЛЬКО ПЛАНИРОВАНИЯ/СКРИНИНГА: не запускай CFD, оборудование "
+            "или эксперименты. Построй план верификации маршрута, явно свяжи каждое "
+            "измерение с незакрытым ограничением и запроси подтверждение."
+        )
     else:
         instruction += "Выполни задачу в пределах заданных требований и ограничений."
     text = instruction + "\n\n" + json.dumps(inputs, ensure_ascii=False, allow_nan=False)

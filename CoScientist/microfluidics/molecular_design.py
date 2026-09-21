@@ -145,12 +145,50 @@ def design_molecules(request: DesignRequest, structured_tz, literature_analysis)
             "mol": mol, "name": analogue.name, "compound_class": analogue.compound_class,
             "properties": list(analogue.properties) if analogue.sources else [],
             "sources": list(analogue.sources), "source": "литература", "parents": [],
+            "route_ids": [],
         }
         if analogue.properties and not analogue.sources:
             gaps.append(f"{analogue.name}: свойства без ссылок исключены из числовой проверки.")
 
     if len(analysis.analogues) > 100:
         gaps.append("Обработаны первые 100 аналогов (лимит вычислений).")
+
+    # A route-first literature search often reports a product only inside a
+    # synthesis route.  It must be a candidate even when the prose summary did
+    # not repeat it in ``analogues``.  We accept only an explicit, parseable
+    # product SMILES; names are deliberately not resolved or guessed here.
+    for route_index, route in enumerate(analysis.synthesis_routes, 1):
+        route_id = route.route_id.strip() or f"LIT-ROUTE-{route_index:02d}"
+        smiles = route.product_smiles.strip()
+        if not smiles:
+            candidate = Chem.MolFromSmiles(route.product.strip())
+            smiles = route.product.strip() if candidate is not None else ""
+        mol = Chem.MolFromSmiles(smiles) if smiles and len(smiles) <= 2000 else None
+        if mol is None or not mol.GetNumAtoms() or mol.GetNumHeavyAtoms() > 150:
+            if route.product.strip():
+                gaps.append(
+                    f"{route.product}: продукт литературного маршрута {route.product!r} "
+                    "не включён в кандидаты без явного корректного SMILES."
+                )
+            continue
+        for atom in mol.GetAtoms():
+            atom.SetAtomMapNum(0)
+        canonical = Chem.MolToSmiles(mol, isomericSmiles=True)
+        if canonical in pool:
+            item = pool[canonical]
+            item["route_ids"] = sorted(set(item["route_ids"] + [route_id]))
+            item["sources"] = sorted(set(item["sources"] + route.sources))
+            continue
+        pool[canonical] = {
+            "mol": mol,
+            "name": route.product,
+            "compound_class": "продукт литературного маршрута",
+            "properties": [],
+            "sources": list(route.sources),
+            "source": "литература",
+            "parents": [],
+            "route_ids": [route_id],
+        }
 
     enumerated = 0
     if request.generate and pool:
@@ -180,6 +218,7 @@ def design_molecules(request: DesignRequest, structured_tz, literature_analysis)
                     "properties": [], "sources": [], "source": "дизайн",
                     # This is the seed library, not a claimed synthetic route.
                     "parents": sorted(set().union(*(fragments[f] for f in selected))),
+                    "route_ids": [],
                 }
         gaps.append("BRICS-перебор ограничен 20 исходными структурами, 12 фрагментами, глубиной 1 и 100 продуктами; пространство не исчерпано.")
 
@@ -209,14 +248,17 @@ def design_molecules(request: DesignRequest, structured_tz, literature_analysis)
             name=item["name"], smiles=smiles, compound_class=item["compound_class"],
             properties=properties, source=item["source"], stub=False,
             sources=item["sources"],
-            derivation=("BRICS, библиотека исходных SMILES: " + "; ".join(item["parents"])) if item["parents"] else "Литературный аналог",
+            derivation=("BRICS, библиотека исходных SMILES: " + "; ".join(item["parents"])) if item["parents"] else (
+                "Продукт литературного маршрута" if item["route_ids"] else "Литературный аналог"
+            ),
+            route_ids=item["route_ids"],
             tz_fit=f"Проверено ограничений: {passed}/{len(checks)}; неизвестно: {unknown}. Полное соответствие ТЗ не подтверждено.",
             risks="Синтезируемость и целевые эксплуатационные свойства требуют проверки." + (
                 " Новая структура-гипотеза; свойства исходных аналогов не перенесены." if item["source"] == "дизайн" else ""
             ),
         )
         # Rank evidence coverage, NOT an invented chemical fitness score.
-        candidates.append(((-passed, unknown, item["source"] != "литература", smiles), candidate))
+        candidates.append(((-passed, unknown, not bool(item["route_ids"]), item["source"] != "литература", smiles), candidate))
     candidates.sort(key=lambda pair: pair[0])
     chosen = [c for _, c in candidates[:request.max_candidates]]
     if not chosen:

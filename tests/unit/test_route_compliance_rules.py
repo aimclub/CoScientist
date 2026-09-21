@@ -77,21 +77,28 @@ def test_unparsed_clause_needs_review_not_block():
     out = rc.evaluate_route(_route(), spec, [])
     c = next(x for x in out.tz_compliance if x.constraint_id == "REQ-X")
     assert c.status == "needs_review"
-    assert out.overall_status == "eligible"
+    # needs_review never rejects/blocks: the route proceeds (to experimental
+    # screening under the merged decision), carrying the clause as a caveat.
+    assert out.overall_status not in ("rejected", "blocked")
 
 
-def test_temperature_range_overlap_yields_eligible_route():
+def test_temperature_range_overlap_is_not_rejected():
+    # 50–80 overlaps 25–70: the route is NOT rejected (it proceeds — eligible
+    # with a verified source, else experimental/screening), never no_compliant.
     q = rc.qualify_routes([_route(temp="50–80 °C")], RequirementsSpec(constraints=[_temp_constraint()]), [])
-    assert q.status == "ok"
-    assert [r.route_id for r in q.routes] == ["R1"]
+    assert q.status != "no_compliant_routes"
+    all_routes = q.routes + q.experimental_routes
+    assert [r.route_id for r in all_routes] == ["R1"]
+    assert all_routes[0].overall_status != "rejected"
 
 
-def test_missing_conditions_still_blocks():
-    # No conditions at all → SYS-CONDITIONS-COMPLETE unknown → blocked.
+def test_missing_conditions_is_not_eligible():
+    # No conditions/yields → SYS completeness checks are not "pass", so the
+    # route is not eligible for production; it drops to experimental screening.
     step = ProcessStep(operation="op", reactants=[Substance(name="A")], products=[Substance(name="P")],
                        conditions=[], conditions_status="missing",
                        conditions_missing_reason="нет данных",
                        yield_fraction=None, yield_status="missing", yield_missing_reason="нет")
     route = SynthesisRoute(route_id="R2", product=Substance(name="P"), steps=[step])
     out = rc.evaluate_route(route, RequirementsSpec(constraints=[]), [])
-    assert out.overall_status == "blocked"
+    assert out.overall_status != "eligible"

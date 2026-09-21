@@ -26,11 +26,18 @@ import json
 import logging
 from typing import Any, Dict, Optional
 
+from CoScientist.microfluidics.models import (
+    OPERATOR_ECONOMICS_OVERRIDE_KEY,
+    OperatorEconomicsOverride,
+    SynthesisRoutes,
+)
+
 logger = logging.getLogger(__name__)
 
 RANKING_KEY = "economics_ranking"
 ESTIMATES_KEY = "economics_estimates"
 RAW_KEY = "economics_raw"
+PRELIMINARY_RANKING_KEY = "economics_preliminary_ranking"
 
 _MAX_WARNINGS = 5
 
@@ -89,6 +96,22 @@ def _collect_ranking(state: Any, args: Dict[str, Any], result: Dict[str, Any]) -
         str(route.get("route_id")) for route in qualified.get("routes") or []
         if isinstance(route, dict) and route.get("route_id")
     }
+    preliminary = False
+    if not allowed:
+        try:
+            override = OperatorEconomicsOverride.model_validate(
+                state.get(OPERATOR_ECONOMICS_OVERRIDE_KEY)
+            )
+            proposal_ids = {
+                route.route_id for route in SynthesisRoutes.model_validate(
+                    state.get("synthesis_routes")
+                ).routes
+            }
+            if set(override.route_ids).issubset(proposal_ids):
+                allowed = set(override.route_ids)
+                preliminary = True
+        except (TypeError, ValueError):
+            pass
     returned = {
         str(route.get("route_id")) for route in result.get("routes") or []
         if isinstance(route, dict) and route.get("route_id")
@@ -98,13 +121,14 @@ def _collect_ranking(state: Any, args: Dict[str, Any], result: Dict[str, Any]) -
             "economics result route_ids must match qualified_routes exactly: "
             f"allowed={sorted(allowed)}, returned={sorted(returned)}"
         )
-    previous = state.get(RANKING_KEY) or {}
+    ranking_key = PRELIMINARY_RANKING_KEY if preliminary else RANKING_KEY
+    previous = state.get(ranking_key) or {}
     routes = dict(previous.get("routes") or {})
     for route in result.get("routes") or []:
         if isinstance(route, dict) and route.get("route_id"):
             routes[str(route["route_id"])] = _route_summary(route)
     # Written whole: AgentTool forwards only whole-key deltas to the parent.
-    state[RANKING_KEY] = {
+    state[ranking_key] = {
         "target_qty": args.get("target_qty", previous.get("target_qty")),
         "target_unit": args.get("target_unit", previous.get("target_unit")),
         "preferred_currency": result.get("preferred_currency"),
@@ -153,6 +177,7 @@ __all__ = [
     "ESTIMATES_KEY",
     "RANKING_KEY",
     "RAW_KEY",
+    "PRELIMINARY_RANKING_KEY",
     "collect_economics_result",
     "structured_result",
 ]

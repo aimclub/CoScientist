@@ -5,7 +5,13 @@ import json
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from CoScientist.microfluidics.models import LiteratureAnalysis, QualifiedRoutes, SynthesisRoutes
+from CoScientist.microfluidics.models import (
+    OPERATOR_ROUTE_OVERRIDE_KEY,
+    LiteratureAnalysis,
+    OperatorRouteOverride,
+    QualifiedRoutes,
+    SynthesisRoutes,
+)
 
 INPUT_KEYS = (
     "structured_tz", "literature_analysis", "synthesis_routes", "qualified_routes",
@@ -35,10 +41,18 @@ def _number(value: Any, name: str, *, positive: bool = False) -> None:
         raise ValueError(f"{name}: finite {'positive' if positive else 'nonnegative'} number required") from exc
 
 
-def prepare_inputs(state: Any) -> dict:
-    """Require real, linked route rankings; preserve service numbers verbatim."""
+def prepare_inputs(state: Any, *, planning_only: bool = False) -> dict:
+    """Prepare either a production hand-off or a non-executing screening plan.
+
+    Production needs fully qualified routes and cost rankings.  Screening is
+    intentionally narrower: it may carry real routes with open evidence/yield
+    gaps so the external system can design the measurements that close them.
+    """
     inputs = {key: state.get(key) for key in INPUT_KEYS}
-    for key in ("structured_tz", "literature_analysis", "synthesis_routes", "qualified_routes"):
+    required = ("structured_tz", "literature_analysis", "synthesis_routes", "qualified_routes")
+    if not planning_only:
+        required = (*required, "economics_ranking")
+    for key in required:
         inputs[key] = _object(inputs[key], key)
     LiteratureAnalysis.model_validate(inputs["literature_analysis"])
     proposals = SynthesisRoutes.model_validate(inputs["synthesis_routes"]).routes
@@ -49,24 +63,35 @@ def prepare_inputs(state: Any) -> dict:
         raise ValueError("synthesis_routes: real routes with nonempty steps required")
     qualified = QualifiedRoutes.model_validate(inputs["qualified_routes"])
     routes = qualified.routes
+    if planning_only and not routes:
+        routes = qualified.experimental_routes
+    override = None
+    if planning_only and not routes and qualified.status == "no_compliant_routes":
+        # A human may ask the external system to design evidence-gathering for
+        # a rejected proposal.  This does not alter qualification and cannot
+        # enter the production branch below.
+        override = OperatorRouteOverride.model_validate(
+            state.get(OPERATOR_ROUTE_OVERRIDE_KEY)
+        )
+        proposal_by_id = {route.route_id: route for route in proposals}
+        unknown = set(override.route_ids) - set(proposal_by_id)
+        if unknown:
+            raise ValueError(
+                "operator_route_override.route_ids must be a subset of synthesis_routes: "
+                f"{sorted(unknown)}"
+            )
+        routes = [proposal_by_id[route_id] for route_id in override.route_ids]
+        inputs[OPERATOR_ROUTE_OVERRIDE_KEY] = override.model_dump()
     ids = [route.route_id for route in routes]
     if not routes or not set(ids).issubset(set(proposal_ids)):
-        raise ValueError("qualified_routes: nonempty eligible subset of synthesis_routes required")
-
-    # economics_ranking is OPTIONAL: when the costing server did not run (no
-    # numbers to rank), hand the routes off UNRANKED for planning/CFD instead
-    # of failing — a missing ranking must not dead-end the experiment stage
-    # (and drive the orchestrator into a design↔routes↔economics loop).
-    raw_ranking = state.get("economics_ranking")
-    ranking_available = bool(raw_ranking) and (
-        not isinstance(raw_ranking, dict) or bool(raw_ranking.get("routes"))
-    )
-    if not ranking_available:
-        inputs["economics_ranking"] = None
-        inputs["economics_ranking_available"] = False
+        mode = "eligible or experimental" if planning_only else "eligible"
+        raise ValueError(f"qualified_routes: nonempty {mode} subset of synthesis_routes required")
+    if planning_only:
+        inputs["handoff_mode"] = "screening"
+        inputs["selected_route_ids"] = ids
         return json.loads(json.dumps(inputs, ensure_ascii=False, allow_nan=False))
-    ranking = _object(raw_ranking, "economics_ranking")
-    inputs["economics_ranking"] = ranking
+
+    ranking = inputs["economics_ranking"]
     ranked = ranking.get("routes")
     if not isinstance(ranked, dict) or set(ranked) != set(ids):
         raise ValueError("economics_ranking.routes must match qualified_routes route_id values exactly")

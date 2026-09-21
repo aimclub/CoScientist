@@ -17,14 +17,18 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def inputs():
+    route = {
+        "route_id": "r1", "product": {"name": "fixture"}, "overall_status": "eligible",
+        "steps": [{"operation": "fixture reaction", "reactants": [{"name": "A"}],
+                   "products": [{"name": "fixture"}],
+                   "conditions": [{"name": "Среда", "value": "water"}],
+                   "yield_fraction": 0.8}],
+    }
     return {
         "structured_tz": {"target": "fixture molecule"},
         "literature_analysis": {"facts": [{"statement": "fixture fact", "sources": ["fixture"]}]},
-        "synthesis_routes": {"routes": [{
-            "route_id": "r1", "product": {"name": "fixture"},
-            "steps": [{"operation": "fixture reaction", "reactants": [{"name": "A"}],
-                       "products": [{"name": "fixture"}]}],
-        }]},
+        "synthesis_routes": {"routes": [route]},
+        "qualified_routes": {"status": "ok", "routes": [copy.deepcopy(route)]},
         "economics": "Partial cost, not a complete price",
         "economics_ranking": {"target_qty": 100, "target_unit": "g",
             "preferred_currency": "RUB", "rank_by": "per_unit", "routes": {
@@ -72,7 +76,7 @@ def test_complete_inputs_are_preserved_and_sent_once(client):
     assert first["inputs"]["economics_ranking"]["routes"]["r1"]["cost_per_unit"] == "42.10"
 
 
-@pytest.mark.parametrize("key", ["structured_tz", "literature_analysis", "synthesis_routes"])
+@pytest.mark.parametrize("key", ["structured_tz", "literature_analysis", "synthesis_routes", "qualified_routes", "economics_ranking"])
 def test_missing_required_inputs_do_not_send(client, key):
     ctx = context()
     del ctx.state[key]
@@ -81,52 +85,6 @@ def test_missing_required_inputs_do_not_send(client, key):
     # A local validation failure can be corrected without creating a new session.
     ctx.state[key] = inputs()[key]
     assert asyncio.run(adapter.optimization_start(ctx))["state"] == "submitted"
-
-
-def _state_with_qualified(ranking=True):
-    """A minimal, model-valid hand-off state (the shared fixture predates the
-    qualified_routes requirement, so build one here)."""
-    from CoScientist.microfluidics.models import (
-        ProcessStep, Substance, SynthesisRoute, SynthesisRoutes, QualifiedRoutes,
-        NamedValue,
-    )
-    route = SynthesisRoute(
-        route_id="r1", product=Substance(name="fixture"),
-        overall_status="eligible",
-        steps=[ProcessStep(
-            operation="Mannich", reactants=[Substance(name="A")],
-            products=[Substance(name="fixture")],
-            conditions=[NamedValue(name="температура", value="50–70 °C")],
-            conditions_status="reported", yield_fraction=0.85, yield_status="reported",
-        )],
-    )
-    st = {
-        "structured_tz": {"target": "fixture"},
-        "literature_analysis": {"facts": [{"statement": "f", "sources": ["s"]}]},
-        "synthesis_routes": SynthesisRoutes(routes=[route]).model_dump(),
-        "qualified_routes": QualifiedRoutes(status="ok", routes=[route]).model_dump(),
-    }
-    if ranking:
-        st["economics_ranking"] = {"target_qty": 100, "target_unit": "g",
-            "preferred_currency": "RUB", "rank_by": "per_unit",
-            "routes": {"r1": {"status": "ok", "rank": 1, "currency": "RUB",
-                              "cost_per_unit": "42.10", "cost_packs": "50.00"}}}
-    return st
-
-
-def test_missing_economics_ranking_hands_off_unranked():
-    # economics_ranking is OPTIONAL: when costing did not run, the routes are
-    # still prepared for planning/CFD (unranked), not rejected — a missing
-    # ranking must not dead-end the experiment stage.
-    out = prepare_inputs(_state_with_qualified(ranking=False))
-    assert out["economics_ranking"] is None
-    assert out["economics_ranking_available"] is False
-
-
-def test_present_economics_ranking_is_preserved_and_unflagged():
-    out = prepare_inputs(_state_with_qualified(ranking=True))
-    assert out["economics_ranking"]["routes"]["r1"]["rank"] == 1
-    assert "economics_ranking_available" not in out
 
 
 @pytest.mark.parametrize("field,value", [
@@ -156,9 +114,43 @@ def test_route_ids_and_non_stub_steps_are_required():
 
 def test_json_state_values_are_supported_without_changing_numbers():
     data = inputs()
-    for key in ("literature_analysis", "synthesis_routes", "economics_ranking"):
+    for key in ("literature_analysis", "synthesis_routes", "qualified_routes", "economics_ranking"):
         data[key] = json.dumps(data[key])
     assert prepare_inputs(data) == inputs()
+
+
+def test_screening_handoff_accepts_real_experimental_route_without_costing(client):
+    data = inputs()
+    route = data["synthesis_routes"]["routes"][0]
+    route["overall_status"] = "experimental"
+    route["steps"][0].pop("yield_fraction")
+    route["steps"][0]["yield_status"] = "missing"
+    route["steps"][0]["yield_missing_reason"] = "Выход должен быть измерен"
+    data["qualified_routes"] = {
+        "status": "screening_only", "routes": [], "experimental_routes": [copy.deepcopy(route)],
+    }
+    del data["economics_ranking"]
+    handoff = prepare_inputs(data, planning_only=True)
+    assert handoff["handoff_mode"] == "screening"
+    assert handoff["selected_route_ids"] == ["r1"]
+
+    ctx = SimpleNamespace(state=data)
+    asyncio.run(adapter.optimization_start(ctx, planning_only=True))
+    text = client.send_message.call_args.kwargs["text"]
+    assert "СКРИНИНГА" in text
+    assert '"handoff_mode": "screening"' in text
+
+
+def test_production_handoff_rejects_screening_only_route_without_costing():
+    data = inputs()
+    route = data["synthesis_routes"]["routes"][0]
+    route["overall_status"] = "experimental"
+    data["qualified_routes"] = {
+        "status": "screening_only", "routes": [], "experimental_routes": [copy.deepcopy(route)],
+    }
+    del data["economics_ranking"]
+    with pytest.raises(ValueError):
+        prepare_inputs(data)
 
 
 def test_wire_contract_preserves_role_and_domain(monkeypatch):

@@ -116,8 +116,24 @@
   // Agent roles, as a user would name them. Anything missing falls back to the
   // bare class name with the "Agent" suffix stripped.
   const AGENTS = {
+    // Microfluidics profile: keep the stable runtime ids, but show the role
+    // a researcher actually needs to understand.
+    RootOrchestrator: { ru: 'Координатор микрофлюидики', en: 'Microfluidics coordinator' },
+    ModuleA_TZLiterature: { ru: 'ТЗ и литература', en: 'Specification & literature' },
+    TZAgent: { ru: 'Подготовка ТЗ', en: 'Specification preparation' },
+    TZSpecAgent: { ru: 'Техническое задание', en: 'Technical specification' },
+    TZQueryGenAgent: { ru: 'Поисковые запросы', en: 'Literature queries' },
+    LiteratureOrchestrator: { ru: 'Координатор анализа литературы', en: 'Literature analysis coordinator' },
+    LiteratureSynthesisAgent: { ru: 'Итоги литературного анализа', en: 'Literature synthesis' },
+    EvidenceVerifierAgent: { ru: 'Проверка источников', en: 'Evidence verification' },
+    ModuleB_Design: { ru: 'Проектирование молекул', en: 'Molecule design' },
+    MolDesignAgent: { ru: 'Молекулярный дизайн', en: 'Molecular design' },
+    SynthRouteAgent: { ru: 'Маршруты синтеза', en: 'Synthesis routes' },
+    EconomicsAgent: { ru: 'Экономика маршрутов', en: 'Route economics' },
+    ModuleC_Experiment: { ru: 'Эксперименты и оптимизация', en: 'Experiments & optimization' },
+    OptimizerAgent: { ru: 'Оптимизация экспериментов', en: 'Experiment optimization' },
+    ReportAgent: { ru: 'Итоговый отчёт', en: 'Final report' },
     OrchestratorAgent: { ru: 'агент-координатор', en: 'orchestrator agent' },
-    RootOrchestrator: { ru: 'агент-координатор', en: 'orchestrator agent' },
     PlannerAgent: { ru: 'агент-планировщик', en: 'planner agent' },
     PlanningPipelineAgent: { ru: 'агент-планировщик', en: 'planner agent' },
     PlanCriticAgent: { ru: 'агент-критик', en: 'plan critic agent' },
@@ -1592,6 +1608,9 @@
     reset: guarded('reset', function () { reset(); notifyStages(); }),
     stages: guarded('stages', stageStates),
     stageOf: guarded('stageOf', stageOf),
+    // Public display name for cards, telemetry and activity widgets. Runtime
+    // ids remain unchanged so event routing and history stay compatible.
+    agentName: guarded('agentName', function (name) { return agentLabel(name); }),
     demo: demo,   // async: the caller already handles its rejection
     setLang: guarded('setLang', function (value) { if (value) { lang = value; paint(); } }),
     setConnected: guarded('setConnected', function (value) { connected = !!value; render(); }),

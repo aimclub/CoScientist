@@ -205,7 +205,23 @@ class RouteStep(BaseModel):
 class LiteratureRoute(BaseModel):
     """Маршрут синтеза, описанный в литературе."""
 
+    route_id: str = Field(
+        default="",
+        description="Устойчивый ID литературного маршрута, например LIT-ROUTE-01",
+    )
     product: str = Field(description="Какое вещество получают (название / SMILES)")
+    product_smiles: str = Field(
+        default="",
+        description="SMILES целевого продукта маршрута, если структура однозначно установлена",
+    )
+    variant_label: str = Field(
+        default="",
+        description="Идентификатор или краткое имя варианта процедуры/строки таблицы",
+    )
+    comparison_notes: str = Field(
+        default="",
+        description="С чем сравнивался вариант и почему он выбран или отклонён",
+    )
     steps: List[RouteStep] = Field(default_factory=list)
     flow_suitability: str = Field(
         default="", description="Пригодность для проточного / микрофлюидного реактора"
@@ -277,6 +293,10 @@ class DesignCandidate(BaseModel):
     )
     sources: List[str] = Field(default_factory=list, description="Источники литературных свойств")
     derivation: str = Field(default="", description="Происхождение структуры; не маршрут синтеза")
+    route_ids: List[str] = Field(
+        default_factory=list,
+        description="Литературные маршруты, непосредственно ведущие к кандидату",
+    )
     stub: bool = Field(default=False, description="Данные получены от заглушки")
 
 
@@ -397,6 +417,14 @@ class SynthesisRoute(BaseModel):
     )
     product: Substance
     source: str = Field(default="ретросинтез", description="«ретросинтез» или «литература»")
+    variant_label: str = Field(
+        default="",
+        description="Идентификатор варианта процедуры/строки таблицы, если источник их различает",
+    )
+    selection_rationale: str = Field(
+        default="",
+        description="Сопоставление с другими вариантами маршрута; не заменяет числовые данные",
+    )
     steps: List[ProcessStep] = Field(
         min_length=1, description="Все операции маршрута по порядку; обязательное непустое поле"
     )
@@ -404,8 +432,14 @@ class SynthesisRoute(BaseModel):
     bottlenecks: List[str] = Field(default_factory=list)
     sources: List[str] = Field(default_factory=list, description="Ссылки / DOI")
     evidence: List[EvidenceRef] = Field(default_factory=list)
+    product_purity_percent: Optional[float] = Field(
+        default=None, ge=0, le=100,
+        description="Измеренная чистота выделенного продукта, %, если сообщена",
+    )
+    product_purity_status: Literal["reported", "missing", "unverified"] = "missing"
+    product_purity_evidence: List[EvidenceRef] = Field(default_factory=list)
     tz_compliance: List[ComplianceCheck] = Field(default_factory=list)
-    overall_status: Literal["unassessed", "eligible", "rejected", "blocked"] = "unassessed"
+    overall_status: Literal["unassessed", "eligible", "experimental", "rejected", "blocked"] = "unassessed"
     stub: bool = Field(default=False, description="Маршрут получен от заглушки")
 
 
@@ -428,15 +462,16 @@ class SynthesisRoutes(BaseModel):
 class RouteDecision(BaseModel):
     route_id: str
     product: str = ""
-    overall_status: Literal["rejected", "blocked"]
+    overall_status: Literal["experimental", "rejected", "blocked"]
     reasons: List[str] = Field(default_factory=list)
 
 
 class QualifiedRoutes(BaseModel):
-    """Fail-closed result consumed by economics and the experiment hand-off."""
+    """Route qualification split between production costing and experimental screening."""
 
-    status: Literal["ok", "no_compliant_routes"]
+    status: Literal["ok", "screening_only", "no_compliant_routes"]
     routes: List[SynthesisRoute] = Field(default_factory=list)
+    experimental_routes: List[SynthesisRoute] = Field(default_factory=list)
     rejected: List[RouteDecision] = Field(default_factory=list)
     blocked: List[RouteDecision] = Field(default_factory=list)
     gaps: List[str] = Field(default_factory=list)
@@ -445,13 +480,58 @@ class QualifiedRoutes(BaseModel):
     def status_matches_routes(self):
         if self.status == "ok" and not self.routes:
             raise ValueError("qualified_routes status=ok requires eligible routes")
-        if self.status == "no_compliant_routes" and self.routes:
-            raise ValueError("no_compliant_routes cannot contain eligible routes")
+        if self.status == "screening_only" and (self.routes or not self.experimental_routes):
+            raise ValueError("screening_only requires experimental routes and no eligible routes")
+        if self.status == "no_compliant_routes" and (self.routes or self.experimental_routes):
+            raise ValueError("no_compliant_routes cannot contain hand-off routes")
         if any(route.overall_status != "eligible" for route in self.routes):
             raise ValueError("qualified_routes.routes may contain only eligible routes")
-        ids = [route.route_id for route in self.routes]
+        if any(route.overall_status != "experimental" for route in self.experimental_routes):
+            raise ValueError("qualified_routes.experimental_routes may contain only experimental routes")
+        ids = [route.route_id for route in [*self.routes, *self.experimental_routes]]
         if len(ids) != len(set(ids)):
             raise ValueError("qualified_routes route_id values must be unique")
+        return self
+
+
+# This is deliberately not a qualification result.  It records a human's
+# exception to the automatic gate and can only be used to request a
+# non-executing verification plan from the external system.
+OPERATOR_ROUTE_OVERRIDE_KEY = "operator_route_override"
+OPERATOR_ECONOMICS_OVERRIDE_KEY = "operator_economics_override"
+
+
+class OperatorRouteOverride(BaseModel):
+    """Explicit operator authorization to plan verification of rejected routes."""
+
+    mode: Literal["screening_only"]
+    approved_by_human: Literal[True]
+    route_ids: List[str] = Field(min_length=1)
+    rationale: str = Field(min_length=1)
+    operator_feedback: str = ""
+
+    @model_validator(mode="after")
+    def route_ids_are_unique(self):
+        ids = [route_id.strip() for route_id in self.route_ids]
+        if any(not route_id for route_id in ids) or len(ids) != len(set(ids)):
+            raise ValueError("operator override requires nonempty unique route_id values")
+        self.route_ids = ids
+        return self
+
+
+class OperatorEconomicsOverride(BaseModel):
+    """Human approval to price non-eligible routes as preliminary evidence."""
+
+    mode: Literal["preliminary_only"]
+    approved_by_human: Literal[True]
+    route_ids: List[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def route_ids_are_unique(self):
+        ids = [route_id.strip() for route_id in self.route_ids]
+        if any(not route_id for route_id in ids) or len(ids) != len(set(ids)):
+            raise ValueError("economics override requires nonempty unique route_id values")
+        self.route_ids = ids
         return self
 
 
@@ -470,6 +550,10 @@ __all__ = [
     "EvidenceRef",
     "SourceRecord",
     "OPEN_STATUSES",
+    "OPERATOR_ROUTE_OVERRIDE_KEY",
+    "OPERATOR_ECONOMICS_OVERRIDE_KEY",
+    "OperatorEconomicsOverride",
+    "OperatorRouteOverride",
     "ProcessStep",
     "RequirementConstraint",
     "RequirementSource",

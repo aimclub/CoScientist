@@ -13,8 +13,8 @@
 #   │    ├─ TZAgent (sequential)              ported from VibePAV
 #   │    │    ├─ TZSpecAgent      -> state["structured_tz"]         (ТЗ, by section)
 #   │    │    └─ TZQueryGenAgent  -> state["tz_literature_queries"] (LIT-01…)
-#   │    ├─ PlannerAgent          -> create_plan(…), one task per LIT query
-#   │    ├─ LiteratureOrchestrator-> delegates each LIT task to ResearchAgent
+#   │    ├─ LiteratureOrchestrator-> delegates each LIT query directly to
+#   │    │                           ResearchAgent (no duplicate planning step)
 #   │    │                           (every answer -> state["literature_findings"])
 #   │    ├─ LiteratureSynthesisAgent -> state["literature_analysis_draft"]
 #   │                                   hand-off: target molecule, analogues,
@@ -68,6 +68,11 @@ agents:
       CoScientist microfluidics root orchestrator — runs the case module by
       module: ТЗ + literature, design, experiment, report.
     prompt: microfluidics_root_orchestrator
+    # The root owns the B→C decision.  It asks for a human confirmation before
+    # entering C and exposes a strictly planning-only override when code has
+    # rejected every route.
+    tools: [operator_screening_override]
+    hitl: true
     subordinates:
       - ModuleA_TZLiterature
       - ModuleB_Design
@@ -86,7 +91,6 @@ agents:
       analogues, synthesis routes with conditions, and facts.
     children:
       - TZAgent
-      - PlannerAgent
       - LiteratureOrchestrator
       - LiteratureSynthesisAgent
       - EvidenceVerifierAgent
@@ -172,8 +176,11 @@ agents:
       # the ТЗ + literature queries as shareable Markdown & HTML files.
       after_agent: [record_research_question, export_tz_and_queries]
 
-  # ── Planning ───────────────────────────────────────────────────────────────
+  # The query generator already produces executable LIT-* requests. A separate
+  # planner only copied those requests into create_plan tasks, so it is kept
+  # available for shared/default profiles but disabled here.
   PlannerAgent:
+    enabled: false
     class: custom:session
     title: План исследования
     description: >-
@@ -185,9 +192,9 @@ agents:
     hitl: true
 
   # ── Execution (inside module A) ────────────────────────────────────────────
-  # Was the root OrchestratorAgent when the profile stopped at literature.
-  # It now lives INSIDE module A: the 1→2 edge is internal to the module, so
-  # routing it through RootOrchestrator would break the module boundary.
+  # The 1→2 edge is direct: TZQueryGenAgent writes tz_literature_queries and
+  # this agent delegates those exact requests to ResearchAgent. There is no
+  # intermediate roadmap/planner stage.
   LiteratureOrchestrator:
     class: llm
     title: Анализ литературы
@@ -197,7 +204,6 @@ agents:
       delegating independent literature tasks to ResearchAgent in parallel and
       sums up the findings against the ТЗ.
     prompt: microfluidics_orchestrator
-    tools: [task_tracker]
     # Its closing summary across all LIT tasks — kept, not just posted.
     output_key: literature_report
     subordinates:
@@ -226,7 +232,7 @@ agents:
       LIT-xx query). It searches scientific literature and the web and
       extracts the requested data (classes, IFT/CMC, synthesis routes,
       limitations, analogues).
-    prompt: research
+    prompt: microfluidics_research
     tools: [websearch, paper_analysis, papers_search, task_tracker]
     output_key: search_results
     # Runs concurrently for all LIT-xx tasks under LiteratureOrchestrator. HITL review is done
@@ -238,7 +244,7 @@ agents:
     callbacks:
       before_agent: [before_get_task]
       before_model: [inject_uploaded_papers]
-      before_tool: [WebSearchLimiter]
+      before_tool: [PaperSearchGuard, WebSearchLimiter]
       after_tool: [log_research_tool_calls]
       # Keep every LIT-xx answer under a collision-free per-query state key.
       after_agent: [collect_literature_finding]
@@ -267,10 +273,13 @@ agents:
     title: Проверка источников
     include_contents: none
     description: >-
-      независимо сверяет числовые условия и выходы с полными
-      текстами источников; неподтверждённые claims оставляет unverified.
+      точечно аутентифицирует критичные числовые claims синтеза (условия и
+      выходы) по полным текстам; не повторяет поиск литературы.
     prompt: microfluidics_evidence_verifier
-    tools: [websearch, paper_analysis, papers_search]
+    # This is a provenance gate, not a second literature search. It may fetch
+    # the exact DOI/source already named in the draft, but never broadens the
+    # search with general web queries.
+    tools: [paper_analysis, papers_search]
     output_key: literature_analysis
     output_schema: literature_analysis
     callbacks:
@@ -325,14 +334,14 @@ agents:
     class: llm
     title: Маршруты синтеза
     description: >-
-      ретросинтез — строит маршруты синтеза кандидатов с условиями каждой
-      операции и оценивает их пригодность для проточного реактора.
+      отбирает подтверждённые литературные маршруты кандидатов с условиями
+      каждой операции и оценивает их пригодность для проточного реактора.
     reasoning: medium
     prompt: microfluidics_synth_route
-    # The retrosynthesis service (HOSTS_PORTS__RETROSYNTHESIS_SERVICES_HOST/PORT,
-    # not 0.0.0.0). No stub: without the service the agent works from the
-    # literature routes alone and says so.
-    tools: [retrosynthesis]
+    # The external retrosynthesis proposals are intentionally disabled here:
+    # this stage only transfers route-backed literature evidence.  The template
+    # switches to its literature-only branch when this list is empty.
+    tools: []
     output_key: synthesis_routes
     # It sends target structures to an external service: the human sees the
     # plan (what goes out), every step and the report. Needs HITL__ENABLED=true.
@@ -368,7 +377,10 @@ agents:
     work_order: true
     work_order_step_review: true
     callbacks:
-      before_agent: [compile_requirements, gate_economics, inject_target_molecule]
+      # If production costing is closed, the operator may approve a separately
+      # labelled preliminary price inquiry before the hard gate decides whether
+      # this agent should run.
+      before_agent: [compile_requirements, review_preliminary_economics, gate_economics, inject_target_molecule]
       before_tool: [guard_economics_routes]
       # The server's numbers, as given, for the report: economics_ranking.
       after_tool: [collect_economics_result]

@@ -266,6 +266,9 @@ class CoScientistManager:
                     else:
                         coder_toolset._hitl_handler = self._hitl_handler
 
+            from CoScientist.agents.common import verify_proxy_reachable
+            await verify_proxy_reachable()
+
             self._initialized = True
 
     async def _set_state(self, key: str, value) -> None:

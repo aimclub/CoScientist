@@ -102,10 +102,20 @@ async def ensure_local_papers_uploaded(callback_context: CallbackContext) -> Non
 
     async with _upload_locks[scope_key]:
         if callback_context.state.get(_PAPER_STATE_KEY):
+            print(
+                "[S3 papers] already registered for "
+                f"user={user_id} session={session_id}: "
+                f"{callback_context.state[_PAPER_STATE_KEY]}",
+                flush=True,
+            )
             return
 
         papers_dir = _resolve_local_papers_dir()
         if papers_dir is None or not papers_dir.exists() or not papers_dir.is_dir():
+            print(
+                f"[S3 papers] local directory not found: {papers_dir}",
+                flush=True,
+            )
             logger.debug("No local papers directory found for uploaded papers.")
             return
 
@@ -116,8 +126,15 @@ async def ensure_local_papers_uploaded(callback_context: CallbackContext) -> Non
         ]
 
         if not pdf_files:
+            print(f"[S3 papers] no PDF files found in {papers_dir}", flush=True)
             logger.debug("Local uploaded papers directory is empty: %s", papers_dir)
         else:
+            print(
+                f"[S3 papers] found {len(pdf_files)} PDF(s) in {papers_dir}; "
+                f"uploading to bucket={s3_service.bucket_name!r} "
+                f"prefix={user_id}/{session_id}/uploaded_papers",
+                flush=True,
+            )
             logger.info("Found %d local PDF(s) for upload in %s", len(pdf_files), papers_dir)
 
         prefix = f"{user_id}/{session_id}/uploaded_papers"
@@ -129,8 +146,14 @@ async def ensure_local_papers_uploaded(callback_context: CallbackContext) -> Non
                     s3_service.upload_file_object(prefix, pdf_path.name, str(pdf_path))
                     s3_key = f"{prefix}/{pdf_path.name}"
                     uploaded_keys.append(s3_key)
+                    print(f"[S3 papers] UPLOAD OK: {s3_key}", flush=True)
                     logger.info("Uploaded local paper to S3: %s", s3_key)
                 except Exception as exc:
+                    print(
+                        f"[S3 papers] UPLOAD FAILED: {pdf_path}: "
+                        f"{type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
                     logger.warning(
                         "Failed to upload local paper %s to S3: %s",
                         pdf_path,
@@ -138,15 +161,31 @@ async def ensure_local_papers_uploaded(callback_context: CallbackContext) -> Non
                     )
 
         if not uploaded_keys:
-            existing_keys = s3_service.list_objects(prefix)
+            try:
+                existing_keys = s3_service.list_objects(prefix)
+            except Exception as exc:
+                print(
+                    f"[S3 papers] LIST FAILED for {prefix}: "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
+                )
+                existing_keys = []
             if existing_keys:
                 uploaded_keys = existing_keys
+                print(
+                    f"[S3 papers] found existing object(s): {existing_keys}",
+                    flush=True,
+                )
                 logger.info(
                     "No new uploads; found existing S3 keys under prefix %s: %s",
                     prefix,
                     existing_keys,
                 )
             else:
+                print(
+                    f"[S3 papers] no objects found under prefix {prefix}",
+                    flush=True,
+                )
                 logger.debug("No S3 keys found under prefix %s", prefix)
 
         if uploaded_keys:

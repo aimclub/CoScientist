@@ -12,6 +12,8 @@ from google.genai import types
 from CoScientist.microfluidics.models import (
     ComplianceCheck,
     EvidenceRef,
+    OPERATOR_ECONOMICS_OVERRIDE_KEY,
+    OperatorEconomicsOverride,
     QualifiedRoutes,
     RequirementConstraint,
     RequirementsSpec,
@@ -151,14 +153,51 @@ def _route_evidence(route: SynthesisRoute, records: dict[str, SourceRecord]) -> 
 
 
 def _step_evidence(route: SynthesisRoute, records: dict[str, SourceRecord]) -> list[list[str]]:
-    route_refs = list(route.evidence)
     result: list[list[str]] = []
     for step in route.steps:
-        refs = route_refs + list(step.evidence)
+        # Route-level evidence can establish provenance of the route, but must
+        # not silently certify every individual operation.  Numeric conditions
+        # and yields need a claim-level pointer on that step (or its condition).
+        refs = list(step.evidence)
         for condition in step.conditions:
             refs.extend(condition.evidence)
         result.append(_verified_evidence(refs, records))
     return result
+
+
+def _check_product_purity(
+    constraint: RequirementConstraint,
+    route: SynthesisRoute,
+    records: dict[str, SourceRecord],
+) -> ComplianceCheck:
+    if constraint.resolution != "confirmed" or not constraint.machine_evaluable:
+        return ComplianceCheck(
+            constraint_id=constraint.constraint_id,
+            status="unknown",
+            reason="Порог чистоты не подтверждён как машинно проверяемое требование.",
+        )
+    minimum = float(constraint.value)
+    if (
+        route.product_purity_percent is None
+        or route.product_purity_status != "reported"
+        or not _verified_evidence(route.product_purity_evidence, records)
+    ):
+        return ComplianceCheck(
+            constraint_id=constraint.constraint_id,
+            status="unknown",
+            reason="Для выделенного продукта нет верифицированного измерения чистоты.",
+        )
+    if route.product_purity_percent < minimum:
+        return ComplianceCheck(
+            constraint_id=constraint.constraint_id,
+            status="fail",
+            reason=f"Чистота продукта {route.product_purity_percent:g} % ниже требуемых {minimum:g} %.",
+        )
+    return ComplianceCheck(
+        constraint_id=constraint.constraint_id,
+        status="pass",
+        reason="Измеренная чистота продукта достигает минимального порога.",
+    )
 
 
 def _check_temperature(
@@ -453,7 +492,7 @@ def evaluate_route(
         "solvent_hazard_policy": _check_solvent_policy,
     }
     for constraint in spec.constraints:
-        if constraint.scope not in {"step", "route", "feedstock"}:
+        if constraint.scope not in {"step", "route", "feedstock", "product", "deliverable"}:
             checks.append(ComplianceCheck(
                 constraint_id=constraint.constraint_id,
                 status="not_applicable",
@@ -463,6 +502,9 @@ def evaluate_route(
         handler = handlers.get(constraint.kind)
         if handler is not None:
             checks.append(handler(constraint, route, evidence_ids))
+            continue
+        if constraint.kind == "minimum_product_purity":
+            checks.append(_check_product_purity(constraint, route, records))
             continue
         # No machine rule for this ТЗ clause: code cannot judge it, so it
         # never blocks — it rides along as a review flag for the operator.
@@ -475,18 +517,19 @@ def evaluate_route(
     checks.extend(_completeness_checks(route, records))
 
     hard = {constraint.constraint_id for constraint in spec.constraints if constraint.hardness == "hard"}
-    # Conditions must exist; yields are advisory (see _completeness_checks).
-    hard.add("SYS-CONDITIONS-COMPLETE")
-    # rejected: the literature CONTRADICTS a hard ТЗ constraint.
-    # blocked:  a hard constraint cannot be evaluated — the data is absent.
-    # eligible: every hard check passes or is merely unverified — the route
-    #           goes on with its caveats (tz_compliance keeps them).
+    system_checks = {"SYS-CONDITIONS-COMPLETE", "SYS-YIELDS-COMPLETE"}
+    hard.update(system_checks)
     if any(check.constraint_id in hard and check.status == "fail" for check in checks):
         status = "rejected"
-    elif any(check.constraint_id in hard and check.status == "unknown" for check in checks):
-        status = "blocked"
-    else:
+    elif all(check.constraint_id not in hard or check.status in {"pass", "not_applicable"} for check in checks):
         status = "eligible"
+    else:
+        # A real route with no known hard violation can be sent to the external
+        # system for planning and evidence-generation, but never to production
+        # costing or autonomous equipment execution.  This avoids the circular
+        # dependency where experiments are needed to learn a yield, while an
+        # already known yield is required to plan the experiment.
+        status = "experimental"
     return route.model_copy(update={"tz_compliance": checks, "overall_status": status})
 
 
@@ -507,6 +550,7 @@ def qualify_routes(
     records = [record if isinstance(record, SourceRecord) else SourceRecord.model_validate(record) for record in source_records]
     assessed = [evaluate_route(route, requirements, records) for route in proposals.routes]
     eligible = [route for route in assessed if route.overall_status == "eligible"]
+    experimental = [route for route in assessed if route.overall_status == "experimental"]
 
     def decisions(status: str) -> list[RouteDecision]:
         result = []
@@ -526,11 +570,12 @@ def qualify_routes(
         return result
 
     gaps = list(proposals.gaps)
-    if not eligible:
+    if not eligible and not experimental:
         gaps.append("Нет маршрута, для которого все жёсткие ограничения ТЗ подтверждены.")
     return QualifiedRoutes(
-        status="ok" if eligible else "no_compliant_routes",
+        status="ok" if eligible else ("screening_only" if experimental else "no_compliant_routes"),
         routes=eligible,
+        experimental_routes=experimental,
         rejected=decisions("rejected"),
         blocked=decisions("blocked"),
         gaps=list(dict.fromkeys(gaps)),
@@ -593,12 +638,14 @@ def gate_economics(callback_context: CallbackContext) -> types.Content | None:
             status="no_compliant_routes", routes=[],
             gaps=[f"Некорректный qualified_routes: {type(exc).__name__}: {exc}"],
         )
-    if result.routes:
+    if result.routes or _preliminary_economics_routes(state, result):
         return None
     payload = {
         "status": "not_run",
-        "reason": "no_compliant_routes",
-        "message": "Экономика не рассчитана: нет маршрута, прошедшего все жёсткие ограничения ТЗ.",
+        # This describes only the economics stage.  Do not reuse it as a
+        # routing decision: screening_only remains a valid Module-C hand-off.
+        "economics_skipped": "missing_eligible_routes",
+        "message": "Экономика не рассчитана: нет маршрута для производственного калькулирования.",
         "gaps": result.gaps,
     }
     state["economics"] = payload
@@ -606,6 +653,79 @@ def gate_economics(callback_context: CallbackContext) -> types.Content | None:
         role="model",
         parts=[types.Part(text=json.dumps(payload, ensure_ascii=False))],
     )
+
+
+def _preliminary_economics_routes(state: Any, qualified: QualifiedRoutes) -> list[SynthesisRoute]:
+    """Selected real routes, only after the economics-specific HITL approval."""
+    if qualified.routes:
+        return qualified.routes
+    try:
+        override = OperatorEconomicsOverride.model_validate(
+            state.get(OPERATOR_ECONOMICS_OVERRIDE_KEY)
+        )
+        proposals = SynthesisRoutes.model_validate(state.get("synthesis_routes"))
+        by_id = {route.route_id: route for route in proposals.routes}
+        if set(override.route_ids) - set(by_id):
+            return []
+        selected = [by_id[route_id] for route_id in override.route_ids]
+        return [] if any(route.stub or not route.steps for route in selected) else selected
+    except (TypeError, ValueError):
+        return []
+
+
+async def review_preliminary_economics(callback_context: CallbackContext) -> None:
+    """Offer a human-approved preliminary pricing pass when code skipped it.
+
+    The resulting state never promotes a route or feeds production economics;
+    it merely allows supplier-price discovery under a clearly labelled mode.
+    """
+    state = callback_context.state
+    if state.get(OPERATOR_ECONOMICS_OVERRIDE_KEY):
+        return None
+    try:
+        qualified = QualifiedRoutes.model_validate(state.get(QUALIFIED_ROUTES_KEY))
+        proposals = SynthesisRoutes.model_validate(state.get("synthesis_routes"))
+    except (TypeError, ValueError):
+        return None
+    if qualified.routes or not proposals.routes:
+        return None
+    from CoScientist.config import get_settings
+    if not get_settings().web.hitl_enabled:
+        return None
+    from CoScientist.agents.common import hitl_handler
+    from CoScientist.graph.session_scope import session_key
+    from CoScientist.hitl.models import HITLAction, HITLRequest
+
+    user_id, session_id = session_key(callback_context)
+    response = await hitl_handler.handle_request(HITLRequest(
+        agent_name="EconomicsAgent",
+        action_type=HITLAction.APPROVE,
+        message=(
+            "Автоматическая квалификация не дала маршрутов для production-экономики. "
+            "Запустить предварительный поиск цен и доступности для предложенных "
+            "маршрутов? Результат не станет production-ранжированием и не отменяет "
+            "незакрытые ограничения или выходы."
+        ),
+        context={
+            "output": {
+                "routes": [
+                    {"route_id": route.route_id, "status": route.overall_status,
+                     "product": route.product.name or route.product.smiles}
+                    for route in proposals.routes if not route.stub and route.steps
+                ],
+                "gaps": qualified.gaps,
+            },
+            "_session": {"user_id": user_id, "session_id": session_id},
+        },
+        invoked_via="callback",
+        trigger="preliminary_economics_override",
+    ))
+    if response.approved:
+        state[OPERATOR_ECONOMICS_OVERRIDE_KEY] = OperatorEconomicsOverride(
+            mode="preliminary_only", approved_by_human=True,
+            route_ids=[route.route_id for route in proposals.routes if not route.stub and route.steps],
+        ).model_dump()
+    return None
 
 
 def guard_economics_routes(
@@ -621,7 +741,8 @@ def guard_economics_routes(
     qualified = QualifiedRoutes.model_validate(tool_context.state.get(QUALIFIED_ROUTES_KEY) or {
         "status": "no_compliant_routes", "routes": [],
     })
-    allowed = {route.route_id for route in qualified.routes}
+    allowed_routes = _preliminary_economics_routes(tool_context.state, qualified)
+    allowed = {route.route_id for route in allowed_routes}
     sent = {
         str(route.get("route_id")) for route in (args or {}).get("routes") or []
         if isinstance(route, dict) and route.get("route_id")
@@ -629,7 +750,7 @@ def guard_economics_routes(
     errors: list[str] = []
     if not allowed or sent != allowed:
         errors.append("route_id set differs from qualified_routes")
-    qualified_by_id = {route.route_id: route for route in qualified.routes}
+    qualified_by_id = {route.route_id: route for route in allowed_routes}
     for submitted in (args or {}).get("routes") or []:
         if not isinstance(submitted, dict) or submitted.get("route_id") not in qualified_by_id:
             continue
@@ -661,6 +782,7 @@ __all__ = [
     "evaluate_route",
     "gate_economics",
     "guard_economics_routes",
+    "review_preliminary_economics",
     "qualify_routes",
     "qualify_synthesis_routes",
 ]
