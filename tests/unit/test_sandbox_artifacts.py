@@ -87,26 +87,6 @@ def test_the_poll_result_carries_the_normalized_uploads():
 
 # --- the report side ----------------------------------------------------------
 
-@pytest.fixture(autouse=True)
-def no_live_s3(monkeypatch):
-    """Keep the operator's S3 out of a unit test.
-
-    The collector links a collected file to its uploaded copy when S3 is
-    configured and to a relative path when it is not, and `_get_service`
-    decides that on the four settings values. Clearing the bucket is the one
-    that says "not configured" without pretending the rest is unset; the
-    cached service is dropped on both sides so neither this test nor the next
-    one inherits a client built from someone else's settings.
-    """
-    from CoScientist.config import get_settings
-    from CoScientist.reporting import s3_upload
-
-    monkeypatch.setattr(get_settings().s3, "bucket_name", None)
-    s3_upload._reset_for_tests()
-    yield
-    s3_upload._reset_for_tests()
-
-
 @pytest.fixture()
 def index_root(tmp_path, monkeypatch):
     monkeypatch.setenv("GRAPH_SNAPSHOT_DIR", str(tmp_path))
