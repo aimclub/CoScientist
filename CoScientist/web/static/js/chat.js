@@ -77,6 +77,20 @@
         </div>`;
     }
 
+    // Both escapers exist because `renderMarkdown` edits the HTML string
+    // AFTER DOMPurify has run: nothing it adds there is sanitized again.
+    // Text content needs the three markup characters escaped.
+    function asText(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // An attribute value taken from already-escaped HTML needs only its
+    // delimiter: escaping & again would print `&amp;amp;` in the alt text.
+    function asAttr(value) {
+      return String(value == null ? '' : value).replace(/"/g, '&quot;');
+    }
+
     function renderMarkdown(text) {
       // Agents write their messages in markdown; render it to sanitized HTML
       // instead of showing the raw '**'/'`'/'#' syntax as plain text.
@@ -97,11 +111,17 @@
         (m, url, text) => {
           const rawUrl = url.replace(/&amp;/g, '&');
           if (text.replace(/&amp;/g, '&') !== rawUrl) return m;
-          const name = decodeURIComponent(
-            rawUrl.split(/[?#]/)[0].split('/').filter(Boolean).pop() || ''
-          );
+          const segment = rawUrl.split(/[?#]/)[0].split('/').filter(Boolean).pop() || '';
+          let name = segment;
+          try {
+            // A URL is not required to be valid percent-encoding: one stray
+            // '%' in a bare link threw URIError out of the whole render.
+            name = decodeURIComponent(segment);
+          } catch (err) {
+            name = segment;
+          }
           const short = name || rawUrl.split('/')[2] || 'link';
-          return '<a href="' + url + '">' + short + '</a>';
+          return '<a href="' + url + '">' + asText(short) + '</a>';
         });
       // A link whose URL path (before any ?query) ends in an image extension
       // gets an inline <img> preview under the link — markdown images render
@@ -112,7 +132,7 @@
         /<a href="(https?:\/\/[^"]+|\/(?!\/)[^"]*)">([^<]*)<\/a>/g,
         (m, url, label) => {
           if (!/\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(url.split(/[?#]/)[0])) return m;
-          return m + '<br><a href="' + url + '"><img src="' + url + '" alt="' + label + '"'
+          return m + '<br><a href="' + url + '"><img src="' + url + '" alt="' + asAttr(label) + '"'
             + ' class="mt-2 max-w-full rounded-lg border border-outline-variant/20 cursor-zoom-in" loading="lazy"></a>';
         });
       return withPreviews.replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" class="text-primary underline" ');
