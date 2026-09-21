@@ -1888,6 +1888,9 @@ class ResearchGraphStore:
         # `under_verification` — work has started. Keeps the graph visibly live
         # (blue → amber) for free; the VERDICT is a judgment left to the validator.
         self._auto_maintain(committed, now)
+        # A verdict is one value: collapse any pair that now carries more than
+        # one, and say so when it was this commit's edge that lost.
+        self._collapse_polarity(committed, warnings)
         message = (f"committed {len(committed['nodes'])} node(s), "
                    f"{len(committed['edges'])} edge(s), "
                    f"{len(committed['status_updates'])} status change(s)")
@@ -1901,6 +1904,80 @@ class ResearchGraphStore:
     # included so focus-auto-linked (polarity-unknown) evidence also advances the
     # hypothesis to under_verification and reaches the validator.
     _EVIDENCE_EDGES = ("supports", "refutes", "refines", "relates_to")
+    #: The three that are a JUDGEMENT about the evidence, as opposed to
+    #: `relates_to`, which only says it was recorded under this hypothesis.
+    _VERDICT_EDGES = ("supports", "refutes", "refines")
+    #: Who is entitled to the verdict. The background validator judges evidence
+    #: it did not produce, which is the whole reason it exists; every other
+    #: source is asserting a polarity for its own finding. So its verdict
+    #: outranks theirs rather than merely arriving later — otherwise a worker
+    #: recording the next piece of evidence overwrites the judge's answer.
+    _VERDICT_RANK = {"ValidatorAgent": 2, "human": 2}
+
+    def _verdict_rank(self, src: str, dst: str, key: str) -> Tuple[int, float]:
+        data = self._g.edges[src, dst, key]
+        source = str(data.get("source") or "")
+        return (self._VERDICT_RANK.get(source, 1),
+                float(data.get("created_at") or 0.0))
+
+    def _collapse_polarity(self, committed: Dict[str, List[Dict[str, Any]]],
+                           warnings: List[str]) -> None:
+        """Leave one edge between each Evidence and Hypothesis this commit touched.
+
+        Only pairs this commit touched are examined: a study is not re-swept on
+        every write, and a pair nobody wrote to cannot have grown a second edge.
+        """
+        pairs = {(e["from"], e["to"]) for e in committed.get("edges", [])
+                 if e.get("type") in self._EVIDENCE_EDGES}
+        for src, dst in sorted(pairs):
+            if not (self._g.has_node(src) and self._g.has_node(dst)):
+                continue
+            if self._g.nodes[src].get("type") != "Evidence" \
+                    or self._g.nodes[dst].get("type") != "Hypothesis":
+                continue
+            present = [k for k in self._VERDICT_EDGES
+                       if self._g.has_edge(src, dst, key=k)]
+            if not present:
+                continue
+            # The neutral link has been answered, so it goes.
+            if self._g.has_edge(src, dst, key="relates_to"):
+                self._g.remove_edge(src, dst, key="relates_to")
+                committed["edges"] = [e for e in committed["edges"]
+                                      if not (e.get("type") == "relates_to"
+                                              and e.get("from") == src
+                                              and e.get("to") == dst)]
+            if len(present) == 1:
+                continue
+            keep = max(present, key=lambda k: self._verdict_rank(src, dst, k))
+            superseded = []
+            for key in present:
+                if key == keep:
+                    continue
+                data = self._g.edges[src, dst, key]
+                superseded.append({"type": key,
+                                   "source": str(data.get("source") or ""),
+                                   "at": data.get("created_at")})
+                self._g.remove_edge(src, dst, key=key)
+                # If the loser is what this commit just wrote, the writer is
+                # told: an agent whose verdict vanished without a word would
+                # go on believing the graph agrees with it.
+                if any(e.get("type") == key and e.get("from") == src
+                       and e.get("to") == dst for e in committed["edges"]):
+                    committed["edges"] = [
+                        e for e in committed["edges"]
+                        if not (e.get("type") == key and e.get("from") == src
+                                and e.get("to") == dst)]
+                    holder = str(self._g.edges[src, dst, keep].get("source")
+                                 or "another source")
+                    warnings.append(
+                        f"{src} -{key}-> {dst} was dropped: that pair already "
+                        f"carries `{keep}` from {holder}, and a piece of "
+                        f"evidence has ONE polarity. Re-judging is the "
+                        f"validator's call.")
+            kept_data = self._g.edges[src, dst, keep]
+            history = list(kept_data.get("superseded") or [])
+            history.extend(superseded)
+            kept_data["superseded"] = history
 
     def _focus_hypothesis(self, focus: str) -> Optional[str]:
         """Resolve a focus node to the Hypothesis it belongs to, so evidence

@@ -445,16 +445,31 @@ def _fedot_route_available(settings: ExperimentsSettings) -> bool:
         return True
 
 
+def _medical_route_available() -> bool:
+    """`medical` is a route only while MedicalAgent is actually in the tree.
+
+    Same shape as `_fedot_route_available` and for the same reason: with the
+    agent switched off, `start_task` would hand back route_agent=MedicalAgent
+    for an agent nobody attached, and `enforce_continue_until_reporting` would
+    keep demanding a call to it until the attempt budget ran out.
+    """
+    try:
+        return bool(get_settings().web.medical_agent_enabled)
+    except Exception:  # noqa: BLE001 - an unreadable setting must not stop a run
+        return True
+
+
 def _route_enabled(route: str, settings: ExperimentsSettings) -> bool:
     if route == ExecutionRoute.FEDOT_MAS.value:
         return _fedot_route_available(settings)
     if route == ExecutionRoute.ALEMBIC_BUILD.value:
         return settings.route_alembic
+    if route == ExecutionRoute.MEDICAL.value:
+        return _medical_route_available()
     return route in {
         ExecutionRoute.REACT_TOOLS.value,
         ExecutionRoute.CODER.value,
         ExecutionRoute.RESEARCH.value,
-        ExecutionRoute.MEDICAL.value,
     }
 
 

@@ -85,15 +85,18 @@ def test_the_profile_inherits_mains_capabilities():
     main = load_config(resolve_config_path("system"))
 
     assert config.internal_tools and config.internal_tools == main.internal_tools
-    assert {
-        a.name for a in config.agents.values() if a.work_order and a.is_enabled()
-    } == {
-        "HypothesesAgent",
-        "ResearchAgent",
-        "MedicalAgent",
-        "DatasetCollectorAgent",
-        "ExperimentAgent",
-    }
+    # Whatever main enables, the profile enables: the point is that the overlay
+    # does not say so. Read from main rather than frozen as a list, because
+    # some of these are switchable — MedicalAgent has a narrow role and turns
+    # off with MEDICAL__ENABLED=false — and a frozen list makes the switch look
+    # like a regression.
+    work_order = {a.name for a in config.agents.values()
+                  if a.work_order and a.is_enabled()}
+    assert work_order == {a.name for a in main.agents.values()
+                          if a.work_order and a.is_enabled()}
+    # The ones that are not switchable are still expected to be there.
+    assert {"HypothesesAgent", "ResearchAgent", "DatasetCollectorAgent",
+            "ExperimentAgent"} <= work_order
     # Plumbing the web UI hides, the S3 vault, the anti-fabrication checker and
     # the per-call sandbox approval: not one line of this file mentions them.
     assert len(config.internal_agent_names()) >= 12

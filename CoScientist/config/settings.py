@@ -326,6 +326,12 @@ class WebSettings(BaseModel):
     executor_tool_keep_score: float = float(_os.getenv("EXECUTOR_TOOL_KEEP_SCORE", "0.3"))
     executor_tool_abstain_score: float = float(_os.getenv("EXECUTOR_TOOL_ABSTAIN_SCORE", "0.2"))
     fedot_fallback_enabled: bool = _os.getenv("EXECUTOR__FEDOT_FALLBACK", "true").lower() in ("true", "1", "yes")
+    # The clinical specialist: PubMed/PICO, study taxonomy and DICOM. A narrow
+    # role, and a study that needs none of it pays for the agent in the
+    # orchestrator's roster and in the router's choices — so it switches off.
+    # Turning it off also withdraws `medical` as an execution route, because a
+    # route whose agent is not in the tree is a route that cannot run.
+    medical_agent_enabled: bool = _os.getenv("MEDICAL__ENABLED", "true").lower() in ("true", "1", "yes")
     fedot_fallback_timeout_s: float = float(_os.getenv("EXECUTOR__FEDOT_FALLBACK_TIMEOUT", "900"))
     sandbox_url: str = _os.getenv("SANDBOX_URL", "")
     coder_workspace_id: _Optional[str] = _os.getenv("CODER_WORKSPACE_ID")

@@ -1364,6 +1364,15 @@
             showDetail(nodeData[selectedId]);
           }
         }
+        //: How many links each pair of cards has, and how many have been drawn
+        //: so far. Counted up front because the fan-out needs to know the total
+        //: before it places the first one.
+        const pairCount = {}, pairSeen = {};
+        (g.edges || []).forEach(e => {
+          if (!e || !e.src || !e.dst || e.src === e.dst) return;
+          const k = [e.src, e.dst].sort().join("\u0000");
+          pairCount[k] = (pairCount[k] || 0) + 1;
+        });
         (g.edges || []).forEach(e => {
           try {
           if (!e.src || !e.dst) return;
@@ -1371,6 +1380,11 @@
           liveEdges.add(id);
           // human-readable edge label ("tested by", "criterion for", …) in research
           const ekey = "graph.edge." + e.type;
+          //: Which of the links between these two cards this one is. Both
+          //: directions count as the same pair: a link back the other way is
+          //: drawn over the same ground.
+          const pairKey = [e.src, e.dst].sort().join("\u0000");
+          const pairIndex = (pairSeen[pairKey] = (pairSeen[pairKey] || 0) + 1) - 1;
           const rlabel = research ? t(ekey, R_EDGE_NAME[e.type] || e.type || "") : (e.type || "");
           const edge = { id, from:e.src, to:e.dst, label: e.provenance ? "" : rlabel };
           // A link inside one band joins two cards on the same row, and a
@@ -1421,6 +1435,19 @@
             // so it reads as inferred, and the tooltip names what it went via.
             edge.dashes = [2, 3]; edge.width = 1;
             edge.title = t('graph.edge.via', { node: e.via || "" });
+          }
+          // Fanned out when there is more than one: index 0 keeps whatever
+          // curvature the rules above chose, and each further link is pushed
+          // a little further off the straight line, alternating sides. Done
+          // last so it overrides those rules rather than being overridden.
+          if ((pairCount[pairKey] || 0) > 1) {
+            const step = 0.18, rank = Math.floor(pairIndex / 2) + 1;
+            const sign = pairIndex % 2 ? -1 : 1;
+            const base = (edge.smooth && typeof edge.smooth.roundness === "number")
+              ? edge.smooth.roundness : 0;
+            edge.smooth = { enabled: true,
+                            type: sign > 0 ? "curvedCW" : "curvedCCW",
+                            roundness: Math.min(0.9, base + step * rank) };
           }
           batchEdges.push(edge);
           } catch (err) { console.warn("graph edge", e && e.src, err); }

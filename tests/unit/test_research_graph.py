@@ -2618,3 +2618,92 @@ def test_the_edge_from_the_detailed_plan_is_not_the_one_for_records():
     perm = schema.AGENT_PERMISSIONS["experiment-plan-mirror"]
     assert perm.create == frozenset({"ExperimentTask"})
     assert all(e[0] in ("elaborates", "realises") for e in perm.edges), perm.edges
+
+
+def test_a_piece_of_evidence_bears_one_polarity_not_two(store):
+    """On a real study the graph drew two lines between almost every hypothesis
+    and piece of evidence, one on top of the other, and twice the two lines said
+    opposite things. Three routes produced it, all of them in that data:
+
+    the autolink writes the neutral `relates_to` and nothing retires it once the
+    polarity is known; the agent that produced the evidence asserts a polarity
+    and the judge later assigns a different one; and the judge is invoked twice
+    over overlapping evidence and changes its own mind.
+
+    A polarity is a verdict, and a verdict is one value.
+    """
+    _build_verifiable(store)
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "under_verification"}])
+
+    def polarity():
+        return sorted(e["type"] for e in store.full()["edges"]
+                      if e["from"] == "E1" and e["to"] == "H1")
+
+    # 1. the neutral link, then the verdict
+    store.commit(source="ExperimentAgent",
+                 nodes=[{"type": "Evidence", "ref": "e", "attrs": {
+                     "subtype": "computational", "content": "медиана LD50 628 мг/кг",
+                     "measured_on": "predict_ld50"}}],
+                 autolink_focus="H1")
+    assert polarity() == ["relates_to"]
+    store.commit(source="ValidatorAgent",
+                 edges=[{"type": "supports", "from": "E1", "to": "H1"}])
+    assert polarity() == ["supports"], "the neutral link outlived its answer"
+
+    # 2. the judge overrules the producer, and what it replaced is kept
+    store.commit(source="ValidatorAgent",
+                 edges=[{"type": "refutes", "from": "E1", "to": "H1"}])
+    assert polarity() == ["refutes"]
+    kept = next(e for e in store.full()["edges"]
+                if e["from"] == "E1" and e["to"] == "H1")
+    assert [s["type"] for s in kept["superseded"]] == ["supports"]
+
+    # 3. and the producer cannot take it back afterwards — which is what a
+    #    plain "newest wins" rule would have allowed.
+    r = store.commit(source="ExperimentAgent",
+                     edges=[{"type": "supports", "from": "E1", "to": "H1"}])
+    assert polarity() == ["refutes"], "a worker overwrote the judge"
+    assert any("ONE polarity" in w for w in (r.warnings or [])), r.warnings
+
+
+def test_the_judge_may_change_its_own_mind_without_saying_both(store):
+    """The validator wrote `refines` and then `refutes` 1.3 seconds apart, in
+    two commits, over overlapping evidence — and the graph kept both."""
+    _build_verifiable(store)
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "under_verification"}])
+    store.commit(source="ExperimentAgent",
+                 nodes=[{"type": "Evidence", "ref": "e", "attrs": {
+                     "subtype": "computational", "content": "кардиотоксичность 21/22",
+                     "measured_on": "predict_general_toxicity"}}],
+                 edges=[{"type": "refines", "from": "#e", "to": "H1"}])
+    store.commit(source="ValidatorAgent",
+                 edges=[{"type": "refutes", "from": "E1", "to": "H1"}])
+
+    edges = [e for e in store.full()["edges"]
+             if e["from"] == "E1" and e["to"] == "H1"]
+    assert len(edges) == 1, edges
+    assert edges[0]["type"] == "refutes"
+
+
+def test_two_links_between_one_pair_are_not_drawn_on_top_of_each_other():
+    """A study recorded before the store collapsed them still carries both, and
+    two links between one pair are legitimate elsewhere. vis gives every edge
+    the same curvature, so they landed in exactly the same place with their
+    labels overprinted.
+    """
+    from starlette.testclient import TestClient
+
+    from CoScientist.web.app import create_app
+
+    with TestClient(create_app()) as client:
+        page = client.get("/graph").text
+
+    # Both directions are the same pair: a link back the other way covers the
+    # same ground.
+    assert "const pairKey = [e.src, e.dst].sort().join(" in page
+    assert "if ((pairCount[pairKey] || 0) > 1) {" in page
+    # Alternating sides, so two links bow away from each other rather than
+    # sharing one arc.
+    assert 'type: sign > 0 ? "curvedCW" : "curvedCCW",' in page
