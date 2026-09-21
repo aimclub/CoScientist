@@ -83,16 +83,32 @@
       const raw = typeof text === 'string' ? stripThinking(text) : String(text == null ? '' : text);
       const withLocalLinks = raw
         .replace(/(^|\s)(\/api\/tz-document[^\s)]*)/g, '$1[$2]($2)')
+        // Reminted artifact paths: GFM only auto-links full URLs, so a bare
+        // root-relative path would render as unclickable text.
+        .replace(/(^|\s)(\/api\/artifact\/[^\s)]*)/g, '$1[$2]($2)')
         // Live MCP build page: /alembic/builds/<job_id> (agent surfaces it as progress_page).
         .replace(/(^|\s)(\/alembic\/builds\/[A-Za-z0-9._-]+)/g, '$1[$2]($2)');
       const html = marked.parse(withLocalLinks);
       const clean = DOMPurify.sanitize(html, { ADD_ATTR: ['target'] });
+      // A bare URL becomes a link whose text is the URL itself. A presigned
+      // URL runs to hundreds of characters, so show the file name instead.
+      const withShortText = clean.replace(
+        /<a href="([^"]+)">([^<]*)<\/a>/g,
+        (m, url, text) => {
+          const rawUrl = url.replace(/&amp;/g, '&');
+          if (text.replace(/&amp;/g, '&') !== rawUrl) return m;
+          const name = decodeURIComponent(
+            rawUrl.split(/[?#]/)[0].split('/').filter(Boolean).pop() || ''
+          );
+          const short = name || rawUrl.split('/')[2] || 'link';
+          return '<a href="' + url + '">' + short + '</a>';
+        });
       // A link whose URL path (before any ?query) ends in an image extension
       // gets an inline <img> preview under the link — markdown images render
       // on their own, but agents also emit image URLs as plain links. The & in
       // presigned S3 query strings shows up here as &amp; — the pattern allows
       // it.
-      const withPreviews = clean.replace(
+      const withPreviews = withShortText.replace(
         /<a href="(https?:\/\/[^"]+|\/(?!\/)[^"]*)">([^<]*)<\/a>/g,
         (m, url, label) => {
           if (!/\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(url.split(/[?#]/)[0])) return m;
