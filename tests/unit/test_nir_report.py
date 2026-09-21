@@ -12,12 +12,15 @@ from __future__ import annotations
 import base64
 import io
 import json
+import re
 import zlib
 from pathlib import Path
 
 import pytest
 
-from CoScientist.reporting.nir import assets, build, contract, hitl_form, slop_check
+from CoScientist.reporting.nir import (
+    assets, build, contract, hitl_form, register_check, slop_check,
+)
 from CoScientist.reporting.nir.evidence import NirEvidence
 
 
@@ -451,3 +454,233 @@ def test_real_scientific_prose_passes_clean():
         "Домен применимости покрывает выборку целиком: минимальное значение 42 процента.",
     ], "тест")
     assert not warnings, [w.render() for w in warnings]
+
+
+# ── register: the study's notation must not reach the page ──────────────────
+
+
+def test_an_identifier_leaks_only_when_the_graph_actually_used_it(evidence):
+    """The check that keeps chemistry out of the findings.
+
+    ``H1`` is a proton and ``T1`` a relaxation time. Flagging either on the
+    pattern alone would make the whole category noise, so membership in this
+    run's id set is what decides.
+    """
+    ids = register_check.graph_identifiers(evidence.nodes)
+    assert "H1" in ids and "CL1" in ids
+
+    found = register_check.check_text("Вывод следует из CL1.", "проба", ids)
+    assert [w.code for w in found] == ["graph-id"]
+
+    # No node called Z9 anywhere in this study.
+    assert not register_check.check_text("Полоса Z9 в спектре.", "проба", ids)
+
+
+def test_products_and_metrics_survive_the_code_identifier_check():
+    """Naming RDKit is correct; naming a callable is not."""
+    clean = "Использованы RDKit, CatBoost и дескрипторы ECFP4; показатель LD50 и RMSE."
+    assert not register_check.check_text(clean, "проба", set())
+
+    dirty = "Инструмент butina_clustering вернул результат."
+    assert [w.code for w in register_check.check_text(dirty, "проба", set())] == [
+        "code-identifier"
+    ]
+
+
+@pytest.mark.parametrize(
+    "text,code",
+    [
+        ("Задача TASK-4 выполнена.", "plan-id"),
+        ("Дендрограмма сохранена в dendrogram.png.", "file-name"),
+        ("ValidatorAgent зафиксировал вердикт.", "agent-name"),
+        ("Статус гипотезы — inconclusive.", "untranslated"),
+    ],
+)
+def test_each_leak_category_is_caught(text, code):
+    assert code in {w.code for w in register_check.check_text(text, "проба", set())}
+
+
+def test_a_repeated_leak_is_reported_once(evidence):
+    """A leaked id repeats a dozen times; the author needs to hear it once."""
+    paragraphs = ["Гипотеза H1 опровергнута."] * 8
+    found = register_check.check_document({"раздел": paragraphs}, evidence.nodes)
+    assert len(found) == 1
+
+
+# ── digest: what the author is shown decides what they can copy ─────────────
+
+
+def test_the_digest_carries_no_identifier_the_report_must_not_print(evidence):
+    """The root cause of the first report's ~160 leaks.
+
+    The digest opened every hypothesis with the node id and passed tool names
+    and English statuses through, so the author was quoting what it was handed.
+    """
+    outline = build.build_outline(evidence)
+    shown = {plan.id: plan.digest for plan in outline.sections}
+    shown["материалы"] = [m["text"] for m in outline.materials]
+
+    leaks = register_check.check_document(shown, evidence.nodes)
+    forbidden = {"graph-id", "plan-id", "code-identifier", "file-name", "agent-name"}
+    assert not [w for w in leaks if w.code in forbidden], [w.render() for w in leaks]
+
+
+def test_an_identifier_becomes_what_it_names(evidence):
+    """Deleting it would leave a dangling preposition; naming it keeps the sentence."""
+    labels = build._label_map(evidence)
+    assert labels["H1"] == "первая гипотеза"
+    scrubbed = build._scrub("Проверка основана на H1.", labels)
+    assert "H1" not in scrubbed and "первая гипотеза" in scrubbed
+
+
+def test_a_tracker_id_becomes_a_russian_numbered_row():
+    assert build._tracker_word("OP-3") == "операция 3"
+    assert build._tracker_word("TASK-4") == "задача 4"
+    assert build._tracker_word("NOTATRACKER") == "NOTATRACKER"
+
+
+def test_scrubbing_a_path_does_not_eat_cyrillic():
+    """Python's ``\\w`` matches Cyrillic, so an earlier pattern read
+    "корпус/база знаний" as a path and deleted half the phrase."""
+    assert "база знаний" in build._scrub("Взято из корпус/база знаний.")
+    assert "workspace" not in build._scrub("Файл лежит в /workspace/figures/out.png.")
+
+
+def test_an_automatic_status_note_is_not_evidence(evidence):
+    """A maintainer's own bookkeeping note is not a finding to report."""
+    evidence.nodes.append({
+        "id": "H9", "type": "Hypothesis", "status": "refuted",
+        "attrs": {"formulation": "Проверяемое утверждение"},
+        "status_history": [
+            {"to": "under_verification", "source": "graph-maintainer",
+             "reason": "auto: evidence attached"},
+            {"to": "refuted", "source": "ValidatorAgent",
+             "reason": "Измеренное значение выше порога"},
+        ],
+    })
+    outline = build.build_outline(evidence)
+    hypothesis_sections = [s for s in outline.sections if s.node_id == "H9"]
+    assert hypothesis_sections
+    lines = " ".join(hypothesis_sections[0].digest)
+    assert "auto:" not in lines
+    assert "Измеренное значение выше порога" in lines
+
+
+# ── headings and proportion ─────────────────────────────────────────────────
+
+
+def test_a_fallback_heading_never_carries_an_identifier(evidence):
+    outline = build.build_outline(evidence)
+    for plan in outline.sections:
+        assert not re.search(r"\b[A-Z]{1,3}\d+\b", plan.title), plan.title
+
+
+def test_a_heading_is_dropped_rather_than_cut_mid_clause():
+    """The first table of contents carried an id plus a list severed mid-item."""
+    long_claim = {
+        "id": "H1", "type": "Hypothesis", "status": "refuted",
+        "attrs": {"formulation": (
+            "Кластер линейных фуранокумаринов (псорален, ксантотоксин, бергаптен, "
+            "императорин, бергамоттин) окажется наиболее токсичным по медиане"
+        )},
+    }
+    title = build._hypothesis_title(long_claim, 1)
+    assert title == "Проверка первой гипотезы"
+
+
+def test_a_heading_declines_correctly():
+    """"Проверка первая гипотезы" is the kind of mistake a reader stops on."""
+    short = {"id": "H1", "type": "Hypothesis", "status": "refuted",
+             "attrs": {"formulation": "Токсичность выше нормы"}}
+    assert build._hypothesis_title(short, 1).startswith("Проверка первой гипотезы")
+
+
+def test_a_written_heading_replaces_the_planned_one(evidence, prose):
+    outline = build.build_outline(evidence)
+    section_id = outline.sections[1].id
+    prose.section_titles = {section_id: "Прогноз острой токсичности фуранокумаринов"}
+    values, _ = build.build_nir_values(evidence, build.NirRequisites(), prose, outline)
+    titles = [s["title"] for s in values["document"]["sections"]]
+    assert "Прогноз острой токсичности фуранокумаринов" in titles
+
+
+def test_agent_reports_are_shared_material_not_one_section(evidence):
+    """They used to be appended to the results section, which put the whole
+    study's substance in one place while other sections had nothing."""
+    evidence.agent_reports = [
+        {"agent": "CoderAgent", "text": "Построена дендрограмма по 15 соединениям.",
+         "status": "success"},
+    ]
+    outline = build.build_outline(evidence)
+    assert outline.materials
+    assert "дендрограмма" in outline.materials[0]["text"]
+    for plan in outline.sections:
+        assert not any("CoderAgent" in line for line in plan.digest)
+
+
+def test_every_section_reports_how_much_material_stands_behind_it(evidence):
+    outline = build.build_outline(evidence)
+    assert any(plan.evidence_chars() > 0 for plan in outline.sections)
+
+
+# ── the appendix speaks Russian ─────────────────────────────────────────────
+
+
+def test_the_appendix_names_nothing_in_the_schema_s_english(evidence, prose):
+    outline = build.build_outline(evidence)
+    values, _ = build.build_nir_values(evidence, build.NirRequisites(), prose, outline)
+    appendices = values["document"].get("appendices") or []
+    rendered = json.dumps(appendices, ensure_ascii=False)
+    for token in ("Hypothesis", "Evidence", "derived_from", "tested_by", "Conclusion"):
+        assert token not in rendered, token
+
+
+def test_the_appendix_ties_the_report_s_names_back_to_the_record(evidence, prose):
+    """Traceability belongs in an appendix, not in the prose."""
+    outline = build.build_outline(evidence)
+    values, _ = build.build_nir_values(evidence, build.NirRequisites(), prose, outline)
+    tables = [
+        block
+        for appendix in values["document"].get("appendices") or []
+        for block in appendix["blocks"]
+        if block.get("type") == "table"
+    ]
+    trace = [t for t in tables if t["id"] == "graph-trace"]
+    assert trace, "no correspondence table"
+    assert ["Первая гипотеза", "H1", "опровергнута"] in trace[0]["rows"]
+
+
+def test_scrubbing_a_path_leaves_a_url_alone():
+    """The path pattern once matched "//github.com/aimclub/CoScientist" inside a
+    URL and cut the repository citation down to the word "https"."""
+    cited = "Исходный код: https://github.com/aimclub/CoScientist"
+    assert build._scrub(cited) == cited
+    assert "pubchem.ncbi.nlm.nih.gov" in build._scrub(
+        "См. https://pubchem.ncbi.nlm.nih.gov/compound/10658"
+    )
+    assert "workspace" not in build._scrub("Файл лежит в /workspace/out.png тут")
+
+
+def test_a_workspace_path_is_not_a_bibliographic_source(evidence, prose):
+    """Agents write a path into source_ref as readily as a DOI, and the first
+    bibliography listed seven of them."""
+    evidence.nodes.append({
+        "id": "E7", "type": "Evidence", "status": "obtained",
+        "attrs": {"subtype": "literature",
+                  "source_ref": r"D:\projects26\code_a\workspace\ld50_predictions.json"},
+    })
+    outline = build.build_outline(evidence)
+    values, _ = build.build_nir_values(evidence, build.NirRequisites(), prose, outline)
+    references = " ".join(r["text"] for r in values["document"]["references"])
+    assert "ld50_predictions" not in references
+    assert "projects26" not in references
+    # A real citation in the same field still gets through.
+    assert build.REPOSITORY_URL in references
+
+
+def test_a_numbered_source_is_never_empty(evidence, prose):
+    """Scrubbing a path would leave a numbered row with nothing in it."""
+    outline = build.build_outline(evidence)
+    values, _ = build.build_nir_values(evidence, build.NirRequisites(), prose, outline)
+    for reference in values["document"]["references"]:
+        assert reference["text"].strip()

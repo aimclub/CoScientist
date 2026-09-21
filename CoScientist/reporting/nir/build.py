@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from CoScientist.reporting.nir import contract
+from CoScientist.reporting.nir import contract, vocabulary
 from CoScientist.reporting.nir.assets import AssetBundle
 from CoScientist.reporting.nir.evidence import NirEvidence
 
@@ -47,14 +47,34 @@ _NON_SLUG = re.compile(r"[^a-z0-9]+")
 #: closing bracket precedes it — never after an initial such as the "H." of a
 #: binomial name.
 _SENTENCE_END = re.compile(r"(?<=[а-яёa-z0-9\)\]])\.\s+")
-_VERDICT_RU = {
-    "confirmed": "подтверждена",
-    "refuted": "опровергнута",
-    "inconclusive": "не разрешена имеющимися данными",
-    "postponed": "не проверялась",
-    "formulated": "сформулирована, проверка не завершена",
-    "under_verification": "на проверке",
-}
+
+#: Code identifiers and workspace filenames, removed from the digest before the
+#: author ever sees them. The first report carried 53 of the former and 17 of
+#: the latter — including `code_a`, a fragment of the checkout path — because
+#: the digest passed them through and the prompt said to quote verbatim.
+#: Product names survive: they are CamelCase (RDKit, PubChem, CatBoost) or
+#: single tokens (ECFP4, LD50, SMILES), and neither pattern matches those.
+_CODE_IDENTIFIER = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
+_FILE_NAME = re.compile(
+    r"\b[\w.-]+\.(?:png|jpe?g|svg|csv|tsv|json|ya?ml|py|docx|pdf|zip|tar\.gz|pkl|h5)\b",
+    re.IGNORECASE,
+)
+#: Absolute or workspace-relative paths, which carry the same problem with more
+#: of the developer's machine attached.
+#:
+#: Two restrictions, each for a bug it caused. ASCII only, because ``\w`` matches
+#: Cyrillic in Python and the first pattern read "из корпуса/база знаний" as a
+#: path, deleting half the phrase. And the lookbehind, because without it the
+#: pattern matched "//github.com/aimclub/CoScientist" inside a URL and reduced
+#: the repository citation to the word "https".
+_PATH = re.compile(r"(?<![:/\w])(?:[A-Za-z]:\\|/)[A-Za-z0-9_./\\-]{4,}")
+#: "OrchestratorAgent зафиксировал…" — the report states what was established,
+#: not which process established it.
+_AGENT_NAME = re.compile(r"\b[A-Z][A-Za-z]*Agent\b")
+#: A node id (H1, CC2, EB3) or a tracker id (TASK-4, EXP-1), both of which the
+#: agents wrote into their own prose. Replaced by what they name, not deleted:
+#: "Собрать SMILES из EB1/EB2" must not become "Собрать SMILES из".
+_ANY_ID = re.compile(r"\b(?:[A-Za-z]{1,3}\d+|[A-Z]{2,6}-\d+)\b")
 
 
 # ── inputs ──────────────────────────────────────────────────────────────────
@@ -104,6 +124,10 @@ class NirProse:
     #: below is a de-underscored filename, which is what a reader should never
     #: see under an illustration in a normative document.
     figure_captions: Dict[str, str] = field(default_factory=dict)
+    #: section id -> heading. A heading is prose too, and the author knows what
+    #: the section ended up being about; the builder only guessed from the
+    #: hypothesis it was planned around.
+    section_titles: Dict[str, str] = field(default_factory=dict)
     terms: List[Dict[str, str]] = field(default_factory=list)
     abbreviations: List[Dict[str, str]] = field(default_factory=list)
 
@@ -117,6 +141,21 @@ class SectionPlan:
     digest: List[str] = field(default_factory=list)
     figures: List[Dict[str, Any]] = field(default_factory=list)
     tables: List[Dict[str, Any]] = field(default_factory=list)
+    #: The graph node this section reports on, kept for the traceability table
+    #: in the appendix. Never shown to the author and never printed in prose.
+    node_id: str = ""
+    #: How the report calls that node — "первая гипотеза". The appendix pairs
+    #: this with :attr:`node_id` so a reader can still reach the record.
+    label: str = ""
+
+    def evidence_chars(self) -> int:
+        """How much material stands behind this section.
+
+        Reported to the author so proportion is a judgement they can make: a
+        section with 300 characters of evidence and one with 7 000 should not
+        come out the same length, and neither should be padded to match.
+        """
+        return sum(len(line) for line in self.digest)
 
     def figure_briefs(self) -> List[Dict[str, str]]:
         """What the author needs to caption each figure in this section."""
@@ -140,6 +179,9 @@ class NirOutline:
     question: str = ""
     gaps: List[str] = field(default_factory=list)
     unplaced_figures: List[Dict[str, Any]] = field(default_factory=list)
+    #: The agents' own reports, available to every section rather than pinned to
+    #: one. This is where most of a run's concrete detail actually lives.
+    materials: List[Dict[str, str]] = field(default_factory=list)
 
 
 # ── small helpers ───────────────────────────────────────────────────────────
@@ -182,6 +224,106 @@ def _sentence(text: Any, limit: int = _MAX_TITLE_CHARS) -> str:
     if len(cut) > limit:
         cut = cut[:limit].rsplit(" ", 1)[0]
     return cut.rstrip(" .,;:—-")
+
+
+#: Tracker prefixes the graph does not own, so no node carries them and
+#: :func:`_label_map` cannot resolve them. The frame writes ``OP-3``, a plan
+#: revision writes ``PLAN-7``; both reach the digest through an agent's prose.
+_TRACKER_WORDS = {
+    "TASK": "задача",
+    "EXP": "эксперимент",
+    "EXRUN": "прогон",
+    "PLAN": "план",
+    "OP": "операция",
+}
+
+
+def _tracker_word(token: str) -> str:
+    """``"OP-3"`` -> ``"операция 3"``. Anything else comes back untouched."""
+    prefix, _, number = token.partition("-")
+    word = _TRACKER_WORDS.get(prefix.upper())
+    return f"{word} {number}" if word and number else token
+
+
+def _label_map(ev: NirEvidence) -> Dict[str, str]:
+    """``{"EB1": "литературный корпус"}`` — what to say instead of an id.
+
+    The agents wrote ids into their own prose: a plan step reads "корпус EB1 по
+    H. sosnowskyi", a method reads "Собрать SMILES из EB1/EB2". Deleting the id
+    would leave "Собрать SMILES из", so each one is replaced by what it stands
+    for. Built once per run and threaded through :func:`_scrub`.
+    """
+    labels: Dict[str, str] = {}
+    question = ev.question
+    if question:
+        labels[str(question.get("id"))] = "исследовательский вопрос"
+    for index, node in enumerate(ev.by_type("ExperimentTask"), start=1):
+        labels[str(node.get("id"))] = f"эксперимент {index}"
+    for index, node in enumerate(ev.by_type("PlanStep"), start=1):
+        labels[str(node.get("id"))] = f"задача {index}"
+    for index, node in enumerate(ev.hypotheses, start=1):
+        labels[str(node.get("id"))] = f"{vocabulary.ordinal_f(index)} гипотеза"
+    for node in ev.by_type("ConfirmationCriteria"):
+        labels[str(node.get("id"))] = "условие подтверждения"
+    for index, node in enumerate(ev.by_type("Evidence"), start=1):
+        labels[str(node.get("id"))] = f"наблюдение {index}"
+    for node in ev.by_type("EmpiricalBase"):
+        # A short generic noun, not the full source_ref. The label is spliced
+        # into someone else's sentence — "Собрать SMILES из EB1/EB2" — and a
+        # 60-character nominative phrase there reads far worse than a plain one.
+        kind = vocabulary.kind_word((node.get("attrs") or {}).get("base_type"))
+        labels[str(node.get("id"))] = kind or "источник данных"
+    for node in ev.by_type("Constraint"):
+        labels[str(node.get("id"))] = "принятое ограничение"
+    # The tracker's own numbering, quoted by agents as "TASK-4" and "EXP-1".
+    for index, node in enumerate(ev.by_type("PlanStep"), start=1):
+        tracker = str((node.get("attrs") or {}).get("plan_task_id") or "")
+        if tracker:
+            labels[tracker] = f"задача {index}"
+    for index, node in enumerate(ev.by_type("ExperimentTask"), start=1):
+        tracker = str((node.get("attrs") or {}).get("experiment_task_id") or "")
+        if tracker:
+            labels[tracker] = f"эксперимент {index}"
+    for node in ev.by_type("Tool"):
+        name = str((node.get("attrs") or {}).get("name") or "")
+        labels[str(node.get("id"))] = _sentence(name, 60) or "программное средство"
+    for index, node in enumerate(ev.by_type("VerificationMethod"), start=1):
+        labels[str(node.get("id"))] = f"метод проверки {index}"
+    for index, node in enumerate(ev.conclusions, start=1):
+        labels[str(node.get("id"))] = f"вывод {index}"
+    return {k: v for k, v in labels.items() if k}
+
+
+def _scrub(text: Any, labels: Optional[Dict[str, str]] = None) -> str:
+    """Drop machine identifiers from a string the author will read.
+
+    The report describes what was done, not which function did it. A digest line
+    saying "измерено на: predict_ld50 (CatBoost, RMSE 0.603)" should reach the
+    author as "измерено на: (CatBoost, RMSE 0.603)" — the model and its error
+    stay, the callable's name goes.
+
+    Cheaper and more reliable than asking the author not to quote what they were
+    shown: text that never arrives cannot be copied.
+
+    ``labels`` turns a graph id into what it names rather than deleting it; see
+    :func:`_label_map`. An id with no label is left alone, so a token that looks
+    like an id but is chemistry survives.
+    """
+    flat = " ".join(str(text or "").split())
+    if not flat:
+        return ""
+    if labels:
+        flat = _ANY_ID.sub(lambda m: labels.get(m.group(0)) or _tracker_word(m.group(0)), flat)
+    flat = _AGENT_NAME.sub(" ", flat)
+    flat = _PATH.sub(" ", flat)
+    flat = _FILE_NAME.sub(" ", flat)
+    flat = _CODE_IDENTIFIER.sub(" ", flat)
+    # Scrubbing leaves the punctuation that framed what was removed.
+    flat = re.sub(r"\(\s*[,;]?\s*\)|\[\s*\]", " ", flat)
+    flat = re.sub(r"\s+([,.;:])", r"\1", flat)
+    flat = re.sub(r"([(\[])\s+", r"\1", flat)
+    flat = re.sub(r"\s+([)\]])", r"\1", flat)
+    return " ".join(flat.split()).strip(" ,;:—-")
 
 
 def _paragraphs(*chunks: Any) -> List[str]:
@@ -273,83 +415,142 @@ def _table_blocks(path: Path, block_id: str) -> List[Dict[str, Any]]:
 # ── outline ─────────────────────────────────────────────────────────────────
 
 
-def _hypothesis_digest(ev: NirEvidence, hypothesis: Dict[str, Any]) -> List[str]:
-    """Facts the author must use for this hypothesis, quoted from the graph."""
+def _hypothesis_digest(
+    ev: NirEvidence, hypothesis: Dict[str, Any], index: int,
+    labels: Dict[str, str],
+) -> List[str]:
+    """What is known about one hypothesis, said the way the report should say it.
+
+    Nothing here carries a node id, an English status or an agent name. The
+    first version opened with ``f"{hid}. Формулировка: …"`` and the report came
+    back full of "Гипотеза H1" and "зафиксирован проверяющим агентом как
+    неразрешённая (inconclusive)" — the author was quoting what it was handed.
+    ``index`` is 1-based and names the hypothesis in words instead.
+    """
     attrs = hypothesis.get("attrs") or {}
     hid = str(hypothesis.get("id") or "")
-    status = str(hypothesis.get("status") or "")
+    ordinal = vocabulary.ordinal_f(index)
     digest = _paragraphs(
-        f"{hid}. Формулировка: {attrs.get('formulation', '')}",
-        f"Обоснование: {attrs.get('rationale', '')}" if attrs.get("rationale") else "",
-        f"Статус: {_VERDICT_RU.get(status, status)}",
-        f"Почему не проверялась: {attrs.get('not_tested_reason')}" if attrs.get("not_tested_reason") else "",
+        f"{ordinal.capitalize()} гипотеза. Формулировка: {_scrub(attrs.get('formulation'), labels)}",
+        f"Обоснование: {_scrub(attrs.get('rationale'), labels)}" if attrs.get("rationale") else "",
+        f"Итог проверки: {vocabulary.status_word(hypothesis.get('status'))}",
+        f"Почему не проверялась: {_scrub(attrs.get('not_tested_reason'), labels)}"
+        if attrs.get("not_tested_reason") else "",
     )
+    # Only the reasons, not the transitions. Who moved the status and what the
+    # states are called is bookkeeping; why the verdict changed is the content.
     for transition in hypothesis.get("status_history") or []:
-        reason = transition.get("reason")
-        if reason:
-            digest.append(
-                f"Переход {transition.get('from') or '—'} → {transition.get('to')} "
-                f"({transition.get('source')}): {reason}"
-            )
+        reason = str(transition.get("reason") or "")
+        # "auto: evidence attached" and its like are the maintainer talking to
+        # itself — a bookkeeping note in English, with nothing in it a reader
+        # of the report could use.
+        if not reason or reason.lstrip().lower().startswith("auto:"):
+            continue
+        digest.append(
+            f"Основание для вывода «{vocabulary.status_word(transition.get('to'))}»: "
+            f"{_scrub(reason, labels)}"
+        )
     for criteria in ev.by_type("ConfirmationCriteria"):
         if any(_e.get("to") == hid for _e in ev.edges_from(str(criteria.get("id")), "formulated_for")):
             threshold = (criteria.get("attrs") or {}).get("threshold")
             if threshold:
-                digest.append(f"Критерий {criteria.get('id')}: {threshold}")
-    for item in ev.evidence_for(hid):
+                digest.append(
+                    f"Условие подтверждения ({ordinal} гипотеза): {_scrub(threshold, labels)}"
+                )
+    for number, item in enumerate(ev.evidence_for(hid), start=1):
         eattrs = item.get("attrs") or {}
+        kind = vocabulary.evidence_kind(eattrs.get("subtype"))
+        label = f"Наблюдение {number}" + (f" ({kind})" if kind else "")
+        measured = _scrub(eattrs.get("measured_on"), labels)
         digest.append(
-            f"{item.get('id')} ({eattrs.get('subtype', 'evidence')}): {eattrs.get('content', '')}"
-            + (f" | измерено на: {eattrs.get('measured_on')}" if eattrs.get("measured_on") else "")
+            f"{label}: {_scrub(eattrs.get('content'), labels)}"
+            + (f" Измерено на: {measured}." if measured else "")
         )
     return digest
 
 
-def _method_digest(ev: NirEvidence) -> List[str]:
+def _method_digest(ev: NirEvidence, labels: Dict[str, str]) -> List[str]:
+    """Method, means and plan — named the way the report names them.
+
+    A tool is given by the product it is, not the function that was called:
+    ``Tool.attrs.name`` is usually "RDKit" or "heracleum-tox", while
+    ``location`` is a repo URL or an endpoint and belongs nowhere near the prose.
+    Plan steps are numbered in Russian rather than quoted as ``TASK-3``.
+    """
     digest: List[str] = []
-    for method in ev.by_type("VerificationMethod"):
+    for number, method in enumerate(ev.by_type("VerificationMethod"), start=1):
         attrs = method.get("attrs") or {}
+        description = _scrub(attrs.get("description"), labels)
+        if not description:
+            # A method with no description leaves a bare heading and nothing to
+            # write from; the numbering closes over the gap.
+            continue
+        kind = vocabulary.kind_word(attrs.get("method_type"))
         digest += _paragraphs(
-            f"{method.get('id')} ({attrs.get('method_type', '')}): {attrs.get('description', '')}",
-            f"Литературное основание: {attrs.get('literature_basis')}" if attrs.get("literature_basis") else "",
+            f"Метод проверки {number}" + (f" ({kind})" if kind else "")
+            + f": {description}",
+            f"Литературное основание: {_scrub(attrs.get('literature_basis'), labels)}"
+            if attrs.get("literature_basis") else "",
         )
     for tool in ev.by_type("Tool"):
         attrs = tool.get("attrs") or {}
+        # Tool.name is a product list for a human-declared tool ("RDKit,
+        # OpenBabel, CDK") and a bare callable for an MCP one
+        # ("butina_clustering"). Scrubbing keeps the first and empties the
+        # second, which is the distinction the report needs.
+        name = _scrub(attrs.get("name"), labels)
+        if not name:
+            continue
+        kind = vocabulary.kind_word(attrs.get("tool_type"))
         digest += _paragraphs(
-            f"Инструмент {attrs.get('name', tool.get('id'))} "
-            f"({attrs.get('tool_type', '')}): {attrs.get('description', '')} "
-            f"{attrs.get('location', '')}".strip()
+            f"Программное средство «{name}»" + (f" ({kind})" if kind else "")
+            + f": {_scrub(attrs.get('description'), labels)}"
         )
     for base in ev.by_type("EmpiricalBase"):
         attrs = base.get("attrs") or {}
+        kind = vocabulary.kind_word(attrs.get("base_type"))
         digest += _paragraphs(
-            f"Эмпирическая база {base.get('id')} ({attrs.get('base_type', '')}): "
-            f"{attrs.get('source_ref', '')} {attrs.get('volume', '')}".strip()
+            f"Источник исходных данных" + (f" ({kind})" if kind else "")
+            + f": {_scrub(attrs.get('source_ref'), labels)} {_scrub(attrs.get('volume'), labels)}"
         )
     for constraint in ev.by_type("Constraint"):
         attrs = constraint.get("attrs") or {}
         digest += _paragraphs(
-            f"Ограничение ({attrs.get('subtype', '')}): {attrs.get('content', '')}"
+            f"Принятое ограничение: {_scrub(attrs.get('content'), labels)}"
         )
-    for step in ev.by_type("PlanStep"):
+    for number, step in enumerate(ev.by_type("PlanStep"), start=1):
         attrs = step.get("attrs") or {}
         digest += _paragraphs(
-            f"Этап {attrs.get('plan_task_id', step.get('id'))}: {attrs.get('title', '')}. "
-            f"{attrs.get('description', '')}"
+            f"Задача {number}: {_scrub(attrs.get('title'), labels)}. "
+            f"{_scrub(attrs.get('description'), labels)}"
+        )
+    for number, task in enumerate(ev.by_type("ExperimentTask"), start=1):
+        attrs = task.get("attrs") or {}
+        digest += _paragraphs(
+            f"Эксперимент {number}: {_scrub(attrs.get('title'), labels)}. "
+            f"{_scrub(attrs.get('description'), labels)}",
+            f"Проверяемые показатели: {_scrub(attrs.get('metrics'), labels)}"
+            if attrs.get("metrics") else "",
+            f"Условие успеха: {_scrub(attrs.get('success_criteria'), labels)}"
+            if attrs.get("success_criteria") else "",
         )
     return digest
 
 
-def _conclusion_digest(ev: NirEvidence) -> List[str]:
+def _conclusion_digest(ev: NirEvidence, labels: Dict[str, str]) -> List[str]:
     digest: List[str] = []
-    for conclusion in ev.conclusions:
+    for number, conclusion in enumerate(ev.conclusions, start=1):
         attrs = conclusion.get("attrs") or {}
         digest += _paragraphs(
-            f"{conclusion.get('id')} — {attrs.get('synthesis', '')}",
-            f"Как установлено: {attrs.get('how_established')}" if attrs.get("how_established") else "",
-            f"Против критериев: {attrs.get('against_criteria')}" if attrs.get("against_criteria") else "",
-            f"Границы применимости: {attrs.get('validity_bounds')}" if attrs.get("validity_bounds") else "",
-            f"Открытые вопросы: {attrs.get('open_questions')}" if attrs.get("open_questions") else "",
+            f"Вывод {number}: {_scrub(attrs.get('synthesis'), labels)}",
+            f"Как установлено: {_scrub(attrs.get('how_established'), labels)}"
+            if attrs.get("how_established") else "",
+            f"Сопоставление с условиями подтверждения: {_scrub(attrs.get('against_criteria'), labels)}"
+            if attrs.get("against_criteria") else "",
+            f"Границы применимости: {_scrub(attrs.get('validity_bounds'), labels)}"
+            if attrs.get("validity_bounds") else "",
+            f"Открытые вопросы: {_scrub(attrs.get('open_questions'), labels)}"
+            if attrs.get("open_questions") else "",
         )
     return digest
 
@@ -362,6 +563,8 @@ def build_outline(ev: NirEvidence, bundle: Optional[AssetBundle] = None) -> NirO
     the end. What does not fit goes to the results section.
     """
     outline = NirOutline(gaps=list(ev.gaps))
+    # Built once: every digest line below is rewritten through it.
+    labels = _label_map(ev)
     question = ev.question
     if question:
         outline.question = str((question.get("attrs") or {}).get("formulation") or "")
@@ -373,22 +576,19 @@ def build_outline(ev: NirEvidence, bundle: Optional[AssetBundle] = None) -> NirO
     method = SectionPlan(
         id=_slug("metodika", "metodika", taken),
         title="Методика исследования и использованные средства",
-        digest=_method_digest(ev),
+        digest=_method_digest(ev, labels),
     )
     taken.append(method.id)
     outline.sections.append(method)
 
-    for hypothesis in ev.hypotheses:
+    for index, hypothesis in enumerate(ev.hypotheses, start=1):
         hid = str(hypothesis.get("id") or "h")
-        attrs = hypothesis.get("attrs") or {}
-        # Shorten the claim first, then compose. Shortening the composed string
-        # would cut at the colon and leave a heading that names a hypothesis id
-        # and nothing about what it says.
-        claim = _sentence(attrs.get("formulation"), 70)
         section = SectionPlan(
             id=_slug(f"proverka-{hid}", f"section-{len(taken)}", taken),
-            title=f"Проверка гипотезы {hid}: {claim}" if claim else f"Проверка гипотезы {hid}",
-            digest=_hypothesis_digest(ev, hypothesis),
+            title=_hypothesis_title(hypothesis, index),
+            digest=_hypothesis_digest(ev, hypothesis, index, labels),
+            node_id=hid,
+            label=f"{vocabulary.ordinal_f(index)} гипотеза",
         )
         taken.append(section.id)
         outline.sections.append(section)
@@ -396,20 +596,55 @@ def build_outline(ev: NirEvidence, bundle: Optional[AssetBundle] = None) -> NirO
     results = SectionPlan(
         id=_slug("rezultaty", "rezultaty", taken),
         title="Обобщённые результаты и их обсуждение",
-        digest=_conclusion_digest(ev),
+        digest=_conclusion_digest(ev, labels),
     )
     taken.append(results.id)
     outline.sections.append(results)
 
-    # Agent reports the graph never captured. Attached to the results section so
-    # the author can mine them; the digest is explicit about where they come from.
-    for report in ev.agent_reports:
-        results.digest.append(
-            f"Отчёт агента {report['agent']}: {report['text'][:2000]}"
-        )
+    # The agents' own final reports — ~127 000 characters on a real run, and
+    # nowhere in the research graph. They used to be appended to the results
+    # section, which concentrated the whole study's substance in one place while
+    # two hypothesis sections had 300 characters between them. They are shared
+    # material now: any section may draw on them.
+    outline.materials = [
+        {
+            "source": f"Материал {number}",
+            "text": _scrub(report.get("text"), labels)[:4000],
+        }
+        for number, report in enumerate(ev.agent_reports, start=1)
+        if str(report.get("text") or "").strip()
+    ]
 
     _place_artifacts(ev, outline, bundle)
     return outline
+
+
+def _hypothesis_title(hypothesis: Dict[str, Any], index: int) -> str:
+    """A heading that names the subject, never the node.
+
+    The first version composed ``f"Проверка гипотезы {hid}: {claim}"`` and cut
+    the result at 70 characters, which put this in the table of contents:
+
+        2 Проверка гипотезы H1: Фуранокумариновый кластер (бергаптен,псорален
+
+    — an internal id and a list severed mid-item. The author overrides this
+    anyway (see ``NirProse.section_titles``); what matters is that the fallback
+    is publishable on its own, because a fallback that only ever appears when
+    something went wrong is the one nobody checks.
+    """
+    formulation = " ".join(str((hypothesis.get("attrs") or {}).get("formulation") or "").split())
+    claim = _sentence(formulation, 70)
+    # Use the claim only when it survived whole. A heading cut mid-list or
+    # mid-clause ("…, а отдельным соединением: самое") reads worse than one that
+    # says less, and the shortener cannot know where the meaning ends.
+    truncated = bool(claim) and len(claim) < len(formulation.rstrip(" .,;:—-"))
+    unbalanced = claim.count("(") != claim.count(")")
+    if truncated or unbalanced:
+        claim = ""
+    ordinal = vocabulary.ordinal_f_gen(index)
+    if claim:
+        return f"Проверка {ordinal} гипотезы: {claim[0].lower() + claim[1:]}"
+    return f"Проверка {ordinal} гипотезы"
 
 
 def _place_artifacts(
@@ -577,6 +812,19 @@ def _title(requisites: NirRequisites, prose: NirProse, ev: NirEvidence) -> Dict[
     return title
 
 
+#: A filesystem location rather than a citation: a drive letter, a backslash
+#: path, or a bare relative path ending in a file. Checked before scrubbing,
+#: because a scrubbed path is an empty string that still occupies a numbered row
+#: in the bibliography.
+_PATHLIKE_RE = re.compile(
+    r"^(?:[A-Za-z]:[\\/]|\.{0,2}[\\/])|(?:^|\s)[\w.-]+[\\/][\w.\\/-]+\.\w{2,5}(?:\s|$)"
+)
+
+
+def _looks_like_a_path(text: str) -> bool:
+    return bool(_PATHLIKE_RE.search(text))
+
+
 _URL_RE = re.compile(r"https?://[^\s\"'<>)\]]+")
 #: A presigned link is a capability with an expiry, not a citation. Putting one
 #: in a bibliography prints a dead 600-character URL into a normative document.
@@ -595,12 +843,23 @@ def _citable_urls(text: Any) -> List[str]:
 
 
 def _references(ev: NirEvidence, graph_export_url: Optional[str]) -> List[Dict[str, str]]:
-    """Cited literature, then the artifacts that let a reader re-run the work."""
+    """Cited literature, then the artifacts that let a reader re-run the work.
+
+    Agents record a workspace path in ``source_ref`` as readily as a DOI, and the
+    first report's bibliography accordingly listed seven entries of the form
+    ``D:\\projects26\\code_a\\…\\metabolites_smiles.json``. A file on the machine
+    that ran the study is not a source anyone can consult, so those are dropped
+    rather than cleaned: scrubbing one leaves an empty entry with a number.
+    """
     entries: List[Dict[str, str]] = []
     seen: set = set()
+    labels = _label_map(ev)
 
     def add(text: str) -> None:
         flat = " ".join(str(text or "").split())
+        if not flat or _looks_like_a_path(flat):
+            return
+        flat = _scrub(flat, labels)
         if not flat or flat.lower() in seen:
             return
         seen.add(flat.lower())
@@ -645,8 +904,16 @@ def _references(ev: NirEvidence, graph_export_url: Optional[str]) -> List[Dict[s
     return entries
 
 
-def _appendices(ev: NirEvidence) -> List[Dict[str, Any]]:
-    """Reference appendices: how to read our data, and what the run cost."""
+def _appendices(
+    ev: NirEvidence, outline: Optional["NirOutline"] = None
+) -> List[Dict[str, Any]]:
+    """Reference appendices: how to read our data, and what the run cost.
+
+    The tables name everything in Russian. The first version printed the
+    schema's own vocabulary — ``Hypothesis``, ``derived_from`` — into a document
+    written to a Russian standard, which is the one place a reader would meet
+    the machinery head on.
+    """
     appendices: List[Dict[str, Any]] = []
 
     nodes = ev.type_census()
@@ -665,9 +932,9 @@ def _appendices(ev: NirEvidence) -> List[Dict[str, Any]]:
             "type": "table",
             "id": "graph-nodes",
             "title": "Состав узлов графа научного исследования",
-            "columns": ["Тип узла", "Назначение", "Количество"],
+            "columns": ["Вид записи", "Назначение", "Количество"],
             "rows": [
-                [name, _NODE_PURPOSE.get(name, "—"), str(count)]
+                [vocabulary.node_word(name), vocabulary.purpose(name), str(count)]
                 for name, count in nodes.items()
             ],
         }]
@@ -676,8 +943,23 @@ def _appendices(ev: NirEvidence) -> List[Dict[str, Any]]:
                 "type": "table",
                 "id": "graph-edges",
                 "title": "Состав связей графа научного исследования",
-                "columns": ["Тип связи", "Количество"],
-                "rows": [[name, str(count)] for name, count in edges.items()],
+                "columns": ["Вид связи", "Количество"],
+                "rows": [
+                    [vocabulary.edge_word(name), str(count)]
+                    for name, count in edges.items()
+                ],
+            })
+        trace = _traceability_rows(outline, ev)
+        if trace:
+            # Traceability without polluting the prose: the report calls the
+            # hypothesis "первая", the record calls it H1, and this is where the
+            # two are tied together for anyone who needs to reach the graph.
+            blocks.append({
+                "type": "table",
+                "id": "graph-trace",
+                "title": "Соответствие разделов отчёта записям графа",
+                "columns": ["Как названо в отчёте", "Обозначение в графе", "Итог проверки"],
+                "rows": trace,
             })
         appendices.append({
             "id": "research-graph",
@@ -703,24 +985,18 @@ def _appendices(ev: NirEvidence) -> List[Dict[str, Any]]:
     return appendices
 
 
-_NODE_PURPOSE = {
-    "ResearchQuestion": "исследовательский вопрос",
-    "Hypothesis": "проверяемая гипотеза",
-    "Evidence": "полученное свидетельство",
-    "Conclusion": "вывод по итогам проверки",
-    "VerificationMethod": "метод проверки гипотезы",
-    "ConfirmationCriteria": "критерий подтверждения",
-    "PlanStep": "этап плана работ",
-    "ExperimentTask": "задача эксперимента",
-    "Tool": "использованный инструмент",
-    "Resource": "ресурс",
-    "EmpiricalBase": "эмпирическая база",
-    "Constraint": "ограничение исследования",
-    "CodeArtifact": "программный артефакт",
-    "GeneratedData": "сгенерированные данные",
-    "Report": "отчётный материал",
-    "CostModel": "модель стоимости",
-}
+def _traceability_rows(
+    outline: Optional["NirOutline"], ev: NirEvidence
+) -> List[List[str]]:
+    """``["первая гипотеза", "H1", "опровергнута"]`` per reported hypothesis."""
+    rows: List[List[str]] = []
+    for plan in (outline.sections if outline else []):
+        if not (plan.node_id and plan.label):
+            continue
+        node = ev.node(plan.node_id)
+        status = vocabulary.status_word((node or {}).get("status")) if node else "—"
+        rows.append([plan.label.capitalize(), plan.node_id, status])
+    return rows
 
 
 def _resource_rows(ev: NirEvidence) -> List[List[str]]:
@@ -776,7 +1052,14 @@ def build_nir_values(
                 )
             blocks.append({k: v for k, v in figure.items() if not k.startswith("_")})
         blocks.extend(plan.tables)
-        sections.append({"id": plan.id, "title": plan.title, "blocks": blocks})
+        # The author's heading wins: it knows what the section became, while the
+        # builder only guessed from the hypothesis it was planned around.
+        written_title = _sentence(prose.section_titles.get(plan.id), _MAX_TITLE_CHARS)
+        sections.append({
+            "id": plan.id,
+            "title": written_title or plan.title,
+            "blocks": blocks,
+        })
 
     if not sections:
         sections = [{
@@ -801,7 +1084,7 @@ def build_nir_values(
 
     conclusion = _paragraphs(*prose.conclusion_paragraphs)
     if not conclusion:
-        conclusion = _conclusion_digest(ev)[:6] or [contract.PLACEHOLDER]
+        conclusion = _conclusion_digest(ev, _label_map(ev))[:6] or [contract.PLACEHOLDER]
         problems.append("заключение не написано — подставлены выводы из графа")
 
     keywords = [str(k).strip().rstrip(".") for k in prose.keywords if str(k).strip()]
@@ -847,7 +1130,7 @@ def build_nir_values(
     if abbreviations:
         document["abbreviations"] = abbreviations
 
-    appendices = _appendices(ev)
+    appendices = _appendices(ev, outline)
     if appendices:
         document["appendices"] = appendices
 

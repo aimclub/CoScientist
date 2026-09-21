@@ -36,7 +36,9 @@ from CoScientist.config.report import ReportConfig
 from CoScientist.graph.session_scope import session_key
 from CoScientist.reporting.collect import report_dir_for
 from CoScientist.reporting.nir import assets as nir_assets
-from CoScientist.reporting.nir import build, client, contract, hitl_form, slop_check
+from CoScientist.reporting.nir import (
+    build, client, contract, hitl_form, register_check, slop_check,
+)
 from CoScientist.reporting.nir.evidence import collect_nir_evidence
 
 logger = logging.getLogger(__name__)
@@ -99,13 +101,17 @@ async def nir_report_outline(tool_context: ToolContext) -> Dict[str, Any]:
         "sections": [
             {
                 "id": plan.id,
-                "title": plan.title,
+                "title_hint": plan.title,
                 "evidence": plan.digest,
+                "evidence_chars": plan.evidence_chars(),
                 "figures": plan.figure_briefs(),
                 "tables": len(plan.tables),
             }
             for plan in outline.sections
         ],
+        # The agents' own reports. Not pinned to any one section: this is where
+        # most of the run's concrete detail lives, and any section may use it.
+        "materials": outline.materials,
         "sources_collected": len(build._references(evidence, None)),
         "figures_encoded": len(bundle.assets),
         "figures_dropped": bundle.dropped,
@@ -124,6 +130,7 @@ async def nir_report_draft(
     conclusion_paragraphs: List[str],
     section_texts: Dict[str, List[str]],
     figure_captions: Optional[Dict[str, str]] = None,
+    section_titles: Optional[Dict[str, str]] = None,
     terms: Optional[List[Dict[str, str]]] = None,
     abbreviations: Optional[List[Dict[str, str]]] = None,
 ) -> Dict[str, Any]:
@@ -134,9 +141,15 @@ async def nir_report_draft(
     text only — structure, figure placement, tables, sources and appendices are
     built here.
 
-    Returns the problems found: unwritten sections, missing keywords, an
-    over-long abstract, and style warnings about AI-sounding prose. Fix them and
-    call this again — it costs nothing. Then call nir_report_submit."""
+    ``section_titles`` maps a section id to the heading you want for it —
+    write one for every section, naming its subject rather than its number.
+
+    Returns what needs fixing: unwritten sections, missing keywords, an
+    over-long abstract, style warnings about AI-sounding prose, and
+    ``register_warnings`` for internal notation that leaked into the text
+    (node ids, plan ids, function or file names, untranslated schema words).
+    Fix them and call this again — it costs nothing. Then call
+    nir_report_submit."""
     if not _request(tool_context).get("enabled"):
         return _not_requested()
 
@@ -156,6 +169,7 @@ async def nir_report_draft(
         conclusion_paragraphs=list(conclusion_paragraphs or []),
         section_texts={k: list(v) for k, v in (section_texts or {}).items()},
         figure_captions=dict(figure_captions or {}),
+        section_titles=dict(section_titles or {}),
         terms=list(terms or []),
         abbreviations=list(abbreviations or []),
     )
@@ -165,7 +179,25 @@ async def nir_report_draft(
     style_input = {"введение": prose.introduction_paragraphs,
                    "заключение": prose.conclusion_paragraphs}
     style_input.update(prose.section_texts)
+    # Everything else the author wrote. The first pass checked only the body and
+    # reported clean while the abstract, the headings and the figure captions
+    # went unread — each of which prints on the page like any other sentence.
+    written_elsewhere = {
+        "реферат": [prose.abstract_text],
+        "ключевые слова": list(prose.keywords),
+        "заголовки": list(prose.section_titles.values()),
+        "подписи к рисункам": list(prose.figure_captions.values()),
+        "наименование": [prose.research_title, prose.report_title],
+    }
     style = slop_check.render(slop_check.check_document(style_input))
+    # Internal notation that survived into the prose. Advisory: submit builds
+    # the document either way, because a report with a stray identifier beats
+    # no report, and the identifier check can collide with real chemistry.
+    register = register_check.render(
+        register_check.check_document(
+            {**style_input, **written_elsewhere}, evidence.nodes
+        )
+    )
 
     fits, size = nir_assets.fits(values, bundle.assets)
     if not fits:
@@ -182,11 +214,12 @@ async def nir_report_draft(
         "status": "success",
         "problems": problems,
         "style_warnings": style,
+        "register_warnings": register,
         "abstract_chars": len(abstract_text or ""),
         "abstract_limit": contract.ABSTRACT_MAX_CHARS,
         "keywords": len(prose.keywords),
         "request_size_mb": round(size / (1024 * 1024), 2),
-        "ready": not problems,
+        "ready": not (problems or register),
     }
 
 
@@ -279,6 +312,29 @@ def _explain(payload: Dict[str, Any]) -> str:
     return payload.get("message") or f"Сервер отказал: {error}"
 
 
+def _free_path(preferred: Path) -> Path:
+    """``preferred``, or a numbered sibling when it cannot be written.
+
+    A previous report left open in Word holds a lock on the file; the write then
+    fails, and the run falls back to the server's 24-hour link — losing the
+    document to save a filename. Observed the second time this ran, with Word
+    still on the first report. Writing beside it keeps the deliverable.
+    """
+    try:
+        if not preferred.exists():
+            return preferred
+        # exists() is not writability: ask the filesystem.
+        with preferred.open("ab"):
+            return preferred
+    except OSError:
+        pass
+    for index in range(2, 50):
+        candidate = preferred.with_name(f"{preferred.stem}_{index}{preferred.suffix}")
+        if not candidate.exists():
+            return candidate
+    return preferred
+
+
 def _keep(tool_context: ToolContext, report_dir: Path, rendered: Dict[str, Any]) -> Dict[str, Any]:
     """Fetch the DOCX and give it an address that outlives the server's link.
 
@@ -298,7 +354,7 @@ def _keep(tool_context: ToolContext, report_dir: Path, rendered: Dict[str, Any])
     url = rendered.get("output_docx")
     files_dir = report_dir / "files"
     files_dir.mkdir(parents=True, exist_ok=True)
-    local = files_dir / DOCX_NAME
+    local = _free_path(files_dir / DOCX_NAME)
 
     if not (url and _download(url, local, timeout=120)):
         logger.warning("nir: could not download the rendered DOCX")
