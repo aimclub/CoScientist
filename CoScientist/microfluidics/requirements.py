@@ -97,6 +97,9 @@ def _pick(
     return matches[0]
 
 
+_ALCOHOL = re.compile(r"(?:спирт\w*|alcohol|ethanol|methanol|этанол|метанол)", re.I)
+
+
 def compile_requirements(structured_tz: Any) -> RequirementsSpec:
     """Compile supported TZ clauses and preserve unsupported ambiguity explicitly."""
     tz = structured_tz if isinstance(structured_tz, StructuredTZ) else StructuredTZ.model_validate(structured_tz or {})
@@ -141,7 +144,15 @@ def compile_requirements(structured_tz: Any) -> RequirementsSpec:
     )
     if item:
         block, row = item
-        add("aqueous_medium", "step", "hard", "requires", {"medium": "water"}, block, row, machine=True)
+        # «в спирте или воде» is not a water-only requirement: keep the
+        # alternative the customer allowed, or the route in ethanol would be
+        # held against a constraint the ТЗ never set.
+        allows_alcohol = bool(_ALCOHOL.search(f"{row.name} {row.value}"))
+        add(
+            "aqueous_medium", "step", "hard", "requires",
+            {"medium": "water_or_alcohol" if allows_alcohol else "water"},
+            block, row, machine=True,
+        )
 
     # Metal-containing catalysts are a category that can be checked from a
     # normalized catalyst identity.  Unknown catalyst identity remains unknown.

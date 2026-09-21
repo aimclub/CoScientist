@@ -372,7 +372,17 @@ class RequirementsSpec(BaseModel):
 
 class ComplianceCheck(BaseModel):
     constraint_id: str
-    status: Literal["pass", "fail", "unknown", "not_applicable"]
+    # Beyond pass/fail: two "cannot conclude" outcomes that must be told
+    # apart, because one blocks the route and the other does not.
+    #   unknown       — a MACHINE-checkable hard constraint whose data the route
+    #                   is missing (e.g. no temperature). Blocks: we can't tell.
+    #   needs_review  — a constraint with NO machine rule at all (an unparsed ТЗ
+    #                   clause). Code cannot judge it, so it never blocks; it
+    #                   travels as a review flag for the operator.
+    #   unverified    — the constraint is satisfied as stated, but the source
+    #                   could not be checked against a full text. A caveat, not
+    #                   a block.
+    status: Literal["pass", "fail", "unknown", "needs_review", "unverified", "not_applicable"]
     reason: str
     evidence_ids: List[str] = Field(default_factory=list)
     evaluated_by: Literal["code", "human", "agent"] = "code"
