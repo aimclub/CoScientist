@@ -28,6 +28,8 @@ const i18n = {
   'agent.KnowledgeGraph.desc': { en: 'Knowledge Graph', ru: 'Граф знаний' },
   'agent.SessionTrace.desc': { en: 'Session Trace', ru: 'Трассировка сессии' },
   'agent.MCPBuilder.desc': { en: 'MCP Builder', ru: 'Сборщик MCP' },
+  'agent.FedotTrace.desc': { en: 'FEDOT.MAS trace', ru: 'Трасса FEDOT.MAS' },
+  'agent.FedotDemo.desc': { en: 'FEDOT.MAS agent graph', ru: 'Граф агентов FEDOT.MAS' },
   'agent.CoderSandbox.desc': { en: 'CoderSandbox', ru: 'Песочница кода' },
   'agent.__settings__.desc': { en: 'Settings', ru: 'Настройки' },
 

@@ -147,6 +147,46 @@ function _coscientistLiveConnect() {
 }
 document.addEventListener("DOMContentLoaded", _coscientistLiveConnect);
 """
+# Shown in place of the gui-demo when its own process is not up. Deliberately
+# self-contained (no /static, no i18n.js): it has to render even when the only
+# thing this route can reach is this string.
+_FEDOT_DEMO_OFFLINE_PAGE = """<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<link rel="stylesheet" href="/static/css/fonts.css" />
+<title>FEDOT.MAS Demo — не запущен</title>
+<style>
+  body {{ margin: 0; min-height: 100vh; display: grid; place-items: center;
+    background: #0f1115; color: #e6e6e6;
+    font: 15px/1.6 "Source Sans 3", -apple-system, "Segoe UI", Roboto, sans-serif; }}
+  main {{ max-width: 620px; padding: 32px; }}
+  h1 {{ font-size: 19px; margin: 0 0 10px; }}
+  p {{ color: #9aa0b0; margin: 10px 0; }}
+  code {{ font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px;
+    background: #1b1f27; border: 1px solid #262a33; border-radius: 5px; padding: 1px 5px; }}
+  ol {{ color: #9aa0b0; padding-left: 20px; }} li {{ margin: 6px 0; }}
+  a {{ color: #6ea8fe; }}
+</style></head><body><main>
+  <h1>Граф агентов FEDOT.MAS не отвечает</h1>
+  <p>Это окно — обратный прокси к отдельному приложению
+  (<code>infrastructure/fedot-mas-gui</code>), которое живёт в своём процессе и
+  своём окружении: оно закрепляет более новый <code>fedotmas</code>, чем ядро,
+  поэтому в CoScientist не импортируется. Сейчас по адресу
+  <code>{upstream}</code> никто не слушает.</p>
+  <ol>
+    <li><code>git submodule update --init infrastructure/fedot-mas-gui</code></li>
+    <li>поднять его по инструкции в этом каталоге (порт по умолчанию 4173)</li>
+    <li>другой адрес задаётся переменной <code>FEDOT_GUI_URL</code></li>
+  </ol>
+  <p>Живой прогон <code>fedot_tool</code> рисуется на этой же странице через
+  <code>/api/fedot-live-stream</code> — поток работает и без демо, но рисовать
+  его пока нечему. Трасса прогонов доступна отдельно:
+  <a href="/fedot-trace">/fedot-trace</a>.</p>
+  <p style="font-size:13px">FEDOT.MAS agent graph is a separate app served by
+  its own process; start it as above or point <code>FEDOT_GUI_URL</code>
+  elsewhere.</p>
+</main></body></html>
+"""
+
 SessionKey = tuple[str, str]
 SOCKET_SEND_TIMEOUT_SECONDS = 5.0
 # Tool records replayed to a reconnecting tab. Chat messages live in the same
@@ -1960,10 +2000,19 @@ def create_app() -> FastAPI:
             upstream_resp = await client.send(upstream_req, stream=True)
         except httpx.ConnectError:
             await client.aclose()
-            return JSONResponse(
-                {"detail": "FEDOT.MAS gui-demo is not running — see infrastructure/fedot-mas-gui"},
-                status_code=502,
+            # This is a row in the activity rail, so the failure opens in a
+            # browser tab: a JSON body would read as a broken page. Anything
+            # that is not a navigation (the page's own fetches) still gets
+            # JSON, and both keep the 502 — nothing here is a working demo.
+            detail = (
+                f"FEDOT.MAS gui-demo is not answering at {FEDOT_GUI_UPSTREAM}"
             )
+            if "text/html" in request.headers.get("accept", ""):
+                return HTMLResponse(
+                    _FEDOT_DEMO_OFFLINE_PAGE.format(upstream=FEDOT_GUI_UPSTREAM),
+                    status_code=502, headers={"Cache-Control": "no-store"},
+                )
+            return JSONResponse({"detail": detail}, status_code=502)
 
         resp_headers = {
             k: v for k, v in upstream_resp.headers.items()
