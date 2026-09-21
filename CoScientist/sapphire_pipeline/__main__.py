@@ -31,8 +31,8 @@ def main():
     """
     parser = argparse.ArgumentParser(description='Update RAG from Sapphire (one complete pass)')
     parser.add_argument('--url', default=os.getenv('SAPPHIRE_URL', 'http://fpin-projects.ru:12280'))
-    parser.add_argument('--page-size', type=int, default=1)
-    parser.add_argument('--max-articles', type=int, help='Maximum number of publications to inspect')
+    parser.add_argument('--page-size', type=int, default=100, help='Number of records to fetch per request')
+    parser.add_argument('--max-articles', type=int, help='Maximum number of records to inspect, including skips and failures')
     parser.add_argument('--timeout', type=float, default=60)
     parser.add_argument('--max-pdf-mb', type=int, default=100)
     parser.add_argument('--lock-file', type=Path, default=Path('data/sapphire_pipeline.lock'))

@@ -2,12 +2,33 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import math
 from collections import Counter
 from itertools import islice
 
 from .client import normalize_doi, openalex_id
 
 logger = logging.getLogger(__name__)
+
+
+def allowed_domains(publication):
+    """Accept positive AI/chembio scores only when no photonics score is positive.
+
+    Missing or malformed domain entries do not establish domain membership.
+    These Sapphire scores are separate from the OpenAlex domain/field taxonomy.
+    """
+    domains = publication.get('domains')
+    if not isinstance(domains, list):
+        return False
+    positive = set()
+    for domain in domains:
+        if not isinstance(domain, dict):
+            continue
+        name, score = domain.get('name'), domain.get('score')
+        if (isinstance(name, str) and type(score) in (int, float)
+                and math.isfinite(score) and score > 0):
+            positive.add(name.strip().lower())
+    return bool(positive & {'ai', 'chembio'}) and 'photonics' not in positive
 
 
 def classification(work):
@@ -54,11 +75,13 @@ class SapphirePipeline:
     def process(self, publication):
         """Process one publication and return its ingestion or skip reason.
 
-        Check DOI, open access, and the work ID; enrich metadata; try PDF candidates;
+        Check domain scores, DOI, open access, and the work ID; enrich metadata; try PDF candidates;
         check the PDF hash; then upload to S3 and run ETL. Return ingested,
-        already_in_rag, not_open_access, missing_openalex_id, or no_usable_pdf.
+        domain_filtered, already_in_rag, not_open_access, missing_openalex_id, or no_usable_pdf.
         Candidate download errors are logged and skipped; other errors propagate.
         """
+        if not allowed_domains(publication):
+            return 'domain_filtered'
         identifier = openalex_id(publication.get('openalex_id'))
         metadata = {
             'openalex_id': identifier or '',
@@ -88,7 +111,7 @@ class SapphirePipeline:
             if self.backend.contains(dict(metadata, article_id=article_id)):
                 return 'already_in_rag'
             key = f'articles/{domain}/{article_id}/paper.pdf'
-            metadata.update(pdf_url=url, s3_key=key, source='sapphire')
+            metadata.update(pdf_url=url, s3_key=key, ingestion_source='sapphire')
             self.backend.upload(key, pdf)
             self.backend.ingest(article_id, publication.get('name') or work.get('display_name') or identifier, metadata)
             return 'ingested'
@@ -109,11 +132,16 @@ class SapphirePipeline:
         counts = Counter()
         for publication in islice(self.client.publications(), max_articles):
             counts['seen'] += 1
+            progress = f"{counts['seen']}/{max_articles}" if max_articles is not None else str(counts['seen'])
+            logger.info(
+                "[%s] Processing publication: %s | %s",
+                progress, publication.get('openalex_id'), publication.get('name') or 'Untitled',
+            )
             try:
                 outcome = self.process(publication)
             except Exception:
                 logger.exception('Publication failed: %s', publication.get('openalex_id'))
                 outcome = 'failed'
             counts[outcome] += 1
-            logger.info('%s: %s', publication.get('openalex_id'), outcome)
+            logger.info('[%s] %s: %s', progress, publication.get('openalex_id'), outcome)
         return dict(counts)

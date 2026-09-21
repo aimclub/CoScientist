@@ -25,7 +25,7 @@ from CoScientist.papers_processing_refactoring.etl import (
 from .client import normalize_doi
 
 
-from .etl_adapters import S3Source
+from .etl_adapters import S3Source, AddIngestionSource
 
 
 class RAGBackend:
@@ -108,7 +108,7 @@ class RAGBackend:
             ETLPipeline([
                 FetchStep(S3Source(self.public)), ParseStep(), HtmlCleaningStep(),
                 ImageFilteringStep(), ImageCaptioningStep(), MetadataExtractionStep(),
-                ChunkingStep(),
+                ChunkingStep(), AddIngestionSource(),
                 EmbeddingStep(), PublishStep(),
             ]).run(ctx)
             if not self.collection.get(where={'article_id': article_id}, limit=1, include=[])['ids']:
