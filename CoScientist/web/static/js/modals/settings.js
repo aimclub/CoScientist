@@ -70,15 +70,38 @@
       },
       {
         id: 'approvals', icon: 'verified_user',
-        groups: [{
-          fields: [
-            { id: 'hitl', path: 'general.hitlEnabled', type: 'toggle', scope: 'session', env: 'HITL__ENABLED' },
-            // -1 = no deadline, wait for the human; N > 0 = approved after N seconds.
-            { id: 'hitlTimeout', path: 'general.hitlAutoApproveTimeout', type: 'timeout', fallback: 300, scope: 'instant', parent: 'hitl', env: 'HITL_AUTO_APPROVE_TIMEOUT' },
-            { id: 'workOrder', path: 'general.workOrderEnabled', type: 'toggle', scope: 'session', parent: 'hitl', env: 'WORK_ORDER__ENABLED' },
-            { id: 'workOrderVeto', path: 'general.workOrderVetoSeconds', type: 'timeout', fallback: 60, scope: 'instant', parent: 'workOrder', env: 'WORK_ORDER__VETO_SECONDS' },
-          ],
-        }],
+        groups: [
+          {
+            fields: [
+              { id: 'hitl', path: 'general.hitlEnabled', type: 'toggle', scope: 'session', env: 'HITL__ENABLED' },
+              // -1 = no deadline, wait for the human; N > 0 = approved after N seconds.
+              { id: 'hitlTimeout', path: 'general.hitlAutoApproveTimeout', type: 'timeout', fallback: 300, scope: 'instant', parent: 'hitl', env: 'HITL_AUTO_APPROVE_TIMEOUT' },
+              { id: 'workOrder', path: 'general.workOrderEnabled', type: 'toggle', scope: 'session', parent: 'hitl', env: 'WORK_ORDER__ENABLED' },
+              { id: 'workOrderVeto', path: 'general.workOrderVetoSeconds', type: 'timeout', fallback: 60, scope: 'instant', parent: 'workOrder', env: 'WORK_ORDER__VETO_SECONDS' },
+            ],
+          },
+          {
+            // Deliberately NOT parented to `hitl`: the experiment module asks
+            // for these two even when the switch above is off, and a window
+            // that runs out pauses the run instead of approving it. Greying
+            // them out with the global switch would hide the only way through.
+            heading: 'experimentReview',
+            fields: [
+              { id: 'experimentPlanAuto', path: 'experimentModule.planAutoApprove', type: 'toggle', scope: 'instant', env: 'EXPERIMENTS__PLAN_AUTO_APPROVE' },
+              {
+                id: 'experimentPlanTimeout', path: 'experimentModule.planReviewTimeoutS', type: 'number', min: 30, max: 86400, scope: 'instant', env: 'EXPERIMENTS__PLAN_REVIEW_TIMEOUT_S',
+                inactive: d => getSettingPath(d, 'experimentModule.planAutoApprove')
+                  ? { key: 'settings.inactive.autoApproved' } : null,
+              },
+              { id: 'experimentResultAuto', path: 'experimentModule.resultAutoApprove', type: 'toggle', scope: 'instant', env: 'EXPERIMENTS__RESULT_AUTO_APPROVE' },
+              {
+                id: 'experimentResultTimeout', path: 'experimentModule.resultReviewTimeoutS', type: 'number', min: 30, max: 86400, scope: 'instant', env: 'EXPERIMENTS__RESULT_REVIEW_TIMEOUT_S',
+                inactive: d => getSettingPath(d, 'experimentModule.resultAutoApprove')
+                  ? { key: 'settings.inactive.autoApproved' } : null,
+              },
+            ],
+          },
+        ],
       },
       {
         id: 'tools', icon: 'construction',

@@ -82,6 +82,15 @@ const appSettings = {
   hypothesesAgent: {
     maxActiveHypotheses: 1,
   },
+  // The experiment module's own reviews. Not under general.hitlEnabled: the
+  // module asks for these two even when that switch is off, and a window that
+  // runs out pauses the run instead of approving it.
+  experimentModule: {
+    planAutoApprove: false,
+    resultAutoApprove: false,
+    planReviewTimeoutS: 300,           // seconds; runs out => paused, not approved
+    resultReviewTimeoutS: 300,
+  },
 };
 
 function escHtml(s) {

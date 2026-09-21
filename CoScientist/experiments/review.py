@@ -119,7 +119,31 @@ def fail_closed_handler() -> DelegatingHITLHandler:
 
 
 def _headless_auto_approve() -> bool:
+    """The one-switch override: both reviews, from the environment.
+
+    Kept as the headless entry point (scripts/test_lanes.py, smoke runs) —
+    one variable, no UI, both kinds.
+    """
     return os.getenv("COSCIENTIST_EXPERIMENT_HITL_AUTO_APPROVE", "").strip().lower() in _AUTO_APPROVE_TRUTHY
+
+
+def _auto_approve(kind: str) -> bool:
+    """Whether this review is approved without asking a human.
+
+    Read at call time, not at startup, so the Approvals tab applies to the
+    next review rather than the next restart. Per kind, because approving a
+    plan sight unseen and accepting whatever came out of it are different
+    risks: the plan costs the run, the result costs the conclusions.
+    """
+    if _headless_auto_approve():
+        return True
+    cfg = get_settings().experiments
+    return bool(cfg.plan_auto_approve if kind == "plan" else cfg.result_auto_approve)
+
+
+def _approval_mode() -> str:
+    """For the audit line: which switch let this review through."""
+    return "headless_auto" if _headless_auto_approve() else "settings_auto"
 
 
 def _auto_approve_response() -> HITLResponse:
@@ -620,11 +644,11 @@ class ExperimentReviewSessionAgent(SessionAgent):
         state["experiment_plan_view"] = view
         record_id = record_plan_proposed(ctx, self.name, view)
 
-        if _headless_auto_approve():
+        if _auto_approve("plan"):
             approve_plan(state)
             _publish_approved_plan_to_graph(ctx, state)
             close_plan_record(ctx, record_id, "approved", reason="headless auto-approve")
-            _audit(f"EXPERIMENT_REVIEW_APPROVED kind=plan mode=headless_auto plan_id={plan.plan_id} phase=execution")
+            _audit(f"EXPERIMENT_REVIEW_APPROVED kind=plan mode={_approval_mode()} plan_id={plan.plan_id} phase=execution")
             _audit("EXPERIMENT_DESIGN_MATRIX\n" + render_experiment_plan(plan))
             return _auto_approve_response()
 
@@ -658,10 +682,10 @@ class ExperimentReviewSessionAgent(SessionAgent):
         # Materialize canonical ArtifactRef locations before HITL / auto-approve.
         rendered = render_experiment_results(state)
 
-        if _headless_auto_approve():
+        if _auto_approve("result"):
             result = mark_result_review(state, approved=True)
             _audit(
-                f"EXPERIMENT_REVIEW_APPROVED kind=result mode=headless_auto "
+                f"EXPERIMENT_REVIEW_APPROVED kind=result mode={_approval_mode()} "
                 f"plan_id={runtime.get('plan_id')} phase={result['phase']} tasks_ok={str(tasks_ok).lower()}"
             )
             return _auto_approve_response()

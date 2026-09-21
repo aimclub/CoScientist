@@ -125,6 +125,10 @@ const i18n = {
     en: 'Not used: the knowledge graph is off.',
     ru: 'Не действует: граф знаний выключен.'
   },
+  'settings.inactive.autoApproved': {
+    en: 'Not used: nobody is asked, so there is nothing to wait for.',
+    ru: 'Не действует: подтверждение не запрашивается, ждать нечего.'
+  },
   'settings.inactive.parentOff': {
     en: 'Works only while "{parent}" is on.',
     ru: 'Действует, только когда включено «{parent}».'
@@ -275,6 +279,11 @@ const i18n = {
   'settings.group.toolSelection.desc': {
     en: 'How TaskExecutorAgent decides which of the found MCP tools to use.',
     ru: 'Как TaskExecutorAgent решает, какие из найденных MCP-инструментов использовать.'
+  },
+  'settings.group.experimentReview': { en: 'Experiments', ru: 'Эксперименты' },
+  'settings.group.experimentReview.desc': {
+    en: 'These two are asked even when the switch above is off, and a window that runs out pauses the run rather than approving it.',
+    ru: 'Эти два подтверждения спрашиваются даже при выключенном переключателе выше, а по истечении времени прогон встаёт на паузу, а не одобряется.'
   },
   'settings.group.danger': { en: 'Delete data', ru: 'Удаление данных' },
   'settings.group.danger.desc': {
@@ -431,6 +440,38 @@ const i18n = {
   'settings.f.workOrderVeto.envValues': {
     en: '-1 — wait for a human (no auto-start)\nN > 0 — start automatically after N seconds',
     ru: '-1 — ждать решения человека (без автостарта)\nN > 0 — стартовать автоматически через N секунд'
+  },
+  'settings.f.experimentPlanAuto.label': {
+    en: 'Approve the experiment plan for me',
+    ru: 'Одобрять план эксперимента за меня'
+  },
+  'settings.f.experimentPlanAuto.desc': {
+    en: 'The experiment module shows its plan — the tasks, the tools, the estimated time — and waits for an explicit approval; an unanswered plan is never approved, the run just stops there. Turn this on for a run that has to go through without you.',
+    ru: 'Модуль экспериментов показывает свой план — задачи, инструменты, оценку времени — и ждёт явного одобрения; план без ответа не одобряется, и прогон на этом заканчивается. Включите, если прогон должен пройти без вас.'
+  },
+  'settings.f.experimentPlanTimeout.label': {
+    en: 'How long to wait for the plan decision',
+    ru: 'Сколько ждать решения по плану'
+  },
+  'settings.f.experimentPlanTimeout.desc': {
+    en: 'Seconds. If nobody answers within this window the run is paused — the plan is NOT approved, and the experiments do not start.',
+    ru: 'Секунды. Если за это время никто не ответил, прогон встаёт на паузу — план НЕ одобряется и эксперименты не запускаются.'
+  },
+  'settings.f.experimentResultAuto.label': {
+    en: 'Accept the experiment result for me',
+    ru: 'Принимать результат эксперимента за меня'
+  },
+  'settings.f.experimentResultAuto.desc': {
+    en: 'When the tasks are done the module shows what came out and asks whether to accept it or send the experiment back for a redesign. Turn this on and whatever came out is accepted.',
+    ru: 'Когда задачи выполнены, модуль показывает, что получилось, и спрашивает: принять или отправить эксперимент на переделку. С включённой настройкой принимается то, что получилось.'
+  },
+  'settings.f.experimentResultTimeout.label': {
+    en: 'How long to wait for the result decision',
+    ru: 'Сколько ждать решения по результату'
+  },
+  'settings.f.experimentResultTimeout.desc': {
+    en: 'Seconds. If nobody answers within this window the run is paused — the result is neither accepted nor sent back.',
+    ru: 'Секунды. Если за это время никто не ответил, прогон встаёт на паузу — результат не принят и не отправлен на переделку.'
   },
 
   // Fields — Tools & code

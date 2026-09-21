@@ -285,6 +285,30 @@ def _apply_frontend_settings(frontend: dict) -> None:
         # graph/research/* both go through settings.research_graph.enabled).
         get_settings().research_graph.enabled = bool(general["researchGraphEnabled"])
 
+    # The experiment module's own two reviews. They are in the Approvals tab
+    # but NOT under `hitlEnabled`: ExperimentReviewSessionAgent._should_run_review
+    # ignores the global switch, so these flags are the only way past them.
+    experiment = frontend.get("experimentModule", {})
+    if experiment:
+        exp = get_settings().experiments
+        if "planAutoApprove" in experiment:
+            exp.plan_auto_approve = bool(experiment["planAutoApprove"])
+        if "resultAutoApprove" in experiment:
+            exp.result_auto_approve = bool(experiment["resultAutoApprove"])
+        # Both windows fail closed, so a nonsense value must not become
+        # "wait forever" by accident: the model declares gt=0 but a BaseModel
+        # does not validate assignment, and handler.py reads <= 0 as no
+        # deadline at all.
+        for key, attr in (("planReviewTimeoutS", "plan_review_timeout_s"),
+                          ("resultReviewTimeoutS", "result_review_timeout_s")):
+            if key in experiment:
+                try:
+                    val = float(experiment[key])
+                except (TypeError, ValueError):
+                    continue
+                if val > 0:
+                    setattr(exp, attr, val)
+
     planner = frontend.get("plannerAgent", {})
     if "retrievalEnabled" in planner:
         web.planner_retrieval_enabled = bool(planner["retrievalEnabled"])
@@ -379,6 +403,12 @@ def _current_settings() -> dict:
             "knowledgeGraphEnabled": web.knowledge_graph_enabled,
             "autoClearGraphEnabled": web.auto_clear_graph_enabled,
             "researchGraphEnabled": settings.research_graph.enabled,
+        },
+        "experimentModule": {
+            "planAutoApprove": settings.experiments.plan_auto_approve,
+            "resultAutoApprove": settings.experiments.result_auto_approve,
+            "planReviewTimeoutS": settings.experiments.plan_review_timeout_s,
+            "resultReviewTimeoutS": settings.experiments.result_review_timeout_s,
         },
         "plannerAgent": {
             "retrievalEnabled": web.planner_retrieval_enabled,

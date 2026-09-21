@@ -451,6 +451,14 @@ class ExperimentsSettings(BaseModel):
     coder_timeout_s: float = Field(default=7200.0, gt=0)
     research_timeout_s: float = Field(default=600.0, gt=0)
     medical_timeout_s: float = Field(default=600.0, gt=0)
+    # The two reviews that do NOT follow the global HITL switch: the module
+    # asks for them even when "ask for my approval" is off, and a window that
+    # runs out PAUSES the run instead of approving it (fail closed — an
+    # experiment is never approved because nobody was watching). So these two
+    # flags are the only way to let an experiment through unattended. Read at
+    # call time, so the Approvals tab takes effect on the next review.
+    plan_auto_approve: bool = False
+    result_auto_approve: bool = False
     plan_review_timeout_s: float = Field(default=300.0, gt=0)
     result_review_timeout_s: float = Field(default=300.0, gt=0)
     complexity_warning_tasks: int = Field(default=6, ge=1, le=8)
