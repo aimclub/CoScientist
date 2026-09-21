@@ -1217,6 +1217,10 @@ def sync_plan_to_research_graph(tasks: Iterable[Dict[str, Any]], graph: Any,
         memo = {}
     seen = dict(memo.get("ids") or {}) if memo.get("gen") == gen else {}
     live = _live_statuses(graph)
+    # What the experiment tasks under each step say. The module records its
+    # results through the store, not through the tracker, so without this a
+    # step whose every task is done still reads "not started".
+    from_tasks = _status_from_tasks(graph)
 
     creates, keys, updates = [], [], []
     for i, task in enumerate(tasks):
@@ -1224,10 +1228,19 @@ def sync_plan_to_research_graph(tasks: Iterable[Dict[str, Any]], graph: Any,
         if not key:
             continue
         if key in seen:
-            step, want = seen[key], _step_status(task)
+            step = seen[key]
+            tracked = _step_status(task)
+            want = tracked
+            if tracked != "blocked":
+                want = _furthest(tracked, from_tasks.get(step)) or tracked
             if live.get(step) not in (None, want):
-                updates.append({"id": step, "status": want,
-                                "reason": "the plan moved this step to " + want})
+                reason = ("the plan moved this step to " + want if want == tracked
+                          else "its experiment tasks are " + want)
+                updates.append({"id": step, "status": want, "reason": reason})
+            if want != tracked:
+                # The roadmap the operator reads is the tracker; leaving it
+                # behind would make the two views of one step disagree.
+                _mark_step(state, task, want)
             continue
         keys.append(key)
         creates.append({"type": "PlanStep", "ref": f"ps{i}",
@@ -1256,6 +1269,77 @@ def sync_plan_to_research_graph(tasks: Iterable[Dict[str, Any]], graph: Any,
             logger.warning("plan links refused: %s", linked.errors[:3])
         result = linked if result is None else result
     return result
+
+
+#: How far along a step is. `blocked` is not on this scale — it is a verdict,
+#: not a distance — so it never loses to a derived status.
+_STEP_PROGRESS = {"todo": 0, "in_progress": 1, "done": 2}
+
+
+def _furthest(*statuses: Optional[str]) -> Optional[str]:
+    """The most advanced of the statuses on the progress scale."""
+    ranked = [(s, _STEP_PROGRESS[s]) for s in statuses
+              if s in _STEP_PROGRESS]
+    if not ranked:
+        return None
+    return max(ranked, key=lambda pair: pair[1])[0]
+
+
+def _status_from_tasks(graph: Any) -> Dict[str, str]:
+    """PlanStep id -> what the experiment tasks under it say, if anything.
+
+    A task the plan marked optional and the runtime skipped says nothing about
+    the step; a task that only exists as a plan (`planned`) has not started it
+    either. Everything else has: the step is at least under way, and when all
+    of its tasks are done, so is it.
+    """
+    try:
+        full = graph.full() or {}
+    except Exception:  # noqa: BLE001 — a status that cannot be read is not a fault
+        return {}
+    kinds = {n.get("id"): n.get("type") for n in (full.get("nodes") or [])
+             if isinstance(n, dict)}
+    states = {n.get("id"): str(n.get("status") or "") for n in (full.get("nodes") or [])
+              if isinstance(n, dict)}
+    children: Dict[str, list] = {}
+    for edge in (full.get("edges") or []):
+        if not isinstance(edge, dict) or edge.get("type") != "elaborates":
+            continue
+        src, dst = edge.get("from"), edge.get("to")
+        if kinds.get(src) == "ExperimentTask" and kinds.get(dst) == "PlanStep":
+            children.setdefault(str(dst), []).append(states.get(src, ""))
+
+    out: Dict[str, str] = {}
+    for step, statuses in children.items():
+        counted = [s for s in statuses if s != "skipped"]
+        if not counted:
+            continue
+        if all(s == "done" for s in counted):
+            out[step] = "done"
+        elif any(s in {"done", "running", "failed"} for s in counted):
+            out[step] = "in_progress"
+    return out
+
+
+def _mark_step(state: Any, task: Dict[str, Any], status: str) -> None:
+    """Carry a derived step status back into the tracker.
+
+    Through `set_task_status`, which is the tracker's one writer, so the two
+    state keys it keeps cannot drift apart.
+    """
+    task_id = str(task.get("id") or "").strip()
+    if not task_id:
+        return
+    tracker = {"in_progress": "IN_PROGRESS", "done": "DONE"}.get(status)
+    if not tracker:
+        return
+    try:
+        from CoScientist.tools.task_tracker import set_task_status
+        set_task_status(state, task_id, tracker,
+                        notes="the experiment tasks under this step are "
+                              + status)
+    except Exception as exc:  # noqa: BLE001 — the graph is already right
+        logger.warning("could not move step %s to %s: %s", task_id, status, exc)
 
 
 def _live_statuses(graph: Any) -> Dict[str, str]:

@@ -338,6 +338,80 @@ def _task_attrs(task: dict[str, Any], plan: dict[str, Any],
     return attrs
 
 
+#: Word-prefix length. The two plans are written by different agents in
+#: Russian, so the same work arrives as «метаболитов» and «метаболиты»;
+#: comparing whole words matches almost nothing. Five characters is not
+#: morphology, but it tells «кластеризация» from «предсказание».
+_STEM = 5
+#: Shorter words are prepositions and noise at this stem length.
+_MIN_WORD = 4
+#: Enough shared vocabulary to call it the same work, and enough of a lead over
+#: the runner-up to be sure which step it is. Both read off the live data:
+#: true matches scored 0.40..0.80, wrong ones 0.00..0.25.
+_MATCH_FLOOR = 0.34
+_MATCH_LEAD = 0.10
+_WORD_RE = re.compile(r"[^\W\d_]+|\d+", re.UNICODE)
+_STOP_WORDS = frozenset({
+    "для", "или", "как", "что", "все", "его", "это", "при", "уже", "без",
+    "the", "and", "with", "from", "this", "that", "into",
+})
+
+
+def _words(text: Any) -> set[str]:
+    """Content words of a title, stemmed to a prefix."""
+    out: set[str] = set()
+    for word in _WORD_RE.findall(str(text or "").lower()):
+        if len(word) >= _MIN_WORD and word not in _STOP_WORDS:
+            out.add(word[:_STEM])
+    return out
+
+
+def _overlap(left: set[str], right: set[str]) -> float:
+    """Share of the smaller vocabulary the two have in common.
+
+    Not Jaccard: a step's title is often shorter than its task's, and a long
+    task should not be penalised for saying more than the step it serves.
+    """
+    if not left or not right:
+        return 0.0
+    return len(left & right) / min(len(left), len(right))
+
+
+def _plan_step_texts(state: MutableMapping[str, Any]) -> list[tuple[str, set[str]]]:
+    """(TASK-n, vocabulary) for every step of the outer plan."""
+    out: list[tuple[str, set[str]]] = []
+    for step in (state.get("_master_active_tasks") or []):
+        if not isinstance(step, dict):
+            continue
+        task_id = str(step.get("id") or "").strip()
+        if task_id:
+            out.append((task_id,
+                        _words(f"{step.get('title') or ''} "
+                               f"{step.get('description') or ''}")))
+    return out
+
+
+def _step_for_task(task: dict[str, Any],
+                   steps: list[tuple[str, set[str]]],
+                   fallback: str) -> str:
+    """Which step of the OUTER plan this experiment task carries out.
+
+    ``fallback`` — the dispatched step — is used when nothing matches well
+    enough: a weak guess is left where it used to go rather than moved
+    somewhere invented.
+    """
+    if not steps:
+        return fallback
+    mine = _words(f"{task.get('title') or ''} {task.get('question') or ''}")
+    scored = sorted(((_overlap(mine, vocab), task_id) for task_id, vocab in steps),
+                    reverse=True)
+    best, best_id = scored[0]
+    runner = scored[1][0] if len(scored) > 1 else 0.0
+    if best >= _MATCH_FLOOR and best - runner >= _MATCH_LEAD:
+        return best_id
+    return fallback
+
+
 def _outer_step(store: Any, state: MutableMapping[str, Any]) -> tuple[str, str]:
     """The outer plan's step the detailed plan elaborates: (PlanStep id, TASK-n).
 
@@ -390,8 +464,17 @@ def publish_plan_detail_to_graph(store: Any,
             return
         plan = (state.get(_RUNTIME_KEY) or {}).get("plan") or {}
         step_id, step_task_id = _outer_step(store, state)
+        # PlanStep node per tracker id, so a task can be linked to the step it
+        # carries out rather than to the one that was dispatched.
+        step_nodes = {
+            str((node.get("attrs") or {}).get("plan_task_id") or ""): str(node.get("id") or "")
+            for node in (_graph_full(store).get("nodes") or [])
+            if isinstance(node, dict) and node.get("type") == "PlanStep"
+        }
+        step_texts = _plan_step_texts(state)
         known = _xt_ids(state)
         graph_nodes = _graph_nodes(store)
+        matched: list[str] = []
 
         nodes: list[dict[str, Any]] = []
         edges: list[dict[str, Any]] = []
@@ -401,7 +484,10 @@ def publish_plan_detail_to_graph(store: Any,
             task_id = str(task.get("id") or "").strip()
             if not task_id:
                 continue
-            attrs = _task_attrs(task, plan, step_task_id)
+            own_task_id = _step_for_task(task, step_texts, step_task_id)
+            own_step_id = step_nodes.get(own_task_id, "") or step_id
+            matched.append(f"{task_id}->{own_task_id or 'none'}")
+            attrs = _task_attrs(task, plan, own_task_id)
             status = _task_status(state, task_id)
             existing = known.get(task_id)
             if existing and existing in graph_nodes:
@@ -417,9 +503,9 @@ def publish_plan_detail_to_graph(store: Any,
             ref_to_task[ref] = task_id
             nodes.append({"type": "ExperimentTask", "ref": ref,
                           "status": status, "attrs": attrs})
-            if step_id:
+            if own_step_id:
                 edges.append({"type": "elaborates", "from": f"#{ref}",
-                              "to": step_id})
+                              "to": own_step_id})
         if not nodes and not updates:
             return
 
@@ -441,6 +527,12 @@ def publish_plan_detail_to_graph(store: Any,
             if echo.get("id") and (task_id := ref_to_task.get(ref)):
                 known[task_id] = str(echo["id"])
         state[_XT_IDS_KEY] = known
+        # Every decision, so a wrong line on the graph can be read back to the
+        # pair of titles that produced it.
+        if matched:
+            audit(logger, "EXPERIMENT_GRAPH_TASK_STEPS "
+                          f"dispatched={step_task_id or 'none'} "
+                          + " ".join(matched))
         if not step_id:
             # Said out loud: the cards are there and the link is not, which is
             # a wiring fact about the run, not a fault of the plan.
