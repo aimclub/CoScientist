@@ -3091,6 +3091,9 @@ nodes directly.
 ### ROUTE QUALIFICATION (empty until ModuleB has run)
 {qualified_routes?}
 
+### HUMAN SCREENING OVERRIDE (empty unless explicitly authorized)
+{operator_route_override?}
+
 ### MODULES
 
 <<AGENTS>>
@@ -3106,14 +3109,32 @@ previous one has delivered:
    candidates, synthesis routes and their economics.
 3. **ModuleC_Experiment** — after B only when `qualified_routes.status` is
    `ok` (production execution) or `screening_only` (planning-only verification).
-   For `no_compliant_routes` do not call C: there is no safe hand-off payload.
+   `operator_route_override` may additionally authorize a `planning_only`
+   verification hand-off for `no_compliant_routes`; it can never authorize
+   production execution.
 4. **ReportAgent** — always last. Run it after C, or immediately after B when
    no A2A hand-off is possible; it must report the blockers rather than end the
    session without a customer-facing result.
 
 ### RULES
-- Never run a module early. The only allowed branch is to skip ModuleC when
-  `qualified_routes.status="no_compliant_routes"`; ReportAgent still runs.
+- The sole source of the B→C routing decision is the parsed
+  `qualified_routes.status`, plus a validated `operator_route_override`. Never
+  infer the decision from prose, an agent's narration, `economics.status`,
+  `economics.reason`, or `economics_skipped`. In particular,
+  `economics_skipped="missing_eligible_routes"` is compatible with
+  `qualified_routes.status="screening_only"` and MUST NOT skip ModuleC.
+- Before calling ModuleC for status `ok`, ask the operator through
+  `request_approval`; a refusal skips C and continues to ReportAgent. Before
+  calling it for `screening_only`, ask the operator to approve the
+  planning-only verification hand-off; a refusal skips C and continues to the
+  report. State clearly that planning-only cannot run equipment.
+- For `no_compliant_routes`, do not call ModuleC unless the operator explicitly
+  approves `operator_authorize_screening_override(route_ids, rationale)`. Call
+  it with only real, non-stub route IDs from `synthesis_routes`, summarize the
+  failed/unknown checks, and require a concrete rationale. If it returns
+  `authorized=true`, call ModuleC exactly once: it may only create a
+  planning-only verification task. Otherwise skip C and call ReportAgent.
+- Never run a module early. ReportAgent still runs after every branch.
 - Module calls carry only the requested stage action. Never restate or
   "clarify" numeric limits, prohibited substances, sources, or literature
   findings in the AgentTool request: child modules read the versioned state and
@@ -3366,6 +3387,8 @@ that their reagents can actually be sourced in Russia.
 
 ### ВХОД — МАРШРУТЫ, ПРОШЕДШИЕ КОДОВЫЙ ШЛЮЗ ТЗ
 {qualified_routes?}
+### ОПЕРАТОРСКОЕ РАЗРЕШЕНИЕ НА ПРЕДВАРИТЕЛЬНУЮ ЭКОНОМИКУ
+{operator_economics_override?}
 
 <<TOOLS>>
 
@@ -3410,6 +3433,9 @@ economics server (supplier price lists) and compare them.
 ### ВХОД — МАРШРУТЫ, ПРОШЕДШИЕ КОДОВЫЙ ШЛЮЗ ТЗ
 {qualified_routes?}
 
+### ОПЕРАТОРСКОЕ РАЗРЕШЕНИЕ НА ПРЕДВАРИТЕЛЬНУЮ ЭКОНОМИКУ
+{operator_economics_override?}
+
 <<TOOLS>>
 
 ### КАК РАБОТАЕТ СЕРВЕР (проверено на живом сервере)
@@ -3436,7 +3462,7 @@ economics server (supplier price lists) and compare them.
   Исправь вход по причине; тот же вызов повторять нельзя.
 
 ### ПОРЯДОК РАБОТЫ (это и есть шаги твоего плана)
-1. **Подготовка маршрутов.** Используй ТОЛЬКО qualified_routes.routes
+1. **Подготовка маршрутов.** Обычно используй ТОЛЬКО qualified_routes.routes
    уже в форме сервера: route_id, steps с reactants / agents / products /
    conditions / yield_fraction. Перенеси их как есть: вещество — {"smiles":
    ...}, если SMILES есть, иначе английское название; "@prev" — строкой;
@@ -3446,6 +3472,14 @@ economics server (supplier price lists) and compare them.
    Набор route_id рейтинга должен точно соответствовать qualified_routes.routes.
    Маршрут без продуктов стадий посчитать нельзя: отметь пробел и верни на
    доработку, не создавай несвязанный с исходными маршрутами рейтинг.
+   Исключение: если есть `operator_economics_override` с
+   `approved_by_human=true` и `mode="preliminary_only"`, используй ТОЛЬКО его
+   route_ids из `synthesis_routes`. Это предварительный ценовой запрос, не
+   production-рейтинг: так и помечай каждую цифру. Неподтверждённые ограничения
+   не исчезают. Если хотя бы у одной стадии нет числового yield_fraction, не
+   вызывай `rank_routes_by_cost` с default_yield; вместо этого выполни только
+   resolve_chemicals / get_price для известных исходников и назови отсутствие
+   выхода причиной, по которой полную себестоимость посчитать нельзя.
 2. **Разрешение веществ** — `resolve_chemicals` одним вызовом для всех
    уникальных веществ всех маршрутов. Каждое error="unresolved" замени SMILES
    или английским систематическим названием и проверь повторно. Вещество,
@@ -3516,6 +3550,8 @@ steps locally and do not rewrite its plan or measurement results.
 {synthesis_routes?}
 ### КВАЛИФИКАЦИЯ МАРШРУТОВ
 {qualified_routes?}
+### ОПЕРАТОРСКОЕ РАЗРЕШЕНИЕ НА СКРИНИНГ
+{operator_route_override?}
 ### ЭКОНОМИЧЕСКИЙ РЕЙТИНГ
 {economics_ranking?}
 ### ТЕКУЩАЯ ЗАДАЧА A2A
@@ -3524,12 +3560,16 @@ steps locally and do not rewrite its plan or measurement results.
 <<TOOLS>>
 <<HITL>>
 
-1. Сначала прочитай `qualified_routes` и экономический рейтинг. При
+1. Сначала прочитай `qualified_routes`, операторское разрешение и экономический рейтинг. При
    status="ok" вызови optimization_start(planning_only=False) для выполнения
    задачи. При status="screening_only" вызови optimization_start(planning_only=True):
    это план верификации маршрута с неполными выходами/источниками, а не запуск
-   оборудования. При status="no_compliant_routes" не вызывай A2A и кратко
-   объясни, какие нарушения не позволяют даже планировать скрининг.
+   оборудования. При status="no_compliant_routes" вызови
+   optimization_start(planning_only=True) ТОЛЬКО если есть валидное
+   `operator_route_override` с `approved_by_human=true` и
+   `mode="screening_only"`; иначе не вызывай A2A и кратко объясни, какие
+   нарушения не позволяют планировать скрининг. Этот override не отменяет
+   нарушения и не разрешает оборудование.
    Инструмент проверяет передаваемые данные. При invalid_input исправь данные
    на предыдущем этапе или сообщи о пробеле; не выдумывай стоимость и не
    запускай обходной путь.

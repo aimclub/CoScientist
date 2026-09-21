@@ -12,6 +12,8 @@ from google.genai import types
 from CoScientist.microfluidics.models import (
     ComplianceCheck,
     EvidenceRef,
+    OPERATOR_ECONOMICS_OVERRIDE_KEY,
+    OperatorEconomicsOverride,
     QualifiedRoutes,
     RequirementConstraint,
     RequirementsSpec,
@@ -559,12 +561,14 @@ def gate_economics(callback_context: CallbackContext) -> types.Content | None:
             status="no_compliant_routes", routes=[],
             gaps=[f"Некорректный qualified_routes: {type(exc).__name__}: {exc}"],
         )
-    if result.routes:
+    if result.routes or _preliminary_economics_routes(state, result):
         return None
     payload = {
         "status": "not_run",
-        "reason": "no_compliant_routes",
-        "message": "Экономика не рассчитана: нет маршрута, прошедшего все жёсткие ограничения ТЗ.",
+        # This describes only the economics stage.  Do not reuse it as a
+        # routing decision: screening_only remains a valid Module-C hand-off.
+        "economics_skipped": "missing_eligible_routes",
+        "message": "Экономика не рассчитана: нет маршрута для производственного калькулирования.",
         "gaps": result.gaps,
     }
     state["economics"] = payload
@@ -572,6 +576,79 @@ def gate_economics(callback_context: CallbackContext) -> types.Content | None:
         role="model",
         parts=[types.Part(text=json.dumps(payload, ensure_ascii=False))],
     )
+
+
+def _preliminary_economics_routes(state: Any, qualified: QualifiedRoutes) -> list[SynthesisRoute]:
+    """Selected real routes, only after the economics-specific HITL approval."""
+    if qualified.routes:
+        return qualified.routes
+    try:
+        override = OperatorEconomicsOverride.model_validate(
+            state.get(OPERATOR_ECONOMICS_OVERRIDE_KEY)
+        )
+        proposals = SynthesisRoutes.model_validate(state.get("synthesis_routes"))
+        by_id = {route.route_id: route for route in proposals.routes}
+        if set(override.route_ids) - set(by_id):
+            return []
+        selected = [by_id[route_id] for route_id in override.route_ids]
+        return [] if any(route.stub or not route.steps for route in selected) else selected
+    except (TypeError, ValueError):
+        return []
+
+
+async def review_preliminary_economics(callback_context: CallbackContext) -> None:
+    """Offer a human-approved preliminary pricing pass when code skipped it.
+
+    The resulting state never promotes a route or feeds production economics;
+    it merely allows supplier-price discovery under a clearly labelled mode.
+    """
+    state = callback_context.state
+    if state.get(OPERATOR_ECONOMICS_OVERRIDE_KEY):
+        return None
+    try:
+        qualified = QualifiedRoutes.model_validate(state.get(QUALIFIED_ROUTES_KEY))
+        proposals = SynthesisRoutes.model_validate(state.get("synthesis_routes"))
+    except (TypeError, ValueError):
+        return None
+    if qualified.routes or not proposals.routes:
+        return None
+    from CoScientist.config import get_settings
+    if not get_settings().web.hitl_enabled:
+        return None
+    from CoScientist.agents.common import hitl_handler
+    from CoScientist.graph.session_scope import session_key
+    from CoScientist.hitl.models import HITLAction, HITLRequest
+
+    user_id, session_id = session_key(callback_context)
+    response = await hitl_handler.handle_request(HITLRequest(
+        agent_name="EconomicsAgent",
+        action_type=HITLAction.APPROVE,
+        message=(
+            "Автоматическая квалификация не дала маршрутов для production-экономики. "
+            "Запустить предварительный поиск цен и доступности для предложенных "
+            "маршрутов? Результат не станет production-ранжированием и не отменяет "
+            "незакрытые ограничения или выходы."
+        ),
+        context={
+            "output": {
+                "routes": [
+                    {"route_id": route.route_id, "status": route.overall_status,
+                     "product": route.product.name or route.product.smiles}
+                    for route in proposals.routes if not route.stub and route.steps
+                ],
+                "gaps": qualified.gaps,
+            },
+            "_session": {"user_id": user_id, "session_id": session_id},
+        },
+        invoked_via="callback",
+        trigger="preliminary_economics_override",
+    ))
+    if response.approved:
+        state[OPERATOR_ECONOMICS_OVERRIDE_KEY] = OperatorEconomicsOverride(
+            mode="preliminary_only", approved_by_human=True,
+            route_ids=[route.route_id for route in proposals.routes if not route.stub and route.steps],
+        ).model_dump()
+    return None
 
 
 def guard_economics_routes(
@@ -587,7 +664,8 @@ def guard_economics_routes(
     qualified = QualifiedRoutes.model_validate(tool_context.state.get(QUALIFIED_ROUTES_KEY) or {
         "status": "no_compliant_routes", "routes": [],
     })
-    allowed = {route.route_id for route in qualified.routes}
+    allowed_routes = _preliminary_economics_routes(tool_context.state, qualified)
+    allowed = {route.route_id for route in allowed_routes}
     sent = {
         str(route.get("route_id")) for route in (args or {}).get("routes") or []
         if isinstance(route, dict) and route.get("route_id")
@@ -595,7 +673,7 @@ def guard_economics_routes(
     errors: list[str] = []
     if not allowed or sent != allowed:
         errors.append("route_id set differs from qualified_routes")
-    qualified_by_id = {route.route_id: route for route in qualified.routes}
+    qualified_by_id = {route.route_id: route for route in allowed_routes}
     for submitted in (args or {}).get("routes") or []:
         if not isinstance(submitted, dict) or submitted.get("route_id") not in qualified_by_id:
             continue
@@ -627,6 +705,7 @@ __all__ = [
     "evaluate_route",
     "gate_economics",
     "guard_economics_routes",
+    "review_preliminary_economics",
     "qualify_routes",
     "qualify_synthesis_routes",
 ]

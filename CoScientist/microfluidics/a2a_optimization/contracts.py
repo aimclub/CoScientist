@@ -5,7 +5,13 @@ import json
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from CoScientist.microfluidics.models import LiteratureAnalysis, QualifiedRoutes, SynthesisRoutes
+from CoScientist.microfluidics.models import (
+    OPERATOR_ROUTE_OVERRIDE_KEY,
+    LiteratureAnalysis,
+    OperatorRouteOverride,
+    QualifiedRoutes,
+    SynthesisRoutes,
+)
 
 INPUT_KEYS = (
     "structured_tz", "literature_analysis", "synthesis_routes", "qualified_routes",
@@ -59,6 +65,23 @@ def prepare_inputs(state: Any, *, planning_only: bool = False) -> dict:
     routes = qualified.routes
     if planning_only and not routes:
         routes = qualified.experimental_routes
+    override = None
+    if planning_only and not routes and qualified.status == "no_compliant_routes":
+        # A human may ask the external system to design evidence-gathering for
+        # a rejected proposal.  This does not alter qualification and cannot
+        # enter the production branch below.
+        override = OperatorRouteOverride.model_validate(
+            state.get(OPERATOR_ROUTE_OVERRIDE_KEY)
+        )
+        proposal_by_id = {route.route_id: route for route in proposals}
+        unknown = set(override.route_ids) - set(proposal_by_id)
+        if unknown:
+            raise ValueError(
+                "operator_route_override.route_ids must be a subset of synthesis_routes: "
+                f"{sorted(unknown)}"
+            )
+        routes = [proposal_by_id[route_id] for route_id in override.route_ids]
+        inputs[OPERATOR_ROUTE_OVERRIDE_KEY] = override.model_dump()
     ids = [route.route_id for route in routes]
     if not routes or not set(ids).issubset(set(proposal_ids)):
         mode = "eligible or experimental" if planning_only else "eligible"

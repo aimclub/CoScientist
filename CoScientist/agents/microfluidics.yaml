@@ -68,6 +68,11 @@ agents:
       CoScientist microfluidics root orchestrator — runs the case module by
       module: ТЗ + literature, design, experiment, report.
     prompt: microfluidics_root_orchestrator
+    # The root owns the B→C decision.  It asks for a human confirmation before
+    # entering C and exposes a strictly planning-only override when code has
+    # rejected every route.
+    tools: [operator_screening_override]
+    hitl: true
     subordinates:
       - ModuleA_TZLiterature
       - ModuleB_Design
@@ -359,7 +364,10 @@ agents:
     work_order: true
     work_order_step_review: true
     callbacks:
-      before_agent: [compile_requirements, gate_economics, inject_target_molecule]
+      # If production costing is closed, the operator may approve a separately
+      # labelled preliminary price inquiry before the hard gate decides whether
+      # this agent should run.
+      before_agent: [compile_requirements, review_preliminary_economics, gate_economics, inject_target_molecule]
       before_tool: [guard_economics_routes]
       # The server's numbers, as given, for the report: economics_ranking.
       after_tool: [collect_economics_result]

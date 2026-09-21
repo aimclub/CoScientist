@@ -484,6 +484,47 @@ class QualifiedRoutes(BaseModel):
         return self
 
 
+# This is deliberately not a qualification result.  It records a human's
+# exception to the automatic gate and can only be used to request a
+# non-executing verification plan from the external system.
+OPERATOR_ROUTE_OVERRIDE_KEY = "operator_route_override"
+OPERATOR_ECONOMICS_OVERRIDE_KEY = "operator_economics_override"
+
+
+class OperatorRouteOverride(BaseModel):
+    """Explicit operator authorization to plan verification of rejected routes."""
+
+    mode: Literal["screening_only"]
+    approved_by_human: Literal[True]
+    route_ids: List[str] = Field(min_length=1)
+    rationale: str = Field(min_length=1)
+    operator_feedback: str = ""
+
+    @model_validator(mode="after")
+    def route_ids_are_unique(self):
+        ids = [route_id.strip() for route_id in self.route_ids]
+        if any(not route_id for route_id in ids) or len(ids) != len(set(ids)):
+            raise ValueError("operator override requires nonempty unique route_id values")
+        self.route_ids = ids
+        return self
+
+
+class OperatorEconomicsOverride(BaseModel):
+    """Human approval to price non-eligible routes as preliminary evidence."""
+
+    mode: Literal["preliminary_only"]
+    approved_by_human: Literal[True]
+    route_ids: List[str] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def route_ids_are_unique(self):
+        ids = [route_id.strip() for route_id in self.route_ids]
+        if any(not route_id for route_id in ids) or len(ids) != len(set(ids)):
+            raise ValueError("economics override requires nonempty unique route_id values")
+        self.route_ids = ids
+        return self
+
+
 __all__ = [
     "Analogue",
     "CANONICAL_BLOCKS",
@@ -499,6 +540,10 @@ __all__ = [
     "EvidenceRef",
     "SourceRecord",
     "OPEN_STATUSES",
+    "OPERATOR_ROUTE_OVERRIDE_KEY",
+    "OPERATOR_ECONOMICS_OVERRIDE_KEY",
+    "OperatorEconomicsOverride",
+    "OperatorRouteOverride",
     "ProcessStep",
     "RequirementConstraint",
     "RequirementSource",

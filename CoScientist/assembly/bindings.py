@@ -988,6 +988,11 @@ def _optimization_a2a():
     return [optimization_start, optimization_get_status, optimization_provide_input, optimization_approve]
 
 
+def _operator_screening_override():
+    from CoScientist.microfluidics.operator_override import operator_authorize_screening_override
+    return [operator_authorize_screening_override]
+
+
 REGISTRY.register_tool(ToolEntry(
     key="optimization_a2a",
     factory=_optimization_a2a,
@@ -1011,6 +1016,22 @@ REGISTRY.register_tool(ToolEntry(
             name="optimization_approve",
             signature="optimization_approve()",
             purpose="Approve the external plan at input_required/approval within the authorized work order. May start remote equipment. Unavailable in planning-only mode.",
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="operator_screening_override",
+    factory=_operator_screening_override,
+    docs=(
+        ToolDoc(
+            name="operator_authorize_screening_override",
+            signature="operator_authorize_screening_override(route_ids, rationale)",
+            purpose=(
+                "Ask the human operator to authorize a planning-only verification "
+                "handoff for real routes rejected by automatic qualification. "
+                "It cannot make a route eligible or authorize equipment execution."
+            ),
         ),
     ),
 ))
@@ -1724,6 +1745,8 @@ _cb("qualify_synthesis_routes", "after_agent",
     factory=lambda ctx: _microfluidics_route_compliance("qualify_synthesis_routes"))
 _cb("gate_economics", "before_agent",
     factory=lambda ctx: _microfluidics_route_compliance("gate_economics"))
+_cb("review_preliminary_economics", "before_agent",
+    factory=lambda ctx: _microfluidics_route_compliance("review_preliminary_economics"))
 _cb("guard_economics_routes", "before_tool",
     factory=lambda ctx: _microfluidics_route_compliance("guard_economics_routes"))
 # Microfluidics module B: keep the economics server's costing answers as given.

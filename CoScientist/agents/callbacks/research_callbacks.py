@@ -19,7 +19,6 @@ _PAPER_STATE_KEY = "uploaded_paper_s3_keys"
 _USER_ID_ENV = "USER_ID"
 _SESSION_ID_ENV = "SESSION_ID"
 _UPLOADED_PAPERS_PATH_ENV = "STORAGE__UPLOADED_PAPERS"
-_UPLOADED_PAPER_S3_KEYS_ENV = "STORAGE__UPLOADED_PAPER_S3_KEYS"
 _DEFAULT_LOCAL_PAPERS_ROOT = Path(__file__).resolve().parents[2] / "local_papers"
 
 _upload_locks: dict[str, asyncio.Lock] = {}
@@ -73,45 +72,21 @@ async def ensure_local_papers_uploaded(callback_context: CallbackContext) -> Non
     _upload_locks.setdefault(scope_key, asyncio.Lock())
 
     async with _upload_locks[scope_key]:
-        configured_keys = _configured_uploaded_paper_s3_keys()
-        if configured_keys:
-            # Useful when the CoScientist process cannot reach the S3 endpoint
-            # but the remote paper-analysis MCP can.  The values are object
-            # keys (not bucket/key paths) and deliberately may belong to an
-            # older session.
-            callback_context.state[_PAPER_STATE_KEY] = configured_keys
-            logger.info(
-                "Using %d explicitly configured uploaded-paper S3 key(s).",
-                len(configured_keys),
+        if callback_context.state.get(_PAPER_STATE_KEY):
+            print(
+                "[S3 papers] already registered for "
+                f"user={user_id} session={session_id}: "
+                f"{callback_context.state[_PAPER_STATE_KEY]}",
+                flush=True,
             )
             return
 
-        current_prefix = f"{user_id}/{session_id}/uploaded_papers/"
-        existing_state = callback_context.state.get(_PAPER_STATE_KEY, [])
-        if existing_state:
-            # AgentTool child sessions inherit the parent state.  A previous
-            # run can therefore leave keys from another session in this state;
-            # passing those keys to the remote paper-analysis MCP produces a
-            # misleading `No valid papers could be loaded from S3` response.
-            # Only reuse keys belonging to the current upload namespace.
-            valid_state = [
-                key
-                for key in existing_state
-                if isinstance(key, str) and key.startswith(current_prefix)
-            ]
-            if len(valid_state) == len(existing_state):
-                return
-
-            logger.warning(
-                "Discarding stale uploaded-paper S3 keys for %s:%s: %s",
-                user_id,
-                session_id,
-                existing_state,
-            )
-            callback_context.state[_PAPER_STATE_KEY] = []
-
         papers_dir = _resolve_local_papers_dir()
         if papers_dir is None or not papers_dir.exists() or not papers_dir.is_dir():
+            print(
+                f"[S3 papers] local directory not found: {papers_dir}",
+                flush=True,
+            )
             logger.debug("No local papers directory found for uploaded papers.")
             return
 
@@ -122,11 +97,18 @@ async def ensure_local_papers_uploaded(callback_context: CallbackContext) -> Non
         ]
 
         if not pdf_files:
+            print(f"[S3 papers] no PDF files found in {papers_dir}", flush=True)
             logger.debug("Local uploaded papers directory is empty: %s", papers_dir)
         else:
+            print(
+                f"[S3 papers] found {len(pdf_files)} PDF(s) in {papers_dir}; "
+                f"uploading to bucket={s3_service.bucket_name!r} "
+                f"prefix={user_id}/{session_id}/uploaded_papers",
+                flush=True,
+            )
             logger.info("Found %d local PDF(s) for upload in %s", len(pdf_files), papers_dir)
 
-        prefix = current_prefix.rstrip("/")
+        prefix = f"{user_id}/{session_id}/uploaded_papers"
         uploaded_keys: List[str] = []
 
         if pdf_files:
@@ -135,8 +117,14 @@ async def ensure_local_papers_uploaded(callback_context: CallbackContext) -> Non
                     s3_service.upload_file_object(prefix, pdf_path.name, str(pdf_path))
                     s3_key = f"{prefix}/{pdf_path.name}"
                     uploaded_keys.append(s3_key)
+                    print(f"[S3 papers] UPLOAD OK: {s3_key}", flush=True)
                     logger.info("Uploaded local paper to S3: %s", s3_key)
                 except Exception as exc:
+                    print(
+                        f"[S3 papers] UPLOAD FAILED: {pdf_path}: "
+                        f"{type(exc).__name__}: {exc}",
+                        flush=True,
+                    )
                     logger.warning(
                         "Failed to upload local paper %s to S3: %s",
                         pdf_path,
@@ -147,20 +135,28 @@ async def ensure_local_papers_uploaded(callback_context: CallbackContext) -> Non
             try:
                 existing_keys = s3_service.list_objects(prefix)
             except Exception as exc:
-                logger.warning(
-                    "Could not list uploaded papers under S3 prefix %s: %s",
-                    prefix,
-                    exc,
+                print(
+                    f"[S3 papers] LIST FAILED for {prefix}: "
+                    f"{type(exc).__name__}: {exc}",
+                    flush=True,
                 )
                 existing_keys = []
             if existing_keys:
                 uploaded_keys = existing_keys
+                print(
+                    f"[S3 papers] found existing object(s): {existing_keys}",
+                    flush=True,
+                )
                 logger.info(
                     "No new uploads; found existing S3 keys under prefix %s: %s",
                     prefix,
                     existing_keys,
                 )
             else:
+                print(
+                    f"[S3 papers] no objects found under prefix {prefix}",
+                    flush=True,
+                )
                 logger.debug("No S3 keys found under prefix %s", prefix)
 
         if uploaded_keys:
@@ -169,16 +165,6 @@ async def ensure_local_papers_uploaded(callback_context: CallbackContext) -> Non
                 "Registered uploaded paper S3 keys in session state: %s",
                 uploaded_keys,
             )
-
-
-def _configured_uploaded_paper_s3_keys() -> List[str]:
-    """Read comma- or newline-separated pre-existing paper keys from ``.env``."""
-    raw = os.getenv(_UPLOADED_PAPER_S3_KEYS_ENV, "")
-    return [
-        key.strip()
-        for key in raw.replace("\n", ",").split(",")
-        if key.strip()
-    ]
 
 
 def cleanup_uploaded_papers(user_id: Optional[str] = None, session_id: Optional[str] = None) -> None:
