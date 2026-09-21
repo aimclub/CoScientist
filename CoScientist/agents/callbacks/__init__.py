@@ -22,6 +22,8 @@ from CoScientist.agents.callbacks.link_registry import (
 )
 from CoScientist.agents.callbacks.report_language import inject_report_language
 from CoScientist.agents.callbacks.research_callbacks import (
+    capture_literature_reactions,
+    capture_literature_smiles,
     cleanup_uploaded_papers,
     ensure_local_papers_uploaded,
     papers_agent_before_model,
@@ -52,6 +54,8 @@ __all__ = [
     "papers_agent_before_model",
     "ensure_local_papers_uploaded",
     "cleanup_uploaded_papers",
+    "capture_literature_smiles",
+    "capture_literature_reactions",
     "before_tool_reranker_model",
     "shortlist_reranker_tools",
     "after_tool_reranker_agent",

@@ -1586,6 +1586,18 @@ def _microfluidics_requirements():
     return compile_requirements_callback
 
 
+def _microfluidics_research_record(name: str):
+    def factory(ctx):
+        from CoScientist.microfluidics import research_record
+        return getattr(research_record, name)
+    return factory
+
+
+def _publish_literature_summary():
+    from CoScientist.microfluidics.literature_report import publish_literature_summary
+    return publish_literature_summary
+
+
 def _microfluidics_route_compliance(name: str):
     from CoScientist.microfluidics import route_compliance
     return getattr(route_compliance, name)
@@ -1755,6 +1767,25 @@ _cb("collect_economics_result", "after_tool", factory=lambda ctx: _collect_econo
 _cb("use_fixed_target_molecule", "before_agent", factory=lambda ctx: _use_fixed_target_molecule())
 # Stage 9: keep the CFD service's run results as given, under their request ids.
 _cb("collect_cfd_result", "after_tool", factory=lambda ctx: _collect_cfd_result())
+# Microfluidics → research graph (the scientific-process record). Each stage
+# writes its STRUCTURED result into the typed research graph from code
+# (microfluidics/research_record.py): ТЗ → ResearchQuestion + Constraints +
+# Tools + literature VerificationMethods; literature → Evidence; candidates →
+# Hypotheses; routes → VerificationMethods; economics / optimisation →
+# Evidence; report → Conclusion + Report. Best-effort, never breaks a run.
+# They MUST precede any after_agent callback that returns chat Content
+# (export_tz_and_queries, publish_literature_summary): ADK stops the chain at
+# the first Content.
+for _name in ("record_research_question", "record_literature_evidence",
+              "record_design_hypotheses", "record_synthesis_routes",
+              "record_economics_evidence", "record_experiment_evidence",
+              "record_conclusion"):
+    _cb(_name, "after_agent", factory=_microfluidics_research_record(_name))
+# The literature agent's own deliverable for the report: summary + tables
+# rendered from literature_analysis into state["literature_markdown"] and
+# posted to the chat.
+_cb("publish_literature_summary", "after_agent",
+    factory=lambda ctx: _publish_literature_summary())
 # Critic callbacks: their LLM prompts embed the orchestrator's current roster.
 _cb("pre_action_critique", "after_model", factory=_pre_action_critique)
 _cb("post_action_critique", "after_tool", factory=_post_action_critique)
