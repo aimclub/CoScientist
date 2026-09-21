@@ -120,6 +120,15 @@ def _resolve_model(cfg: AgentConfig, system: SystemConfig):
         return make_llm(deadline_s=deadline_s, reasoning=reasoning)
     if ref == "coder":
         return make_coder_llm(deadline_s=deadline_s, reasoning=reasoning)
+    if ref == "nir":
+        # Long-form GOST authoring over a large evidence base. No dedicated
+        # factory: make_llm already applies the reasoning and OpenRouter
+        # provider kwargs, and this model needs no API key of its own.
+        from CoScientist.config import get_settings
+
+        nir_model = get_settings().llm.nir_model
+        return make_llm(nir_model, deadline_s=deadline_s, reasoning=reasoning) \
+            if nir_model else make_llm(deadline_s=deadline_s, reasoning=reasoning)
     return make_llm(ref, deadline_s=deadline_s, reasoning=reasoning)
 
 

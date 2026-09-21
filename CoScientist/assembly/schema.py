@@ -6,7 +6,7 @@ The YAML declares every agent of the system in one place. Per agent:
   enabled:      bool, or "${settings.path}" resolved against app settings —
                 a disabled agent is still BUILT (so it can be served standalone
                 over A2A) but is not attached to / advertised by its parents
-  model:        "main" | "coder" | a literal litellm model string
+  model:        "main" | "coder" | "nir" | a literal litellm model string
   reasoning:    model "thinking" for this agent — false/"off" to switch it off,
                 or "minimal"|"low"|"medium"|"high"; unset inherits defaults
   prompt:       name of a registered prompt template

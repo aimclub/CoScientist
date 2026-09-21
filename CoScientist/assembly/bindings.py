@@ -63,6 +63,21 @@ def _result_formatter():
     return result_formatter_tool
 
 
+def _nir_report():
+    """The GOST NIR report toolset, or None when the MCP is not configured.
+
+    Returning None (rather than a toolset that fails on first call) lets the
+    entry be `optional`, so NirReportAgent simply has nothing to offer and the
+    run completes the way it does today.
+    """
+    from CoScientist.config import get_settings
+
+    if not get_settings().mcp.normcontrol_url:
+        return None
+    from CoScientist.tools.nir_report_tool import nir_report_tools
+    return nir_report_tools
+
+
 def _dynamic_tools():
     from CoScientist.tools import dynamic_mcp_toolset_instance
     return dynamic_mcp_toolset_instance
@@ -600,6 +615,44 @@ REGISTRY.register_tool(ToolEntry(
                 "Collect every figure and data table this run produced (from session "
                 "artifacts and the sandbox workspace) into the per-run report folder and "
                 "return ready-to-embed Markdown blocks (image embeds + tables). Call FIRST."
+            ),
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="nir_report",
+    factory=_nir_report,
+    optional=True,  # built only when MCP__NORMCONTROL_URL is configured
+    docs=(
+        ToolDoc(
+            name="nir_report_outline",
+            signature="nir_report_outline()",
+            purpose=(
+                "Show the planned GOST 7.32-2017 report: section ids, the evidence "
+                "recorded for each, figures awaiting captions, and gaps. Call FIRST "
+                "and write only from what it returns."
+            ),
+        ),
+        ToolDoc(
+            name="nir_report_draft",
+            signature=(
+                "nir_report_draft(research_title, report_title, abstract_text, keywords, "
+                "introduction_paragraphs, conclusion_paragraphs, section_texts, "
+                "figure_captions=None, terms=None, abbreviations=None)"
+            ),
+            purpose=(
+                "Assemble your prose into the GOST document and check it locally — "
+                "no network, so iterate freely. Returns unwritten sections, contract "
+                "problems and style warnings."
+            ),
+        ),
+        ToolDoc(
+            name="nir_report_submit",
+            signature="nir_report_submit()",
+            purpose=(
+                "Validate the draft on the normcontrol server, build the DOCX and "
+                "return a permanent download link plus the server's warnings."
             ),
         ),
     ),
@@ -1164,6 +1217,12 @@ def _ask_pipeline_scope():
     return make_ask_pipeline_scope_callback(hitl_handler)
 
 
+def _ask_nir_report():
+    from CoScientist.agents.common import hitl_handler
+    from CoScientist.reporting.nir.callback import make_ask_nir_report_callback
+    return make_ask_nir_report_callback(hitl_handler)
+
+
 def _enforce_pipeline_scope_hops():
     from CoScientist.hitl.pipeline_scope import enforce_pipeline_scope_hops
     return enforce_pipeline_scope_hops
@@ -1235,6 +1294,10 @@ _cb("expand_link_refs", "after_model", factory=lambda ctx: _expand_link_refs())
 _cb("hitl_before_model", "before_model", factory=lambda ctx: _hitl_before_model())
 _cb("hitl_before_agent", "before_agent", factory=lambda ctx: _hitl_before_model())
 _cb("ask_pipeline_scope", "before_agent", factory=lambda ctx: _ask_pipeline_scope())
+# Asks, once per session, whether the run should also produce a GOST 7.32-2017
+# NIR report, and collects the title-page requisites nothing else knows. Inert
+# unless NIR__ENABLED, MCP__NORMCONTROL_URL and HITL are all on.
+_cb("ask_nir_report", "before_agent", factory=lambda ctx: _ask_nir_report())
 _cb(
     "enforce_pipeline_scope_hops",
     "after_model",

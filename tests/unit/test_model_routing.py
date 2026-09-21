@@ -30,7 +30,9 @@ PROFILES = sorted(CONFIG_DIR.glob("*.yaml"))
 
 #: The aliases the assembler resolves through settings (assembly/assembler.py::
 #: _resolve_model). Anything else is a literal passed straight to litellm.
-ALIASES = {"main", "coder"}
+#: ``nir`` resolves through ``LLM__NIR_MODEL`` and falls back to the main model
+#: when unset, so it obeys the same rule: the deployment picks the provider.
+ALIASES = {"main", "coder", "nir"}
 
 #: Literals a profile is allowed to pin, with the reason. Empty on purpose: add
 #: an entry only for a model the deployment can actually reach.

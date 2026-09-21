@@ -284,6 +284,8 @@ Links: {links_context?}
    - **Limitations & Next Steps**: Caveats, failed or partial tasks, and concrete recommendations for follow-up studies.
 
 Ground every claim in actual experiment data. Never invent URLs or numbers. Embed every available figure and table.
+
+{nir_block?}
 """,
         TOOLS=ctx.render_tools(),
     )

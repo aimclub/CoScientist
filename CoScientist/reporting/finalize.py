@@ -53,9 +53,10 @@ def finalize_report(
         latex_files = render_latex(
             final_markdown or "", report_dir, report_config.latex, references
         )
+        nir = _record_nir(report_dir, state or {})
         promoted = _promote_sources(report_dir)
         manifest = _build_manifest(
-            session_id, report_dir, report_config, latex_files, promoted
+            session_id, report_dir, report_config, latex_files, promoted, nir
         )
         (report_dir / "MANIFEST.json").write_text(
             json.dumps(manifest, indent=2), encoding="utf-8"
@@ -65,6 +66,52 @@ def finalize_report(
     except Exception as exc:  # never let report packaging sink a completed run
         logger.error("report: failed to finalize %s (%s)", report_dir, exc)
         return RunResult(markdown=final_markdown, report_dir=None, manifest=None)
+
+
+def _record_nir(report_dir: Path, state: Dict[str, Any]) -> Dict[str, Any]:
+    """Fold the NIR DOCX into the artifact sources, before promotion runs.
+
+    The tool that built the document cannot write this file itself:
+    ``collect_artifacts`` rewrites ``SOURCES_FILENAME`` wholesale, so a second
+    ``format_results`` call — which the aggregator is free to make — would erase
+    the entry. Here there is exactly one writer and a fixed order, so the key
+    reaches ``_promote_sources`` and moves from ``ephemeral/`` to ``permanent/``
+    like every other artifact the report shows.
+
+    Returns the manifest block, or {} when the run produced no NIR report.
+    """
+    nir = state.get("nir_report")
+    if not isinstance(nir, dict):
+        return {}
+
+    local = nir.get("local_path")
+    bucket, key = nir.get("bucket"), nir.get("s3_key")
+    if local and bucket and key:
+        sources_path = report_dir / SOURCES_FILENAME
+        sources: Dict[str, Any] = {}
+        if sources_path.exists():
+            try:
+                loaded = json.loads(sources_path.read_text(encoding="utf-8"))
+                if isinstance(loaded, dict):
+                    sources = loaded
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("report: cannot merge into %s (%s)", sources_path, exc)
+        try:
+            relative = str(Path(local).relative_to(report_dir)).replace("\\", "/")
+        except ValueError:
+            relative = f"files/{Path(local).name}"
+        sources[relative] = {"bucket": bucket, "s3_key": key}
+        try:
+            sources_path.write_text(json.dumps(sources, indent=2), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 - promotion is not the report
+            logger.warning("report: cannot write %s (%s)", sources_path, exc)
+
+    return {
+        k: nir.get(k)
+        for k in ("task_id", "bucket", "s3_key", "local_path", "sha256",
+                  "download_link", "expires_at", "mode", "warnings")
+        if nir.get(k) is not None
+    }
 
 
 def _promote_sources(report_dir: Path) -> Dict[str, str]:
@@ -125,6 +172,7 @@ def _build_manifest(
     report_config: ReportConfig,
     latex_files: List[Path],
     promoted: Optional[Dict[str, str]] = None,
+    nir: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     def listing(subdir: str) -> List[str]:
         d = report_dir / subdir
@@ -132,7 +180,7 @@ def _build_manifest(
             return []
         return sorted(str(p.relative_to(report_dir)) for p in d.rglob("*") if p.is_file())
 
-    return {
+    manifest: Dict[str, Any] = {
         "session_id": session_id,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "report": "report.md" if (report_dir / "report.md").exists() else None,
@@ -148,6 +196,11 @@ def _build_manifest(
             "files": sorted(str(p.relative_to(report_dir)) for p in latex_files),
         },
     }
+    # Absent unless the operator asked for a GOST report, so a manifest from a
+    # run without one is byte-identical to what this wrote before.
+    if nir:
+        manifest["nir"] = nir
+    return manifest
 
 
 def _extract_references(state: Dict[str, Any]) -> List[str]:

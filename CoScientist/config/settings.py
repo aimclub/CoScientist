@@ -37,6 +37,13 @@ class LLMSettings(BaseModel):
     # endpoint, so no separate URL is needed.
     coder_model: Optional[str] = None
 
+    # Dedicated model for NirReportAgent. Writing a GOST 7.32-2017 report is a
+    # long-form authoring job over a large evidence base, which is a different
+    # workload from the short Markdown the aggregator assembles — so it gets its
+    # own model instead of raising `reasoning` for every run. Falls back to
+    # main_model when unset, which is exactly today's behaviour.
+    nir_model: Optional[str] = None
+
     # Seconds to wait for a single completion before giving up. Without this a
     # provider that accepts the connection and then goes quiet never raises, so
     # the agent waits forever and the run looks frozen with nothing in the log.
@@ -172,6 +179,33 @@ class MCPSettings(BaseModel):
     # framework code calls it per request through tools/vault_client.py.
     # Unset means both drop out, and the run still completes.
     vault_url: Optional[str] = None
+
+    # The "Автонормоконтроль" MCP (GOST 7.32-2017 NIR report rendering).
+    # DELIBERATELY no default: the address is a moving target — the ITMO
+    # instance and a locally hosted one swap places — and a literal in the code
+    # would outlive whichever is current. Set MCP__NORMCONTROL_URL in .env;
+    # unset means the NIR tools drop out and the run completes as before.
+    normcontrol_url: Optional[str] = None
+
+
+# =========================
+# NIR report (GOST 7.32-2017, via the normcontrol MCP)
+# =========================
+class NIRSettings(BaseModel):
+    """The GOST NIR report stage, off until an operator turns it on.
+
+    An explicit flag rather than an inference from "is normcontrol_url set?":
+    a reachable server is not a reason to spend a strong model on a 30-page
+    document, so the choice stays the operator's. Both conditions together are
+    :attr:`Settings.nir_ready`, which is what the agent is actually gated on.
+    """
+
+    enabled: bool = False
+    # draft tolerates `<...>` placeholders and temporary pagination; production
+    # additionally demands a real page_count and a complete page_map, which
+    # nothing can supply before the DOCX has been laid out. Kept configurable so
+    # a future two-pass flow can switch it without touching the call sites.
+    mode: str = "draft"
 
 
 # =========================
@@ -501,6 +535,7 @@ class Settings(BaseSettings):
     s3: S3Settings = S3Settings()
     opik: OpikSettings = OpikSettings()
     hitl: HITLSettings = HITLSettings()
+    nir: NIRSettings = NIRSettings()
     context_init: ContextInitSettings = ContextInitSettings()
     orchestrator: OrchestratorSettings = OrchestratorSettings()
     code_exec: CodeExecSettings = CodeExecSettings()
@@ -516,6 +551,20 @@ class Settings(BaseSettings):
         env_nested_delimiter="__",     # IMPORTANT for nesting
         extra="ignore"
     )
+
+    @property
+    def nir_ready(self) -> bool:
+        """The NIR stage is on AND there is a normcontrol server to reach.
+
+        system.yaml attaches NirReportAgent on ``enabled: ${nir_ready}``. The
+        flag alone is not enough: with NIR__ENABLED set and no
+        MCP__NORMCONTROL_URL, the agent would appear in the aggregator's roster
+        while its only toolset had been dropped as unconfigured — a capability
+        advertised and not present. Read through a property rather than fixed at
+        construction so a setting changed at runtime (the web UI writes some)
+        still decides correctly.
+        """
+        return bool(self.nir.enabled and self.mcp.normcontrol_url)
 
 
 # Global instance

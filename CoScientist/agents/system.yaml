@@ -11,7 +11,7 @@
 #                 (and can be served over A2A) but is NOT attached to parents
 #                 and disappears from their prompts
 #   root:         exactly one agent is the system root (the orchestrator)
-#   model:        main | coder | <literal litellm model string>  (default: main)
+#   model:        main | coder | nir | <literal litellm model string>  (default: main)
 #   reasoning:    model "thinking" for this agent: false (or "off") switches it
 #                 off entirely — the fastest setting for agents that only route,
 #                 reformat or fill a schema; "minimal"|"low"|"medium"|"high"
@@ -243,17 +243,63 @@ agents:
     reasoning: low
     prompt: result_aggregator
     tools: [result_formatter, research_graph_readonly]
+    # The GOST 7.32-2017 report is a different job — dozens of pages of Russian
+    # scientific prose — so it goes to its own agent with its own model instead
+    # of raising this one's `reasoning` for every run. Attached as a subordinate
+    # rather than a pipeline stage: a stage running after this one would emit
+    # the last final response, and the driver writes report.md from that.
+    subordinates: [NirReportAgent]
+    # Deliberately NOT `hitl: true`. The NIR question is asked by the
+    # ask_nir_report callback, which holds the handler directly and is gated by
+    # HITL__ENABLED globally. Setting the flag would instead hand this agent the
+    # request_approval/request_selection TOOLS, which its prompt never mentions
+    # — a capability the model cannot use and an invariant test rightly refuses.
     # Graph-primary grounding: no conversation history — the report is built from
     # the typed graph (via research_graph_readonly + injected digest) plus the
     # figures/tables collected by format_results, not from the raw transcript.
     include_contents: none
     callbacks:
-      before_agent: [inject_research_context, inject_report_language, user_links]
+      # ask_nir_report asks the operator whether to also produce a GOST report
+      # and writes the {nir_block?} the prompt reads; with the feature off it
+      # writes an empty block and the prompt is unchanged. It sits before
+      # user_links because user_links must stay last (see the profile test).
+      before_agent: [inject_research_context, inject_report_language, ask_nir_report, user_links]
       before_model: [redact_link_urls]
       after_model: [expand_link_refs]
       before_tool: [resolve_link_refs]
       after_tool: [register_tool_result_links]
     output_key: final_report
+
+  NirReportAgent:
+    class: llm
+    # Off by default. A reachable normcontrol server is not a reason to spend a
+    # strong model on a 30-page document, so an operator turns this on
+    # deliberately; disabled, it is not attached to the aggregator and vanishes
+    # from its prompt.
+    enabled: ${nir_ready}
+    description: >-
+      Writes the GOST 7.32-2017 research report (ОТЧЁТ О НИР) from the finished
+      research graph and the run's figures, and builds the DOCX through the
+      "Автонормоконтроль" MCP. Returns a download link, not the report text.
+    routing: >-
+      when the operator asked for a normative NIR report in addition to the
+      short Markdown one — never on your own initiative.
+    # Dozens of pages of Russian scientific prose that must stay faithful to
+    # measured numbers: the one place in this pipeline worth a stronger model
+    # and full reasoning. LLM__NIR_MODEL selects it; unset falls back to main.
+    model: nir
+    reasoning: high
+    prompt: nir_report
+    tools: [nir_report]
+    # Its answer is a deliverable in its own right (a link to a document), so it
+    # reaches the chat as its own message instead of a preview inside the
+    # aggregator's function_response.
+    report_output: true
+    callbacks:
+      before_model: [redact_link_urls]
+      after_model: [expand_link_refs]
+      before_tool: [resolve_link_refs]
+      after_tool: [register_tool_result_links]
 
   HypothesesAgent:
     class: llm
