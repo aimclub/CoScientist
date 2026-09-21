@@ -35,6 +35,7 @@ rather than a copy that drifts from the original. See :func:`_merge_raw`.
 """
 from __future__ import annotations
 
+import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -44,6 +45,8 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from CoScientist.config import get_settings
+
+_log = logging.getLogger(__name__)
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "agents"
 DEFAULT_CONFIG_PATH = CONFIG_DIR / "system.yaml"
@@ -107,15 +110,23 @@ REASONING_OFF = ("off", "none", "disabled")
 
 
 def _validate_reasoning(value: Any) -> Any:
-    """A ``reasoning:`` declaration: unset, a bool, or an effort/off keyword."""
+    """A ``reasoning:`` declaration: unset, a bool, an effort/off keyword, or a
+    "${settings.path}" reference resolved at assembly time.
+
+    A reference is kept verbatim here: what it points at is read when the model
+    is built, so one run can turn an agent's thinking down without the YAML's
+    default moving. `resolved_reasoning` validates whatever comes back.
+    """
     if value is None or isinstance(value, bool):
         return value
+    if _is_setting_ref(value):
+        return str(value).strip()
     normalized = str(value).strip().lower()
     if normalized in REASONING_OFF or normalized in REASONING_EFFORTS:
         return normalized
     raise ValueError(
         f"reasoning must be a bool, one of {REASONING_OFF} or {REASONING_EFFORTS}, "
-        f"got {value!r}"
+        f"a '${{settings.path}}' reference, got {value!r}"
     )
 
 
@@ -249,6 +260,34 @@ class AgentConfig(BaseModel):
 
     def is_enabled(self) -> bool:
         return _resolve_setting_ref(self.enabled)
+
+    def resolved_reasoning(self) -> Optional[Union[bool, str]]:
+        """``reasoning`` with a "${settings.path}" reference read off settings.
+
+        A reference that resolves to something `reasoning:` does not accept is
+        treated as UNSET, with a warning: an agent then inherits
+        `defaults.reasoning` and the run goes on. Raising here would take the
+        whole system down over one mistyped environment variable, and this dial
+        is an optimisation, not a correctness switch.
+        """
+        value = self.reasoning
+        if not _is_setting_ref(value):
+            return value
+        try:
+            resolved = _setting_value(value)
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("reasoning %s for %s is unreadable (%s); "
+                         "inheriting the default", value, self.name, exc)
+            return None
+        if resolved is None or isinstance(resolved, bool):
+            return resolved
+        normalized = str(resolved).strip().lower()
+        if normalized in REASONING_OFF or normalized in REASONING_EFFORTS:
+            return normalized
+        _log.warning("reasoning %s for %s resolved to %r, which is not one of "
+                     "%s or %s; inheriting the default", value, self.name,
+                     resolved, REASONING_OFF, REASONING_EFFORTS)
+        return None
 
     def uses_critic(self) -> bool:
         return _resolve_setting_ref(self.critic)

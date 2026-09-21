@@ -77,6 +77,53 @@ def session_context(tool_context: Any) -> Dict[str, str]:
     return {"user_id": user_id, "session_id": session_id}
 
 
+def _claim_plan_step(state: Any, agent: str, order: Any) -> None:
+    """An approved order takes the agent's current plan step to in_progress.
+
+    Best-effort by this module's contract: the human has already approved the
+    order, and a bookkeeping failure must not undo that.
+    """
+    try:
+        from CoScientist.tools.task_tracker import (
+            current_task_for_agent,
+            set_task_status,
+        )
+
+        if getattr(order, "plan_task_id", ""):
+            task_id = order.plan_task_id
+        else:
+            task = current_task_for_agent(state, agent)
+            if task is None:
+                return
+            task_id = str(task.get("id") or "")
+            if not task_id:
+                return
+            order.plan_task_id = task_id
+        set_task_status(state, task_id, "IN_PROGRESS",
+                        notes="work order approved", agent=agent)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("claiming a plan step for %s failed: %s", agent, exc)
+
+
+def _close_plan_step(state: Any, agent: str, order: Any, status: str,
+                     note: str) -> None:
+    """The report's outcome moves the step the order claimed, by id.
+
+    By id and not by "the agent's current step": between the claim and the
+    report the agent may have been handed more, and closing the wrong one is
+    worse than closing none.
+    """
+    try:
+        from CoScientist.tools.task_tracker import set_task_status
+
+        task_id = str(getattr(order, "plan_task_id", "") or "")
+        if not task_id:
+            return
+        set_task_status(state, task_id, status, notes=note, agent=agent)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("closing plan step for %s failed: %s", agent, exc)
+
+
 class WorkOrderToolset:
     """declare_work_order / update_work_order / update_work_step /
     submit_work_report for one agent."""
@@ -431,6 +478,7 @@ class WorkOrderToolset:
             assumption.rejected = assumption.id in rejected_ids
         order.status = "approved"
         order.operator_notes = feedback
+        _claim_plan_step(state, self.agent_name, order)
         save_order(state, order)
 
         result: Dict[str, Any] = {
@@ -697,6 +745,10 @@ class WorkOrderToolset:
         if response is not None and not response.approved:
             report.status = "rejected"
             report.operator_notes = feedback
+            # The step did not complete and the agent is told not to continue,
+            # so it is failed, not left running.
+            _close_plan_step(state, self.agent_name, order, "FAILED",
+                             "work report rejected")
             save_order(state, order)
             return {
                 "status": "rejected",
@@ -707,6 +759,8 @@ class WorkOrderToolset:
 
         report.status = "accepted"
         report.operator_notes = feedback
+        _close_plan_step(state, self.agent_name, order, "DONE",
+                         "work report accepted")
         save_order(state, order)
         result = {
             "status": "accepted",

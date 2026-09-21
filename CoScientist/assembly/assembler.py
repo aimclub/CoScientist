@@ -112,8 +112,10 @@ def _resolve_model(cfg: AgentConfig, system: SystemConfig):
     ref = cfg.model or system.defaults.model
     deadline_s = cfg.llm_timeout
     # An agent that says nothing about reasoning inherits `defaults.reasoning`;
-    # an unset default sends no reasoning kwargs at all.
-    reasoning = cfg.reasoning if cfg.reasoning is not None else system.defaults.reasoning
+    # an unset default sends no reasoning kwargs at all. Resolved, not read raw:
+    # the declaration may be a "${settings.path}" reference.
+    declared = cfg.resolved_reasoning()
+    reasoning = declared if declared is not None else system.defaults.reasoning
     if ref == "main":
         return make_llm(deadline_s=deadline_s, reasoning=reasoning)
     if ref == "coder":

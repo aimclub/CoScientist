@@ -103,8 +103,11 @@ def test_the_profile_inherits_mains_capabilities():
     coder = config.agent("CoderAgent")
     assert {"vault", "verify"} <= set(coder.tools)
     assert coder.hitl and "hitl_before_tool" in coder.callbacks.before_tool
-    assert config.agent("HypothesesAgent").reasoning == "high"
-    assert config.agent("CoderAgent").reasoning == "medium"
+    # Resolved, not the raw declaration: the hypothesis generator's dial is a
+    # "${settings.path}" reference so one run can turn it down without moving
+    # the default. What the profile inherits is the value, either way.
+    assert config.agent("HypothesesAgent").resolved_reasoning() == "high"
+    assert config.agent("CoderAgent").resolved_reasoning() == "medium"
 
 
 def test_route_agents_read_the_graph_and_the_bridge_writes_it():

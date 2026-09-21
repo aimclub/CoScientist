@@ -274,8 +274,9 @@ agents:
       to test first, so plan ONE verification branch after it.
       Decision-making and compatibility assessment based on gathered facts.
     # Ideation plus choosing what to test first: the most reasoning-bound job
-    # in the system.
-    reasoning: high
+    # in the system — so `high`, unless a run turns it down with
+    # HYPOTHESES__REASONING=low.
+    reasoning: "${web.hypotheses_reasoning}"
     prompt: hypotheses
     output_key: hypotheses
     report_output: true

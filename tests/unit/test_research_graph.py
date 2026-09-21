@@ -2707,3 +2707,200 @@ def test_two_links_between_one_pair_are_not_drawn_on_top_of_each_other():
     # Alternating sides, so two links bow away from each other rather than
     # sharing one arc.
     assert 'type: sign > 0 ? "curvedCW" : "curvedCCW",' in page
+
+
+# ── the plan column has to follow the plan ───────────────────────────────────
+
+def _plan_tasks():
+    return [
+        {"id": "TASK-1", "title": "Сформулировать гипотезу", "description": "одна",
+         "assignee": "HypothesesAgent", "status": "TODO"},
+        {"id": "TASK-2", "title": "Собрать литературные SMILES",
+         "description": "из статей", "assignee": "TaskExecutorAgent",
+         "status": "TODO"},
+        {"id": "TASK-3", "title": "Кластеризация по Танимото",
+         "description": "ECFP4", "assignee": "TaskExecutorAgent", "status": "TODO"},
+    ]
+
+
+def _graph_steps(store):
+    return {(n.get("attrs") or {}).get("plan_task_id"): n["status"]
+            for n in store.full()["nodes"] if n["type"] == "PlanStep"}
+
+
+def test_a_finished_study_does_not_show_five_steps_nobody_started(store):
+    """Every plan step of a study that ran to completion said "не начат".
+
+    Two independent causes, and the graph was only the messenger. The
+    after_tool hook returned immediately unless the tool was `create_plan`,
+    and the before_agent hook fires once per agent invocation — so the plan
+    reached the graph exactly once, at registration, when every step was still
+    todo. And the workers report progress through the work order (37
+    `update_work_step` calls in one real run) rather than through
+    `update_task_status` (2 calls for 5 steps), so the tracker was stale too.
+    """
+    from CoScientist.agents.callbacks.tool_callbacks import (
+        sync_plan_to_research_graph,
+    )
+    from CoScientist.hitl.work_order import WorkOrder
+    from CoScientist.hitl.work_order_tools import _claim_plan_step, _close_plan_step
+
+    _init(store)
+    state = {"_master_active_tasks": _plan_tasks()}
+    sync_plan_to_research_graph(state["_master_active_tasks"], store, state)
+    assert set(_graph_steps(store).values()) == {"todo"}
+
+    # An approved work order claims the agent's current step…
+    order = WorkOrder(agent="HypothesesAgent", goal="write one hypothesis")
+    _claim_plan_step(state, "HypothesesAgent", order)
+    assert order.plan_task_id == "TASK-1"
+    sync_plan_to_research_graph(state["_master_active_tasks"], store, state)
+    assert _graph_steps(store)["TASK-1"] == "in_progress"
+
+    # …and an accepted report closes it.
+    _close_plan_step(state, "HypothesesAgent", order, "DONE", "accepted")
+    sync_plan_to_research_graph(state["_master_active_tasks"], store, state)
+    assert _graph_steps(store)["TASK-1"] == "done"
+
+
+def test_an_agent_holding_several_steps_closes_them_one_at_a_time(store):
+    """One agent holds four of the five steps of a typical plan, so "every task
+    assigned to this agent" would mark the whole column done on the first
+    report. The order stamps the id it claimed and closes that one."""
+    from CoScientist.agents.callbacks.tool_callbacks import (
+        sync_plan_to_research_graph,
+    )
+    from CoScientist.hitl.work_order import WorkOrder
+    from CoScientist.hitl.work_order_tools import _claim_plan_step, _close_plan_step
+
+    _init(store)
+    state = {"_master_active_tasks": _plan_tasks()}
+    sync_plan_to_research_graph(state["_master_active_tasks"], store, state)
+
+    first = WorkOrder(agent="TaskExecutorAgent", goal="collect")
+    _claim_plan_step(state, "TaskExecutorAgent", first)
+    _close_plan_step(state, "TaskExecutorAgent", first, "DONE", "accepted")
+    sync_plan_to_research_graph(state["_master_active_tasks"], store, state)
+    steps = _graph_steps(store)
+    assert steps["TASK-2"] == "done" and steps["TASK-3"] == "todo", steps
+
+    # The next order takes the NEXT step, not the one already finished.
+    second = WorkOrder(agent="TaskExecutorAgent", goal="cluster")
+    _claim_plan_step(state, "TaskExecutorAgent", second)
+    assert second.plan_task_id == "TASK-3"
+    # A rejected report is a step that did not complete, not one still running.
+    _close_plan_step(state, "TaskExecutorAgent", second, "FAILED", "rejected")
+    sync_plan_to_research_graph(state["_master_active_tasks"], store, state)
+    assert _graph_steps(store)["TASK-3"] == "blocked"
+
+    # And a finished step is not reopened by a later order.
+    spare = WorkOrder(agent="HypothesesAgent", goal="again")
+    _claim_plan_step(state, "HypothesesAgent", spare)
+    _claim_plan_step(state, "TaskExecutorAgent", spare)
+    assert _graph_steps(store)["TASK-2"] == "done"
+
+
+def test_the_mirror_costs_nothing_on_a_tool_call_that_changed_no_plan():
+    """It now runs after EVERY tool the orchestrator calls, which is about two
+    hundred and thirty in a real run. A plan that has not moved must cost a
+    join and a dictionary lookup, not a graph commit."""
+    import CoScientist.agents.callbacks.tool_callbacks as TC
+
+    class _Tool:
+        def __init__(self, name):
+            self.name = name
+
+    class _Ctx:
+        def __init__(self, state):
+            self.state = state
+
+    calls = []
+    real = TC.sync_plan_to_research_graph
+    TC.sync_plan_to_research_graph = lambda *a, **k: calls.append(a[0])
+    try:
+        state = {"_master_active_tasks": _plan_tasks()}
+        ctx = _Ctx(state)
+        TC.mirror_plan_after_create(_Tool("research_commit"), {}, ctx, {})
+        assert len(calls) == 1, "the plan was new to this hook"
+        for _ in range(50):
+            TC.mirror_plan_after_create(_Tool("predict_ld50"), {}, ctx, {})
+        assert len(calls) == 1, "an unmoved plan was re-mirrored"
+
+        state["_master_active_tasks"][0]["status"] = "DONE"
+        TC.mirror_plan_after_create(_Tool("submit_work_report"), {}, ctx, {})
+        assert len(calls) == 2, "a step moved and the graph was not told"
+
+        # create_plan keeps its own path: its response carries the new list
+        # before state has been written back.
+        TC.mirror_plan_after_create(_Tool("create_plan"), {}, _Ctx({}),
+                                    {"plan": [{"id": "TASK-9", "title": "z"}]})
+        assert len(calls) == 3 and len(calls[-1]) == 1
+        # And a run with no plan is not a run with an empty one.
+        TC.mirror_plan_after_create(_Tool("x"), {}, _Ctx({}), {})
+        assert len(calls) == 3
+    finally:
+        TC.sync_plan_to_research_graph = real
+
+
+def test_the_tracker_has_one_writer_for_a_status(store):
+    """`update_task_status` is a tool and the work order is not, but the write
+    touches two state keys and a drift between them is a roadmap that
+    disagrees with itself."""
+    from CoScientist.tools.task_tracker import (
+        current_task_for_agent,
+        set_task_status,
+    )
+
+    state = {"_master_active_tasks": _plan_tasks()}
+    assert current_task_for_agent(state, "TaskExecutorAgent")["id"] == "TASK-2"
+
+    assert set_task_status(state, "TASK-2", "DONE", agent="TaskExecutorAgent")
+    assert not set_task_status(state, "TASK-2", "DONE"), "no move, no write"
+    assert current_task_for_agent(state, "TaskExecutorAgent")["id"] == "TASK-3"
+    # Both views, or the agent reads a roadmap the record disagrees with.
+    assert {t["id"]: t["status"] for t in state["active_tasks"]}["TASK-2"] == "DONE"
+    assert set_task_status(state, "TASK-404", "DONE") is False
+
+
+def test_an_agents_thinking_can_be_turned_down_for_one_run(monkeypatch):
+    """Turning the hypothesis generator's thinking down meant editing the YAML,
+    which commits the change for everyone. `enabled:` has taken a settings
+    reference since the beginning; `reasoning:` is the same kind of dial."""
+    from CoScientist.assembly.schema import load_config, resolve_config_path
+    from CoScientist.config import get_settings
+
+    def reasoning_of(profile):
+        cfg = load_config(resolve_config_path(profile))
+        return cfg.agent("HypothesesAgent").resolved_reasoning()
+
+    # Settings are a module-level singleton read at import, so the dial is
+    # exercised on the object rather than through the environment.
+    web = get_settings().web
+    assert web.hypotheses_reasoning == "high", "the committed default moved"
+    assert reasoning_of("system") == "high"
+    monkeypatch.setattr(web, "hypotheses_reasoning", "low")
+    assert reasoning_of("system") == "low"
+    assert reasoning_of("experiments") == "low"
+    # A typo must not take the system down over an optimisation dial: the agent
+    # inherits `defaults.reasoning` instead.
+    monkeypatch.setattr(web, "hypotheses_reasoning", "lowww")
+    assert reasoning_of("system") is None
+
+
+def test_the_medical_route_is_withdrawn_with_the_medical_agent(monkeypatch):
+    """A route whose agent is not in the tree is a route that cannot run:
+    start_task would hand back route_agent=MedicalAgent for an agent nobody
+    attached, and the executor would go on being told to call it."""
+    from CoScientist.config import get_settings
+    from CoScientist.experiments.runtime.state_machine import _route_enabled
+    from CoScientist.experiments.schemas.models import ExecutionRoute
+
+    settings = get_settings().experiments
+    monkeypatch.setattr(get_settings().web, "medical_agent_enabled", False)
+    assert not _route_enabled(ExecutionRoute.MEDICAL.value, settings)
+    # The routes that do not depend on it are untouched.
+    assert _route_enabled(ExecutionRoute.RESEARCH.value, settings)
+    assert _route_enabled(ExecutionRoute.REACT_TOOLS.value, settings)
+
+    monkeypatch.setattr(get_settings().web, "medical_agent_enabled", True)
+    assert _route_enabled(ExecutionRoute.MEDICAL.value, settings)

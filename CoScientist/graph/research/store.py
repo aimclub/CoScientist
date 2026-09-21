@@ -22,7 +22,7 @@ import threading
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 from uuid import uuid4
 
 import networkx as nx
@@ -1914,11 +1914,24 @@ class ResearchGraphStore:
     #: recording the next piece of evidence overwrites the judge's answer.
     _VERDICT_RANK = {"ValidatorAgent": 2, "human": 2}
 
-    def _verdict_rank(self, src: str, dst: str, key: str) -> Tuple[int, float]:
+    def _verdict_rank(self, src: str, dst: str, key: str,
+                      fresh: Iterable[str] = ()) -> Tuple[int, float, int]:
+        """How strong a claim this edge is on the pair's one polarity slot.
+
+        Rank first, so the judge's verdict beats a self-assertion however the
+        clock falls. Then the timestamp. Then whether THIS commit wrote it,
+        which is what breaks a tie the timestamp cannot: `created_at` comes
+        from a wall clock with about 15ms of resolution on Windows, so a judge
+        that re-judges twice in the same tick produced two verdicts of equal
+        rank and equal time, and the winner fell out of the order the edge
+        types happen to be declared in. An edge written in the commit being
+        applied is the newest by construction.
+        """
         data = self._g.edges[src, dst, key]
         source = str(data.get("source") or "")
         return (self._VERDICT_RANK.get(source, 1),
-                float(data.get("created_at") or 0.0))
+                float(data.get("created_at") or 0.0),
+                1 if key in fresh else 0)
 
     def _collapse_polarity(self, committed: Dict[str, List[Dict[str, Any]]],
                            warnings: List[str]) -> None:
@@ -1939,6 +1952,9 @@ class ResearchGraphStore:
                        if self._g.has_edge(src, dst, key=k)]
             if not present:
                 continue
+            # What this commit wrote for this pair, for the tie-break.
+            fresh = {e.get("type") for e in committed.get("edges", [])
+                     if e.get("from") == src and e.get("to") == dst}
             # The neutral link has been answered, so it goes.
             if self._g.has_edge(src, dst, key="relates_to"):
                 self._g.remove_edge(src, dst, key="relates_to")
@@ -1948,7 +1964,8 @@ class ResearchGraphStore:
                                               and e.get("to") == dst)]
             if len(present) == 1:
                 continue
-            keep = max(present, key=lambda k: self._verdict_rank(src, dst, k))
+            keep = max(present,
+                       key=lambda k: self._verdict_rank(src, dst, k, fresh))
             superseded = []
             for key in present:
                 if key == keep:

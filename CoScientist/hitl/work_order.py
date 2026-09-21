@@ -91,6 +91,10 @@ class WorkReport(BaseModel):
 class WorkOrder(BaseModel):
     agent: str
     goal: str
+    # The outer plan's step this order carries out (TASK-n), claimed when the
+    # order is approved. Empty when the run has no plan, or when every step of
+    # this agent's is already finished.
+    plan_task_id: str = ""
     done_criteria: str = ""
     assumptions: List[Assumption] = Field(default_factory=list)
     steps: List[WorkStep] = Field(default_factory=list)

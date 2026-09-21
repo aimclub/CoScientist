@@ -1267,18 +1267,55 @@ def _live_statuses(graph: Any) -> Dict[str, str]:
         return {}
 
 
+#: State key holding what the plan looked like at the last mirror.
+_PLAN_FINGERPRINT_KEY = "_plan_mirror_fingerprint"
+
+
+def _plan_fingerprint(tasks: Iterable[Dict[str, Any]]) -> str:
+    """Id and status of every step, in order. Everything the graph copies that
+    can change after the plan is registered."""
+    return "|".join(
+        f"{t.get('id')}:{str(t.get('status') or '').strip().lower()}"
+        for t in tasks if isinstance(t, dict))
+
+
 def mirror_plan_after_create(tool: BaseTool, args: Dict[str, Any],
                              tool_context: ToolContext,
                              tool_response: Any) -> None:
-    """after_tool on create_plan: the roadmap becomes the method column."""
-    if getattr(tool, "name", "") != "create_plan" or not isinstance(tool_response, dict):
+    """after_tool: keep the plan column level with the plan.
+
+    Named for `create_plan` because that is where it started, and kept under
+    that name because three YAML files register it — but it no longer fires
+    only there. It used to, and that was the defect: the roadmap reached the
+    graph once, at registration, when every step was still "todo", and a study
+    that ran to completion still showed five steps nobody had started.
+
+    Two triggers, cheapest first. A plan whose fingerprint has not moved costs
+    a join and a dictionary lookup, which is what the other ~230 tool calls of
+    a run get. `create_plan` is handled on its own because its own response
+    carries the new list before state is read back.
+    """
+    try:
+        name = getattr(tool, "name", "")
+        state = tool_context.state
+        if name == "create_plan" and isinstance(tool_response, dict):
+            tasks = tool_response.get("plan") or []
+        else:
+            tasks = state.get("_master_active_tasks") or []
+            if not tasks:
+                return
+            fingerprint = _plan_fingerprint(tasks)
+            if state.get(_PLAN_FINGERPRINT_KEY) == fingerprint:
+                return
+            state[_PLAN_FINGERPRINT_KEY] = fingerprint
+    except Exception as exc:  # noqa: BLE001 — mirroring must never break a tool
+        logger.warning("plan mirror could not read the plan: %s", exc)
         return
     try:
         from CoScientist.graph.research.store import get_research_graph
         sync_plan_to_research_graph(
-            tool_response.get("plan") or [], get_research_graph(tool_context),
-            tool_context.state,
-            str((tool_context.state or {}).get("user_query", "")),
+            tasks, get_research_graph(tool_context), state,
+            str((state or {}).get("user_query", "")),
         )
     except Exception as exc:  # noqa: BLE001 — mirroring must never break a tool
         logger.warning("plan mirror failed: %s", exc)

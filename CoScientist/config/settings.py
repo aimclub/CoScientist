@@ -332,6 +332,12 @@ class WebSettings(BaseModel):
     # Turning it off also withdraws `medical` as an execution route, because a
     # route whose agent is not in the tree is a route that cannot run.
     medical_agent_enabled: bool = _os.getenv("MEDICAL__ENABLED", "true").lower() in ("true", "1", "yes")
+    # The hypothesis generator's thinking budget. `high` by default because
+    # ideation plus choosing what to test first is the most reasoning-bound job
+    # in the system; turn it down per run with HYPOTHESES__REASONING=low when
+    # the hypothesis is expected to be straightforward and the run is paying
+    # for latency.
+    hypotheses_reasoning: str = _os.getenv("HYPOTHESES__REASONING", "high")
     fedot_fallback_timeout_s: float = float(_os.getenv("EXECUTOR__FEDOT_FALLBACK_TIMEOUT", "900"))
     sandbox_url: str = _os.getenv("SANDBOX_URL", "")
     coder_workspace_id: _Optional[str] = _os.getenv("CODER_WORKSPACE_ID")
