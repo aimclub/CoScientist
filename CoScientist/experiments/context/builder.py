@@ -675,7 +675,16 @@ def skip_executor_without_runtime(callback_context: CallbackContext) -> types.Co
     if isinstance(runtime, dict) and runtime.get("approved") and runtime.get("phase") == "execution":
         return None
     phase = runtime.get("phase") if isinstance(runtime, dict) else None
-    reason = "plan review paused" if state.get("experiment_plan_review_paused") else f"phase={phase or 'missing'}"
+    # A phase is where the module stopped; the pause reason is why. On a review
+    # nobody answered, "phase=awaiting_review" was all this said.
+    from CoScientist.experiments.review import PAUSE_REASON_STATE_KEY
+    pause_reason = str(state.get(PAUSE_REASON_STATE_KEY) or "")
+    if state.get("experiment_plan_review_paused"):
+        reason = f"plan review paused ({pause_reason})" if pause_reason else "plan review paused"
+    elif pause_reason:
+        reason = f"{pause_reason} (phase={phase or 'missing'})"
+    else:
+        reason = f"phase={phase or 'missing'}"
     message = f"Experiment execution skipped: no approved experiment runtime is active ({reason})."
     audit(logger, f"EXPERIMENT_EXECUTION_SKIPPED {reason}")
     state["experiment_execution_summary"] = message

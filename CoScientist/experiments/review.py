@@ -403,6 +403,13 @@ def _clip(text: Any, limit: int = 400) -> str | None:
     return out if len(out) <= limit else out[: limit - 1] + "…"
 
 
+#: Why the last review did not end in an approval: "plan_review_timeout",
+#: "result_review_timeout", "max_plan_revisions" or
+#: "inventory_blocker_repeated". Read by the orchestrator's suppressor to say
+#: so in the final report, and by the planner context builder.
+PAUSE_REASON_STATE_KEY = "experiment_review_pause_reason"
+
+
 # State this reviewer owns and must hand back to whoever invoked the module.
 #
 # The module runs as an ADK AgentTool, and AgentTool gives it a FRESH in-memory
@@ -428,6 +435,7 @@ _REVIEW_OWNED_STATE_KEYS = (
     "experiment_plan_critique",
     "experiment_plan_validation_errors",
     "experiment_plan_review_paused",
+    PAUSE_REASON_STATE_KEY,
     "experiment_plan_revision_count",
     "experiment_inventory_blocker_hits",
     "experiment_artifacts_manifest",
@@ -492,6 +500,7 @@ class ExperimentReviewSessionAgent(SessionAgent):
             if hits >= self.max_inventory_blocker_hits
             else "max_plan_revisions"
         )
+        state[PAUSE_REASON_STATE_KEY] = reason
         _audit(f"EXPERIMENT_PLAN_REVIEW_PAUSED reason={reason}")
         return HITLResponse(
             action=HITLAction.REJECT, approved=False, stop_review_loop=True,
@@ -627,6 +636,7 @@ class ExperimentReviewSessionAgent(SessionAgent):
             )
 
         state["experiment_plan_review_paused"] = False
+        state[PAUSE_REASON_STATE_KEY] = None
         state["experiment_plan_validation_errors"] = None
         # The budget bounds CONSECUTIVE failures, not a whole session. Until this
         # reset it was only cleared in approve_plan, so a plan that validated but
@@ -664,6 +674,12 @@ class ExperimentReviewSessionAgent(SessionAgent):
             _audit(f"EXPERIMENT_REVIEW_APPROVED kind=plan mode=human plan_id={plan.plan_id} phase=execution")
             _audit("EXPERIMENT_DESIGN_MATRIX\n" + render_experiment_plan(plan))
         view["status"] = _plan_outcome(response)
+        if response.timed_out:
+            # The record has said "paused" all along (_plan_outcome); state
+            # said nothing, so the orchestrator blamed its attempt budget.
+            state[PAUSE_REASON_STATE_KEY] = "plan_review_timeout"
+            _audit(f"EXPERIMENT_REVIEW_TIMEOUT kind=plan plan_id={plan.plan_id} "
+                   f"window_s={cfg.plan_review_timeout_s:g}")
         close_plan_record(ctx, record_id, view["status"],
                           reason=_clip(response.instructions))
         return response
@@ -696,6 +712,10 @@ class ExperimentReviewSessionAgent(SessionAgent):
             user_id=user_id, session_id=session_id, timeout_seconds=cfg.result_review_timeout_s,
         ))
         if response.timed_out:
+            state[PAUSE_REASON_STATE_KEY] = "result_review_timeout"
+            _audit(f"EXPERIMENT_REVIEW_TIMEOUT kind=result "
+                   f"plan_id={runtime.get('plan_id')} "
+                   f"window_s={cfg.result_review_timeout_s:g}")
             return response
         if response.approved:
             result = mark_result_review(state, approved=True)

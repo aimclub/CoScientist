@@ -22,9 +22,26 @@ from google.genai import types
 logger = logging.getLogger(__name__)
 
 _EM_NAME = "ExperimentModuleAgent"
+#: Why the last plan or result review did not end in an approval. Owned by
+#: CoScientist/experiments/review.py (imported lazily, like everything else
+#: this module reaches for: importing review at module scope would pull the
+#: whole experiment package into the orchestrator's callback chain).
+_PAUSE_REASON_STATE_KEY = "experiment_review_pause_reason"
+_TIMED_OUT_REASONS = {"plan_review_timeout", "result_review_timeout"}
 # Set by research_init, or by ContextInit from the user's original_request.
 _ROOT_GOAL_STATE_KEY = "orchestrator_root_goal"
 _FRAME_STATE_KEY = "research_frame"
+
+
+def _spend(state: object, current_runs: int) -> None:
+    """Let this dispatch through, one unit lighter.
+
+    Always returns None, so it can be returned straight from the decision:
+    an after_model callback that returns None leaves the response alone.
+    """
+    if hasattr(state, "__setitem__"):
+        state["experiment_module_runs"] = current_runs + 1
+    return None
 
 
 def _text_parts(content: object) -> str:
@@ -85,14 +102,11 @@ def coalesce_experiment_module_calls(
         if isinstance(req, str) and req.strip():
             requests.append(req.strip())
 
+    # Marks that the module was asked for at all; the BUDGET is spent in
+    # suppress_experiment_module_after_completed, which is where it is
+    # checked. Counting here meant a dispatch paid for itself before being
+    # judged, and the judge then refused it for being over budget.
     if em_idxs and hasattr(state, "__setitem__"):
-        getter = getattr(state, "get", None)
-        prior = getter("experiment_module_runs") if callable(getter) else None
-        try:
-            runs = int(prior or 0) + 1
-        except (TypeError, ValueError):
-            runs = 1
-        state["experiment_module_runs"] = runs
         state["experiment_module_dispatched"] = True
 
     if len(em_idxs) <= 1:
@@ -126,11 +140,25 @@ def suppress_experiment_module_after_completed(
     callback_context: CallbackContext,
     llm_response: LlmResponse,
 ) -> Optional[LlmResponse]:
-    """after_model: do not re-enter the module after result HITL accepted the stage or if planning is paused."""
+    """after_model: do not re-enter the module after result HITL accepted the
+    stage, or if planning is paused, or if the dispatch budget is spent — and
+    spend a unit of that budget for a dispatch this lets through."""
     state = getattr(callback_context, "state", None)
     getter = getattr(state, "get", None) if state is not None else None
     if not callable(getter):
         return None
+
+    # Find the dispatch first: with nothing to judge there is nothing to spend
+    # either, and this callback runs after every model turn.
+    content = getattr(llm_response, "content", None)
+    parts = list(getattr(content, "parts", None) or [])
+    em_idxs = [
+        i for i, part in enumerate(parts)
+        if getattr(getattr(part, "function_call", None), "name", None) == _EM_NAME
+    ]
+    if not em_idxs:
+        return None
+
     runtime = getter("experiment_runtime")
     plan_paused = bool(getter("experiment_plan_review_paused"))
     is_completed = isinstance(runtime, dict) and runtime.get("phase") == "completed"
@@ -149,20 +177,11 @@ def suppress_experiment_module_after_completed(
     elif is_completed:
         from CoScientist.experiments.review import result_tasks_ok
         if not result_tasks_ok(runtime):
-            return None
+            return _spend(state, current_runs)
     else:
-        return None
+        return _spend(state, current_runs)
 
-    content = getattr(llm_response, "content", None)
-    parts = list(getattr(content, "parts", None) or [])
-    if not parts:
-        return None
-    em_idxs = [
-        i for i, part in enumerate(parts)
-        if getattr(getattr(part, "function_call", None), "name", None) == _EM_NAME
-    ]
-    if not em_idxs:
-        return None
+    # Refused: strip the calls, and say why in their place.
     kept = [p for i, p in enumerate(parts) if i not in set(em_idxs)]
     if not kept:
         summary = getter("experiment_summary") if callable(getter) else None
@@ -173,11 +192,24 @@ def suppress_experiment_module_after_completed(
                     "not starting a second plan."
                 )
             elif budget_exhausted:
-                summary = (
-                    f"Experiment module reached maximum attempt budget "
-                    f"({current_runs}/{max_em_runs}); synthesizing final "
-                    "report with available results."
-                )
+                # A budget spent because nobody answered the review is not a
+                # budget spent on bad plans, and the orchestrator writes this
+                # sentence into the final report.
+                reason = str(getter(_PAUSE_REASON_STATE_KEY) or "")
+                if reason in _TIMED_OUT_REASONS:
+                    what = "plan" if reason == "plan_review_timeout" else "result"
+                    summary = (
+                        f"The experiment {what} was waiting for a human "
+                        f"approval and the review window ran out "
+                        f"({current_runs}/{max_em_runs} attempts used); "
+                        "synthesizing final report with available results."
+                    )
+                else:
+                    summary = (
+                        f"Experiment module reached maximum attempt budget "
+                        f"({current_runs}/{max_em_runs}); synthesizing final "
+                        "report with available results."
+                    )
             else:
                 summary = (
                     "Experiment stage already completed for this session; "
@@ -186,11 +218,12 @@ def suppress_experiment_module_after_completed(
         kept = [types.Part(text=summary)]
     content.parts = kept
     logger.warning(
-        "[%s] suppressed ExperimentModuleAgent: runs=%d/%d plan_paused=%s",
+        "[%s] suppressed ExperimentModuleAgent: runs=%d/%d plan_paused=%s pause_reason=%s",
         getattr(callback_context, "agent_name", None) or "orchestrator",
         current_runs,
         max_em_runs,
         plan_paused,
+        getter(_PAUSE_REASON_STATE_KEY) or "-",
     )
     return None
 
