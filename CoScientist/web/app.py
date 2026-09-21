@@ -2,6 +2,7 @@ from CoScientist.agents.common import is_proxy_error
 import asyncio
 import json
 import logging
+import mimetypes
 import os
 import time
 from collections import defaultdict, OrderedDict
@@ -235,8 +236,10 @@ def _mint_artifact_url(bucket: str, key: str) -> str | None:
         if payload is None:
             return None
         return payload.get("presigned_url") or payload.get("url")
+    content_type = mimetypes.guess_type(key)[0]
     return s3_service.generate_presigned_url(
-        key, "get_object", expiration=3600, bucket_name=bucket
+        key, "get_object", expiration=3600, bucket_name=bucket,
+        response_content_type=content_type,
     )
 
 
