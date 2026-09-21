@@ -203,7 +203,8 @@
     const C = getComputedStyle(document.documentElement);
     const col = n => C.getPropertyValue(n).trim();
     const GOOD=col('--good'), WARN=col('--warn'), CRIT=col('--crit'), INFO=col('--info'),
-          ORANGE=col('--orange'), SLATE=col('--slate'), VIOLET=col('--violet'), INK=col('--ink');
+          ORANGE=col('--orange'), SLATE=col('--slate'), VIOLET=col('--violet'), INK=col('--ink'),
+          INK2=col('--ink2');
 
     const R_STATUS = {  // status -> {color, glyph, label}
       confirmed:{c:GOOD,g:'✓'}, validated:{c:GOOD,g:'✓'}, met:{c:GOOD,g:'✓'},
@@ -220,34 +221,70 @@
       derived:{c:SLATE,g:'▣'},
     };
     const rStatus = s => R_STATUS[s] || {c:SLATE,g:'•'};
-    // What KIND of thing a card is, in colour. Status used to be the only thing
-    // colour said, which made an `open` question and a `planned` method the
-    // same blue — the reader had to read every card to find out what it was.
-    // Now the box is the kind, and the status is the glyph and the word: the
-    // split the hand-drawn reference uses.
+    // What KIND of thing a card is, in colour — for EVERY kind, with no
+    // exceptions and no two the same. Status used to be the only thing colour
+    // said, which made an `open` question and a `planned` method the same
+    // blue; the first fix moved colour onto the type but left `Hypothesis` out
+    // of the table so it could keep carrying its verdict, and that put the
+    // study's central claim on the status palette: a hypothesis
+    // `under_verification` came out amber, which is where `Evidence` already
+    // lives. The two cards a reader most needs to tell apart were the one pair
+    // that looked alike.
     //
-    // The hypothesis is the deliberate exception and is absent from this table:
-    // it is the one card whose STATUS is the message, because the whole study
-    // exists to settle it, so it keeps the verdict colour.
+    // Two rules hold this table together:
+    //   * every type in the server's NODE_TYPES appears exactly once, with a
+    //     hue no other type uses — a card's colour answers "what is this?"
+    //     before a word is read;
+    //   * no type may take `--good` or `--crit`. Green and red are the
+    //     verdict's, and a green card would read as a confirmed one whatever
+    //     its label said.
+    // Both are pinned by tests, because neither fails visibly: a duplicate
+    // just makes two types look the same, which is the defect this replaces.
     const R_KIND = {
-      framing:              "#d29922",  // the setup, agreed with the operator
-      researchquestion:     "#3b82f6",  // what was asked
-      planstep:             "#64748b",  // the intention: background, not record
+      // The setup, agreed with the operator: one family, three weights.
+      framing:              "#d29922",  // gold
+      constraint:           "#b45309",  // burnt amber — the setup's boundary
+      empiricalbase:        "#0ea5e9",  // sky: where the material came from
+      resource:             "#84cc16",  // lime: what the run is allowed to use
+      researchquestion:     "#3b82f6",  // blue: what was asked
+      // The claim the whole study exists to settle. Yellow because it is the
+      // one card a reader should find first, and because it is far from both
+      // the verdict colours and from the orange of an observation.
+      hypothesis:           "#facc15",
+      confirmationcriteria: "#8b5cf6",  // violet: the bar
+      verificationmethod:   "#14b8a6",  // teal: by what means
+      planstep:             "#64748b",  // slate: the intention, background
       // The same track one grain finer, and deliberately NOT a shade of the
       // step's slate: a reader has to tell the general plan from the detailed
-      // one at a glance, and magenta is the one hue no other card here uses.
-      experimenttask:       "#e879f9",
-      confirmationcriteria: "#8b5cf6",  // the bar
-      verificationmethod:   "#14b8a6",  // by what means
-      tool:                 "#a9682a",
-      evidence:             "#f97316",  // what was measured
-      generateddata:        "#a9682a",
-      codeartifact:         "#a9682a",
-      conclusion:           "#fb923c",  // what it adds up to — evidence's family
-      report:               "#fb923c",
-      publication:          "#fb923c",
-      outcome:              "#94a3b8",
+      // one at a glance.
+      experimenttask:       "#e879f9",  // magenta
+      tool:                 "#a9682a",  // brown: the instrument
+      evidence:             "#f97316",  // orange: what was measured
+      generateddata:        "#06b6d4",  // cyan: what the run produced
+      codeartifact:         "#f472b6",  // pink: the code that produced it
+      conclusion:           "#fdba74",  // light orange: what it adds up to
+      // Paper: the deliverable is the one card that should look like a
+      // document, and near-white is a tone no other type can be given.
+      // It also keeps green off the cards entirely — see the rule above.
+      report:               "#e2e8f0",
+      publication:          "#a855f7",  // purple
+      spec:                 "#6366f1",  // indigo
+      outcome:              "#94a3b8",  // light slate: the summary card
+      // The efficiency family, rare and always together, so they are told
+      // apart from each other rather than from the rest of the graph.
+      efficiencyjustification: "#2dd4bf",
+      efficiencymetric:        "#22d3ee",
+      costmodel:               "#c2410c",
     };
+    // Which statuses are a verdict, and which way. Everything absent from both
+    // sets is neither — in progress, postponed, not yet measured — and reads in
+    // neutral ink. `inconclusive` belongs there too: it is the honest "we
+    // measured and it did not settle", not a failure.
+    const STATUS_GOOD = new Set(["confirmed", "validated", "met", "approved",
+                                 "done", "available"]);
+    const STATUS_BAD = new Set(["refuted", "rejected", "failed", "creation_failed"]);
+    const statusInk = st => STATUS_GOOD.has(st) ? GOOD
+                          : STATUS_BAD.has(st) ? CRIT : INK2;
 
     const R_ICON = { researchquestion:'❓', hypothesis:'💡', evidence:'🔬', conclusion:'✅',
       verificationmethod:'⚙️', confirmationcriteria:'🎯', tool:'🔧', resource:'🔋',
@@ -261,6 +298,26 @@
       framing:0, outcome:5 };
     const R_EDGE = { supports:GOOD, refutes:CRIT, refines:WARN,
       supersedes:SLATE, frames:SLATE, concludes:INFO };
+    // An untyped link — motivates, tested_by, produces, uses — used to be
+    // drawn in #4a5160 on a #14161a canvas, and its label in #aeb6c2 at 12px.
+    // Three stops off the background is invisible past a dozen cards, and on
+    // this study most links are untyped. "Black", on a dark canvas, is the
+    // light end of the range.
+    const EDGE_NEUTRAL = "#cbd5e1", EDGE_BRIGHT = "#ffffff";
+    //: The plan links (realises, elaborates) stay subordinate — they say which
+    //: intention a record serves, not what the study found — but subordinate is
+    //: not the same as unreadable.
+    const EDGE_QUIET = "#94a3b8";
+    const EDGE_HALO = "#14161a";
+    //: A label is typeset by the same parser as a card, so a real weight is
+    //: available: escape the text and wrap it in <b>. Bigger type would have
+    //: been the other way to be noticed, and it costs room a graph does not
+    //: have.
+    const edgeLabel = v => { const e = visSafe(String(v == null ? "" : v));
+                             return e ? "<b>" + e + "</b>" : ""; };
+    const edgeFont = (color, size) => ({ color, size: size || 13, multi: "html",
+                                         strokeWidth: 5, strokeColor: EDGE_HALO,
+                                         bold: { color, size: size || 13, mod: "bold" } });
     // Human-readable type names (shown as "Hypothesis 1" instead of the terse id
     // "H1") and edge phrases, so a first-time viewer instantly reads the graph.
     const R_TYPE_NAME = { researchquestion:"Question", hypothesis:"Hypothesis", evidence:"Evidence",
@@ -421,8 +478,13 @@
       const idx = n.index && n.kind !== "researchquestion" ? " " + n.index : "";
       const sw = rStatusWord(n);
       const L = [];
-      L.push("<b>" + visSafe(st.g + " " + icon + " " + rTypeName(n) + idx
-                             + (sw ? " · " + sw : "")) + "</b>");
+      // The type in ink, the status in the verdict's colour. Both are bold;
+      // the status word is wrapped in <b><i> so it lands on the `boldital`
+      // class, which `researchNode` gives the status colour and a plain bold
+      // weight — the only way to get two colours into one vis label.
+      const head = visSafe(st.g + " " + icon + " " + rTypeName(n) + idx);
+      L.push(sw ? "<b>" + head + " · </b><b><i>" + visSafe(sw) + "</i></b>"
+                : "<b>" + head + "</b>");
       // A headline, still — but a wider one than the cramped column layout
       // could afford. At 150 characters an observation was cut before its
       // numbers ("mean AD=59.7%; …"), which is the part a reader came for.
@@ -505,8 +567,11 @@
       if (network) network.destroy();
       network = new vis.Network(document.getElementById("net"), { nodes, edges }, {
         nodes: { borderWidth: 2, shadow: { enabled: true, color: "rgba(0,0,0,0.35)", size: 10, x: 0, y: 3 } },
-        edges: { arrows: { to: { scaleFactor: 0.55 } }, color: { color: "#3a4150", highlight: "#64748b" },
-                 font: { color: "#8b93a1", size: r ? 12 : 10, strokeWidth: 0 },
+        edges: { arrows: { to: { scaleFactor: r ? 0.8 : 0.55 } },
+                 color: { color: r ? "#94a3b8" : "#3a4150",
+                          highlight: r ? "#ffffff" : "#64748b" },
+                 font: { color: r ? "#cbd5e1" : "#8b93a1", size: r ? 13 : 10,
+                         strokeWidth: r ? 5 : 0, strokeColor: "#14161a" },
                  // The research graph now reads top to bottom through its stage
                  // bands, so its links bend the way they travel; the log still
                  // runs along a clock, left to right.
@@ -1001,7 +1066,12 @@
                  // if the node had vanished.
                  hover: { background: rgba(c, 0.26), border: c } },
         font: { color: INK, size: 16, multi: "html",
-                face: "-apple-system, Segoe UI, sans-serif", align: "left" },
+                face: "-apple-system, Segoe UI, sans-serif", align: "left",
+                // mod "bold" rather than the default "bold italic": the status
+                // word is set in the same weight as the type it follows, and
+                // only its colour differs.
+                boldital: { color: statusInk(n.status), size: 16, mod: "bold",
+                            face: "-apple-system, Segoe UI, sans-serif" } },
         // Hovering must not re-typeset the label: labelHighlightBold redraws it
         // bold, which re-runs the parser over the very string that can throw.
         chosen: { node: true, label: false },
@@ -1387,7 +1457,9 @@
           const pairKey = [e.src, e.dst].sort().join("\u0000");
           const pairIndex = (pairSeen[pairKey] = (pairSeen[pairKey] || 0) + 1) - 1;
           const rlabel = research ? t(ekey, R_EDGE_NAME[e.type] || e.type || "") : (e.type || "");
-          const edge = { id, from:e.src, to:e.dst, label: e.provenance ? "" : rlabel };
+          const edge = { id, from:e.src, to:e.dst,
+                         label: e.provenance ? ""
+                                : (research ? edgeLabel(rlabel) : rlabel) };
           // A link inside one band joins two cards on the same row, and a
           // bezier told to bend vertically between them draws a straight line
           // straight through everything in between — the evidence that supports
@@ -1411,26 +1483,26 @@
             }
           }
           if (research && (e.type === "realises" || e.type === "elaborates")) {
-            edge.color = { color: "#4b5563", highlight: "#6b7280" };
-            edge.dashes = [2, 4]; edge.width = 1;
-            edge.font = { color: "#6b7280", size: 11, strokeWidth: 4,
-                          strokeColor: "#14161a" };
+            edge.color = { color: EDGE_QUIET, highlight: EDGE_BRIGHT };
+            edge.dashes = [2, 4]; edge.width = 1.6;
+            edge.font = edgeFont(EDGE_QUIET, 12);
           }
           else if (e.synthetic) { edge.color={color:"#2c313a",highlight:"#3a4150"}; edge.dashes=true; edge.width=1; edge.arrows=""; edge.label=""; }
           else if (research) { const c=R_EDGE[e.type];
-            edge.color={color:c||"#4a5160",highlight:c||"#64748b"}; edge.width=c?3:1.5;
-            edge.font={color:c||"#aeb6c2",size:12,strokeWidth:4,strokeColor:"#14161a"}; }
+            edge.color={color:c||EDGE_NEUTRAL,highlight:c||EDGE_BRIGHT};
+            edge.width=c?3:2.2;
+            edge.font=edgeFont(c||EDGE_NEUTRAL); }
           // How the study MOVED: the verdict that retired one hypothesis and
           // the change that produced the next. Without the label this is just
           // an unexplained arrow between two look-alike cards.
           if (research && e.type === "supersedes") {
             const v = (e.attrs || {}).verdict || "other";
             const c = v === "refuted" ? CRIT : v === "confirmed" ? GOOD : WARN;
-            edge.dashes = [5, 4]; edge.width = 1.8;
+            edge.dashes = [5, 4]; edge.width = 2.2;
             edge.color = { color: c, highlight: c, hover: c };
-            edge.font = { color: c, size: 12, strokeWidth: 4, strokeColor: "#14161a" };
-            edge.label = t('graph.edge.supersedes.' + v,
-                           { reason: (e.attrs || {}).reason || "" });
+            edge.font = edgeFont(c);
+            edge.label = edgeLabel(t('graph.edge.supersedes.' + v,
+                                     { reason: (e.attrs || {}).reason || "" }));
           } else if (research && e.rerouted) {
             // The link ran through something folded into a card. Drawn thinner
             // so it reads as inferred, and the tooltip names what it went via.
@@ -1723,7 +1795,9 @@
       const head = `<div class="dhead"><span class="close" onclick="closeDetail()">✕</span>`
         + `<h3>${R_ICON[n.kind]||"•"} ${esc(rTypeName(n))}${n.index ? " " + n.index : ""}</h3>`
         + `<div class="sub">${esc(n.id)}${n.executor_agent ? esc(" · " + t('graph.detail.by', { agent: n.executor_agent })) : ""}</div>`
-        + `<span class="badge" style="background:${rgba(st.c,.18)};color:${st.c};border:1px solid ${st.c}">${st.g} ${esc(rStatusWord(n))}</span></div>`;
+        // The same word must not be green on the card and amber in the
+        // panel, so the badge reads off the same three-way scale.
+        + (() => { const sc = statusInk(n.status); return `<span class="badge" style="background:${rgba(sc,.18)};color:${sc};border:1px solid ${sc}">${st.g} ${esc(rStatusWord(n))}</span></div>`; })();
       paint(n, head + `<div class="dbody">${body}</div>`);
     }
     // How it got here: every move, who made it and what they gave as the reason.
