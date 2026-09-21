@@ -237,6 +237,54 @@ OR
 uv run python -m CoScientist.main
 ```
 
+### FEDOT.MAS graph and traces
+
+Two rows in the web UI's activity rail open FEDOT.MAS views. Both are optional,
+and each needs something set up before it has anything to show:
+
+| Rail row | Page | Needs |
+|---|---|---|
+| FEDOT.MAS trace | `/fedot-trace` | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` in `.env` |
+| FEDOT.MAS agent graph | `/fedot-demo/` | the `infrastructure/fedot-mas-gui` submodule, running as its own process |
+
+**Traces.** `/fedot-trace` reads the latest `coscientist:fedot` trace from
+Langfuse and draws it as a span tree. The secret key stays on the server; only
+the (already truncated) trace content reaches the browser. Without the keys the
+page renders an empty state that says so.
+
+```env
+LANGFUSE_PUBLIC_KEY=pk-...
+LANGFUSE_SECRET_KEY=sk-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com   # or your self-hosted instance
+```
+
+**Agent graph.** `/fedot-demo/` reverse-proxies the FEDOT.MAS GUI stand, which
+lives in its own process and its own environment:
+
+```bash
+git submodule update --init infrastructure/fedot-mas-gui
+cd infrastructure/fedot-mas-gui
+uv sync && uv pip install -r gui/requirements.txt
+GUI_PORT=4173 ./.venv/bin/python gui/run.py        # Windows: .venv\Scripts\python.exe
+```
+
+Its own environment is not optional. FEDOT.MAS discovers local MCP servers by
+walking up from its installed location to a `pyproject.toml` carrying
+`[tool.uv.workspace]`; installed into CoScientist's venv there is no such root,
+so the stand starts but answers 500 on `/api/status` and comes up with no
+tools. Point `FEDOT_GUI_URL` elsewhere if the stand runs on another host or
+port.
+
+The stand reads `OPENAI_API_KEY` and `OPENAI_BASE_URL` for its own "run"
+button. CoScientist's `.env` names the same key `LLM__OPENAI_API_KEY`, so
+either add the alias or pass it on the command line.
+
+CoScientist splices a small bridge into the stand's `app.js` while proxying it,
+so a real `fedot_tool` run **inside CoScientist** draws on that page as it
+happens (through `/api/fedot-live-stream`) — nothing has to be started in the
+stand itself. Until the stand is up, `/fedot-demo/` answers a page naming the
+commands above.
+
 ### Chemical Computing Examples
 
 ```python

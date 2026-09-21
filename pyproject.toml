@@ -13,6 +13,10 @@ dependencies = [
     "fedotmas",
     "google-adk>=2.3.0",
     "greenlet>=3.5.2",
+    # Imported at module scope by CoScientist/web/app.py (the /fedot-demo
+    # reverse proxy) and directly by ten other modules. It used to arrive
+    # transitively through google-adk, which is not a promise anyone made.
+    "httpx>=0.27",
     "json-repair>=0.30.0",
     "langchain-text-splitters>=1.1.2",
     "langfuse>=4.14.0",

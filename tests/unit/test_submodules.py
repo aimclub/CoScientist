@@ -58,3 +58,25 @@ def test_a_declared_submodule_is_still_in_the_tree(path: str):
         "there — either the gitlink was dropped by accident, or the declaration "
         "should have gone with it"
     )
+
+
+@pytest.mark.parametrize("path", _declared_paths() or [pytest.param(None, marks=pytest.mark.skip)])
+def test_a_declared_submodule_is_mentioned_in_the_install_steps(path: str):
+    """The other half of the same mismatch, from the other direction.
+
+    PR 368 added `infrastructure/fedot-mas-gui` and a web page that proxies
+    it, and documented neither. A plain `git clone` leaves the directory
+    empty, the page answers 502, and nothing in the install steps says the
+    word "submodule" — so the tab reads as broken rather than as not set up.
+    """
+    docs = "".join(
+        (ROOT / name).read_text(encoding="utf-8")
+        for name in ("README.md", "docs/INSTALLATION.md")
+        if (ROOT / name).exists()
+    )
+    assert path in docs, (
+        f"{path!r} is a submodule nobody mentions in README.md or "
+        "docs/INSTALLATION.md — a fresh clone comes up without it and the "
+        "feature that needs it looks broken instead of unconfigured"
+    )
+

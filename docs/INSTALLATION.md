@@ -25,8 +25,16 @@ You will need to obtain API keys for the following services:
 ## Step 1: Clone the Repository
 
 ```bash
-git clone https://github.com/ITMO-NSS-team/CoScientist.git
+git clone --recurse-submodules https://github.com/ITMO-NSS-team/CoScientist.git
 cd CoScientist
+```
+
+Already cloned without `--recurse-submodules`? The two submodules
+(`infrastructure/openchemie`, `infrastructure/fedot-mas-gui`) are empty
+directories until you run:
+
+```bash
+git submodule update --init
 ```
 
 ## Step 2: Create Virtual Environment (Recommended)
@@ -278,6 +286,54 @@ HOSTS_PORTS__RETROSYNTHESIS_SERVICES_PORT=8001
         ```
         bash /projects/MADD/infrastructure/generative_models/api.sh
         ```
+
+### 6.5 FEDOT.MAS GUI stand (optional, for the agent-graph tab)
+
+The web UI's "FEDOT.MAS agent graph" row proxies a stand that runs as its own
+process, from the `infrastructure/fedot-mas-gui` submodule:
+
+```bash
+git submodule update --init infrastructure/fedot-mas-gui
+cd infrastructure/fedot-mas-gui
+uv sync && uv pip install -r gui/requirements.txt
+GUI_PORT=4173 ./.venv/bin/python gui/run.py        # Windows: .venv\Scripts\python.exe
+```
+
+The stand needs its **own** environment, not CoScientist's: FEDOT.MAS finds
+local MCP servers by walking up from its installed location to a
+`pyproject.toml` that carries `[tool.uv.workspace]`. Installed into
+CoScientist's venv there is no such root above `site-packages`, and the stand
+then starts but answers 500 on `/api/status` with an empty tool list.
+
+It listens on `127.0.0.1:4173`. If you run it elsewhere, tell CoScientist:
+
+```env
+FEDOT_GUI_URL=http://127.0.0.1:4173
+```
+
+Its own "run" button needs a provider key under the names it expects —
+`OPENAI_API_KEY` and `OPENAI_BASE_URL`. CoScientist keeps the same key as
+`LLM__OPENAI_API_KEY`, so add the alias to `.env` or pass it when starting the
+stand. A real `fedot_tool` run inside CoScientist is drawn on that page
+without either: the proxy feeds it `/api/fedot-live-stream`.
+
+Until the stand is up, the page explains what to start — it is an empty state,
+not a broken tab.
+
+### 6.6 Langfuse (optional, for the FEDOT trace tab)
+
+The "FEDOT.MAS trace" row reads the latest `coscientist:fedot` trace from
+Langfuse. Add the keys to `.env`; the secret one never leaves the server:
+
+```env
+LANGFUSE_PUBLIC_KEY=pk-...
+LANGFUSE_SECRET_KEY=sk-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com   # or your self-hosted instance
+```
+
+Without them the page renders an empty state saying it is not configured.
+Tracing itself is optional everywhere else too: the FEDOT toolset imports the
+Langfuse plugin defensively and runs without it.
 
 ## Step 7: Verify Installation
 
