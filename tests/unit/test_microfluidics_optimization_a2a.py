@@ -293,6 +293,20 @@ def test_graph_delegates_entire_experimental_subsystem():
         assert not {"cfd_mcp", "cfd_mcp_stub", "rig_mcp_stub", "microfluidics", "finish_optimization"}.intersection(agent.get("tools", []))
 
 
+def test_route_selection_has_no_duplicate_hitl_gate():
+    agents = yaml.safe_load((ROOT / "CoScientist/agents/microfluidics.yaml").read_text())["agents"]
+    assert agents["RootOrchestrator"]["hitl"] is True
+    assert agents["RouteSelectionAgent"].get("hitl") is not True
+
+
+def test_route_selection_commits_output_before_finalization():
+    from CoScientist.microfluidics.route_selection import _commit_selection_output
+
+    state = {}
+    _commit_selection_output(state, '{"decisions": [], "selection_reason": "automatic"}')
+    assert state["route_selection"]["selection_reason"] == "automatic"
+
+
 def test_registry_and_report_read_original_service_results():
     from CoScientist.assembly import bindings  # noqa: F401
     from CoScientist.agents.prompts.templates import microfluidics_optimizer, microfluidics_report

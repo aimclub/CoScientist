@@ -50,16 +50,14 @@
       return created.session;
     }
 
-    // startFresh is kept for callers that explicitly want a blank session.
-    // A server restart must not imply a new conversation: the ADK session and
-    // its checkpoints are durable and the remembered session should reopen.
+    // startFresh creates a new session (or reuses the newest one if it has no messages yet).
     async function ensureUserSession(user, preferredSessionId = null, { startFresh = false } = {}) {
       activeUser = user;
       const sessions = await loadSessions(user);
-      let selected = sessions.find(item => item.id === preferredSessionId);
+      let selected = preferredSessionId ? sessions.find(item => item.id === preferredSessionId) : null;
       if (!selected && startFresh) {
         selected = sessions.find(item => item.status === 'processing')
-          || sessions.find(item => item.empty)
+          || (sessions.length > 0 && sessions[0].empty ? sessions[0] : null)
           || await createBlankSession(user);
       }
       if (!selected) {
@@ -83,7 +81,7 @@
         knownUsers.push(data.user);
         nicknameInput.value = '';
         populateUserSelectors();
-        await ensureUserSession(data.user);
+        await ensureUserSession(data.user, null, { startFresh: true });
         closeIdentityModal();
       } catch (error) { showIdentityError(error); }
     }
@@ -93,14 +91,14 @@
       const user = knownUsers.find(item => item.id === userId);
       if (!user) return;
       try {
-        await ensureUserSession(user, localStorage.getItem(SESSION_STORAGE_KEY));
+        await ensureUserSession(user, null, { startFresh: true });
         closeIdentityModal();
       } catch (error) { showIdentityError(error); }
     }
 
     async function onUserSelected(userId) {
       const user = knownUsers.find(item => item.id === userId);
-      if (user) await ensureUserSession(user);
+      if (user) await ensureUserSession(user, null, { startFresh: true });
     }
 
     async function onSessionSelected(sessionId) {
@@ -240,9 +238,23 @@
           openIdentityModal();
           return;
         }
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlSessionId = urlParams.get('session_id');
+
+        const navEntry = (typeof performance !== 'undefined' && performance.getEntriesByType)
+          ? performance.getEntriesByType('navigation')[0]
+          : null;
+        const isReload = navEntry
+          ? navEntry.type === 'reload'
+          : (typeof performance !== 'undefined' && performance.navigation && performance.navigation.type === 1);
+
+        const preferredSessionId = urlSessionId || (isReload ? localStorage.getItem(SESSION_STORAGE_KEY) : null);
+        const startFresh = !preferredSessionId;
+
         await ensureUserSession(
           savedUser,
-          localStorage.getItem(SESSION_STORAGE_KEY),
+          preferredSessionId,
+          { startFresh },
         );
       } catch (error) {
         addSystemMsg(t('sessions.initError', { error: error.message }));

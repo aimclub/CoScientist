@@ -15,7 +15,8 @@ from typing import Any
 from google.adk.tools import ToolContext
 
 from .a2a_test_client import A2AClient, A2ARequestError
-from .contracts import INPUT_KEYS, prepare_inputs
+from .contracts import INPUT_KEYS, EconomicsRankingError, prepare_inputs
+from .operator_ranking import DECLINED, RANKING_KEY, request_operator_ranking
 
 ACTIVE_KEY = "optimization_a2a_task"
 HISTORY_KEY = "optimization_a2a_runs"
@@ -107,6 +108,49 @@ def _failure(context, record, state, exc):
     })
 
 
+def _operator_reachable(tool_context: ToolContext) -> bool:
+    """HITL is on and this is a real ADK context a human can answer on.
+
+    Bare unit/CLI contexts have no invocation/session channel on which a
+    human could answer; real ADK ToolContext objects do.
+    """
+    from CoScientist.config import get_settings
+
+    interactive_context = bool(
+        getattr(tool_context, "_invocation_context", None)
+        or getattr(tool_context, "invocation_context", None)
+        or getattr(tool_context, "session", None)
+    )
+    return bool(get_settings().web.hitl_enabled and interactive_context)
+
+
+async def _inputs_with_operator_ranking(
+    tool_context: ToolContext, exc: EconomicsRankingError,
+) -> tuple[dict | None, dict]:
+    """Close a missing/unusable economics_ranking with the operator's costs.
+
+    Returns ``(inputs, {})`` once the operator's ranking is stored and the
+    hand-off validates, else ``(None, invalid_input result)``. The result is
+    flagged ``economics_ranking_required`` so the session does not loop on a
+    gap only new data can close.
+    """
+    failure = {"state": "invalid_input", "error": str(exc), "economics_ranking_required": True}
+    if not _operator_reachable(tool_context):
+        return None, {**failure, "operator_available": False}
+    ranking, reason = await request_operator_ranking(tool_context, exc.route_ids, str(exc))
+    if ranking is None:
+        return None, {
+            **failure, "operator_available": True,
+            "operator_declined": reason == DECLINED,
+            **({} if reason == DECLINED else {"operator_error": reason}),
+        }
+    tool_context.state[RANKING_KEY] = ranking
+    try:
+        return prepare_inputs(tool_context.state), {}
+    except (ValueError, TypeError) as retry_exc:
+        return None, {**failure, "error": str(retry_exc), "operator_available": True}
+
+
 async def optimization_start(tool_context: ToolContext, planning_only: bool = False) -> dict[str, Any]:
     """Delegate the complete experiment/optimization workflow to one A2A task.
 
@@ -119,6 +163,13 @@ async def optimization_start(tool_context: ToolContext, planning_only: bool = Fa
         return previous
     try:
         inputs = prepare_inputs(tool_context.state, planning_only=planning_only)
+    except EconomicsRankingError as exc:
+        # Only the cost ranking is missing: the operator can supply it here,
+        # in the tool, instead of the model improvising a ranking it cannot store.
+        inputs, result = await _inputs_with_operator_ranking(tool_context, exc)
+        if inputs is None:
+            tool_context.state[RESULT_KEY] = result
+            return result
     except (ValueError, TypeError) as exc:
         result = {"state": "invalid_input", "error": str(exc)}
         tool_context.state[RESULT_KEY] = result
@@ -139,6 +190,8 @@ async def optimization_start(tool_context: ToolContext, planning_only: bool = Fa
         "по выполненным опытам. Учти результаты последнего опыта перед завершением. "
         "CoScientist не исполняет план локально. Не выбирай invalid/unpriceable "
         "маршруты; partial означает неполную стоимость, сохрани оговорки. "
+        "economics_ranking.source=\"operator\" означает, что стоимости задал оператор, "
+        "а не прайс поставщика (cost_source у маршрута). "
         "Верни исходные результаты: план и его изменения, выполненные опыты "
         "с параметрами, единицами и измерениями, CFD со статусами и идентификаторами, "
         "итог оптимизации с причиной остановки и незакрытыми критериями. "
@@ -225,15 +278,7 @@ async def optimization_approve(tool_context: ToolContext) -> dict[str, Any]:
     approvals = record.get("approved_plans", [])
     if fingerprint in approvals:
         return {"state": "error", "error": "This plan was already approved; poll instead of confirming again"}
-    from CoScientist.config import get_settings
-    # Bare unit/CLI contexts have no invocation/session channel on which a
-    # human could answer; real ADK ToolContext objects do.
-    interactive_context = bool(
-        getattr(tool_context, "_invocation_context", None)
-        or getattr(tool_context, "invocation_context", None)
-        or getattr(tool_context, "session", None)
-    )
-    if get_settings().web.hitl_enabled and interactive_context:
+    if _operator_reachable(tool_context):
         from CoScientist.agents.common import hitl_handler
         from CoScientist.graph.session_scope import session_key
         from CoScientist.hitl.models import HITLAction, HITLRequest

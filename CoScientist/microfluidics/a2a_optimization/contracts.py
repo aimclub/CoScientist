@@ -17,6 +17,19 @@ INPUT_KEYS = (
     "structured_tz", "literature_analysis", "synthesis_routes", "qualified_routes",
     "economics", "economics_ranking",
 )
+TARGET_UNITS = ("g", "kg", "mol", "mmol")
+RANK_BY = ("per_unit", "packs")
+ROUTE_STATUSES = ("ok", "partial", "invalid", "unpriceable")
+
+
+class EconomicsRankingError(ValueError):
+    """Everything else in the production hand-off is valid; only a usable
+    ``economics_ranking`` for ``route_ids`` is missing — the one gap an
+    operator can close without redoing an earlier stage."""
+
+    def __init__(self, message: str, route_ids: list[str]) -> None:
+        super().__init__(message)
+        self.route_ids = list(route_ids)
 
 
 def _object(value: Any, name: str) -> dict:
@@ -49,10 +62,9 @@ def prepare_inputs(state: Any, *, planning_only: bool = False) -> dict:
     gaps so the external system can design the measurements that close them.
     """
     inputs = {key: state.get(key) for key in INPUT_KEYS}
-    required = ("structured_tz", "literature_analysis", "synthesis_routes", "qualified_routes")
-    if not planning_only:
-        required = (*required, "economics_ranking")
-    for key in required:
+    # economics_ranking is checked last (production only), after every other
+    # input: its failure alone raises EconomicsRankingError.
+    for key in ("structured_tz", "literature_analysis", "synthesis_routes", "qualified_routes"):
         inputs[key] = _object(inputs[key], key)
     LiteratureAnalysis.model_validate(inputs["literature_analysis"])
     proposals = SynthesisRoutes.model_validate(inputs["synthesis_routes"]).routes
@@ -91,14 +103,33 @@ def prepare_inputs(state: Any, *, planning_only: bool = False) -> dict:
         inputs["selected_route_ids"] = ids
         return json.loads(json.dumps(inputs, ensure_ascii=False, allow_nan=False))
 
-    ranking = inputs["economics_ranking"]
+    try:
+        inputs["economics_ranking"] = validate_economics_ranking(inputs["economics_ranking"], ids)
+    except ValueError as exc:
+        raise EconomicsRankingError(str(exc), ids) from exc
+    # Snapshot with no references to mutable session data. Reject NaN in inputs.
+    return json.loads(json.dumps(inputs, ensure_ascii=False, allow_nan=False))
+
+
+def validate_economics_ranking(value: Any, route_ids: list[str]) -> dict:
+    """The ranking contract of the production hand-off; returns the ranking.
+
+    One row per qualified route; ``ok`` / ``partial`` rows carry a unique
+    positive rank and finite nonnegative costs in the preferred currency;
+    ``invalid`` / ``unpriceable`` rows are kept unranked, with their reasons.
+    """
+    ranking = _object(value, "economics_ranking")
     ranked = ranking.get("routes")
-    if not isinstance(ranked, dict) or set(ranked) != set(ids):
-        raise ValueError("economics_ranking.routes must match qualified_routes route_id values exactly")
+    if not isinstance(ranked, dict) or set(ranked) != set(route_ids):
+        raise ValueError(
+            "economics_ranking.routes must match qualified_routes route_id values exactly: "
+            f"expected {sorted(route_ids)}, got "
+            f"{sorted(ranked) if isinstance(ranked, dict) else type(ranked).__name__}"
+        )
     _number(ranking.get("target_qty"), "economics_ranking.target_qty", positive=True)
-    if ranking.get("target_unit") not in {"g", "kg", "mol", "mmol"}:
+    if ranking.get("target_unit") not in TARGET_UNITS:
         raise ValueError("economics_ranking.target_unit must be g, kg, mol or mmol")
-    if ranking.get("rank_by") not in {"per_unit", "packs"}:
+    if ranking.get("rank_by") not in RANK_BY:
         raise ValueError("economics_ranking.rank_by must be per_unit or packs")
     currency = ranking.get("preferred_currency")
     if not isinstance(currency, str) or not currency.strip():
@@ -108,7 +139,7 @@ def prepare_inputs(state: Any, *, planning_only: bool = False) -> dict:
         if not isinstance(row, dict) or row.get("stub"):
             raise ValueError(f"{route_id}: real economics result required")
         status = row.get("status")
-        if status not in {"ok", "partial", "invalid", "unpriceable"}:
+        if status not in ROUTE_STATUSES:
             raise ValueError(f"{route_id}: unsupported economics status {status!r}")
         if status in {"invalid", "unpriceable"}:
             continue  # Preserve excluded routes and their reasons for the remote system.
@@ -121,6 +152,7 @@ def prepare_inputs(state: Any, *, planning_only: bool = False) -> dict:
             _number(row.get(key), f"{route_id}.{key}")
         usable_ranks.append(rank)
     if not usable_ranks or len(usable_ranks) != len(set(usable_ranks)):
-        raise ValueError("economics_ranking: at least one costed route and unique ranks required")
-    # Snapshot with no references to mutable session data. Reject NaN in inputs.
-    return json.loads(json.dumps(inputs, ensure_ascii=False, allow_nan=False))
+        raise ValueError(
+            "economics_ranking: at least one costed route (status ok/partial) and unique ranks required"
+        )
+    return ranking

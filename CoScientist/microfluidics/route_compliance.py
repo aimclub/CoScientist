@@ -476,6 +476,40 @@ def _completeness_checks(
     ]
 
 
+def _costing_shape_check(route: SynthesisRoute) -> ComplianceCheck:
+    """Check the minimum reaction graph required by the costing MCP.
+
+    The economics service processes every submitted route as one request.  A
+    step without either side of the reaction makes that entire request fail,
+    rather than returning an ``invalid`` row for just that route.  Therefore a
+    route with an incomplete reaction graph is suitable for evidence-gathering
+    only and must not enter ``qualified_routes.routes``.
+    """
+    incomplete: list[str] = []
+    for index, step in enumerate(route.steps, 1):
+        missing = []
+        if not step.reactants:
+            missing.append("reactants")
+        if not step.products:
+            missing.append("products")
+        if missing:
+            incomplete.append(f"стадия {index}: {', '.join(missing)}")
+    if incomplete:
+        return ComplianceCheck(
+            constraint_id="SYS-ECONOMICS-ROUTE-SHAPE",
+            status="unknown",
+            reason=(
+                "Маршрут нельзя передать в rank_routes_by_cost: "
+                + "; ".join(incomplete) + "."
+            ),
+        )
+    return ComplianceCheck(
+        constraint_id="SYS-ECONOMICS-ROUTE-SHAPE",
+        status="pass",
+        reason="Каждая стадия содержит reactants и products для расчёта экономики.",
+    )
+
+
 def evaluate_route(
     route: SynthesisRoute,
     spec: RequirementsSpec,
@@ -515,10 +549,21 @@ def evaluate_route(
         ))
 
     checks.extend(_completeness_checks(route, records))
+    checks.append(_costing_shape_check(route))
 
     hard = {constraint.constraint_id for constraint in spec.constraints if constraint.hardness == "hard"}
     if any(check.constraint_id in hard and check.status == "fail" for check in checks):
         status = "rejected"
+    elif any(
+        check.constraint_id in {
+            "SYS-CONDITIONS-COMPLETE",
+            "SYS-YIELDS-COMPLETE",
+            "SYS-ECONOMICS-ROUTE-SHAPE",
+        }
+        and check.status in {"unknown", "unverified"}
+        for check in checks
+    ):
+        status = "experimental"
     elif any(
         check.status == "unknown"
         and check.constraint_id in hard
@@ -655,6 +700,159 @@ def gate_economics(callback_context: CallbackContext) -> types.Content | None:
     )
 
 
+def _route_repair_form(proposals: SynthesisRoutes) -> tuple[dict[str, Any] | None, dict[str, tuple[int, int]]]:
+    """Build a HITL form for reaction steps that the economics MCP cannot consume."""
+    blocks: list[dict[str, Any]] = []
+    locations: dict[str, tuple[int, int]] = {}
+    for route_index, route in enumerate(proposals.routes):
+        for step_index, step in enumerate(route.steps):
+            if step.reactants and step.products:
+                continue
+            title = f"{route.route_id} · стадия {step_index + 1}"
+            locations[title] = (route_index, step_index)
+            blocks.append({
+                "title": title,
+                "usage": (
+                    "Исправьте JSON-массивы веществ. Для вещества допустимы name, smiles и amount; "
+                    "продукт предыдущей стадии задаётся как {\"name\": \"@prev\"}."
+                ),
+                "fields": [
+                    {
+                        "name": "reactants",
+                        "value": json.dumps(
+                            [item.model_dump(exclude_defaults=True) for item in step.reactants],
+                            ensure_ascii=False,
+                        ),
+                        "status": "missing" if not step.reactants else "current",
+                        "open": not step.reactants,
+                        "label": "Reactants (JSON-массив)",
+                        "placeholder": '[{"name": "starting material", "smiles": "..."}]',
+                    },
+                    {
+                        "name": "products",
+                        "value": json.dumps(
+                            [item.model_dump(exclude_defaults=True) for item in step.products],
+                            ensure_ascii=False,
+                        ),
+                        "status": "missing" if not step.products else "current",
+                        "open": not step.products,
+                        "label": "Products (JSON-массив)",
+                        "placeholder": '[{"name": "stage product", "smiles": "..."}]',
+                    },
+                    {
+                        "name": "yield_fraction",
+                        "value": "" if step.yield_fraction is None else str(step.yield_fraction),
+                        "status": step.yield_status,
+                        "open": step.yield_fraction is None,
+                        "label": "Выход стадии, доля 0–1",
+                        "placeholder": "например, 0.75",
+                    },
+                ],
+            })
+    if not blocks:
+        return None, locations
+    return {
+        "kind": "economics_route_repair",
+        "title": "Исправление маршрутов перед расчётом экономики",
+        "intro": (
+            "Некоторые стадии не содержат reactants или products. Проверьте структуру; "
+            "после сохранения маршруты будут заново провалидированы и квалифицированы."
+        ),
+        "blocks": blocks,
+    }, locations
+
+
+def _apply_route_repair_values(
+    proposals: SynthesisRoutes,
+    form_values: Any,
+    locations: dict[str, tuple[int, int]],
+) -> SynthesisRoutes:
+    """Apply and fully validate operator edits; never partially mutate session state."""
+    if not isinstance(form_values, dict):
+        return proposals
+    document = proposals.model_dump()
+    for title, location in locations.items():
+        submitted = form_values.get(title)
+        if not isinstance(submitted, dict):
+            continue
+        route_index, step_index = location
+        step = document["routes"][route_index]["steps"][step_index]
+        for field in ("reactants", "products"):
+            if field not in submitted:
+                continue
+            try:
+                value = json.loads(str(submitted[field]))
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{title}.{field}: требуется JSON-массив") from exc
+            if not isinstance(value, list) or not value:
+                raise ValueError(f"{title}.{field}: требуется непустой JSON-массив")
+            step[field] = value
+        if "yield_fraction" in submitted:
+            raw_yield = str(submitted["yield_fraction"]).strip().replace(",", ".")
+            try:
+                value = float(raw_yield)
+            except ValueError as exc:
+                raise ValueError(f"{title}.yield_fraction: требуется число от 0 до 1") from exc
+            if not 0 < value <= 1:
+                raise ValueError(f"{title}.yield_fraction: требуется число от 0 до 1")
+            step["yield_fraction"] = value
+            step["yield_status"] = "reported"
+            step["yield_missing_reason"] = ""
+    return SynthesisRoutes.model_validate(document)
+
+
+async def review_incomplete_economics_routes(
+    callback_context: CallbackContext,
+) -> types.Content | None:
+    """Let the operator repair malformed reaction steps before economics runs."""
+    from CoScientist.config import get_settings
+
+    if not get_settings().web.hitl_enabled:
+        return None
+    try:
+        proposals = SynthesisRoutes.model_validate(callback_context.state.get("synthesis_routes"))
+    except (TypeError, ValueError):
+        return None
+    form, locations = _route_repair_form(proposals)
+    if form is None:
+        return None
+
+    from CoScientist.agents.common import hitl_handler
+    from CoScientist.graph.session_scope import session_key
+    from CoScientist.hitl.models import HITLAction, HITLRequest
+
+    user_id, session_id = session_key(callback_context)
+    response = await hitl_handler.handle_request(HITLRequest(
+        agent_name="EconomicsAgent",
+        action_type=HITLAction.EDIT,
+        message="Исправьте неполные стадии маршрутов перед расчётом экономики.",
+        context={
+            "output": {"affected_steps": list(locations)},
+            "_session": {"user_id": user_id, "session_id": session_id},
+        },
+        form=form,
+        invoked_via="callback",
+        trigger="economics_route_repair",
+    ))
+    if not response.form_values:
+        return None
+    try:
+        repaired = _apply_route_repair_values(proposals, response.form_values, locations)
+    except ValueError as exc:
+        callback_context.state["route_repair_error"] = str(exc)
+        return types.Content(
+            role="model",
+            parts=[types.Part(text=f"Исправления маршрутов отклонены: {exc}")],
+        )
+
+    callback_context.state["synthesis_routes"] = repaired.model_dump()
+    # ADK's State implements item assignment but is not guaranteed to expose
+    # every MutableMapping method (notably ``pop``) in every runtime version.
+    callback_context.state["route_repair_error"] = None
+    qualify_synthesis_routes(callback_context)
+    return None
+
+
 def _preliminary_economics_routes(state: Any, qualified: QualifiedRoutes) -> list[SynthesisRoute]:
     """Selected real routes, only after the economics-specific HITL approval."""
     if qualified.routes:
@@ -767,6 +965,12 @@ def guard_economics_routes(
             actual_yield = actual.get("yield", actual.get("yield_fraction"))
             if actual_yield != expected.yield_fraction:
                 errors.append(f"{route_id}: step {index} yield differs from verified value")
+            missing = [field for field in ("reactants", "products") if not actual.get(field)]
+            if missing:
+                errors.append(
+                    f"{route_id}: step {index} requires nonempty {', '.join(missing)} "
+                    "for rank_routes_by_cost"
+                )
     if not errors:
         return None
     return {
@@ -782,6 +986,7 @@ __all__ = [
     "evaluate_route",
     "gate_economics",
     "guard_economics_routes",
+    "review_incomplete_economics_routes",
     "review_preliminary_economics",
     "qualify_routes",
     "qualify_synthesis_routes",

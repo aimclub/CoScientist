@@ -6,7 +6,7 @@ from typing import Optional
 from google.adk.agents.invocation_context import InvocationContext
 
 from CoScientist.hitl.session_agent import SessionAgent
-from CoScientist.microfluidics.a2a_optimization.adapter import ACTIVE_KEY
+from CoScientist.microfluidics.a2a_optimization.adapter import ACTIVE_KEY, RESULT_KEY
 
 
 class OptimizationSessionAgent(SessionAgent):
@@ -17,6 +17,19 @@ class OptimizationSessionAgent(SessionAgent):
     def _unfinished_feedback(self, ctx: InvocationContext) -> Optional[str]:
         task = ctx.session.state.get(ACTIVE_KEY)
         if not isinstance(task, dict):
+            result = ctx.session.state.get(RESULT_KEY)
+            if isinstance(result, dict) and result.get("state") == "invalid_input":
+                if result.get("economics_ranking_required"):
+                    # optimization_start already asked the operator for the
+                    # route costs in its own form (or no operator is attached):
+                    # another pass of the model cannot add the missing numbers.
+                    return None
+                return (
+                    "optimization_start отклонил локальные входные данные. Не закрывай "
+                    "сессию: прочитай точную ошибку и запроси у человека через HITL "
+                    "недостающие сведения. Не придумывай данные и не повторяй "
+                    "optimization_start, пока неисправленные данные остаются в состоянии."
+                )
             return None
         state = str(task.get("state") or "")
         if state in {"submitting", "sending_input", "submitted", "working"}:

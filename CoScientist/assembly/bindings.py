@@ -1686,6 +1686,14 @@ def _reset_research_searches():
     from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
     from CoScientist.config import get_settings
     return SearchLimiter(max_searches=get_settings().web.max_searches).reset_search_budget
+
+
+def _tavily_search_limiter():
+    from CoScientist.agents.callbacks.tool_callbacks import TavilySearchLimiter
+    from CoScientist.config import get_settings
+    return TavilySearchLimiter(max_searches=get_settings().web.max_searches).limit_searches
+
+
 def _per_tool_call_limiter():
     from CoScientist.agents.callbacks.tool_callbacks import PerToolCallLimiter
     return PerToolCallLimiter(max_calls=2).limit_tool_calls
@@ -1941,6 +1949,8 @@ _cb("hitl_before_tool", "before_tool", factory=lambda ctx: _hitl_before_tool())
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
 _cb("count_research_searches", "after_tool", factory=lambda ctx: _count_research_searches())
 _cb("reset_research_searches", "before_agent", factory=lambda ctx: _reset_research_searches())
+# A separate per-agent quota for EconomicsAgent / OptimizerAgent Tavily fallback.
+_cb("TavilySearchLimiter", "before_tool", factory=lambda ctx: _tavily_search_limiter())
 # Microfluidics ResearchAgent budget: two calls per concrete tool and per
 # delegated agent branch, so parallel LIT-* tasks never share a counter.
 _cb("PerToolCallLimiter", "before_tool", factory=lambda ctx: _per_tool_call_limiter())
@@ -2040,6 +2050,8 @@ _cb("qualify_synthesis_routes", "after_agent",
     factory=lambda ctx: _microfluidics_route_compliance("qualify_synthesis_routes"))
 _cb("gate_economics", "before_agent",
     factory=lambda ctx: _microfluidics_route_compliance("gate_economics"))
+_cb("review_incomplete_economics_routes", "before_agent",
+    factory=lambda ctx: _microfluidics_route_compliance("review_incomplete_economics_routes"))
 _cb("review_preliminary_economics", "before_agent",
     factory=lambda ctx: _microfluidics_route_compliance("review_preliminary_economics"))
 _cb("guard_economics_routes", "before_tool",
