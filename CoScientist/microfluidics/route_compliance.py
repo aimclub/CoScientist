@@ -447,19 +447,19 @@ def evaluate_route(
     checks.extend(_completeness_checks(route, records))
 
     hard = {constraint.constraint_id for constraint in spec.constraints if constraint.hardness == "hard"}
-    system_checks = {"SYS-CONDITIONS-COMPLETE", "SYS-YIELDS-COMPLETE"}
-    hard.update(system_checks)
     if any(check.constraint_id in hard and check.status == "fail" for check in checks):
         status = "rejected"
-    elif all(check.constraint_id not in hard or check.status in {"pass", "not_applicable"} for check in checks):
-        status = "eligible"
-    else:
-        # A real route with no known hard violation can be sent to the external
-        # system for planning and evidence-generation, but never to production
-        # costing or autonomous equipment execution.  This avoids the circular
-        # dependency where experiments are needed to learn a yield, while an
-        # already known yield is required to plan the experiment.
+    elif any(
+        check.status == "unknown"
+        and check.constraint_id in hard
+        for check in checks
+    ):
+        # Missing provenance or measurements are not chemistry violations.  Keep
+        # the route available for a planning-only verification hand-off, while
+        # preventing it from being treated as production-ready economics.
         status = "experimental"
+    else:
+        status = "eligible"
     return route.model_copy(update={"tz_compliance": checks, "overall_status": status})
 
 

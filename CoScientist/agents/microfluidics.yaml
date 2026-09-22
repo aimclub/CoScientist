@@ -16,12 +16,11 @@
 #   │    ├─ LiteratureOrchestrator-> delegates each LIT query directly to
 #   │    │                           ResearchAgent (no duplicate planning step)
 #   │    │                           (every answer -> state["literature_findings"])
-#   │    ├─ LiteratureSynthesisAgent -> state["literature_analysis_draft"]
-#   │                                   hand-off: target molecule, analogues,
-#   │                                   routes + conditions, facts, gaps)
-#   │    └─ EvidenceVerifierAgent -> state["literature_analysis"] (authenticated)
+#   │    ├─ LiteratureSynthesisAgent -> structured literature analysis
+#   │    ├─ EvidenceVerifierAgent -> authenticated claims
+#   │    └─ RouteSelectionAgent -> operator-selected active route
 #   ├─ ModuleB_Design (sequential)            stages 3–5
-#   │    └─ MolDesignAgent → SynthRouteAgent → EconomicsAgent
+#   │    └─ MolDesignAgent → EconomicsAgent (route already selected in A)
 #   ├─ ModuleC_Experiment (sequential)        external experimental subsystem
 #   │    └─ OptimizerAgent                   one A2A task owns planning, CFD,
 #   │                                       equipment and the optimization loop
@@ -94,6 +93,7 @@ agents:
       - LiteratureOrchestrator
       - LiteratureSynthesisAgent
       - EvidenceVerifierAgent
+      - RouteSelectionAgent
 
   # ── ТЗ stage (ported from VibePAV) ─────────────────────────────────────────
   TZAgent:
@@ -144,6 +144,7 @@ agents:
     # back to the operator — round after round (see tz_review.py).
     class: custom:tz_session
     title: Техническое задание
+    reasoning: low
     description: >-
       агент постановки ТЗ — превращает свободный запрос заказчика в
       структурированный документ ТЗ (16 блоков-таблиц: тип задачи, целевой
@@ -158,6 +159,7 @@ agents:
   TZQueryGenAgent:
     class: custom:session
     title: Поисковые запросы
+    reasoning: low
     description: >-
       генератор поисковых задач — из структурированного ТЗ формирует 4–6
       конкретных литературных задач (LIT-01…) со списком данных для
@@ -199,15 +201,18 @@ agents:
     class: llm
     title: Анализ литературы
     include_contents: none
+    reasoning: low
     description: >-
       Microfluidics literature orchestrator — executes the roadmap by
-      delegating independent literature tasks to ResearchAgent in parallel and
-      sums up the findings against the ТЗ.
+      delegating the primary paper-analysis and route-finding task (LIT-01) to
+      PaperRetriever and remaining independent literature tasks to ResearchAgent
+      in parallel, then sums up the findings against the ТЗ.
     prompt: microfluidics_orchestrator
     # Its closing summary across all LIT tasks — kept, not just posted.
     output_key: literature_report
     subordinates:
       - ResearchAgent
+      - PaperRetriever
     callbacks:
       before_agent: [before_get_task, inject_target_molecule]
     # Unified HITL / Work Order for the literature stage: one check at the start
@@ -218,20 +223,22 @@ agents:
 
   ResearchAgent:
     class: llm
+    reasoning: off
     description: >-
       retrieves scientific knowledge and searches/downloads literature
-      (web, RAG, paper search). Open-ended search only.
+      (web, scientific database, OpenAlex paper search). Open-ended search only.
+      Does NOT analyze user-uploaded papers with explore_my_papers.
     routing: >-
-      for every literature task (LIT-xx) from the plan and any open-ended
-      knowledge question. Pass the task description VERBATIM with the list of
-      data to extract — it composes the search queries itself. If it returns
-      no/empty/insufficient results, escalate once by reformulating into
+      for general literature tasks (LIT-02+) from the plan and any open-ended
+      knowledge question (properties, analogues, constraints). Pass the task description
+      VERBATIM with the list of data to extract — it composes the search queries itself.
+      If it returns no/empty/insufficient results, escalate once by reformulating into
       "find and download papers about <expanded topic>".
     planning: |-
-      Use this for EVERY literature query derived from the ТЗ (one task per
-      LIT-xx query). It searches scientific literature and the web and
-      extracts the requested data (classes, IFT/CMC, synthesis routes,
-      limitations, analogues).
+      Use this for literature queries derived from the ТЗ covering properties,
+      analogues, and general literature search (LIT-02+). It searches scientific
+      literature and the web and extracts the requested data (classes, IFT/CMC,
+      limitations, analogues). Does NOT call explore_my_papers.
     prompt: microfluidics_research
     tools: [websearch, paper_analysis, papers_search, task_tracker]
     output_key: search_results
@@ -243,24 +250,51 @@ agents:
     report_output: true
     callbacks:
       before_agent: [before_get_task]
-      before_model: [inject_uploaded_papers]
-      before_tool: [PaperSearchGuard, WebSearchLimiter]
+      before_tool: [ForbidExploreMyPapers, PaperSearchGuard, PerToolCallLimiter]
       after_tool: [log_research_tool_calls]
       # Keep every LIT-xx answer under a collision-free per-query state key.
       after_agent: [collect_literature_finding]
 
+  PaperRetriever:
+    class: llm
+    reasoning: off
+    description: >-
+      retrieves and analyzes scientific full-text literature, focusing on
+      user-uploaded papers via explore_my_papers. Specialised in discovering
+      and extracting synthesis routes, reaction operations, exact conditions,
+      and microfluidic/flow reactor viability.
+    routing: >-
+      for the first literature task (LIT-01) and any task requiring deep
+      full-text analysis of uploaded or downloaded papers to extract synthesis
+      routes and reaction conditions.
+    planning: |-
+      Use this for the first literature query (LIT-01) from the plan to
+      analyze available and user-uploaded papers with explore_my_papers. It
+      extracts synthesis routes, stages, reaction conditions, and flow viability.
+    prompt: microfluidics_paper_retriever
+    tools: [websearch, paper_analysis, papers_search, task_tracker]
+    output_key: search_results
+    # Runs under LiteratureOrchestrator concurrently with ResearchAgent.
+    report_output: true
+    callbacks:
+      before_agent: [before_get_task]
+      before_model: [inject_uploaded_papers]
+      before_tool: [PaperSearchGuard, PerToolCallLimiter]
+      after_tool: [log_research_tool_calls]
+      # Keep LIT-01 answer under a collision-free per-query state key.
+      after_agent: [collect_literature_finding]
+
   # ── Hand-off of module A ───────────────────────────────────────────────────
-  # Turns the per-task answers into ONE structured result the design module
-  # and the report read. No tools: output_schema only. When the ТЗ fixes the
-  # target molecule, pin_target_molecule makes the ТЗ's values win.
+  # The synthesis agent must preserve structured chemistry; downstream stages
+  # cannot reconstruct routes from the free-text research findings.
   LiteratureSynthesisAgent:
     class: llm
     title: Итоги литературного анализа
     include_contents: none
+    reasoning: off
     description: >-
       сводит результаты всех литературных задач в структурированный итог:
-      целевая молекула, аналоги (SMILES + свойства), маршруты синтеза с
-      условиями, факты с источниками и пробелы.
+      целевая молекула, аналоги, маршруты синтеза, факты и пробелы.
     prompt: microfluidics_literature_synthesis
     output_key: literature_analysis_draft
     output_schema: literature_analysis
@@ -272,13 +306,10 @@ agents:
     class: llm
     title: Проверка источников
     include_contents: none
+    reasoning: off
     description: >-
-      точечно аутентифицирует критичные числовые claims синтеза (условия и
-      выходы) по полным текстам; не повторяет поиск литературы.
+      точечно проверяет критичные числовые claims маршрутов по полным текстам.
     prompt: microfluidics_evidence_verifier
-    # This is a provenance gate, not a second literature search. It may fetch
-    # the exact DOI/source already named in the draft, but never broadens the
-    # search with general web queries.
     tools: [paper_analysis, papers_search]
     output_key: literature_analysis
     output_schema: literature_analysis
@@ -287,13 +318,22 @@ agents:
       before_tool: [WebSearchLimiter]
       after_tool: [capture_evidence_verification]
       after_model: [sanitize_json_output]
-      # Then: literature → research graph Evidence; then the literature
-      # agent's summary + tables (state["literature_markdown"], posted to the
-      # chat via the agent-output sink and inserted verbatim into the final
-      # report). Neither returns Content: this agent has an output_schema and
-      # ADK would save an after_agent Content to output_key through it.
       after_agent: [authenticate_evidence_verification, pin_target_molecule,
                     record_literature_evidence, publish_literature_summary]
+
+  RouteSelectionAgent:
+    class: custom:route_selection_session
+    title: Выбор маршрута
+    description: >-
+      показывает оператору все найденные маршруты, рекомендацию оставить или
+      отсеять и краткую причину; окончательный выбор делает оператор.
+    prompt: microfluidics_route_selection
+    output_key: route_selection
+    output_schema: route_selection
+    hitl: true
+    callbacks:
+      before_agent: [compile_requirements]
+      after_model: [sanitize_json_output]
 
   # ── Module B — stages 3–5: design ──────────────────────────────────────────
   # Edge 4→5 stays inside B while 4→6 leaves for C: B runs to completion (the
@@ -301,14 +341,13 @@ agents:
   ModuleB_Design:
     class: sequential
     description: >-
-      проектирует целевые молекулы под ТЗ, выводит маршруты синтеза с условиями
-      операций и считает их экономику (стоимость, доступность реагентов в РФ).
+      фиксирует целевую молекулу и считает экономику выбранного в ModuleA
+      маршрута (стоимость, доступность реагентов в РФ).
     routing: >-
       run after module A, once the ТЗ and the literature findings exist. It
       needs the analogues and facts A produced.
     children:
       - MolDesignAgent
-      - SynthRouteAgent
       - EconomicsAgent
 
   MolDesignAgent:
@@ -326,7 +365,9 @@ agents:
     callbacks:
       # A molecule the customer fixed in the ТЗ is handed on as the only
       # candidate — no LLM call, no design.
-      before_agent: [compile_requirements, use_fixed_target_molecule]
+      before_agent: [compile_requirements, use_fixed_target_molecule,
+                     use_selected_route_product]
+      after_model: [sanitize_json_output]
       # Candidates → research graph Hypotheses (motivated by the ТЗ question).
       after_agent: [record_design_hypotheses]
 
@@ -336,7 +377,7 @@ agents:
     description: >-
       отбирает подтверждённые литературные маршруты кандидатов с условиями
       каждой операции и оценивает их пригодность для проточного реактора.
-    reasoning: medium
+    reasoning: low
     prompt: microfluidics_synth_route
     # The external retrosynthesis proposals are intentionally disabled here:
     # this stage only transfers route-backed literature evidence.  The template
@@ -369,18 +410,8 @@ agents:
     # economics_mcp once MCP_MICROFLUIDIC_ECONOMIC is set, otherwise the stub.
     tools: [economics_mcp, economics_mcp_stub]
     output_key: economics
-    # The agent sends routes and substances to an external service: the human
-    # approves the plan (what goes out, what is expected), checks every step
-    # (sent / expected / found) and the final report. Needs HITL__ENABLED=true —
-    # without it none of this is attached and the agent runs straight through.
-    hitl: true
-    work_order: true
-    work_order_step_review: true
     callbacks:
-      # If production costing is closed, the operator may approve a separately
-      # labelled preliminary price inquiry before the hard gate decides whether
-      # this agent should run.
-      before_agent: [compile_requirements, review_preliminary_economics, gate_economics, inject_target_molecule]
+      before_agent: [compile_requirements, gate_economics, inject_target_molecule]
       before_tool: [guard_economics_routes]
       # The server's numbers, as given, for the report: economics_ranking.
       after_tool: [collect_economics_result]
@@ -400,19 +431,17 @@ agents:
       - OptimizerAgent
 
   OptimizerAgent:
-    class: llm
+    class: custom:optimization_session
     title: Внешняя оптимизация и эксперименты
     description: >-
       сопровождает одну задачу внешней A2A-системы: передаёт входные данные,
       уточнения и подтверждения, получает статусы и результаты экспериментов.
     reasoning: medium
     prompt: microfluidics_optimizer
+    # Registry key `sleep` exposes the actual tool `sleep_tool(minutes)`.
     tools: [optimization_a2a, sleep]
     # Narrative is separate from raw service results written by the tools.
     output_key: optimization_summary
-    hitl: true
-    work_order: true
-    work_order_step_review: true
     callbacks:
       # Optimisation / CFD answers → research graph Evidence + GeneratedData.
       after_agent: [record_experiment_evidence]

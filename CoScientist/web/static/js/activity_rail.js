@@ -138,6 +138,7 @@
       TZSpecAgent: 'assignment',
       HypothesesAgent: 'lightbulb',
       ResearchAgent: 'travel_explore',
+      PaperRetriever: 'menu_book',
       TaskExecutorAgent: 'alt_route',
       ToolPipelineAgent: 'checklist',
       ToolPreparerAgent: 'precision_manufacturing',

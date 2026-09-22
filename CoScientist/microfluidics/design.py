@@ -107,4 +107,67 @@ def use_fixed_target_molecule(callback_context: CallbackContext) -> Optional[typ
     )
 
 
-__all__ = ["CANDIDATES_KEY", "fixed_target_candidates", "use_fixed_target_molecule"]
+def use_selected_route_product(callback_context: CallbackContext) -> Optional[types.Content]:
+    """Hand the operator-selected literature product to Module B verbatim.
+
+    A selected route is already a design decision.  Do not run BRICS or ask an
+    LLM to invent another molecule at this point.  If the source did not give
+    an explicit structure, leave the stage fail-soft with an actionable gap.
+    """
+    state = callback_context.state
+    try:
+        analysis = state.get("literature_analysis") or {}
+        routes = analysis.get("synthesis_routes") if isinstance(analysis, dict) else None
+        if not routes or len(routes) != 1:
+            return None
+        route = routes[0]
+        product = (route.get("product") or {}) if isinstance(route, dict) else {}
+        if isinstance(product, dict):
+            name = str(product.get("name") or product.get("smiles") or "").strip()
+            smiles = str(product.get("smiles") or "").strip()
+        else:
+            name = str(product).strip()
+            smiles = str(route.get("product_smiles") or "").strip()
+        name = name or str(route.get("route_id") or "").strip()
+        if not name or not smiles:
+            result = DesignCandidates(gaps=[
+                "Выбранный маршрут не содержит явного product SMILES: "
+                "структура не выдумывается и требует ручного уточнения."
+            ])
+        else:
+            from rdkit import Chem
+            molecule = Chem.MolFromSmiles(smiles)
+            if molecule is None or not molecule.GetNumAtoms():
+                result = DesignCandidates(gaps=[
+                    f"Некорректный product SMILES выбранного маршрута {route.get('route_id', '')}."
+                ])
+            else:
+                result = DesignCandidates(candidates=[DesignCandidate(
+                    name=name,
+                    smiles=Chem.MolToSmiles(molecule, isomericSmiles=True),
+                    compound_class="продукт выбранного литературного маршрута",
+                    source="литература",
+                    derivation="Продукт выбранного литературного маршрута",
+                    route_ids=[str(route.get("route_id") or "")],
+                    tz_fit="Маршрут выбран оператором в Module A; повторный подбор не выполнялся",
+                    risks="Целевые эксплуатационные свойства требуют экспериментальной проверки.",
+                )])
+        state[CANDIDATES_KEY] = result.model_dump()
+        return types.Content(
+            role="model", parts=[types.Part(text=result.model_dump_json(ensure_ascii=False))]
+        )
+    except Exception as exc:  # noqa: BLE001 - stage boundary must never crash the run
+        logger.exception("selected route product hand-off failed: %s", exc)
+        result = DesignCandidates(gaps=[
+            f"Не удалось зафиксировать продукт выбранного маршрута ({type(exc).__name__})."
+        ])
+        state[CANDIDATES_KEY] = result.model_dump()
+        return types.Content(
+            role="model", parts=[types.Part(text=result.model_dump_json(ensure_ascii=False))]
+        )
+
+
+__all__ = [
+    "CANDIDATES_KEY", "fixed_target_candidates", "use_fixed_target_molecule",
+    "use_selected_route_product",
+]

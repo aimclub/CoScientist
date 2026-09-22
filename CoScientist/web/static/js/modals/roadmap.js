@@ -14,6 +14,7 @@
 
   const KNOWN_AGENTS = [
     'ResearchAgent',
+    'PaperRetriever',
     'PlannerAgent',
     'CoderAgent',
     'TaskExecutorAgent',
@@ -38,6 +39,7 @@
     ContextInitAgent: 'assignment',
     HypothesesAgent: 'lightbulb',
     ResearchAgent: 'travel_explore',
+    PaperRetriever: 'menu_book',
     TaskExecutorAgent: 'alt_route',
     CoderAgent: 'terminal',
     DatasetCollectorAgent: 'dataset',

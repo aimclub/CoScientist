@@ -408,7 +408,12 @@ Update a registered task to "done" immediately upon completion of its work item.
 # advertising an absent MCP tool makes the model call it and ADK then
 # hard-errors with "Tool not found", killing the run.
 
-def _research(ctx: PromptContext, *, cost_constrained: bool = False) -> str:
+def _research(
+    ctx: PromptContext,
+    *,
+    cost_constrained: bool = False,
+    allow_explore_my_papers: bool = True,
+) -> str:
     from CoScientist.config import get_settings
 
     paper_analysis = ctx.has_tool("paper_analysis")
@@ -417,32 +422,38 @@ def _research(ctx: PromptContext, *, cost_constrained: bool = False) -> str:
 
     steps, n = [], 1
     if paper_analysis:
-        # 1) If user has uploaded papers (S3 keys) analyse them first.
-        steps.append(
-            f"{n}. For the user's uploaded papers: use `explore_my_papers` ONLY when you "
-            "have actual S3 keys — never invent S3 keys."
-        )
-        n += 1
-        if cost_constrained:
+        if allow_explore_my_papers:
+            # 1) If user has uploaded papers (S3 keys) analyse them first.
             steps.append(
-                f"{n}. Use `explore_scientific_database` only when the task needs evidence from "
-                "the indexed full-text database and metadata search is insufficient; do not call it as a preflight."
+                f"{n}. For the user's uploaded papers: use `explore_my_papers` ONLY when you "
+                "have actual S3 keys — never invent S3 keys."
             )
+            n += 1
+            if cost_constrained:
+                steps.append(
+                    f"{n}. Use `explore_scientific_database` only when the task needs evidence from "
+                    "the indexed full-text database and metadata search is insufficient; do not call it as a preflight."
+                )
+            else:
+                steps.append(
+                    f"{n}. If there are NO user-uploaded papers, ALWAYS call `explore_scientific_database` before other literature tools. "
+                    "Do this even if you plan to use `search_papers` or `download_papers_from_search` afterwards."
+                )
         else:
             steps.append(
-                f"{n}. If there are NO user-uploaded papers, ALWAYS call `explore_scientific_database` before other literature tools. "
-                "Do this even if you plan to use `search_papers` or `download_papers_from_search` afterwards."
+                f"{n}. Use `explore_scientific_database` when the task needs evidence from "
+                "the indexed scientific literature database."
             )
-    n += 1
+        n += 1
     
     # 3) Use papers search
     if papers_search:
+        download_explore = (", then analyze the downloads with `explore_my_papers`." if (paper_analysis and allow_explore_my_papers) else ".")
         if cost_constrained:
             steps.append(
                 f"{n}. Start with exactly one `search_papers` metadata search (limit=5). "
-            + "If evidence is still insufficient and the task needs full-text verification: use `download_papers_from_search`"
-            + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else ".")
-            + " Set `limit=3`; do not download more papers merely to broaden coverage. "
+            + f"If evidence is still insufficient and the task needs full-text verification: use `download_papers_from_search`{download_explore} "
+            + "Set `limit=3`; do not download more papers merely to broaden coverage. "
             "OpenAlex indexes n-grams: pass keywords as a single space-separated string, no quotes around phrases. "
             "Use up to 3 short exact phrases (2–3 words each) taken verbatim from the query; "
             "do not paraphrase, stem, or replace Unicode symbols. "
@@ -451,9 +462,8 @@ def _research(ctx: PromptContext, *, cost_constrained: bool = False) -> str:
             )
         else:
             steps.append(
-                f"{n}. If evidence is still insufficient: use `download_papers_from_search`"
-            + (", then analyze the downloads with `explore_my_papers`." if paper_analysis else ".")
-            + " When calling `download_papers_from_search`, aim to find at least *10* "
+                f"{n}. If evidence is still insufficient: use `download_papers_from_search`{download_explore} "
+            + "When calling `download_papers_from_search`, aim to find at least *10* "
             "papers that might contain the answer. OpenAlex indexes n-grams: pass keywords "
             "as a single space-separated string, no quotes around phrases. "
             "Use up to 3 short exact phrases (2–3 words each) taken verbatim from the query; "
@@ -486,6 +496,12 @@ def _research(ctx: PromptContext, *, cost_constrained: bool = False) -> str:
       )
 
     prefer_line = "- Prefer peer-reviewed evidence over web content\n" if lit else ""
+    forbidden_papers_rule = (
+        "- STRICTLY PROHIBITED: Do NOT call `explore_my_papers`. You are forbidden from calling "
+        "`explore_my_papers` (full-text analysis of uploaded papers is performed exclusively by PaperRetriever). "
+        "Use `explore_scientific_database`, `search_papers`, or `tavily_search` instead.\n"
+        if not allow_explore_my_papers else ""
+    )
 
     template = '''
 Your job is to understand the query, gather reliable information, and produce clear, accurate answers.
@@ -503,7 +519,7 @@ WORKFLOW
 RULES
 --------------------------------------------------
 
-<<PREFER_LINE>>- Stop once sufficient evidence is obtained
+<<PREFER_LINE>><<FORBIDDEN_PAPERS_RULE>>- Stop once sufficient evidence is obtained
 - Clearly communicate uncertainty or conflicting findings
 - Never hallucinate papers, repositories, or citations — if you cannot find the
   exact source the user named, say so rather than substituting a different one
@@ -527,7 +543,7 @@ Write these section headings in the report language (see LANGUAGE REQUIREMENT):
 **Key Points** – main takeaways
 **Uncertainty** – gaps or doubts (if any)
 
-You have a STRICT LIMIT of <<MAX_SEARCHES>> search calls. Plan your search carefully.
+<<TOOL_LIMIT_RULE>>
 
 
 ### TASK_MANAGEMENT
@@ -547,8 +563,15 @@ Update a registered task to "done" immediately upon completion of its work item.
         TOOLS=ctx.render_tools(),
         STEPS="\n".join(steps),
         PAPER_SEARCH_SECTION=paper_search_section,
-        MAX_SEARCHES=str(get_settings().web.max_searches),
+        TOOL_LIMIT_RULE=(
+            "You may call each individual tool at most 2 times in this task. "
+            "The limit is independent for every tool; plan tool use carefully."
+            if cost_constrained else
+            f"You have a STRICT LIMIT of {get_settings().web.max_searches} search calls. "
+            "Plan your search carefully."
+        ),
         PREFER_LINE=prefer_line,
+        FORBIDDEN_PAPERS_RULE=forbidden_papers_rule,
         RESEARCH=render_research_protocol(ctx),
         HITL=ctx.render_hitl(),
         LANGUAGE=_LANGUAGE_REQUIREMENT,
@@ -563,8 +586,123 @@ def research(ctx: PromptContext) -> str:
 
 @_register("microfluidics_research")
 def microfluidics_research(ctx: PromptContext) -> str:
-    """Budget-conscious literature workflow used only by the microfluidics app."""
-    return _research(ctx, cost_constrained=True)
+    """Budget-conscious literature workflow used only by the microfluidics app.
+    Forbids explore_my_papers, reserving uploaded paper analysis for PaperRetriever."""
+    return _research(ctx, cost_constrained=True, allow_explore_my_papers=False)
+
+
+@_register("microfluidics_paper_retriever")
+def microfluidics_paper_retriever(ctx: PromptContext) -> str:
+    """Workflow for PaperRetriever: analyzes user-uploaded papers via explore_my_papers
+    to discover and extract synthesis routes, reaction operations, conditions, and flow viability."""
+    paper_analysis = ctx.has_tool("paper_analysis")
+    papers_search = ctx.has_tool("papers_search")
+    lit = paper_analysis or papers_search
+
+    steps, n = [], 1
+    if paper_analysis:
+        steps.append(
+            f"{n}. PRIMARY GOAL — USER-UPLOADED PAPERS: Call `explore_my_papers` with the actual S3 keys "
+            "provided in the prompt context. Analyze the papers in depth to extract complete synthesis routes "
+            "(маршруты синтеза) for the target molecule or compound class: all operations/stages in sequence, "
+            "reactants, agents (solvents, catalysts, additives), stage products, precise conditions (temperatures, "
+            "residence/reaction times, concentrations, solvent ratios, catalyst loadings), yields, and suitability "
+            "for continuous flow / microfluidic reactor synthesis."
+        )
+        n += 1
+        steps.append(
+            f"{n}. If user-uploaded papers do not provide full route details or conditions, query "
+            "`explore_scientific_database` for supplementary full-text evidence."
+        )
+        n += 1
+
+    if papers_search:
+        steps.append(
+            f"{n}. If routes are still missing from uploaded papers and database, search OpenAlex using "
+            "`search_papers` (limit=5). If full text is needed for verification, download papers with "
+            "`download_papers_from_search` (limit=3) and analyze the downloads with `explore_my_papers`."
+        )
+        n += 1
+
+    if lit:
+        steps.append(
+            f"{n}. Fall back to `tavily_search` only if literature tools cannot answer. Never use Tavily before literature tools."
+        )
+
+    paper_search_section = (
+        "\n--------------------------------------------------\n"
+        "PAPER RETRIEVAL & FULL-TEXT ANALYSIS\n"
+        "--------------------------------------------------\n\n"
+        "Use `explore_my_papers` with available S3 keys for deep full-text extraction of user-uploaded papers. "
+        "Use `search_papers` for metadata/search and `download_papers_from_search` only when additional papers must be downloaded for full-text inspection.\n"
+    )
+
+    template = '''
+You are the PaperRetriever agent of the CoScientist microfluidics deployment.
+Your primary role is full-text scientific paper retrieval and analysis, focusing on user-uploaded papers
+via `explore_my_papers`, to extract complete, verified synthesis routes, reaction operations, exact conditions, and flow/microfluidic viability.
+
+<<TOOLS>>
+
+{links_context?}
+--------------------------------------------------
+WORKFLOW
+--------------------------------------------------
+
+<<STEPS>>
+<<PAPER_SEARCH_SECTION>>
+--------------------------------------------------
+RULES
+--------------------------------------------------
+
+- Prefer peer-reviewed evidence and user-uploaded full-text papers over web content
+- Focus deeply on SYNTHESIS ROUTES for the target molecule / class:
+  * Operations / steps in order (reactants, agents/catalysts/solvents, products)
+  * Precise numeric conditions: temperature, residence time / reaction time, pressures, solvent ratios, catalyst loading
+  * Reaction yields, conversions, purities
+  * Suitability for flow / microfluidic synthesis: homogeneous vs heterogeneous phases, kinetics, precipitation/clogging risks
+  * Real DOI/URL/patent/title and exact locators (page, section, table, figure, scheme, paragraph)
+- Stop once sufficient evidence is obtained
+- Clearly communicate uncertainty or conflicting findings
+- Never hallucinate papers, repositories, or citations — report genuine facts from the text
+- Synthesize findings instead of copying raw abstracts
+- Be concise, structured, and informative
+- Use tools to answer; it is prohibited to answer directly without them
+
+<<LANGUAGE>>
+--------------------------------------------------
+OUTPUT FORMAT
+--------------------------------------------------
+
+Write these section headings in the report language (see LANGUAGE REQUIREMENT):
+**Summary** – short answer highlighting discovered synthesis routes and target compounds
+**Details** – structured detailed breakdown of each route: stages, reactants, solvents, catalysts, conditions (T, time, ratios), yields, and microfluidic viability
+**Key Points** – main takeaways, comparison between route variants, and flow reactor compatibility
+**Uncertainty** – gaps, unverified steps, or missing full-text locators (if any)
+
+You may call each individual tool at most 2 times in this task. The limit is independent for every tool; plan tool use carefully.
+
+### TASK_MANAGEMENT
+Context of tasks:
+{active_tasks}
+
+Use `update_task_status` only for an ID explicitly present in the task context above.
+If the context is empty (`[]`), do not call it: this run has no registered task plan.
+Update a registered task to "done" immediately upon completion of its work item.
+
+<<RESEARCH>>
+
+<<HITL>>
+'''
+    return render_template(
+        template,
+        TOOLS=ctx.render_tools(),
+        STEPS="\n".join(steps),
+        PAPER_SEARCH_SECTION=paper_search_section,
+        RESEARCH=render_research_protocol(ctx),
+        HITL=ctx.render_hitl(),
+        LANGUAGE=_LANGUAGE_REQUIREMENT,
+    )
 
 
 # ── ToolRetrieverAgent ───────────────────────────────────────────────────────
@@ -2780,14 +2918,26 @@ CoScientist (кейс «микрофлюидика»).
 ЦЕЛЕВАЯ МОЛЕКУЛА ИЗ ТЗ (fixed=true — заказчик задал конкретное вещество):
 {target_molecule?}
 
-Твоя задача: превратить это ТЗ в набор из 3–4 конкретных поисковых задач для
-литературного агента (не общий запрос «найти ПАВ для нефтегаза», а точечные
+Твоя задача: превратить это ТЗ в набор из 3 конкретных поисковых задач для
+литературного анализа (не общий запрос «найти ПАВ для нефтегаза», а точечные
 задачи: классы веществ, рецептуры, синтетические маршруты — в т.ч. проточные/
-микрофлюидные, ограничения, аналоги).
+микрофлюидные, мягкие каталитические методы, ограничения, аналоги).
+
+РАСПРЕДЕЛЕНИЕ ЗАДАЧ МЕЖДУ АГЕНТАМИ:
+1. ПЕРВАЯ ЗАДАЧА (LIT-01) ДОЛЖНА БЫТЬ ВЫДАНА ИМЕННО АГЕНТУ PaperRetriever
+   (поле "assignee": "PaperRetriever"). Её цель — проанализировать имеющиеся
+   и загруженные пользователем статьи с помощью explore_my_papers для
+   детального поиска и извлечения маршрутов синтеза (в т.ч. проточных/микрофлюидных),
+   стадий, условий реакций, реагентов, растворителей, катализаторов и выходов.
+2. ОСТАЛЬНЫЕ ЗАДАЧИ (LIT-02, LIT-03 и т.д.) ВЫДАЮТСЯ АГЕНТУ ResearchAgent
+   (поле "assignee": "ResearchAgent"). Их цель — открытый поиск по научной
+   базе данных, метаданным статей и вебу (свойства против ТЗ, аналоги,
+   прикладные аспекты, ограничения) БЕЗ вызова explore_my_papers.
 
 Каждая задача содержит:
 - id: идентификатор вида "LIT-01", "LIT-02", ...
-- task: формулировка задачи на русском — самодостаточная: агент-исследователь
+- assignee: "PaperRetriever" (для первой задачи поиска маршрутов) или "ResearchAgent" (для остальных)
+- task: формулировка задачи на русском — самодостаточная: агент
   сам составит по ней поисковые запросы, поэтому назови в ней конкретные
   классы веществ, условия и параметры из ТЗ
 - extract: список того, какие данные нужно извлечь из источников
@@ -2801,23 +2951,23 @@ CoScientist (кейс «микрофлюидика»).
 - приоритеты -> что искать в первую очередь.
 
 Если целевая молекула задана (fixed=true), задачи строятся ВОКРУГ неё:
-- обязательно одна задача — известные маршруты синтеза именно этого вещества
+- обязательно одна задача (LIT-01, PaperRetriever) — известные маршруты синтеза именно этого вещества
   (по названию, SMILES, CAS) с условиями каждой операции (температура, время,
   соотношения, растворитель, катализатор), выходом и чистотой целевого продукта,
-  идентичностью продукта и опытом проточного синтеза; если источник сравнивает
+  идентичностью продукта и опытом проточного синтеза по имеющимся статьям; если источник сравнивает
   варианты в таблице, извлеки все существенные варианты и критерии сравнения,
   а не только заявленный авторами «основной» результат;
-- обязательно одна задача — измеренные свойства этого вещества против
+- обязательно одна задача (LIT-02, ResearchAgent) — измеренные свойства этого вещества против
   требований ТЗ (со значениями, единицами и условиями измерения);
-- остальные — ближайшие структурные аналоги и ограничения.
-Если молекула не задана, сформируй две НЕЗАВИСИМЫЕ обязательные задачи:
-- **route-first discovery**: начни от доступного/предпочтительного сырья из ТЗ
+- остальные (ResearchAgent) — ближайшие структурные аналоги и ограничения.
+Если молекула не задана, сформируй обязательные задачи:
+- **route-first discovery** (LIT-01, PaperRetriever): начни от доступного/предпочтительного сырья из ТЗ
   и найди продукты конкретных превращений, совместимых с ограничениями
   процесса. Ищи по функциональным группам исходного сырья и классам реакций
   (конденсации, окисления, нейтрализации, присоединения и т.п.), а не только по
   названию области применения. Для каждого найденного продукта потребуй SMILES,
   первичный источник, условия каждой операции и выход.
-- **application validation**: отдельно проверь найденные продукты как компоненты
+- **application validation** (LIT-02, ResearchAgent): отдельно проверь найденные продукты как компоненты
   конечной среды: антиоксидантную активность, совместимость, растворимость и
   термостабильность. Отсутствие прикладной статьи не отменяет продукт из первого
   поиска, а создаёт явный пробел для экспериментального скрининга.
@@ -2826,7 +2976,11 @@ CoScientist (кейс «микрофлюидика»).
 а не закрытый список кандидатов.
 
 Отвечай ТОЛЬКО валидным JSON вида:
-{"queries": [{"id": "...", "task": "...", "extract": ["...", "..."]}]}
+{"queries": [
+  {"id": "LIT-01", "assignee": "PaperRetriever", "task": "...", "extract": ["...", "..."]},
+  {"id": "LIT-02", "assignee": "ResearchAgent", "task": "...", "extract": ["...", "..."]},
+  {"id": "LIT-03", "assignee": "ResearchAgent", "task": "...", "extract": ["...", "..."]}
+]}
 Без пояснений и без обрамления ```.
 ''')
 
@@ -2849,14 +3003,14 @@ steps and reference agents — you do NOT execute anything yourself.
 {tz_literature_queries?}
 
 ### HOW TO BUILD THE PLAN
-- Create ONE task per literature query (LIT-01, LIT-02, ...), assignee
-  "ResearchAgent", in the queries' order:
+- Create ONE task per literature query (LIT-01, LIT-02, ...), in the queries' order:
+    * The first task (LIT-01, route search from papers) MUST have assignee "PaperRetriever".
+    * The remaining tasks (LIT-02, LIT-03...) MUST have assignee "ResearchAgent".
     * title: the query id plus a short subject (e.g. "LIT-01: betaine
-      surfactants for high-salinity EOR");
+      surfactants flow synthesis routes");
     * description: MUST carry the full query — the Russian task VERBATIM and
       the "extract" list (what data to pull from sources). The description is
-      exactly what ResearchAgent will receive, so it must be self-contained;
-      ResearchAgent composes the search queries itself.
+      exactly what the assigned agent will receive, so it must be self-contained.
 - If the queries block above is empty, derive 3–4 focused literature tasks
   directly from the ТЗ fields (target product, conditions, required
   properties, raw-material and technology constraints).
@@ -2892,6 +3046,10 @@ _static("microfluidics_literature_synthesis", '''
 {target_molecule?}
 
 ### РЕЗУЛЬТАТЫ ПО КАЖДОЙ ЛИТЕРАТУРНОЙ ЗАДАЧЕ (query_id, запрос, ответ)
+Учти: задача LIT-01 выполнена агентом PaperRetriever через глубокий анализ
+загруженных статей с помощью explore_my_papers — именно из неё извлекай
+основные synthesis_routes, реакционные условия и пригодность для протока.
+Задачи LIT-02+ выполнены ResearchAgent для поиска свойств, аналогов и ограничений.
 {literature_findings?}
 
 ### ПАРАЛЛЕЛЬНЫЕ РЕЗУЛЬТАТЫ ПО ID (основной источник; пропусти пустые)
@@ -2923,8 +3081,10 @@ LIT-08: {literature_finding_LIT_08?}
   источники.
 - synthesis_routes: каждый описанный маршрут — route_id вида LIT-ROUTE-01,
   product (читаемое название) и product_smiles (если структура однозначно
-  установлена), операции по порядку:
-  реагенты, продукты стадии (products — что получается на этой стадии),
+  установлена), операции по порядку: reactants — стехиометрические исходные
+  вещества, agents — растворители/катализаторы/среды, products — что
+  получается на стадии; legacy-поле reagents оставь пустым, если reactants и
+  agents удалось разделить;
   выход стадии как в источнике (yield_value, напр. «75 %»; нет в источнике —
   пусто), условия (температура, время, соотношения, растворитель,
   катализатор); пригодность для проточного/микрофлюидного реактора,
@@ -2954,6 +3114,34 @@ LIT-08: {literature_finding_LIT_08?}
 ''')
 
 
+_static("microfluidics_literature_selection", '''
+Ты завершаешь уже выполненный литературный поиск. Не пересказывай источники,
+не извлекай маршруты заново и не создавай библиографию: полные результаты
+исследовательских агентов уже сохранены системой.
+
+Выбери не более ДВУХ наиболее полезных результатов по их LIT-id. Выбирай
+только id, которые встречаются во входных данных. Если подходящих результатов
+нет или данных недостаточно, верни пустой selected_ids.
+
+### ТЗ
+{structured_tz?}
+
+### РЕЗУЛЬТАТЫ ИССЛЕДОВАНИЯ
+{literature_findings?}
+
+### ФОРМАТ ОТВЕТА
+Верни ТОЛЬКО JSON:
+{
+  "selected_ids": ["LIT-01"],
+  "reason": "Краткая причина выбора.",
+  "warnings": []
+}
+
+selected_ids содержит 0, 1 или 2 уникальных LIT-id. Не используй null,
+никакие другие поля, Markdown или пояснения вне JSON.
+''')
+
+
 _static("microfluidics_evidence_verifier", '''
 Ты — узкий верификатор критичных числовых литературных claims. Не добавляй
 новых маршрутов или фактов и НЕ выполняй повторный широкий поиск литературы.
@@ -2978,6 +3166,42 @@ _static("microfluidics_evidence_verifier", '''
   verification_tool сам не выдумывай: их заполнит код из фактических tool results.
 
 Верни ТОЛЬКО полный JSON literature_analysis по схеме.
+''')
+
+
+_static("microfluidics_route_selection", '''
+Ты — агент предварительного отбора литературных маршрутов в конце ModuleA.
+Покажи оператору решение по КАЖДОМУ найденному маршруту и предложи ровно один
+лучший маршрут. Окончательное решение принимает человек в следующем review.
+
+### ТЗ
+{structured_tz?}
+
+### МАШИННЫЙ КОНТРАКТ ТРЕБОВАНИЙ
+{requirements_spec?}
+
+### ПРОВЕРЕННЫЙ ЛИТЕРАТУРНЫЙ АНАЛИЗ
+{literature_analysis?}
+
+### ПРАВИЛА ОТБОРА
+- Верни один decisions[] на каждый route_id без пропусков и дубликатов.
+- recommendation — только «оставить» или «отсеять»; «оставить» должен быть
+  ровно один маршрут, совпадающий с selected_route_id. Если пригодных нет,
+  selected_route_id пустой и все маршруты «отсеять».
+- Явное нарушение ТЗ (запрещённый реагент/катализатор, температура вне
+  диапазона, другой продукт) заноси в hard_violations и отсеивай.
+- Отсутствие полного текста, locator, численного выхода, чистоты или будущего
+  экспериментального результата — warning, а не самостоятельная причина
+  отсева.
+- Сначала предпочитай отсутствие явных нарушений, затем полноту процедуры,
+  соответствие водной/комнатной технологии, простоту и пригодность к протоку.
+- reason — кратко, 1–2 предложения, без длинного пересказа статьи.
+- Ничего не добавляй к химии маршрутов и не исправляй их вручную.
+- Перед отправкой проверь: selected_route_id либо пуст, либо встречается ровно
+  в одном decision; при непустом selected_route_id только этот decision имеет
+  «оставить», а при пустом — ни один.
+
+Ответь ТОЛЬКО валидным JSON по схеме route_selection.
 ''')
 
 
@@ -3017,17 +3241,20 @@ Available tools from agents:
 ### Instructions
 
 1. Execute every generated LIT-* query exactly once as an independent
-   literature task. In ONE model response, emit one ResearchAgent tool call per
-   query so ADK runs the calls concurrently. Pass each query's `id`, `task`
-   and `extract` list VERBATIM; do not paraphrase away domain terms from the
-   ТЗ. Do not wait for one ResearchAgent result before emitting the next call.
+   literature task. In ONE model response, emit tool calls concurrently:
+   - For the first query (assignee "PaperRetriever", typically LIT-01 for route search and paper analysis):
+     call the `PaperRetriever` tool.
+   - For the remaining queries (assignee "ResearchAgent", typically LIT-02+):
+     call the `ResearchAgent` tool for each query.
+   Pass each query's `id`, `task` and `extract` list VERBATIM; do not paraphrase
+   away domain terms from the ТЗ. Do not wait for one result before emitting the next call.
 2. Route by the nature of the work:
 
 <<ROUTING>>
 
-3. If some ResearchAgent calls return nothing useful, retry only those failed
-   queries ONCE. Emit all such retries together in one model response so that
-   they also run in parallel; then move on — do not loop.
+3. If some calls return nothing useful, retry only those failed queries ONCE
+   (calling PaperRetriever for LIT-01 or ResearchAgent for LIT-02+). Emit all such retries
+   together in one model response so that they also run in parallel; then move on — do not loop.
 4. When delegating, keep the query id (LIT-xx) at the start of the request —
    it is how each answer is filed. If the target molecule is fixed, name it
    (name, SMILES, CAS) in every request that concerns it.
@@ -3105,8 +3332,9 @@ previous one has delivered:
 1. **ModuleA_TZLiterature** — always first. Produces the ТЗ and the structured
    literature analysis (target molecule, analogues, routes with conditions,
    facts).
-2. **ModuleB_Design** — after A. Turns the ТЗ + literature into molecule
-   candidates, synthesis routes and their economics.
+2. **ModuleB_Design** — after A. Keeps the single operator-selected route,
+   fixes the molecule candidate and calculates its economics. It must not
+   recreate or broaden the route set.
 3. **ModuleC_Experiment** — after B only when `qualified_routes.status` is
    `ok` (production execution) or `screening_only` (planning-only verification).
    `operator_route_override` may additionally authorize a `planning_only`
@@ -3123,11 +3351,11 @@ previous one has delivered:
   `economics.reason`, or `economics_skipped`. In particular,
   `economics_skipped="missing_eligible_routes"` is compatible with
   `qualified_routes.status="screening_only"` and MUST NOT skip ModuleC.
-- Before calling ModuleC for status `ok`, ask the operator through
-  `request_approval`; a refusal skips C and continues to ReportAgent. Before
-  calling it for `screening_only`, ask the operator to approve the
-  planning-only verification hand-off; a refusal skips C and continues to the
-  report. State clearly that planning-only cannot run equipment.
+- The operator has already selected the only active route at the end of
+  ModuleA. For status `ok`, call ModuleC without a duplicate transition
+  approval. For `screening_only`, call ModuleC in planning-only mode without
+  another approval; planning-only cannot run equipment. Physical execution is
+  approved separately inside the A2A lifecycle.
 - For `no_compliant_routes`, do not call ModuleC unless the operator explicitly
   approves `operator_authorize_screening_override(route_ids, rationale)`. Call
   it with only real, non-stub route IDs from `synthesis_routes`, summarize the
@@ -3203,9 +3431,7 @@ propose concrete target molecules to synthesise.
    достаточного пула; это не способ заполнить список любой ценой. Продукты
    литературных маршрутов уже добавляет сам инструмент; не исключай их только
    потому, что они не повторены в `analogues`.
-4. Используй только возвращённые candidates. Инструмент уже включает
-   литературные аналоги: не добавляй отклонённые структуры обратно вручную.
-   При error или no_candidates верни пустой список и исходные gaps.
+4. При error или no_candidates верни пустой список и исходные gaps.
    Ранжируй сначала по наличию проверяемого маршрута из допустимого сырья,
    затем по молекулярному соответствию; кандидат без маршрута явно остаётся
    гипотезой и не вытесняет route-backed кандидат.
@@ -3477,14 +3703,9 @@ economics server (supplier price lists) and compare them.
    Набор route_id рейтинга должен точно соответствовать qualified_routes.routes.
    Маршрут без продуктов стадий посчитать нельзя: отметь пробел и верни на
    доработку, не создавай несвязанный с исходными маршрутами рейтинг.
-   Исключение: если есть `operator_economics_override` с
-   `approved_by_human=true` и `mode="preliminary_only"`, используй ТОЛЬКО его
-   route_ids из `synthesis_routes`. Это предварительный ценовой запрос, не
-   production-рейтинг: так и помечай каждую цифру. Неподтверждённые ограничения
-   не исчезают. Если хотя бы у одной стадии нет числового yield_fraction, не
-   вызывай `rank_routes_by_cost` с default_yield; вместо этого выполни только
-   resolve_chemicals / get_price для известных исходников и назови отсутствие
-   выхода причиной, по которой полную себестоимость посчитать нельзя.
+   Если хотя бы у одной стадии нет числового yield_fraction, всё равно вызывай
+   `rank_routes_by_cost`, но явно передай default_yield=0.5. Такой результат
+   пометь preliminary и перечисли стадии, где применено допущение.
 2. **Разрешение веществ** — `resolve_chemicals` одним вызовом для всех
    уникальных веществ всех маршрутов. Каждое error="unresolved" замени SMILES
    или английским систематическим названием и проверь повторно. Вещество,
@@ -3492,7 +3713,7 @@ economics server (supplier price lists) and compare them.
 3. **Рейтинг маршрутов** — `rank_routes_by_cost` для всех готовых маршрутов
    одним вызовом: одно target_qty/target_unit, preferred_currency="RUB",
    strategy="cheapest", similarity="soft", include_breakdown=true, выходы
-   стадий из источника.
+   стадий из источника; при пропусках default_yield=0.5.
 4. **Разбор пробелов** — для маршрутов partial / invalid / unpriceable и для
    подозрительных совпадений: `get_price` или `search_by_structure` по каждой
    позиции из missing, чтобы понять причину (нет в прайсах, другая форма,
@@ -3505,8 +3726,9 @@ economics server (supplier price lists) and compare them.
 - Целевое количество продукта: из ТЗ («Масштаб результата», «Минимальная масса
   образца»); только g, kg, mol или mmol. Если в ТЗ его нет — 100 g, и скажи,
   что это допущение.
-- Выходы стадий: только из верифицированного источника. Маршрут с неизвестным
-  выходом не должен быть в qualified_routes; не заменяй его молча default_yield=1.
+- Выходы стадий: используй сообщённые числовые значения независимо от статуса
+  полной верификации, сохраняя warning. Для неизвестных выходов применяй только
+  объявленный default_yield=0.5 и маркируй расчёт preliminary.
 - Растворители и катализаторы (agents): сервер их не покупает, пока у вещества
   нет amount. Если объём или загрузка есть в условиях маршрута (например,
   «ДХМ 10 мл на 1 г спирта»), пересчитай на целевое количество продукта и
@@ -3579,16 +3801,18 @@ steps locally and do not rewrite its plan or measurement results.
    на предыдущем этапе или сообщи о пробеле; не выдумывай стоимость и не
    запускай обходной путь.
    Повторный вызов возвращает ту же задачу даже после завершения.
-2. submitted/working: sleep_tool на 5 секунд и optimization_get_status.
+2. submitted/working: вызови `sleep_tool(minutes=0.1)`, затем
+   optimization_get_status. Не опрашивай задачу без паузы.
    Не больше 12 опросов за проход; после этого сообщи «ещё выполняется» и task_id.
    При продолжении используй ту же задачу, не создавай новый эксперимент.
 3. input_required/waiting_input: прочитай точный запрос внешнего агента.
    Передай известные данные через optimization_provide_input; если данных нет,
    запроси их у пользователя. Не подставляй произвольные параметры.
 4. input_required/approval: это готовый план ВНЕШНЕЙ системы. Проверь его
-   соответствие ТЗ и разрешённой работе. Для согласованного плана вызови
-   optimization_approve, затем опрашивай ту же задачу. Подтверждение может
-   запустить реальное оборудование. В planning_only не подтверждай запуск.
+   соответствие ТЗ и разрешённой работе и вызови optimization_approve: сам
+   инструмент покажет план человеку и продолжит только после явного согласия.
+   Затем опрашивай ту же задачу. Подтверждение может запустить реальное
+   оборудование. В planning_only не подтверждай запуск.
    Если план выходит за согласованные условия, покажи пользователю отклонения.
 5. submission_unknown: не повторяй отправку без выяснения её исхода.
    followup_unknown/status_error при известном task_id: сначала перечитай статус,
@@ -3644,6 +3868,12 @@ report is where they come together.
 ### МАРШРУТЫ СИНТЕЗА (стадия 4)
 {synthesis_routes?}
 
+### РЕШЕНИЕ ПО МАРШРУТАМ В MODULE A
+{route_selection_audit?}
+
+### ОТСЕЯННЫЕ КАНДИДАТЫ МАРШРУТОВ (только аудит, не активные маршруты)
+{route_candidates_audit?}
+
 ### ПРОВЕРКА МАРШРУТОВ НА СООТВЕТСТВИЕ ТЗ (стадия 4, код: eligible / rejected / blocked)
 {qualified_routes?}
 
@@ -3677,8 +3907,9 @@ report is where they come together.
    и таблицы» литературного агента (со всеми таблицами), затем 2–5 предложений:
    на какие аналоги и факты опирались дальше и что осталось непроверенным.
 3. **Предложенные молекулы** — кандидаты и их соответствие критериям ТЗ.
-4. **Как синтезировать** — маршруты и условия, пригодность для проточного
-   синтеза.
+4. **Как синтезировать** — сначала компактная таблица всех рассмотренных
+   маршрутов: оставить/отсеять и краткая причина. Затем выбранный человеком
+   маршрут, его условия и пригодность для проточного синтеза.
 5. **Сколько стоит и из чего делать** — стоимость, доступность реагентов в РФ,
    риски поставок. Если есть цифры сервера стоимости — суммы бери из них, с
    валютой и статусом маршрута (partial — нижняя граница).

@@ -9,7 +9,7 @@ carries a provenance status. The TZAgent pipeline outputs:
   TZQueryGenAgent  -> LiteratureQueries   (state key ``tz_literature_queries``)
   LiteratureSynthesisAgent -> LiteratureAnalysis (state key ``literature_analysis``)
   MolDesignAgent   -> DesignCandidates    (state key ``design_candidates``)
-  SynthRouteAgent  -> SynthesisRoutes     (state key ``synthesis_routes``)
+  RouteSelectionAgent -> SynthesisRoutes (state key ``synthesis_routes``)
 
 ``CoScientist.microfluidics.render.render_tz_document`` turns a validated
 StructuredTZ into the human-readable Markdown document of the reference
@@ -99,6 +99,10 @@ class LiteratureQuery(BaseModel):
     task: str = Field(description="Формулировка задачи на русском")
     extract: List[str] = Field(
         default_factory=list, description="Какие данные нужно извлечь из источников"
+    )
+    assignee: Optional[str] = Field(
+        default=None,
+        description="Исполнитель задачи: PaperRetriever для первой задачи поиска маршрутов по статьям, ResearchAgent для остальных задач",
     )
 
 
@@ -191,6 +195,14 @@ class RouteStep(BaseModel):
     """
 
     operation: str
+    reactants: List[str] = Field(
+        default_factory=list,
+        description="Исходные вещества стадии; предпочтительнее legacy-поля reagents",
+    )
+    agents: List[str] = Field(
+        default_factory=list,
+        description="Растворители, катализаторы и технологические среды стадии",
+    )
     reagents: List[str] = Field(default_factory=list)
     products: List[str] = Field(
         default_factory=list, description="Что получается на стадии (название / SMILES)"
@@ -259,6 +271,76 @@ class LiteratureAnalysis(BaseModel):
         ids = [source.source_id for source in self.source_records]
         if len(ids) != len(set(ids)):
             raise ValueError("literature_analysis source_id values must be unique")
+        return self
+
+
+class LiteratureSelection(BaseModel):
+    """Small, fail-safe decision made after the literature research phase."""
+
+    selected_ids: List[str] = Field(default_factory=list)
+    reason: str = ""
+    warnings: List[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def accept_imperfect_llm_payload(cls, value: Any):
+        """Coerce nulls and malformed values into a safe empty selection."""
+        raw = value if isinstance(value, dict) else {}
+        candidate_ids = raw.get("selected_ids", raw.get("selected_id", []))
+        if isinstance(candidate_ids, str):
+            candidate_ids = [candidate_ids]
+        if not isinstance(candidate_ids, list):
+            candidate_ids = []
+        ids: list[str] = []
+        for item in candidate_ids:
+            text = str(item or "").strip().upper()
+            if text and text not in ids:
+                ids.append(text)
+        warnings = raw.get("warnings") or []
+        if isinstance(warnings, str):
+            warnings = [warnings]
+        if not isinstance(warnings, list):
+            warnings = []
+        return {
+            "selected_ids": ids,
+            "reason": str(raw.get("reason") or ""),
+            "warnings": [str(item) for item in warnings if str(item or "").strip()],
+        }
+
+
+class RouteSelectionItem(BaseModel):
+    """Короткое, показываемое оператору решение по одному маршруту Module A."""
+
+    route_id: str = Field(min_length=1)
+    product: str = ""
+    recommendation: Literal["оставить", "отсеять"]
+    reason: str = Field(min_length=1, description="Краткая причина в 1–2 предложениях")
+    hard_violations: List[str] = Field(default_factory=list)
+    warnings: List[str] = Field(default_factory=list)
+
+
+class RouteSelection(BaseModel):
+    """Предложение агента; окончательным оно становится только после HITL review."""
+
+    decisions: List[RouteSelectionItem] = Field(default_factory=list)
+    selected_route_id: str = Field(
+        default="",
+        description="Ровно один рекомендуемый route_id; пусто означает отклонить все",
+    )
+    selection_reason: str = Field(default="")
+
+    @model_validator(mode="after")
+    def selected_route_is_known_and_unique(self):
+        ids = [item.route_id.strip() for item in self.decisions]
+        if any(not route_id for route_id in ids) or len(ids) != len(set(ids)):
+            raise ValueError("route selection requires unique nonempty route_id values")
+        if self.selected_route_id and self.selected_route_id not in ids:
+            raise ValueError("selected_route_id must occur in decisions")
+        kept = [item.route_id for item in self.decisions if item.recommendation == "оставить"]
+        if self.selected_route_id and kept != [self.selected_route_id]:
+            raise ValueError("exactly selected_route_id must be marked оставить")
+        if not self.selected_route_id and kept:
+            raise ValueError("no route may be marked оставить when selected_route_id is empty")
         return self
 
 

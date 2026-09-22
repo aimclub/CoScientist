@@ -737,6 +737,52 @@ class SearchLimiter:
         return None
 
 
+class PerToolCallLimiter:
+    """Limit each tool independently within one agent execution branch.
+
+    Parallel ``AgentTool`` calls share the session state and invocation id, but
+    ADK gives every delegated agent run its own branch.  Including that branch
+    in the counter key keeps two concurrent ResearchAgent runs from consuming
+    each other's quota.
+    """
+
+    _STATE_KEY_PREFIX = "_per_tool_call_limiter"
+
+    def __init__(self, max_calls: int = 2):
+        if max_calls < 1:
+            raise ValueError("max_calls must be at least 1")
+        self.max_calls = max_calls
+
+    def limit_tool_calls(
+        self, tool: BaseTool, args: dict, tool_context: ToolContext
+    ) -> Optional[dict]:
+        del args  # Every call counts, regardless of whether its arguments differ.
+        tool_name = str(getattr(tool, "name", "") or "unknown_tool")
+        agent_name = str(getattr(tool_context, "agent_name", "") or "agent")
+        invocation_id = str(getattr(tool_context, "invocation_id", "") or "invocation")
+        branch = str(getattr(tool_context, "branch", "") or "root")
+        state_key = (
+            f"{self._STATE_KEY_PREFIX}:{invocation_id}:{branch}:{agent_name}:{tool_name}"
+        )
+
+        count = int(tool_context.state.get(state_key, 0)) + 1
+        tool_context.state[state_key] = count
+        if count <= self.max_calls:
+            return None
+
+        return {
+            "status": "blocked",
+            "blocked_by": "per_tool_call_limiter",
+            "tool": tool_name,
+            "limit": self.max_calls,
+            "message": (
+                f"Tool call limit reached: `{tool_name}` may be used at most "
+                f"{self.max_calls} times in this research task. Synthesize the "
+                "answer from existing results or use a different tool."
+            ),
+        }
+
+
 class PaperSearchGuard:
     """Clamp paper-search MCP result sets before they reach OpenAlex."""
 
@@ -789,3 +835,35 @@ def inject_original_query(
                 "[OrchestratorAgent] Replaced planner messages with original user query"
             )
             return
+
+
+class ForbidExploreMyPapersGuard:
+    """Blocks an agent from calling `explore_my_papers`.
+
+    Used in microfluidics to prevent ResearchAgent from repeatedly reading
+    user-uploaded papers, reserving `explore_my_papers` for PaperRetriever.
+    """
+
+    def guard_tool(
+        self, tool: BaseTool, args: dict, tool_context: ToolContext
+    ) -> Optional[dict]:
+        del args
+        tool_name = str(getattr(tool, "name", "") or "")
+        if tool_name == "explore_my_papers":
+            agent_name = str(getattr(tool_context, "agent_name", "") or "ResearchAgent")
+            logger.warning(
+                "[ForbidExploreMyPapersGuard] Blocked explore_my_papers call by %s",
+                agent_name,
+            )
+            return {
+                "status": "blocked",
+                "blocked_by": "ForbidExploreMyPapersGuard",
+                "tool": "explore_my_papers",
+                "message": (
+                    f"Call to `explore_my_papers` is strictly forbidden for {agent_name}. "
+                    "Analysis of user-uploaded papers is performed exclusively by PaperRetriever. "
+                    "Use explore_scientific_database, search_papers, or tavily_search instead."
+                ),
+            }
+        return None
+

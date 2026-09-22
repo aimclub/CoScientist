@@ -144,6 +144,8 @@ async def optimization_start(tool_context: ToolContext, planning_only: bool = Fa
         "итог оптимизации с причиной остановки и незакрытыми критериями. "
         "Используй сообщения/artifacts A2A; не выдавай симуляции за измерения. "
         "Недостающие данные и необходимые подтверждения запрашивай в этой задаче. "
+        "Сначала верни план на подтверждение. Не запускай CFD, физическое "
+        "оборудование или эксперименты до отдельного сообщения с подтверждением плана. "
     )
     if planning_only:
         instruction += (
@@ -223,5 +225,41 @@ async def optimization_approve(tool_context: ToolContext) -> dict[str, Any]:
     approvals = record.get("approved_plans", [])
     if fingerprint in approvals:
         return {"state": "error", "error": "This plan was already approved; poll instead of confirming again"}
+    from CoScientist.config import get_settings
+    # Bare unit/CLI contexts have no invocation/session channel on which a
+    # human could answer; real ADK ToolContext objects do.
+    interactive_context = bool(
+        getattr(tool_context, "_invocation_context", None)
+        or getattr(tool_context, "invocation_context", None)
+        or getattr(tool_context, "session", None)
+    )
+    if get_settings().web.hitl_enabled and interactive_context:
+        from CoScientist.agents.common import hitl_handler
+        from CoScientist.graph.session_scope import session_key
+        from CoScientist.hitl.models import HITLAction, HITLRequest
+
+        user_id, session_id = session_key(tool_context)
+        decision = await hitl_handler.handle_request(HITLRequest(
+            agent_name="OptimizerAgent",
+            action_type=HITLAction.APPROVE,
+            message=(
+                "Внешняя A2A-система подготовила план, подтверждение может запустить "
+                "CFD и физическое оборудование. Разрешить выполнение этого плана?"
+            ),
+            context={
+                "output": plan,
+                "task_id": record.get("task_id"),
+                "_session": {"user_id": user_id, "session_id": session_id},
+            },
+            invoked_via="tool",
+            trigger="optimization_plan_approval",
+        ))
+        if not decision.approved:
+            return _save(tool_context, {
+                **record,
+                "state": "rejected",
+                "phase": "operator_rejected",
+                "error": decision.instructions or decision.free_input or "План отклонён оператором.",
+            })
     record = {**record, "approved_plans": [*approvals, fingerprint]}
     return await _continue(tool_context, record, "Подтверждаю план. Выполни все шаги в рамках переданного ТЗ и ограничений, включая необходимые CFD, эксперименты и оптимизацию. Верни фактические результаты и итог последнего опыта.")

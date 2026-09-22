@@ -1537,9 +1537,19 @@ def _web_search_limiter():
     return SearchLimiter(max_searches=get_settings().web.max_searches).limit_searches
 
 
+def _per_tool_call_limiter():
+    from CoScientist.agents.callbacks.tool_callbacks import PerToolCallLimiter
+    return PerToolCallLimiter(max_calls=2).limit_tool_calls
+
+
 def _paper_search_guard():
     from CoScientist.agents.callbacks.tool_callbacks import PaperSearchGuard
     return PaperSearchGuard().guard_paper_search
+
+
+def _forbid_explore_my_papers():
+    from CoScientist.agents.callbacks.tool_callbacks import ForbidExploreMyPapersGuard
+    return ForbidExploreMyPapersGuard().guard_tool
 
 
 def _sanitize_json_output():
@@ -1569,6 +1579,11 @@ def _microfluidics_literature(name: str):
 def _use_fixed_target_molecule():
     from CoScientist.microfluidics.design import use_fixed_target_molecule
     return use_fixed_target_molecule
+
+
+def _use_selected_route_product():
+    from CoScientist.microfluidics.design import use_selected_route_product
+    return use_selected_route_product
 
 
 def _collect_cfd_result():
@@ -1601,6 +1616,11 @@ def _publish_literature_summary():
 def _microfluidics_route_compliance(name: str):
     from CoScientist.microfluidics import route_compliance
     return getattr(route_compliance, name)
+
+
+def _normalize_literature_identities():
+    from CoScientist.microfluidics.chemistry_identity import normalize_literature_identities
+    return normalize_literature_identities
 
 
 def _export_tz_and_queries():
@@ -1718,8 +1738,13 @@ _cb("hitl_before_agent", "before_agent", factory=lambda ctx: _hitl_before_model(
 _cb("hitl_before_tool", "before_tool", factory=lambda ctx: _hitl_before_tool())
 # Limit web search calls per agent turn.
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
+# Microfluidics ResearchAgent budget: two calls per concrete tool and per
+# delegated agent branch, so parallel LIT-* tasks never share a counter.
+_cb("PerToolCallLimiter", "before_tool", factory=lambda ctx: _per_tool_call_limiter())
 # Clamp OpenAlex result sets before the request reaches the remote papers MCP.
 _cb("PaperSearchGuard", "before_tool", factory=lambda ctx: _paper_search_guard())
+# Forbid ResearchAgent from calling explore_my_papers (reserved for PaperRetriever).
+_cb("ForbidExploreMyPapers", "before_tool", factory=lambda ctx: _forbid_explore_my_papers())
 # Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.
 _cb("guard_unknown_tools", "after_model", factory=_guard_unknown_tools)
 # End the planner's turn once its plan is registered, so it cannot loop
@@ -1735,6 +1760,8 @@ _cb("capture_evidence_verification", "after_tool",
     factory=_microfluidics_evidence("capture_evidence_verification"))
 _cb("authenticate_evidence_verification", "after_agent",
     factory=_microfluidics_evidence("authenticate_evidence_verification"))
+_cb("normalize_literature_identities", "after_agent",
+    factory=lambda ctx: _normalize_literature_identities())
 # Render the approved ТЗ into the reference Markdown document (state + file).
 _cb("save_tz_document", "after_agent", factory=lambda ctx: _save_tz_document())
 # Save the ТЗ + literature queries as shareable Markdown & HTML for hand-off.
@@ -1748,6 +1775,8 @@ _cb("inject_target_molecule", "before_agent",
     factory=_microfluidics_literature("inject_target_molecule"))
 _cb("pin_target_molecule", "after_agent",
     factory=_microfluidics_literature("pin_target_molecule"))
+_cb("assemble_selected_literature", "after_agent",
+    factory=_microfluidics_literature("assemble_selected_literature"))
 # Compile the approved human-readable TZ into the only requirements contract
 # downstream chemistry stages may use.
 _cb("compile_requirements", "before_agent", factory=lambda ctx: _microfluidics_requirements())
@@ -1765,6 +1794,8 @@ _cb("guard_economics_routes", "before_tool",
 _cb("collect_economics_result", "after_tool", factory=lambda ctx: _collect_economics_result())
 # Stage 3: a molecule fixed in the ТЗ is handed on as the only candidate — no design.
 _cb("use_fixed_target_molecule", "before_agent", factory=lambda ctx: _use_fixed_target_molecule())
+_cb("use_selected_route_product", "before_agent",
+    factory=lambda ctx: _use_selected_route_product())
 # Stage 9: keep the CFD service's run results as given, under their request ids.
 _cb("collect_cfd_result", "after_tool", factory=lambda ctx: _collect_cfd_result())
 # Microfluidics → research graph (the scientific-process record). Each stage
@@ -1800,6 +1831,8 @@ def _register_classes() -> None:
     )
     from CoScientist.hitl.session_agent import SessionAgent
     from CoScientist.microfluidics.tz_agent import TZSessionAgent
+    from CoScientist.microfluidics.a2a_optimization.session_agent import OptimizationSessionAgent
+    from CoScientist.microfluidics.route_selection import RouteSelectionSessionAgent
     from CoScientist.context_init.agent import ContextInitSessionAgent
 
     REGISTRY.register_agent_class("session", SessionAgent)
@@ -1808,6 +1841,8 @@ def _register_classes() -> None:
     REGISTRY.register_agent_class("executor_switch", ExecutorSwitchAgent)
     # Microfluidics ТЗ stage: the review loop shows the RENDERED ТЗ document.
     REGISTRY.register_agent_class("tz_session", TZSessionAgent)
+    REGISTRY.register_agent_class("optimization_session", OptimizationSessionAgent)
+    REGISTRY.register_agent_class("route_selection_session", RouteSelectionSessionAgent)
     # Context-init pre-stage: the review shows a STRUCTURED FORM (research frame)
     # and seeds the confirmed frame into the research graph.
     REGISTRY.register_agent_class("context_init_session", ContextInitSessionAgent)
@@ -1819,6 +1854,8 @@ def _register_schemas() -> None:
         DesignCandidates,
         LiteratureAnalysis,
         LiteratureQueries,
+        LiteratureSelection,
+        RouteSelection,
         StructuredTZ,
         SynthesisRoutes,
     )
@@ -1831,6 +1868,8 @@ def _register_schemas() -> None:
     REGISTRY.register_output_schema("structured_tz", StructuredTZ)
     REGISTRY.register_output_schema("tz_literature_queries", LiteratureQueries)
     REGISTRY.register_output_schema("literature_analysis", LiteratureAnalysis)
+    REGISTRY.register_output_schema("literature_selection", LiteratureSelection)
+    REGISTRY.register_output_schema("route_selection", RouteSelection)
     # Module B hand-off: candidates and routes in the shape the economics server costs.
     REGISTRY.register_output_schema("design_candidates", DesignCandidates)
     REGISTRY.register_output_schema("synthesis_routes", SynthesisRoutes)

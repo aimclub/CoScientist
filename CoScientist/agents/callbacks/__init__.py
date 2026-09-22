@@ -40,12 +40,14 @@ from CoScientist.agents.callbacks.tool_callbacks import (
     inject_graph_root,
     make_plan_registration_guard,
     make_unknown_tool_guard,
+    ForbidExploreMyPapersGuard,
     inject_original_query,
     print_research_agent_tool_call,
     redirect_when_no_tools,
 )
 
 __all__ = [
+    "ForbidExploreMyPapersGuard",
     "make_pre_action_critique",
     "make_post_action_critique",
     "make_plan_critique",

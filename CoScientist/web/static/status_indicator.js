@@ -141,6 +141,7 @@
     ContextInitSessionAgent: { ru: 'агент рамки исследования', en: 'research frame agent' },
     HypothesesAgent: { ru: 'агент генерации гипотез', en: 'hypotheses agent' },
     ResearchAgent: { ru: 'агент-исследователь', en: 'researcher agent' },
+    PaperRetriever: { ru: 'агент анализа статей', en: 'paper retriever' },
     TaskExecutorAgent: { ru: 'агент-исполнитель', en: 'executor agent' },
     ToolPipelineAgent: { ru: 'агент подбора инструментов', en: 'tool pipeline agent' },
     CoderAgent: { ru: 'агент-инженер', en: 'engineer agent' },
