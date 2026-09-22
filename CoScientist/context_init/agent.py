@@ -8,7 +8,7 @@
      through the HITL bridge, and folds the operator's answers back onto the
      frame — untouched fields keep the agent's drafted values (soft gate);
   3. seeds the confirmed frame into the Research Context Graph (the privileged
-     init path) BEFORE the orchestrator runs, then publishes a short summary.
+     init path) BEFORE the orchestrator runs (without duplicating the frame in chat).
 
 In headless mode (no HITL handler) the base loop skips the review and step 3
 still runs — the agent's drafted frame is seeded as-is.
@@ -23,7 +23,6 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
-from google.genai import types
 
 from CoScientist.context_init.commit import seed_frame
 from CoScientist.context_init.models import (
@@ -256,12 +255,14 @@ class ContextInitSessionAgent(SessionAgent):
 
         ok = bool(result.get("ok"))
         stats = result.get("graph_stats") or {}
-        header = ("🧭 Рамка исследования зафиксирована в графе"
-                  if ok else "⚠️ Рамку не удалось зафиксировать в графе")
-        if ok and stats:
-            header += (f" ({stats.get('nodes', 0)} узлов, "
-                       f"{stats.get('edges', 0)} рёбер).")
-        text = f"{header}\n\n{render_frame_summary(frame)}"
+        if ok:
+            logger.info(
+                "research frame seeded in graph (%d nodes, %d edges)",
+                stats.get("nodes", 0), stats.get("edges", 0),
+            )
+        else:
+            logger.warning("frame graph seeding did not succeed: %s", result)
+
         state_delta = {FRAME_STATE_KEY: frame.model_dump()}
         if ask := (frame.original_request or "").strip():
             state_delta["orchestrator_root_goal"] = ask
@@ -275,7 +276,6 @@ class ContextInitSessionAgent(SessionAgent):
             invocation_id=ctx.invocation_id,
             author=self.name,
             branch=ctx.branch,
-            content=types.Content(role="model", parts=[types.Part(text=text)]),
             actions=EventActions(state_delta=state_delta),
         )
 
