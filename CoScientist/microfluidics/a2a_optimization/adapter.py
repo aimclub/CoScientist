@@ -101,6 +101,14 @@ def _receive(context: ToolContext, record: dict, response: dict) -> dict:
     })
 
 
+def _completed_steps(record: dict) -> int:
+    """Steps the external system reports as executed; no counter means none."""
+    message = ((record.get("task") or {}).get("status") or {}).get("message") or {}
+    return next((part["data"]["completed_steps"] for part in message.get("parts", [])
+                 if isinstance(part.get("data"), dict)
+                 and isinstance(part["data"].get("completed_steps"), int)), 0)
+
+
 def _failure(context, record, state, exc):
     return _save(context, {
         **record, "state": state, "error": str(exc),
@@ -183,8 +191,8 @@ async def optimization_start(tool_context: ToolContext, planning_only: bool = Fa
     _save(tool_context, record)
     instruction = (
         "Ты — внешняя система оптимизации и выполнения экспериментов. "
-        "Получаешь ТЗ с целевой молекулой, физико-химические свойства и маршруты "
-        "из литературы, маршруты синтеза и ранжирование по стоимости. "
+        "Получаешь ТЗ (tz: исходный запрос и заданные требования), выбранные "
+        "маршруты синтеза со стадиями и условиями (routes) и ранжирование по стоимости. "
         "Самостоятельно управляй полным циклом: планирование, необходимые CFD "
         "через свой MCP, оборудование, сбор фактических результатов и оптимизация "
         "по выполненным опытам. Учти результаты последнего опыта перед завершением. "
@@ -278,6 +286,15 @@ async def optimization_approve(tool_context: ToolContext) -> dict[str, Any]:
     approvals = record.get("approved_plans", [])
     if fingerprint in approvals:
         return {"state": "error", "error": "This plan was already approved; poll instead of confirming again"}
+    # A rebuilt plan carries a new fingerprint, so only executed steps show the
+    # remote is running the plan instead of re-planning on every confirmation.
+    # Without this, one confirmation per new design loops the operator forever.
+    steps = _completed_steps(record)
+    if approvals and steps <= record.get("approved_at_step", 0):
+        return {"state": "error", "error": (
+            f"The external system asks for approval again with {steps} steps executed: it is "
+            "re-planning instead of running the approved plan. Do not confirm again; stop and "
+            "report this to the operator.")}
     if _operator_reachable(tool_context):
         from CoScientist.agents.common import hitl_handler
         from CoScientist.graph.session_scope import session_key
@@ -306,5 +323,9 @@ async def optimization_approve(tool_context: ToolContext) -> dict[str, Any]:
                 "phase": "operator_rejected",
                 "error": decision.instructions or decision.free_input or "План отклонён оператором.",
             })
-    record = {**record, "approved_plans": [*approvals, fingerprint]}
-    return await _continue(tool_context, record, "Подтверждаю план. Выполни все шаги в рамках переданного ТЗ и ограничений, включая необходимые CFD, эксперименты и оптимизацию. Верни фактические результаты и итог последнего опыта.")
+    record = {**record, "approved_plans": [*approvals, fingerprint], "approved_at_step": steps}
+    # The literal token the remote agent executes on, as sent by the vendor's
+    # own test_reactor_experiment_a2a.py. Any prose — including the Russian
+    # sentence of A2A-TESTING.md §7 — is taken for a clarification, so the
+    # remote rebuilds the plan and asks for approval again, forever.
+    return await _continue(tool_context, record, "Approve")

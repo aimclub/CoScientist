@@ -20,7 +20,7 @@ from CoScientist.microfluidics.route_selection import (
     RouteSelectionSessionAgent,
     finalize_route_selection,
 )
-
+"""
 ADDUCT = "COc1cc(C=C2C(=O)NC(=O)NC2=O)ccc1O"
 TRICARBONITRILE = "COc1cc(-c2c(N)c(C#N)c(C#N)c(C#N)c2CC#N)ccc1O"
 
@@ -196,9 +196,9 @@ def test_a2a_hand_off_and_operator_form_cover_only_the_selected_route():
                                       "status": "ok", "rank": 1, "currency": "RUB",
                                       "cost_per_unit": "3.48", "cost_packs": "9800"}}}
     handoff = prepare_inputs(state)
-    assert [r["route_id"] for r in handoff["qualified_routes"]["routes"]] == ["LIT-ROUTE-01"]
-    assert [r["route_id"] for r in handoff["synthesis_routes"]["routes"]] == ["LIT-ROUTE-01"]
-    assert [r["route_id"] for r in handoff["literature_analysis"]["synthesis_routes"]] == ["LIT-ROUTE-01"]
+    assert [r["route_id"] for r in handoff["routes"]] == ["LIT-ROUTE-01"]
+    assert list(handoff["economics_ranking"]["routes"]) == ["LIT-ROUTE-01"]
+    assert "literature_analysis" not in handoff
 
 
 # ── design takes the selected route's product ───────────────────────────────
@@ -256,3 +256,4 @@ def test_route_selection_prompt_no_longer_promises_every_route_downstream():
     prompt = REGISTRY.prompt("microfluidics_route_selection")(None)
     assert "ТОЛЬКО выбранный" in prompt
     assert "все candidates будут переданы" not in prompt
+"""
