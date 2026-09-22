@@ -371,8 +371,8 @@
         addExperimentToolCall(author, {
           name: tool, args: data.args, callId: data.call_id,
           truncated: !!data.args_truncated, timestamp: data.timestamp,
-          parent: data.parent, is_delegation: data.is_delegation,
-          target_agent: data.target_agent,
+          parent: data.parent, parentInstance: data.parent_instance, is_delegation: data.is_delegation,
+          target_agent: data.target_agent, agentInstance: data.agent_instance,
         });
         if (!quiet) addTelemetry('TOOL_CALL :: ' + author + ' → ' + tool);
         return;
@@ -388,12 +388,14 @@
       addExperimentToolResponse(author, {
         name: tool, response: response, callId: data.call_id,
         truncated: truncated, failed: failed, timestamp: data.timestamp,
+        agentInstance: data.agent_instance,
       });
       if (!quiet) {
         addTelemetry((failed ? 'TOOL_ERROR :: ' : 'TOOL_RESULT :: ') + author
           + (failed ? ' ✖ ' : ' ← ') + tool);
       }
     }
+
 
     function activityResponseFailed(response) {
       if (!response) return false;
@@ -651,4 +653,3 @@
       localStorage.setItem(SIDE_NAV_KEY, collapsed ? 'on' : 'off');
       applySideNavState();
     }
-

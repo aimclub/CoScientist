@@ -79,6 +79,28 @@ def test_call_id_is_optional(sink):
     assert payload["call_id"] is None
 
 
+def test_parallel_same_named_agent_runs_keep_distinct_runtime_instances(sink):
+    plugin = tool_activity.ToolActivityPlugin()
+    first = agent_tool_context("CoderAgent", "fc_1")
+    second = agent_tool_context("CoderAgent", "fc_1")
+    first.session.id = "child-run-a"
+    second.session.id = "child-run-b"
+
+    async def scenario():
+        await plugin.before_tool_callback(
+            tool=SimpleNamespace(name="execute_bash"), tool_args={"command": "a"}, tool_context=first,
+        )
+        await plugin.before_tool_callback(
+            tool=SimpleNamespace(name="execute_bash"), tool_args={"command": "b"}, tool_context=second,
+        )
+
+    asyncio.run(scenario())
+
+    calls = [payload for _, payload in sink]
+    assert [call["author"] for call in calls] == ["CoderAgent", "CoderAgent"]
+    assert [call["agent_instance"] for call in calls] == ["child-run-a", "child-run-b"]
+
+
 def test_tool_error_is_reported(sink):
     plugin = tool_activity.ToolActivityPlugin()
 
