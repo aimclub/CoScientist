@@ -276,9 +276,6 @@ function renderHitlCard(panel, data) {
             <button onclick="respondHITL('${data.request_id}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
               <span class="material-symbols-outlined text-base">check_circle</span> ${hitlLabel('hitl.btn.accept')}
             </button>
-            <button onclick="respondHITLEdit('${data.request_id}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
-              <span class="material-symbols-outlined text-base">edit_note</span> ${hitlLabel('hitl.btn.revise')}
-            </button>
             <button onclick="respondHITL('${data.request_id}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
               <span class="material-symbols-outlined text-base">close</span> ${hitlLabel('hitl.btn.reject')}
             </button>
@@ -402,11 +399,13 @@ function respondHITLInput(requestId) {
 function respondHITL(requestId, approved) {
   const feedbackEl = document.getElementById('hitl-feedback-' + requestId);
   const feedback = feedbackEl ? feedbackEl.value.trim() : '';
+  // Approving with feedback means the operator wants the output revised.
+  const action = approved && feedback ? 'edit' : (approved ? 'approve' : 'reject');
   sendHitlResponse({
     type: 'hitl_response',
     request_id: requestId,
-    action: approved ? 'approve' : 'reject',
-    approved: approved,
+    action,
+    approved: action === 'approve',
     instructions: feedback || null,
     free_input: feedback || null,
   });
@@ -714,9 +713,6 @@ function renderWorkOrderCard(panel, data) {
                 <button id="wo-pause-${rid}" onclick="holdWorkOrder('${rid}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-tertiary/30 text-tertiary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-tertiary/10 transition-all">
                   <span class="material-symbols-outlined text-base">pause</span> ${hitlLabel('workOrder.btn.pause')}
                 </button>` : ''}
-                <button onclick="respondWorkOrder('${rid}', 'edit')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
-                  <span class="material-symbols-outlined text-base">edit_note</span> ${hitlLabel('hitl.btn.revise')}
-                </button>
                 <button onclick="respondWorkOrder('${rid}', 'reject')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
                   <span class="material-symbols-outlined text-base">close</span> ${hitlLabel('hitl.btn.reject')}
                 </button>
@@ -792,6 +788,8 @@ function holdWorkOrder(rid) {
 function respondWorkOrder(rid, action) {
   const feedbackEl = document.getElementById('hitl-feedback-' + rid);
   const feedback = feedbackEl ? feedbackEl.value.trim() : '';
+  // The single approval button doubles as "revise" when notes were entered.
+  if (action === 'approve' && feedback) action = 'edit';
   if (action === 'edit' && !feedback) {
     addSystemMsg(t('hitl.reviseEmpty'));
     if (feedbackEl) feedbackEl.focus();
@@ -941,9 +939,6 @@ function renderWorkReportCard(panel, data) {
   const tier = ctx.tier || order.tier || 'compute';
   const timeout = panel ? (Number(data.timeout_seconds) || 0) : 0;
   const messageHtml = hitlDynamic(data, 'message', localizeHitlMessage(data));
-  // A fallback card comes after the run ended: "rework" can only return the task to the parent.
-  const reviseKey = report.fallback ? 'workReport.btn.returnParent' : 'workReport.btn.rework';
-
   if (panel) {
     panel.classList.remove('hidden');
     panel.innerHTML = `
@@ -973,9 +968,6 @@ function renderWorkReportCard(panel, data) {
                 <button id="wo-pause-${rid}" onclick="holdWorkOrder('${rid}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-tertiary/30 text-tertiary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-tertiary/10 transition-all">
                   <span class="material-symbols-outlined text-base">pause</span> ${hitlLabel('workOrder.btn.pause')}
                 </button>` : ''}
-                <button onclick="respondWorkOrder('${rid}', 'edit')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
-                  <span class="material-symbols-outlined text-base">replay</span> ${hitlLabel(reviseKey)}
-                </button>
                 <button onclick="respondWorkOrder('${rid}', 'reject')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
                   <span class="material-symbols-outlined text-base">close</span> ${hitlLabel('hitl.btn.reject')}
                 </button>
