@@ -322,10 +322,17 @@ function hitlResponseSummary(response) {
       + (disputed ? ' — ' + t('workReport.disputedCount').replace('{n}', disputed) : '')
       + (feedback ? ': ' + feedback : '');
   }
-  if (action === 'provide_input') return '💬 HITL Input: ' + (feedback || '(empty)');
+  // The receipts a run leaves in the feed. The keys were written when the rest
+  // of this function was localised; these three lines kept their literals, so a
+  // Russian session recorded every verdict as "✓ HITL Approved".
+  if (action === 'provide_input')
+    return t('hitl.inputSent', { feedback: feedback || t('hitl.empty') });
   if (action === 'select') return '☑ ' + (response.selected_option || feedback);
-  if (action === 'edit') return '✎ HITL Revision requested: ' + feedback;
-  return response.approved ? '✓ HITL Approved' : '✗ HITL Rejected' + (feedback ? ': ' + feedback : '');
+  if (action === 'edit') return t('hitl.revisionRequested', { feedback: feedback });
+  // The feedback used to hang off the rejected branch alone: `a ? b : c + d`
+  // groups as `a ? b : (c + d)`, so an approval with a comment dropped it.
+  return t(response.approved ? 'hitl.approved' : 'hitl.rejected')
+    + (feedback ? ': ' + feedback : '');
 }
 
 function hitlTimeoutSummary(data) {

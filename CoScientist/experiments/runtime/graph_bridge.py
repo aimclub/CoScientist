@@ -131,13 +131,13 @@ def _sync_uncovered_hypotheses(
                 updates.append({
                     "id": nid,
                     "status": "formulated",
-                    "reason": "plan task covers this hypothesis",
+                    "reason": "задача плана покрывает эту гипотезу",
                 })
         elif status == "formulated":
             updates.append({
                 "id": nid,
                 "status": "postponed",
-                "reason": "no_method_this_stage: no plan task tests this hypothesis",
+                "reason": "no_method_this_stage: ни одна задача плана не проверяет эту гипотезу",
             })
     if not updates:
         return 0, 0
@@ -478,6 +478,20 @@ def _outer_step(store: Any, state: MutableMapping[str, Any]) -> tuple[str, str]:
     return "", task_id
 
 
+#: Status codes in the words the card already uses for them, so a reason
+#: does not read «задача EXP-3: success» in the middle of a Russian sentence.
+_RU_STATUS = {
+    "success": "успех", "partial": "частично", "failure": "неудача",
+    "failed": "не удался", "skipped": "пропущена", "done": "выполнена",
+    "running": "выполняется", "planned": "запланирована",
+}
+
+
+def _ru_status(status: Any) -> str:
+    code = str(status or "").strip()
+    return _RU_STATUS.get(code, code)
+
+
 def _graph_full(store: Any) -> dict[str, Any]:
     try:
         return store.full() or {}
@@ -534,8 +548,8 @@ def publish_plan_detail_to_graph(store: Any,
                 nodes.append({"id": existing, "attrs": attrs})
                 if graph_nodes[existing].get("status") != status:
                     updates.append({"id": existing, "status": status,
-                                    "reason": f"experiment plan revision "
-                                              f"{plan.get('revision') or '?'}"})
+                                    "reason": f"правка плана эксперимента "
+                                              f"№{plan.get('revision') or '?'}"})
                 continue
             ref = f"xt{index}"
             ref_to_task[ref] = task_id
@@ -742,7 +756,8 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
         # Tasks dropped by a replan: mark their still-live VMs as failed.
         current = {str(t.get("id") or "") for t in tasks}
         stale = [
-            {"id": vm, "status": "failed", "reason": "replanned: task removed from plan"}
+            {"id": vm, "status": "failed",
+             "reason": "перепланировано: задача убрана из плана"}
             for task_id, vm in vm_ids.items()
             if task_id not in current
             and graph_nodes.get(vm, {}).get("status") in ("planned", "running")
@@ -839,7 +854,7 @@ def _advance_task_card(store: Any, state: MutableMapping[str, Any],
         if current.get("status") == final:
             return
         update: dict[str, Any] = {"id": xt_id, "status": final,
-                                  "reason": f"task {task_id} result: {status}"}
+                                  "reason": f"задача {task_id}: {_ru_status(status)}"}
         # A card that says a thing failed and not why is the gap the graph
         # reports as `unreasoned_failures`, so the failure carries its message.
         attrs = None
@@ -889,7 +904,7 @@ def publish_result_to_graph(
             store.commit(
                 source=_SOURCE,
                 status_updates=[{"id": vm_id, "status": "running",
-                                 "reason": f"task {task_id} executed"}],
+                                 "reason": f"задача {task_id} запущена"}],
                 enforce_permissions=False,
             )
 
@@ -936,7 +951,7 @@ def publish_result_to_graph(
         if current_vm_status in ("planned", "running") and current_vm_status != final:
             status_updates.append({
                 "id": vm_id, "status": final,
-                "reason": f"task {task_id} result: {status}",
+                "reason": f"задача {task_id}: {_ru_status(status)}",
             })
         result = store.commit(
             source=_SOURCE, nodes=nodes, edges=edges,

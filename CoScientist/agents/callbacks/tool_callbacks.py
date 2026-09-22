@@ -1234,8 +1234,9 @@ def sync_plan_to_research_graph(tasks: Iterable[Dict[str, Any]], graph: Any,
             if tracked != "blocked":
                 want = _furthest(tracked, from_tasks.get(step)) or tracked
             if live.get(step) not in (None, want):
-                reason = ("the plan moved this step to " + want if want == tracked
-                          else "its experiment tasks are " + want)
+                reason = ("план перевёл шаг в состояние «" + _RU_STEP.get(want, want) + "»"
+                          if want == tracked else
+                          "задачи эксперимента под этим шагом " + _RU_STEP.get(want, want))
                 updates.append({"id": step, "status": want, "reason": reason})
             if want != tracked:
                 # The roadmap the operator reads is the tracker; leaving it
@@ -1274,6 +1275,9 @@ def sync_plan_to_research_graph(tasks: Iterable[Dict[str, Any]], graph: Any,
 #: How far along a step is. `blocked` is not on this scale — it is a verdict,
 #: not a distance — so it never loses to a derived status.
 _STEP_PROGRESS = {"todo": 0, "in_progress": 1, "done": 2}
+#: The same states in the words the card shows, for the «почему» line.
+_RU_STEP = {"todo": "не начат", "in_progress": "выполняются", "done": "выполнены",
+            "blocked": "заблокирован"}
 
 
 def _furthest(*statuses: Optional[str]) -> Optional[str]:
@@ -1336,8 +1340,8 @@ def _mark_step(state: Any, task: Dict[str, Any], status: str) -> None:
     try:
         from CoScientist.tools.task_tracker import set_task_status
         set_task_status(state, task_id, tracker,
-                        notes="the experiment tasks under this step are "
-                              + status)
+                        notes="задачи эксперимента под этим шагом "
+                              + _RU_STEP.get(status, status))
     except Exception as exc:  # noqa: BLE001 — the graph is already right
         logger.warning("could not move step %s to %s: %s", task_id, status, exc)
 

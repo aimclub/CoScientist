@@ -726,3 +726,78 @@ def test_every_declared_hitl_reaches_the_agent_that_must_use_it(monkeypatch, pro
             for tool in ("declare_work_order", "submit_work_report"):
                 assert tool in instruction, f"{profile}/{name}: {tool} not documented"
     assert checked, f"{profile}: no hitl llm agents found — the test proves nothing"
+
+
+@pytest.mark.parametrize("profile", ["system", "experiments"])
+def test_every_agent_a_human_reads_is_told_which_language_to_write(monkeypatch, profile):
+    """The rule has to reach every prompt, or it reaches the wrong half of one run.
+
+    It used to be pasted by hand into three of the thirty-four prompts —
+    research, planner, orchestrator. On session_989a3098 of 2026-09-22, 36% of
+    the chat (28 061 of 78 706 characters) came out English in a Russian
+    interface, and the longest English block was the 10 483-character decision
+    card written by ExperimentExecutorAgent, whose prompt had never heard of the
+    language setting. Coverage cannot be a habit: it is appended in
+    `_render_instruction`, and this test is what keeps it there.
+
+    `internal:` agents are exempt on purpose — plumbing stages whose output is
+    JSON, ids and tool names, and which the UI never shows.
+    """
+    from CoScientist.assembly.schema import resolve_config_path
+
+    config = load_config(resolve_config_path(profile))
+    system = _build_with(monkeypatch, config, hitl_enabled=True)
+
+    checked = 0
+    for name, cfg in config.agents.items():
+        if not cfg.is_enabled() or cfg.cls != "llm":
+            continue
+        instruction = system.agent(name).instruction
+        if not isinstance(instruction, str):
+            continue
+        if cfg.internal:
+            assert "LANGUAGE REQUIREMENT" not in instruction, \
+                f"{profile}/{name}: internal plumbing does not write prose"
+            continue
+        checked += 1
+        assert "LANGUAGE REQUIREMENT" in instruction, \
+            f"{profile}/{name}: nothing tells this agent which language to write in"
+        # At the END: a prompt is hundreds of lines of English instructions, and
+        # a language rule stated first is contradicted by every line after it.
+        assert instruction.rstrip().endswith("not of the report."), \
+            f"{profile}/{name}: the language rule is not the last thing it reads"
+        # The narration is the half that was English, so it must be named.
+        assert "BEFORE calling a tool" in instruction
+    assert checked >= 5, f"{profile}: only {checked} prompts checked"
+
+
+def test_the_language_default_is_the_one_the_store_uses():
+    """Four mechanisms, four defaults, and which one applied depended on which
+    happened to cover the agent: this text said English, the callback's
+    `normalize_report_language` said Russian, `session_agent` said English
+    again. There is one default now."""
+    from CoScientist.agents.callbacks.report_language import (
+        DEFAULT_REPORT_LANGUAGE,
+        normalize_report_language,
+    )
+    from CoScientist.agents.prompts.templates import _LANGUAGE_REQUIREMENT
+
+    assert DEFAULT_REPORT_LANGUAGE == "ru"
+    assert normalize_report_language("") == "ru"
+    assert "If empty, use English" not in _LANGUAGE_REQUIREMENT
+    assert "write in Russian" in _LANGUAGE_REQUIREMENT
+
+
+def test_a_correction_prompt_does_not_ask_the_model_to_read_session_state():
+    """`session_agent`'s correction prompts are USER messages. ADK substitutes
+    session state into instructions, never into a user turn, so telling the
+    model there that "the session state key report_language gives it" left it
+    guessing — its own thinking in the live session says exactly that. The
+    instruction carries the rule now."""
+    from CoScientist.hitl.session_agent import SessionAgent
+
+    fields = SessionAgent.model_fields
+    for name in ("correction_prompt", "critic_correction_prompt"):
+        prompt = fields[name].default
+        assert "report_language" not in prompt
+        assert "If it is empty, use English" not in prompt

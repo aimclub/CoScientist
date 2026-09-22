@@ -308,7 +308,9 @@ def test_the_step_of_a_finished_task_stops_saying_not_started(monkeypatch):
              for kw in updates for u in (kw.get("status_updates") or [])}
     assert moved.get("PS4", ("",))[0] == "done", moved
     assert moved.get("PS5", ("",))[0] == "in_progress", moved
-    assert "experiment tasks" in moved["PS4"][1]
+    # The reason is what the card shows on its «почему» line, so it is
+    # written in the language of the person reading the graph.
+    assert "задачи эксперимента" in moved["PS4"][1], moved["PS4"][1]
 
     # And the roadmap the operator reads agrees with the graph.
     tracker = {t["id"]: t["status"] for t in state["_master_active_tasks"]}

@@ -48,11 +48,25 @@ _LANGUAGE_REQUIREMENT = '''
 --------------------------------------------------
 LANGUAGE REQUIREMENT
 --------------------------------------------------
-Write ALL user-visible output (all prose, headings, summaries, labels) in the
-language given by: {report_language?} (values: en = English, ru = Russian).
-If empty, use English. This applies to every user-facing answer, not only the
-final report. Tool arguments such as search queries stay in English. Structured
-outputs (JSON keys, task ids) stay unchanged.
+Write in the language given by: {report_language?} — "ru" = Russian,
+"en" = English. **If it is empty, write in Russian**: that is this
+installation's default, and it is what the operator's interface is set to.
+
+This binds EVERY character the operator can read, and the operator reads more
+than your final answer. The text you write BEFORE calling a tool, BETWEEN tool
+calls, and while narrating what you are about to do is shown to them in the
+chat as your message, word for word — it is not an aside and not internal
+thinking. A sentence like "Now I will delegate this to the executor" reaches
+them exactly as written, so it obeys this rule like any other.
+
+So: prose, headings, summaries, labels, status notes, explanations of what you
+are doing and why, the reason you give for a decision, and anything you write
+into the research graph.
+
+These stay as they are, in any language setting: identifiers (H1, TASK-3,
+EXP-2, ART-…), JSON keys and enum values, file and tool names, code, SMILES and
+formulae, and the arguments you pass to tools — a literature search query is
+written in the language of the literature, not of the report.
 '''
 
 
@@ -625,7 +639,7 @@ Update task status to "done" immediately upon completion of each work item.
         PREFER_LINE=prefer_line,
         RESEARCH=render_research_protocol(ctx),
         HITL=ctx.render_hitl(),
-        LANGUAGE=_LANGUAGE_REQUIREMENT,
+        LANGUAGE="",  # appended centrally by _render_instruction
     )
 
 
@@ -1697,7 +1711,7 @@ Plan tasks are delegation units, not a narration of your reasoning.
 <<LANGUAGE>>
 <<CRITIC>>
 ''', ROSTER=ctx.render_sibling_roster(), DISCOVERY=discovery, GRAPH=graph,
-     RESEARCH_FRAME=research_frame, CRITIC=critic, LANGUAGE=_LANGUAGE_REQUIREMENT,
+     RESEARCH_FRAME=research_frame, CRITIC=critic, LANGUAGE="",  # appended centrally by _render_instruction
      TASK_DESC_MCP=_PLANNER_TASK_DESC_MCP if ctx.has_tool("planner_retrieval") else "")
 
 
@@ -2248,7 +2262,7 @@ with the graph tools (read_research_graph / get_graph_history / get_agents_info)
         KNOWLEDGE_GRAPH=knowledge_graph_section,
         RESEARCH_GRAPH=research_graph_section,
         CRITIC_PROTOCOL=render_critic_protocol(ctx),
-        LANGUAGE=_LANGUAGE_REQUIREMENT,
+        LANGUAGE="",  # appended centrally by _render_instruction
     )
 
 
