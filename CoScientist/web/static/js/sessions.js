@@ -349,7 +349,7 @@
           addUserMsg(message.message, message.timestamp);
         } else if (message.type === 'agent_event') {
           activityTouchAgent(message.author, message.timestamp);
-          if (hasText(message.content)) {
+          if (hasText(message.content) && !isChatNoise(message)) {
             addAgentMsg(message.author || 'system', message.content, message.timestamp);
             const foundUrl = extractSandboxUrlFromText(message.content);
             if (foundUrl) updateCoderSandboxButton(foundUrl);
@@ -362,7 +362,7 @@
           });
         } else if (message.type === 'agent_output') {
           activityTouchAgent(message.agent, message.timestamp);
-          addAgentOutputMsg(message.agent, message.content, message.timestamp, message.caller);
+          if (!PLAN_AGENTS.includes(message.agent)) addAgentOutputMsg(message.agent, message.content, message.timestamp, message.caller);
         } else if (message.type === 'tool_activity') {
           applyToolActivity(message, true);
         } else if (message.type === 'hitl_request') {

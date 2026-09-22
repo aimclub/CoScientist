@@ -84,7 +84,9 @@
             break;
           case 'agent_event':
             activityTouchAgent(data.author, data.timestamp);
-            if (hasText(data.content)) {
+            if (hasText(data.content) && isChatNoise(data)) {
+              addTelemetry('NOTE :: ' + data.author + ' :: ' + stripThinking(data.content).slice(0, 200));
+            } else if (hasText(data.content)) {
               hideTyping();
               highlightAgent(data.author);
               addAgentMsg(data.author, data.content, data.timestamp);
@@ -114,6 +116,10 @@
             // The run continues after a subordinate answers, so the typing
             // indicator stays up — only the deliverable is posted here.
             activityTouchAgent(data.agent, data.timestamp);
+            if (PLAN_AGENTS.includes(data.agent)) {
+              addTelemetry('OUTPUT :: ' + data.agent + ' (plan view only)');
+              break;
+            }
             highlightAgent(data.agent);
             addAgentOutputMsg(data.agent, data.content, data.timestamp, data.caller);
             addTelemetry('OUTPUT :: ' + data.agent + ' → ' + (data.caller || 'system'));
