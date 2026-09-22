@@ -33,13 +33,33 @@ _RANGE_C = re.compile(
     r"([+-]?\d+(?:[.,]\d+)?)\s*(?:[–—-]|\.\.)\s*"
     r"([+-]?\d+(?:[.,]\d+)?)\s*°?\s*[CcСс]"
 )
+# A temperature-labelled condition ("температура: 50–70"): the number carries
+# no °C, so read it from the value once the FIELD is known to be temperature.
+_TEMP_LABEL = re.compile(r"температур|temperature|\btemp\b|t\s*[,=]|t\s*°", re.I)
+_RANGE_BARE = re.compile(
+    r"([+-]?\d+(?:[.,]\d+)?)\s*(?:[–—-]|\.\.|to|до)\s*([+-]?\d+(?:[.,]\d+)?)"
+)
+_NUMBER_BARE = re.compile(r"[+-]?\d+(?:[.,]\d+)?")
 _WATER = re.compile(r"\b(?:water|aqueous|вод(?:а|ы|е|у|ой)|водн\w*)\b", re.I)
+_ALCOHOL_MEDIUM = re.compile(
+    r"(?:спирт\w*|этанол\w*|метанол\w*|изопропанол\w*|alcohol|ethanol|methanol|isopropanol|EtOH|MeOH|iPrOH)",
+    re.I,
+)
 _SOLVENT_DECLARATION = re.compile(
     r"\b(?:solvent|medium|aqueous|water|растворител\w*|среда|вода|водн\w*)\b", re.I
 )
 _NO_CATALYST = re.compile(
     r"(?:без|отсутств\w*)[^.;]{0,50}(?:металл\w*\s+)?катализ|"
-    r"(?:no|without)\s+(?:metal(?:-containing)?\s+)?catalyst",
+    r"катализ\w*[^.;]{0,30}(?:не\s+(?:требуетс\w*|нужн\w*|использ\w*|примен\w*)|отсутств\w*)|"
+    r"(?:no|without)\s+(?:metal(?:-containing)?\s+)?catalyst|"
+    r"catalyst[- ]free",
+    re.I,
+)
+# A catalyst FIELD whose value says "none / not needed" — an explicit absence.
+_NO_CATALYST_VALUE = re.compile(
+    r"(?:не\s+(?:требуетс\w*|нужн\w*|использ\w*|примен\w*)|"
+    r"отсутств\w*|^\s*нет\s*$|^\s*none\s*$|"
+    r"not\s+(?:required|needed|used)|catalyst[- ]free)",
     re.I,
 )
 _METAL_SYMBOL = re.compile(
@@ -70,13 +90,33 @@ def _metal_named(value: str) -> bool:
 
 
 def _temperature_values(step: Any) -> list[float]:
+    """Temperatures declared for a step, °C.
+
+    A condition whose NAME marks it as temperature ("температура", "temperature",
+    "T") has its numbers read even without a °C unit — the model often writes
+    ``температура: 50–70``. Any other condition contributes only numbers that
+    explicitly carry °C, so a bare "время: 3–6" never leaks in as a temperature.
+    """
     values: list[float] = []
     for condition in step.conditions:
-        text = f"{condition.name} {condition.value}"
+        name = str(condition.name or "")
+        value = str(condition.value or "")
+        is_temp_field = bool(_TEMP_LABEL.search(name))
+        if is_temp_field:
+            ranges = list(_RANGE_BARE.finditer(value))
+            if ranges:
+                for match in ranges:
+                    values.extend(float(v.replace(",", ".")) for v in match.groups())
+                continue
+            nums = _NUMBER_BARE.findall(value)
+            if nums:
+                values.extend(float(n.replace(",", ".")) for n in nums)
+                continue
+        text = f"{name} {value}"
         ranges = list(_RANGE_C.finditer(text))
         if ranges:
             for match in ranges:
-                values.extend(float(value.replace(",", ".")) for value in match.groups())
+                values.extend(float(v.replace(",", ".")) for v in match.groups())
             continue
         values.extend(float(match.group(1).replace(",", ".")) for match in _NUMBER_C.finditer(text))
     return values
@@ -165,11 +205,15 @@ def _check_temperature(
     route: SynthesisRoute,
     evidence_ids: list[str],
 ) -> ComplianceCheck:
+    """A step's temperature is a RANGE; it complies when the range overlaps
+    the ТЗ window (the operating point is then the overlap), and fails only
+    when the whole range lies outside it. «50–80 °C» against «25–70 °C» is
+    therefore compliant at 50–70 °C, not rejected for the 80."""
     if constraint.resolution != "confirmed" or not constraint.machine_evaluable:
         return ComplianceCheck(
             constraint_id=constraint.constraint_id,
-            status="unknown",
-            reason="Температурное требование не подтверждено как числовой машинный порог.",
+            status="needs_review",
+            reason="Температурное требование не задано как числовой машинный порог — нужна проверка оператором.",
         )
     per_step = [_temperature_values(step) for step in route.steps]
     if any(not values for values in per_step):
@@ -180,27 +224,38 @@ def _check_temperature(
         )
     minimum = float(constraint.value["minimum"])
     maximum = float(constraint.value["maximum"])
-    outside = [
-        value for values in per_step for value in values
-        if value < minimum or value > maximum
-    ]
-    if outside:
-        return ComplianceCheck(
-            constraint_id=constraint.constraint_id,
-            status="fail",
-            reason=f"Заявленная температура {outside[0]:g} °C вне допустимого диапазона {minimum:g}–{maximum:g} °C.",
-            evidence_ids=evidence_ids,
-        )
+    windows: list[str] = []
+    for index, values in enumerate(per_step, 1):
+        low, high = min(values), max(values)
+        if high < minimum or low > maximum:
+            return ComplianceCheck(
+                constraint_id=constraint.constraint_id,
+                status="fail",
+                reason=(
+                    f"Стадия {index}: заявленная температура {low:g}–{high:g} °C целиком вне "
+                    f"допустимого диапазона {minimum:g}–{maximum:g} °C."
+                ),
+                evidence_ids=evidence_ids,
+            )
+        lo, hi = max(low, minimum), min(high, maximum)
+        if (low, high) != (lo, hi):
+            windows.append(
+                f"стадия {index}: в источнике {low:g}–{high:g} °C, работать при {lo:g}–{hi:g} °C"
+            )
+    note = ("; ".join(windows) + ". ") if windows else ""
     if not evidence_ids:
         return ComplianceCheck(
             constraint_id=constraint.constraint_id,
-            status="unknown",
-            reason="Температура находится в диапазоне, но её источник и место в полном тексте не верифицированы.",
+            status="unverified",
+            reason=(
+                f"Температура совместима с диапазоном {minimum:g}–{maximum:g} °C. {note}"
+                "Источник условия не верифицирован по полному тексту — подтвердить опытом."
+            ).strip(),
         )
     return ComplianceCheck(
         constraint_id=constraint.constraint_id,
         status="pass",
-        reason="Все заявленные температуры находятся в подтверждённом диапазоне.",
+        reason=(f"Все заявленные температуры совместимы с подтверждённым диапазоном. {note}").strip(),
         evidence_ids=evidence_ids,
     )
 
@@ -219,26 +274,33 @@ def _check_aqueous(
     if constraint.resolution != "confirmed" or not constraint.machine_evaluable:
         return ComplianceCheck(
             constraint_id=constraint.constraint_id,
-            status="unknown",
-            reason="Требование водной среды не подтверждено оператором.",
+            status="needs_review",
+            reason="Требование среды не задано как машинное правило — нужна проверка оператором.",
         )
+    medium = str((constraint.value or {}).get("medium") or "water")
+    allows_alcohol = medium == "water_or_alcohol"
+    label = "водная или спиртовая среда" if allows_alcohol else "водная среда"
+
+    def _matches(text: str) -> bool:
+        return bool(_WATER.search(text) or (allows_alcohol and _ALCOHOL_MEDIUM.search(text)))
+
     texts = [_condition_text(step) for step in route.steps]
-    if any(not text.strip() or not _WATER.search(text) for text in texts):
+    if any(not text.strip() or not _matches(text) for text in texts):
         return ComplianceCheck(
             constraint_id=constraint.constraint_id,
             status="unknown",
-            reason="Водная среда не указана явно для всех стадий маршрута.",
+            reason=f"{label.capitalize()} не указана явно для всех стадий маршрута.",
         )
     if not evidence_ids:
         return ComplianceCheck(
             constraint_id=constraint.constraint_id,
-            status="unknown",
-            reason="Вода указана, но условие не привязано к верифицированному месту источника.",
+            status="unverified",
+            reason=f"{label.capitalize()} указана, но источник условия не верифицирован по полному тексту.",
         )
     return ComplianceCheck(
         constraint_id=constraint.constraint_id,
         status="pass",
-        reason="Водная среда подтверждена источником.",
+        reason=f"{label.capitalize()} подтверждена источником.",
         evidence_ids=evidence_ids,
     )
 
@@ -268,8 +330,8 @@ def _check_metal_catalyst(
     if constraint.resolution != "confirmed" or not constraint.machine_evaluable:
         return ComplianceCheck(
             constraint_id=constraint.constraint_id,
-            status="unknown",
-            reason="Запрет металлсодержащих катализаторов не подтверждён.",
+            status="needs_review",
+            reason="Запрет металлсодержащих катализаторов не задан как машинное правило — нужна проверка оператором.",
         )
     catalyst_texts: list[str] = []
     per_step_texts: list[str] = []
@@ -303,7 +365,8 @@ def _check_metal_catalyst(
         explicit_absence.append(
             any(
                 _CATALYST_LABEL.search(condition.name)
-                and _NO_METAL_VALUE.search(condition.value)
+                and (_NO_METAL_VALUE.search(condition.value)
+                     or _NO_CATALYST_VALUE.search(condition.value))
                 for condition in step.conditions
             )
             or bool(_NO_CATALYST.search(_condition_text(step)))
@@ -317,7 +380,7 @@ def _check_metal_catalyst(
     if not evidence_ids:
         return ComplianceCheck(
             constraint_id=constraint.constraint_id,
-            status="unknown",
+            status="unverified",
             reason="Заявлено отсутствие металлокатализатора, но источник условия не верифицирован.",
         )
     return ComplianceCheck(
@@ -337,8 +400,8 @@ def _check_solvent_policy(
     if constraint.resolution != "confirmed" or not constraint.machine_evaluable or not names:
         return ComplianceCheck(
             constraint_id=constraint.constraint_id,
-            status="unknown",
-            reason="Запрет вредных растворителей не задан как проверяемый перечень.",
+            status="needs_review",
+            reason="Запрет вредных растворителей не задан как проверяемый перечень — нужна проверка оператором.",
         )
     normalized_names = {_norm(name) for name in names}
     for step in route.steps:
@@ -360,7 +423,7 @@ def _check_solvent_policy(
     if not evidence_ids:
         return ComplianceCheck(
             constraint_id=constraint.constraint_id,
-            status="unknown",
+            status="unverified",
             reason="Состав среды не привязан к верифицированному месту источника.",
         )
     return ComplianceCheck(
@@ -375,36 +438,41 @@ def _completeness_checks(
     route: SynthesisRoute,
     records: dict[str, SourceRecord],
 ) -> list[ComplianceCheck]:
+    """Conditions must EXIST for every step (missing data blocks the route);
+    an unverified source is a caveat. Yields are advisory: the economics
+    server costs a route without them (default_yield, flagged in its
+    assumptions), so a missing yield must not stop the hand-off."""
     per_step_evidence = _step_evidence(route, records)
-    conditions_ok = all(
-        step.conditions and step.conditions_status == "reported" and bool(per_step_evidence[index])
+    conditions_present = all(
+        step.conditions and step.conditions_status != "missing" for step in route.steps
+    )
+    conditions_verified = conditions_present and all(
+        step.conditions_status == "reported" and bool(per_step_evidence[index])
         for index, step in enumerate(route.steps)
     )
-    yields_ok = all(
-        step.yield_fraction is not None and step.yield_status == "reported" and bool(per_step_evidence[index])
+    yields_present = all(step.yield_fraction is not None for step in route.steps)
+    yields_verified = yields_present and all(
+        step.yield_status == "reported" and bool(per_step_evidence[index])
         for index, step in enumerate(route.steps)
     )
+    evidence = sorted({item for ids in per_step_evidence for item in ids})
+    if conditions_verified:
+        conditions = ("pass", "Условия каждой стадии заполнены и подтверждены источником.")
+    elif conditions_present:
+        conditions = ("unverified", "Условия каждой стадии заполнены, но не подтверждены по полному тексту источника.")
+    else:
+        conditions = ("unknown", "Не для каждой стадии есть условия проведения.")
+    if yields_verified:
+        yields = ("pass", "Выход каждой стадии заполнен и подтверждён источником.")
+    elif yields_present:
+        yields = ("unverified", "Выход каждой стадии заполнен, но не подтверждён по полному тексту источника.")
+    else:
+        yields = ("unknown", "Не для каждой стадии есть числовой выход; экономика считается с оговоркой (default_yield).")
     return [
-        ComplianceCheck(
-            constraint_id="SYS-CONDITIONS-COMPLETE",
-            status="pass" if conditions_ok else "unknown",
-            reason=(
-                "Условия каждой стадии заполнены и подтверждены источником."
-                if conditions_ok else
-                "Не для каждой стадии есть непустые проверенные условия."
-            ),
-            evidence_ids=sorted({item for ids in per_step_evidence for item in ids}),
-        ),
-        ComplianceCheck(
-            constraint_id="SYS-YIELDS-COMPLETE",
-            status="pass" if yields_ok else "unknown",
-            reason=(
-                "Выход каждой стадии заполнен и подтверждён источником."
-                if yields_ok else
-                "Не для каждой стадии есть проверенный числовой выход; экономика недопустима."
-            ),
-            evidence_ids=sorted({item for ids in per_step_evidence for item in ids}),
-        ),
+        ComplianceCheck(constraint_id="SYS-CONDITIONS-COMPLETE", status=conditions[0],
+                        reason=conditions[1], evidence_ids=evidence),
+        ComplianceCheck(constraint_id="SYS-YIELDS-COMPLETE", status=yields[0],
+                        reason=yields[1], evidence_ids=evidence),
     ]
 
 
@@ -438,10 +506,12 @@ def evaluate_route(
         if constraint.kind == "minimum_product_purity":
             checks.append(_check_product_purity(constraint, route, records))
             continue
+        # No machine rule for this ТЗ clause: code cannot judge it, so it
+        # never blocks — it rides along as a review flag for the operator.
         checks.append(ComplianceCheck(
             constraint_id=constraint.constraint_id,
-            status="unknown",
-            reason="Для этого ограничения нет детерминированного проверяющего правила.",
+            status="needs_review",
+            reason="Для этого ограничения нет машинного правила — требует проверки оператором.",
         ))
 
     checks.extend(_completeness_checks(route, records))
@@ -468,7 +538,14 @@ def qualify_routes(
     spec: Any,
     source_records: Iterable[SourceRecord | dict] = (),
 ) -> QualifiedRoutes:
-    proposals = routes if isinstance(routes, SynthesisRoutes) else SynthesisRoutes.model_validate(routes)
+    if isinstance(routes, SynthesisRoutes):
+        proposals = routes
+    elif isinstance(routes, list):
+        proposals = SynthesisRoutes(routes=[
+            r if isinstance(r, SynthesisRoute) else SynthesisRoute.model_validate(r) for r in routes
+        ])
+    else:
+        proposals = SynthesisRoutes.model_validate(routes)
     requirements = spec if isinstance(spec, RequirementsSpec) else RequirementsSpec.model_validate(spec)
     records = [record if isinstance(record, SourceRecord) else SourceRecord.model_validate(record) for record in source_records]
     assessed = [evaluate_route(route, requirements, records) for route in proposals.routes]
