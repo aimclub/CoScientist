@@ -1,7 +1,15 @@
 """A route with evidence gaps may be screened, but cannot enter production costing."""
 from types import SimpleNamespace
 
-from CoScientist.microfluidics.route_compliance import guard_economics_routes, qualify_routes
+import pytest
+
+from CoScientist.microfluidics.models import SynthesisRoutes
+from CoScientist.microfluidics.route_compliance import (
+    _apply_route_repair_values,
+    _route_repair_form,
+    guard_economics_routes,
+    qualify_routes,
+)
 
 
 def _route(*, yield_fraction=None):
@@ -61,3 +69,44 @@ def test_costing_guard_explains_incomplete_legacy_qualified_route():
 
     assert blocked is not None
     assert "requires nonempty products" in blocked["reasons"][0]
+
+
+def test_route_repair_form_updates_and_validates_nested_state():
+    document = _route(yield_fraction=0.8)
+    document["routes"][0]["steps"][0]["reactants"] = []
+    proposals = SynthesisRoutes.model_validate(document)
+    form, locations = _route_repair_form(proposals)
+
+    assert form is not None
+    block = form["blocks"][0]["title"]
+    repaired = _apply_route_repair_values(proposals, {
+        block: {
+            "reactants": '[{"name": "Corrected feed", "smiles": "CCO"}]',
+            "products": '[{"name": "Product"}]',
+            "yield_fraction": "0,72",
+        },
+    }, locations)
+
+    step = repaired.routes[0].steps[0]
+    assert step.reactants[0].name == "Corrected feed"
+    assert step.reactants[0].smiles == "CCO"
+    assert step.yield_fraction == 0.72
+    # The object supplied to the form remains unchanged until the validated
+    # replacement is explicitly written to session state.
+    assert proposals.routes[0].steps[0].reactants == []
+
+
+def test_route_repair_rejects_invalid_json_without_partial_update():
+    document = _route(yield_fraction=0.8)
+    document["routes"][0]["steps"][0]["products"] = []
+    proposals = SynthesisRoutes.model_validate(document)
+    form, locations = _route_repair_form(proposals)
+    block = form["blocks"][0]["title"]
+
+    with pytest.raises(ValueError, match="JSON-массив"):
+        _apply_route_repair_values(proposals, {
+            block: {"reactants": '[{"name": "changed"}]', "products": "not-json"},
+        }, locations)
+
+    assert proposals.routes[0].steps[0].reactants[0].name == "Feed"
+    assert proposals.routes[0].steps[0].products == []

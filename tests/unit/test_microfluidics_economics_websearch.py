@@ -14,6 +14,19 @@ def test_economics_agent_has_websearch_fallback() -> None:
 
     assert "websearch" in config["agents"]["EconomicsAgent"]["tools"]
     assert config["agents"]["EconomicsAgent"]["hitl"] is True
+    callbacks = config["agents"]["EconomicsAgent"]["callbacks"]["before_agent"]
+    assert callbacks.index("review_incomplete_economics_routes") < callbacks.index("gate_economics")
+
+
+def test_economics_report_reaches_the_chat() -> None:
+    """Its costing is a deliverable, and it runs as a ModuleB_Design step —
+    without the flag the report would only ever reach the terminal log."""
+    config = yaml.safe_load(
+        (ROOT / "CoScientist" / "agents" / "microfluidics.yaml").read_text()
+    )
+
+    assert config["agents"]["EconomicsAgent"]["report_output"] is True
+    assert "EconomicsAgent" in config["agents"]["ModuleB_Design"]["children"]
 
 
 def test_optimizer_has_websearch_and_human_recovery() -> None:

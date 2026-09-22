@@ -1794,6 +1794,8 @@ _cb("qualify_synthesis_routes", "after_agent",
     factory=lambda ctx: _microfluidics_route_compliance("qualify_synthesis_routes"))
 _cb("gate_economics", "before_agent",
     factory=lambda ctx: _microfluidics_route_compliance("gate_economics"))
+_cb("review_incomplete_economics_routes", "before_agent",
+    factory=lambda ctx: _microfluidics_route_compliance("review_incomplete_economics_routes"))
 _cb("review_preliminary_economics", "before_agent",
     factory=lambda ctx: _microfluidics_route_compliance("review_preliminary_economics"))
 _cb("guard_economics_routes", "before_tool",

@@ -412,8 +412,13 @@ agents:
     # Allows an explicit request for missing/confirmed supplier data.
     hitl: true
     output_key: economics
+    # The costing is a deliverable: it runs as a step of ModuleB_Design, so
+    # nothing speaks it in the top-level stream — post it to the chat as
+    # EconomicsAgent's own message (see logging/agent_output.py).
+    report_output: true
     callbacks:
-      before_agent: [compile_requirements, gate_economics, inject_target_molecule]
+      before_agent: [compile_requirements, review_incomplete_economics_routes,
+                     gate_economics, inject_target_molecule]
       before_tool: [guard_economics_routes, TavilySearchLimiter]
       # The server's numbers, as given, for the report: economics_ranking.
       after_tool: [collect_economics_result]
