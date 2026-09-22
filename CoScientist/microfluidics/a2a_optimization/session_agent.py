@@ -19,13 +19,16 @@ class OptimizationSessionAgent(SessionAgent):
         if not isinstance(task, dict):
             result = ctx.session.state.get(RESULT_KEY)
             if isinstance(result, dict) and result.get("state") == "invalid_input":
+                if result.get("economics_ranking_required"):
+                    # optimization_start already asked the operator for the
+                    # route costs in its own form (or no operator is attached):
+                    # another pass of the model cannot add the missing numbers.
+                    return None
                 return (
                     "optimization_start отклонил локальные входные данные. Не закрывай "
-                    "сессию: прочитай точную ошибку. При пробеле в цене сначала используй "
-                    "tavily_search для точного вещества, формы и фасовки; затем запроси у "
-                    "человека подтверждённый economics_ranking или недостающие поля через "
-                    "HITL. Не придумывай ranking и не повторяй optimization_start, пока "
-                    "неисправленные данные остаются в состоянии."
+                    "сессию: прочитай точную ошибку и запроси у человека через HITL "
+                    "недостающие сведения. Не придумывай данные и не повторяй "
+                    "optimization_start, пока неисправленные данные остаются в состоянии."
                 )
             return None
         state = str(task.get("state") or "")

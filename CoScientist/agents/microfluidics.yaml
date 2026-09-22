@@ -189,7 +189,7 @@ agents:
       builds the roadmap FROM the structured ТЗ: one literature task per
       LIT-xx query, registered via create_plan.
     prompt: microfluidics_planner
-    tools: [create_plan_tool]
+    tools: []
     output_key: planner_roadmap
     hitl: true
 
@@ -240,7 +240,7 @@ agents:
       literature and the web and extracts the requested data (classes, IFT/CMC,
       limitations, analogues). Does NOT call explore_my_papers.
     prompt: microfluidics_research
-    tools: [websearch, paper_analysis, papers_search, task_tracker]
+    tools: [websearch, paper_analysis, papers_search]
     output_key: search_results
     # Runs concurrently for all LIT-xx tasks under LiteratureOrchestrator. HITL review is done
     # at the orchestrator level (common start and end checks), so research queries
@@ -272,7 +272,7 @@ agents:
       analyze available and user-uploaded papers with explore_my_papers. It
       extracts synthesis routes, stages, reaction conditions, and flow viability.
     prompt: microfluidics_paper_retriever
-    tools: [websearch, paper_analysis, papers_search, task_tracker]
+    tools: [websearch, paper_analysis, papers_search]
     output_key: search_results
     # Runs under LiteratureOrchestrator concurrently with ResearchAgent.
     report_output: true

@@ -1,4 +1,4 @@
-"""Module-A route selection and lossless hand-off to downstream stages."""
+"""Module-A route selection and its hand-off of the selected route downstream."""
 from __future__ import annotations
 
 import json
@@ -16,6 +16,7 @@ from CoScientist.microfluidics.models import (
     LiteratureRoute,
     ProcessStep,
     QualifiedRoutes,
+    RouteDecision,
     RouteSelection,
     Substance,
     SynthesisRoute,
@@ -88,12 +89,39 @@ def literature_route_to_synthesis(route: LiteratureRoute) -> SynthesisRoute:
     )
 
 
-def finalize_route_selection(callback_context: CallbackContext) -> types.Content:
-    """Publish every literature route; selection is advisory until human review.
+def _rejected_decisions(
+    selection: RouteSelection, rejected: list[LiteratureRoute], selected_id: str,
+) -> list[RouteDecision]:
+    """Why each route left the hand-off, as the selection gave it."""
+    by_id = {item.route_id: item for item in selection.decisions}
+    decisions = []
+    for route in rejected:
+        item = by_id.get(route.route_id)
+        reasons = [item.reason, *item.hard_violations] if item else [
+            f"Не выбран в Module A: активный маршрут — {selected_id}."
+        ]
+        decisions.append(RouteDecision(
+            route_id=route.route_id,
+            product=route.product,
+            overall_status="rejected",
+            reasons=[reason for reason in reasons if reason.strip()],
+        ))
+    return decisions
 
-    A model recommendation and automatic TZ screening must never sever the
-    Module-A -> Module-B hand-off.  Both are retained as audit information for
-    the operator, while all discovered routes remain available downstream.
+
+def finalize_route_selection(callback_context: CallbackContext) -> types.Content:
+    """Hand Module B the single selected route; keep the others as audit only.
+
+    With a ``selected_route_id`` the selected literature route is the only
+    active route downstream — ``synthesis_routes``, ``qualified_routes`` and
+    ``literature_analysis.synthesis_routes`` carry it alone, so design,
+    economics and the A2A hand-off never cost or ship the routes the selection
+    dropped. Those stay in ``route_candidates_audit`` (full routes) and in
+    ``qualified_routes.rejected`` (id, product, reasons) for the report.
+
+    Without a usable selection (none selected, unparsable, or an id that is no
+    literature route) every route is forwarded as before: a model decision or
+    automatic TZ screening must never sever the Module-A -> Module-B hand-off.
     """
     state = callback_context.state
     try:
@@ -115,14 +143,32 @@ def finalize_route_selection(callback_context: CallbackContext) -> types.Content
     decision_ids = {item.route_id for item in selection.decisions}
     if decision_ids != set(by_id):
         logger.warning(
-            "route selection decisions do not cover all routes; preserving candidates: expected=%s actual=%s",
+            "route selection decisions do not cover all routes: expected=%s actual=%s",
             sorted(by_id), sorted(decision_ids),
         )
-    # Never use selected_route_id as a transport filter.  It is only the
-    # agent's recommendation; the human makes the later final choice.
-    chosen = list(analysis.synthesis_routes)
+    selected_id = selection.selected_route_id.strip()
+    narrowed = bool(selected_id) and selected_id in by_id
+    if narrowed:
+        # ModuleA's selection is the only active route (the root never asks
+        # for a second route decision), so it is also the transport filter.
+        chosen = [by_id[selected_id]]
+        dropped = [route for route in analysis.synthesis_routes if route.route_id != selected_id]
+    else:
+        if selected_id:
+            logger.warning(
+                "selected route %s is not a literature route %s; forwarding every candidate",
+                selected_id, sorted(by_id),
+            )
+        chosen = list(analysis.synthesis_routes)
+        dropped = []
 
-    state[ROUTE_CANDIDATES_AUDIT_KEY] = [route.model_dump() for route in analysis.synthesis_routes]
+    # Full routes that are not active (every candidate when none was
+    # selected) — audit for the report, never an active route.
+    state[ROUTE_CANDIDATES_AUDIT_KEY] = [
+        route.model_dump() for route in (dropped if narrowed else analysis.synthesis_routes)
+    ]
+    if narrowed:
+        analysis = analysis.model_copy(update={"synthesis_routes": chosen})
     from CoScientist.config import get_settings
     operator_confirmed = bool(get_settings().web.hitl_enabled)
     state[SELECTION_AUDIT_KEY] = {
@@ -140,13 +186,13 @@ def finalize_route_selection(callback_context: CallbackContext) -> types.Content
     spec = state.get(REQUIREMENTS_KEY) or compile_requirements(state.get("structured_tz"))
     state[REQUIREMENTS_KEY] = spec if isinstance(spec, dict) else spec.model_dump()
     if routes.routes:
-        # Qualification is informational at this stage.  Passing candidates to
-        # economics/Module C must not depend on an LLM decision or a TZ gate;
-        # the RootOrchestrator's human review makes the final selection.
+        # Qualification is informational at this stage.  Passing the route(s)
+        # to economics/Module C must not depend on a later TZ gate.
         approved_routes = [route.model_copy(update={"overall_status": "eligible"}) for route in routes.routes]
         qualified = QualifiedRoutes(
             status="ok",
             routes=approved_routes,
+            rejected=_rejected_decisions(selection, dropped, selected_id),
             gaps=list(routes.gaps),
         )
     else:
@@ -154,8 +200,11 @@ def finalize_route_selection(callback_context: CallbackContext) -> types.Content
     state[QUALIFIED_ROUTES_KEY] = qualified.model_dump()
 
     payload = {
-        "status": "candidates_forwarded" if chosen else "none_selected",
+        "status": ("selected_route_forwarded" if narrowed
+                   else "candidates_forwarded" if chosen else "none_selected"),
         "selected_route_id": selection.selected_route_id,
+        "active_route_ids": [route.route_id for route in chosen],
+        "rejected_route_ids": [route.route_id for route in dropped],
         "qualified_status": qualified.status,
     }
     return types.Content(

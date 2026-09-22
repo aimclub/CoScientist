@@ -14,6 +14,7 @@ module A still decides.
 """
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Dict, List, Optional
 
@@ -107,6 +108,30 @@ def use_fixed_target_molecule(callback_context: CallbackContext) -> Optional[typ
     )
 
 
+def _selected_route(state: Any) -> Optional[Dict[str, Any]]:
+    """The route whose product Module B takes: the one ``route_selection``
+    selected, found among the active routes (``synthesis_routes``) or the
+    literature routes; without a selection, the only route handed on."""
+    selection = state.get("route_selection")
+    if isinstance(selection, str):
+        try:
+            selection = json.loads(selection)
+        except ValueError:
+            selection = None
+    selected_id = str(selection.get("selected_route_id") or "").strip() if isinstance(selection, dict) else ""
+    synthesis = state.get("synthesis_routes")
+    analysis = state.get("literature_analysis")
+    for doc, key in ((synthesis, "routes"), (analysis, "synthesis_routes")):
+        routes = [r for r in (doc.get(key) if isinstance(doc, dict) else None) or [] if isinstance(r, dict)]
+        if selected_id:
+            match = next((r for r in routes if str(r.get("route_id") or "").strip() == selected_id), None)
+            if match is not None:
+                return match
+        elif len(routes) == 1:
+            return routes[0]
+    return None
+
+
 def use_selected_route_product(callback_context: CallbackContext) -> Optional[types.Content]:
     """Hand the operator-selected literature product to Module B verbatim.
 
@@ -116,11 +141,9 @@ def use_selected_route_product(callback_context: CallbackContext) -> Optional[ty
     """
     state = callback_context.state
     try:
-        analysis = state.get("literature_analysis") or {}
-        routes = analysis.get("synthesis_routes") if isinstance(analysis, dict) else None
-        if not routes or len(routes) != 1:
+        route = _selected_route(state)
+        if route is None:
             return None
-        route = routes[0]
         product = (route.get("product") or {}) if isinstance(route, dict) else {}
         if isinstance(product, dict):
             name = str(product.get("name") or product.get("smiles") or "").strip()
