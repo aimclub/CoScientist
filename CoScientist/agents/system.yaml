@@ -279,9 +279,12 @@ agents:
       it returns no/empty/insufficient results, escalate by reformulating into
       "find and download papers about <expanded topic>". Do NOT use it to read a
       specific repository or URL the user named — that goes to TaskExecutorAgent.
+      Also route here questions about the internal paper database itself: how
+      many papers it holds and which domains or fields it covers.
     planning: |-
       Use it when your domain knowledge is not enough.
       Use it to gather extra information about the scientific field and literature.
+      Use it to find out what the internal paper database contains (paper count, domains, fields).
       Use it when information cannot be computed or retrieved via tools, and specifically 
       requires searching information from the web or literature.  
     # Decides how to search, then judges and synthesizes what comes back.

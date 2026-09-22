@@ -415,15 +415,34 @@ def research(ctx: PromptContext) -> str:
 
     steps, n = [], 1
     if paper_analysis:
+        # 0) Questions ABOUT the database are answered from its metadata, not by
+        #    RAG over its content - RAG only ever sees the chunks it retrieved.
+        steps.append(
+            f"{n}. If the question is about the internal literature database itself "
+            "(how many papers it holds, which research domains or fields it covers), "
+            "call `get_papers_database_statistics` and answer from its report. This "
+            "takes precedence over every step below: do not use RAG, paper search or "
+            "web search for it."
+        )
+        n += 1
+        # 1a) A request for a LIST of papers from the internal database is not a
+        #     question to answer - RAG would answer it instead of listing papers.
+        steps.append(
+            f"{n}. If the user asks which papers in the internal literature database "
+            "cover a topic (a list of papers, not an answer), call `find_papers_in_db` "
+            "with the topic and report the papers it returns. For such requests it "
+            "replaces `explore_scientific_database`."
+        )
+        n += 1
         # 1) If user has uploaded papers (S3 keys) analyse them first.
         steps.append(
             f"{n}. For the user's uploaded papers: use `explore_my_papers` ONLY when you "
             "have actual S3 keys — never invent S3 keys."
         )
         n += 1
-        # 2) Otherwise (or if no uploaded papers) always call explore_chemistry_database first
+        # 2) Otherwise (or if no uploaded papers) always call explore_scientific_database first
         steps.append(
-            f"{n}. If there are NO user-uploaded papers, ALWAYS call `explore_chemistry_database` before other literature tools. "
+            f"{n}. If there are NO user-uploaded papers, ALWAYS call `explore_scientific_database` before other literature tools. "
             "Do this even if you plan to use `search_papers` or `download_papers_from_search` afterwards."
         )
     n += 1
@@ -464,6 +483,11 @@ def research(ctx: PromptContext) -> str:
         "`download_papers_from_search` for downloadable/analyzable papers. "
         "Do not download unless the user asks for analysis or downloading.\n"
       )
+      if paper_analysis:
+        paper_search_section += (
+          "Both search OpenAlex, outside the internal database. For papers that "
+          "are already in the internal database, use `find_papers_in_db`.\n"
+        )
 
     prefer_line = "- Prefer peer-reviewed evidence over web content\n" if lit else ""
 
