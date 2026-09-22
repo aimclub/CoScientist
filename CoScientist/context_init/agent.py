@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events.event import Event
@@ -35,6 +35,10 @@ from CoScientist.hitl.session_agent import SessionAgent
 logger = logging.getLogger(__name__)
 
 FRAME_STATE_KEY = "research_frame"
+# ``research_frame`` is the agent output and may be present before the operator
+# accepts it.  This separate marker is written only after the frame has been
+# seeded, so a failed or interrupted first turn can still be retried.
+FRAME_COMPLETED_STATE_KEY = "research_frame_initialized"
 _FORM_INTRO = ("Заполните рамку исследования. Пустые поля агент заполнит "
                "рабочими значениями. Рамка задаёт стратегию: литературный "
                "поиск, дорогой или дешёвый эксперимент.")
@@ -119,8 +123,33 @@ def render_frame_summary(frame: ResearchFrame) -> str:
     return "\n".join(lines)
 
 
+def frame_is_initialized(state: Dict[str, Any]) -> bool:
+    """Whether this session has already completed its one-time frame stage."""
+    return bool(state.get(FRAME_COMPLETED_STATE_KEY))
+
+
 class ContextInitSessionAgent(SessionAgent):
     """SessionAgent that confirms the frame via a web form and seeds the graph."""
+
+    async def _run_async_impl(
+        self, ctx: InvocationContext
+    ) -> AsyncGenerator[Event, None]:
+        """Run the framing stage only once per persisted ADK session.
+
+        The pipeline wrapper invokes every pre-stage for every chat turn.  Once
+        this agent successfully finishes, later user messages are continuations
+        of the same research and must go straight to the orchestrator.
+        """
+        if frame_is_initialized(ctx.session.state):
+            logger.info(
+                "research frame already initialized; skipping ContextInitAgent "
+                "for session %s",
+                session_key(ctx)[1],
+            )
+            return
+
+        async for event in super()._run_async_impl(ctx):
+            yield event
 
     def _review_output(self, output_text) -> str:
         try:
@@ -174,20 +203,27 @@ class ContextInitSessionAgent(SessionAgent):
             header += (f" ({stats.get('nodes', 0)} узлов, "
                        f"{stats.get('edges', 0)} рёбер).")
         text = f"{header}\n\n{render_frame_summary(frame)}"
+        state_delta = {FRAME_STATE_KEY: frame.model_dump()}
+        if ok:
+            # Leave the stage eligible for a retry if graph initialization did
+            # not complete successfully.
+            state_delta[FRAME_COMPLETED_STATE_KEY] = True
         yield Event(
             invocation_id=ctx.invocation_id,
             author=self.name,
             branch=ctx.branch,
             content=types.Content(role="model", parts=[types.Part(text=text)]),
-            actions=EventActions(state_delta={FRAME_STATE_KEY: frame.model_dump()}),
+            actions=EventActions(state_delta=state_delta),
         )
 
 
 __all__ = [
     "ContextInitSessionAgent",
+    "FRAME_COMPLETED_STATE_KEY",
     "FRAME_STATE_KEY",
     "apply_form_values",
     "coerce_frame",
+    "frame_is_initialized",
     "frame_to_form",
     "render_frame_summary",
 ]
