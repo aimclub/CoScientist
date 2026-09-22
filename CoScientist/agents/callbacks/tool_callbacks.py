@@ -737,6 +737,39 @@ class SearchLimiter:
         return None
 
 
+class TavilySearchLimiter:
+    """Give each agent an independent budget for Tavily web searches only.
+
+    Economics agents also use MCP tools whose names include ``search``; those
+    are supplier-catalogue operations rather than web searches and must not
+    consume this fallback budget.
+    """
+
+    _STATE_KEY = "_tavily_search_limiter_counts"
+
+    def __init__(self, max_searches: int = 5):
+        self.max_searches = max_searches
+
+    def limit_searches(self, tool, args: dict, tool_context: ToolContext) -> Optional[dict]:
+        if getattr(tool, "name", "") != "tavily_search":
+            return None
+
+        agent = getattr(tool_context, "agent_name", None) or "unknown"
+        counts = tool_context.state.get(self._STATE_KEY, {})
+        counts = dict(counts) if isinstance(counts, dict) else {}
+        count = int(counts.get(agent, 0)) + 1
+        counts[agent] = count
+        tool_context.state[self._STATE_KEY] = counts
+        if count > self.max_searches:
+            return {
+                "result": (
+                    f"Web-search limit reached for {agent} ({self.max_searches} Tavily searches allowed). "
+                    "Use the evidence already found or request the missing information from the human."
+                )
+            }
+        return None
+
+
 class PerToolCallLimiter:
     """Limit each tool independently within one agent execution branch.
 
@@ -866,4 +899,3 @@ class ForbidExploreMyPapersGuard:
                 ),
             }
         return None
-

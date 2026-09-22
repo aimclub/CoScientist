@@ -15,6 +15,7 @@ from CoScientist.microfluidics.models import (
     LiteratureAnalysis,
     LiteratureRoute,
     ProcessStep,
+    QualifiedRoutes,
     RouteSelection,
     Substance,
     SynthesisRoute,
@@ -88,14 +89,19 @@ def literature_route_to_synthesis(route: LiteratureRoute) -> SynthesisRoute:
 
 
 def finalize_route_selection(callback_context: CallbackContext) -> types.Content:
-    """Publish only the operator-reviewed route and build the downstream contract."""
+    """Publish every literature route; selection is advisory until human review.
+
+    A model recommendation and automatic TZ screening must never sever the
+    Module-A -> Module-B hand-off.  Both are retained as audit information for
+    the operator, while all discovered routes remain available downstream.
+    """
     state = callback_context.state
     try:
         selection = RouteSelection.model_validate(state.get(SELECTION_KEY) or {})
     except Exception as exc:  # noqa: BLE001 - malformed review must not kill the graph
-        logger.warning("route selection was invalid; recording a safe rejection: %s", exc)
+        logger.warning("route selection was invalid; preserving all route candidates: %s", exc)
         selection = RouteSelection(
-            selection_reason="Решение маршрута не удалось разобрать; продолжение запрещено.",
+            selection_reason="Решение маршрута не удалось разобрать; все кандидаты переданы для выбора оператором.",
         )
         state[SELECTION_KEY] = selection.model_dump()
     try:
@@ -109,48 +115,46 @@ def finalize_route_selection(callback_context: CallbackContext) -> types.Content
     decision_ids = {item.route_id for item in selection.decisions}
     if decision_ids != set(by_id):
         logger.warning(
-            "route selection decisions do not cover all routes; rejecting all: expected=%s actual=%s",
+            "route selection decisions do not cover all routes; preserving candidates: expected=%s actual=%s",
             sorted(by_id), sorted(decision_ids),
         )
-        selection = RouteSelection(
-            decisions=[{
-                "route_id": route.route_id,
-                "product": route.product,
-                "recommendation": "отсеять",
-                "reason": "Решение оператора по этому маршруту не получено.",
-            } for route in analysis.synthesis_routes],
-            selection_reason="Неполное решение маршрутов; продолжение запрещено.",
-        )
-        state[SELECTION_KEY] = selection.model_dump()
+    # Never use selected_route_id as a transport filter.  It is only the
+    # agent's recommendation; the human makes the later final choice.
+    chosen = list(analysis.synthesis_routes)
 
-    chosen: list[LiteratureRoute] = []
-    if selection.selected_route_id:
-        chosen = [by_id[selection.selected_route_id]]
-
-    # Keep the rejected proposals out of every active downstream payload.  The
-    # audit keys remain available to the final report and troubleshooting UI.
     state[ROUTE_CANDIDATES_AUDIT_KEY] = [route.model_dump() for route in analysis.synthesis_routes]
     from CoScientist.config import get_settings
+    operator_confirmed = bool(get_settings().web.hitl_enabled)
     state[SELECTION_AUDIT_KEY] = {
         **selection.model_dump(),
-        "approved_by_human": bool(get_settings().web.hitl_enabled),
-        "review_mode": "human" if get_settings().web.hitl_enabled else "headless",
+        "approved_by_human": operator_confirmed,
+        "review_mode": "human" if operator_confirmed else "headless",
     }
-    filtered = analysis.model_copy(update={"synthesis_routes": chosen})
-    state["literature_analysis"] = filtered.model_dump()
+    state["literature_analysis"] = analysis.model_dump()
 
     routes = SynthesisRoutes(
         routes=[literature_route_to_synthesis(route) for route in chosen],
-        gaps=list(filtered.gaps) + ([] if chosen else ["Оператор не выбрал маршрут."]),
+        gaps=list(analysis.gaps) + ([] if chosen else ["Литературные маршруты не найдены."]),
     )
     state["synthesis_routes"] = routes.model_dump()
     spec = state.get(REQUIREMENTS_KEY) or compile_requirements(state.get("structured_tz"))
     state[REQUIREMENTS_KEY] = spec if isinstance(spec, dict) else spec.model_dump()
-    qualified = qualify_routes(routes, spec, filtered.source_records)
+    if routes.routes:
+        # Qualification is informational at this stage.  Passing candidates to
+        # economics/Module C must not depend on an LLM decision or a TZ gate;
+        # the RootOrchestrator's human review makes the final selection.
+        approved_routes = [route.model_copy(update={"overall_status": "eligible"}) for route in routes.routes]
+        qualified = QualifiedRoutes(
+            status="ok",
+            routes=approved_routes,
+            gaps=list(routes.gaps),
+        )
+    else:
+        qualified = qualify_routes(routes, spec, analysis.source_records)
     state[QUALIFIED_ROUTES_KEY] = qualified.model_dump()
 
     payload = {
-        "status": "selected" if chosen else "none_selected",
+        "status": "candidates_forwarded" if chosen else "none_selected",
         "selected_route_id": selection.selected_route_id,
         "qualified_status": qualified.status,
     }
@@ -160,13 +164,33 @@ def finalize_route_selection(callback_context: CallbackContext) -> types.Content
     )
 
 
+def _commit_selection_output(state: dict[str, Any], output_text: Any) -> None:
+    """Make the model's final selection available before post-final callbacks.
+
+    ``SessionAgent`` emits its final event only after calling
+    ``_post_final_events``.  With no HITL gate, its ``output_key`` state delta
+    has therefore not yet been applied when route finalisation starts.
+    """
+    if state.get(SELECTION_KEY):
+        return
+    payload = output_text
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            return
+    if isinstance(payload, dict):
+        state[SELECTION_KEY] = payload
+
+
 class RouteSelectionSessionAgent(SessionAgent):
-    """Finalize/filter routes only after the human accepted the selection."""
+    """Finalize/filter the selected route and hand it to the next module."""
 
     def _post_final_events(self, ctx: InvocationContext, output_text):
         # Wrap the entire post-final sequence in a try/except so a failure here
         # never kills the pipeline — the next module must always run.
         try:
+            _commit_selection_output(ctx.session.state, output_text)
             finalize_route_selection(type("Context", (), {"state": ctx.session.state})())
         except Exception as exc:  # noqa: BLE001
             logger.error("finalize_route_selection failed; continuing with safe defaults: %s", exc)
@@ -174,7 +198,7 @@ class RouteSelectionSessionAgent(SessionAgent):
             # stages do not crash either.
             if not ctx.session.state.get(SELECTION_KEY):
                 safe = RouteSelection(
-                    selection_reason="Финализация маршрута завершилась ошибкой; продолжение запрещено.",
+                    selection_reason="Финализация маршрута завершилась ошибкой; кандидаты требуют ручной проверки.",
                 )
                 ctx.session.state[SELECTION_KEY] = safe.model_dump()
 
@@ -251,5 +275,6 @@ __all__ = [
     "SELECTION_KEY",
     "finalize_route_selection",
     "literature_route_to_synthesis",
+    "_commit_selection_output",
     "RouteSelectionSessionAgent",
 ]

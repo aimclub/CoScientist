@@ -6,7 +6,7 @@ from typing import Optional
 from google.adk.agents.invocation_context import InvocationContext
 
 from CoScientist.hitl.session_agent import SessionAgent
-from CoScientist.microfluidics.a2a_optimization.adapter import ACTIVE_KEY
+from CoScientist.microfluidics.a2a_optimization.adapter import ACTIVE_KEY, RESULT_KEY
 
 
 class OptimizationSessionAgent(SessionAgent):
@@ -17,6 +17,16 @@ class OptimizationSessionAgent(SessionAgent):
     def _unfinished_feedback(self, ctx: InvocationContext) -> Optional[str]:
         task = ctx.session.state.get(ACTIVE_KEY)
         if not isinstance(task, dict):
+            result = ctx.session.state.get(RESULT_KEY)
+            if isinstance(result, dict) and result.get("state") == "invalid_input":
+                return (
+                    "optimization_start отклонил локальные входные данные. Не закрывай "
+                    "сессию: прочитай точную ошибку. При пробеле в цене сначала используй "
+                    "tavily_search для точного вещества, формы и фасовки; затем запроси у "
+                    "человека подтверждённый economics_ranking или недостающие поля через "
+                    "HITL. Не придумывай ranking и не повторяй optimization_start, пока "
+                    "неисправленные данные остаются в состоянии."
+                )
             return None
         state = str(task.get("state") or "")
         if state in {"submitting", "sending_input", "submitted", "working"}:

@@ -1537,6 +1537,12 @@ def _web_search_limiter():
     return SearchLimiter(max_searches=get_settings().web.max_searches).limit_searches
 
 
+def _tavily_search_limiter():
+    from CoScientist.agents.callbacks.tool_callbacks import TavilySearchLimiter
+    from CoScientist.config import get_settings
+    return TavilySearchLimiter(max_searches=get_settings().web.max_searches).limit_searches
+
+
 def _per_tool_call_limiter():
     from CoScientist.agents.callbacks.tool_callbacks import PerToolCallLimiter
     return PerToolCallLimiter(max_calls=2).limit_tool_calls
@@ -1738,6 +1744,8 @@ _cb("hitl_before_agent", "before_agent", factory=lambda ctx: _hitl_before_model(
 _cb("hitl_before_tool", "before_tool", factory=lambda ctx: _hitl_before_tool())
 # Limit web search calls per agent turn.
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
+# A separate per-agent quota for EconomicsAgent / OptimizerAgent Tavily fallback.
+_cb("TavilySearchLimiter", "before_tool", factory=lambda ctx: _tavily_search_limiter())
 # Microfluidics ResearchAgent budget: two calls per concrete tool and per
 # delegated agent branch, so parallel LIT-* tasks never share a counter.
 _cb("PerToolCallLimiter", "before_tool", factory=lambda ctx: _per_tool_call_limiter())

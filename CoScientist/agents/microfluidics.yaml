@@ -325,12 +325,11 @@ agents:
     class: custom:route_selection_session
     title: Выбор маршрута
     description: >-
-      показывает оператору все найденные маршруты, рекомендацию оставить или
-      отсеять и краткую причину; окончательный выбор делает оператор.
+      формирует выбор единственного активного маршрута из найденных, сохраняет
+      обоснование и передаёт результат следующему модулю без отдельного HITL.
     prompt: microfluidics_route_selection
     output_key: route_selection
     output_schema: route_selection
-    hitl: true
     callbacks:
       before_agent: [compile_requirements]
       after_model: [sanitize_json_output]
@@ -408,11 +407,14 @@ agents:
     reasoning: low
     prompt: microfluidics_economics
     # economics_mcp once MCP_MICROFLUIDIC_ECONOMIC is set, otherwise the stub.
-    tools: [economics_mcp, economics_mcp_stub]
+    # Tavily is a read-only fallback for reagents absent from supplier price lists.
+    tools: [economics_mcp, economics_mcp_stub, websearch]
+    # Allows an explicit request for missing/confirmed supplier data.
+    hitl: true
     output_key: economics
     callbacks:
       before_agent: [compile_requirements, gate_economics, inject_target_molecule]
-      before_tool: [guard_economics_routes]
+      before_tool: [guard_economics_routes, TavilySearchLimiter]
       # The server's numbers, as given, for the report: economics_ranking.
       after_tool: [collect_economics_result]
       # Costing → research graph Evidence (computational, per route).
@@ -439,10 +441,14 @@ agents:
     reasoning: medium
     prompt: microfluidics_optimizer
     # Registry key `sleep` exposes the actual tool `sleep_tool(minutes)`.
-    tools: [optimization_a2a, sleep]
+    # Tavily helps recover supplier/price evidence when the economics hand-off is incomplete.
+    tools: [optimization_a2a, sleep, websearch]
+    # An incomplete hand-off needs a concrete operator clarification, not a final answer.
+    hitl: true
     # Narrative is separate from raw service results written by the tools.
     output_key: optimization_summary
     callbacks:
+      before_tool: [TavilySearchLimiter]
       # Optimisation / CFD answers → research graph Evidence + GeneratedData.
       after_agent: [record_experiment_evidence]
 

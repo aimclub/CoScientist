@@ -372,8 +372,20 @@ def _build_custom_agent(
         ]
     if issubclass(cls, LlmAgent):
         tool_entries = _resolve_tools(cfg)
-        ctx = PromptContext(config=cfg, system=system, tool_entries=tool_entries)
+        hitl_attached = bool(cfg.hitl and _hitl_enabled())
         tools = [t for e in tool_entries for t in _flatten(e.factory())]
+        if hitl_attached:
+            from CoScientist.hitl.tool import get_hitl_tools
+            tools.extend(get_hitl_tools(a2a_root=bool(cfg.root)))
+            tool_entries = tool_entries + [
+                ToolEntry(key="hitl", factory=lambda: None, docs=HITL_TOOL_DOCS)
+            ]
+        ctx = PromptContext(
+            config=cfg,
+            system=system,
+            tool_entries=tool_entries,
+            hitl_attached=hitl_attached,
+        )
         kwargs["model"] = _resolve_model(cfg, system)
         if tools:
             kwargs["tools"] = tools
@@ -386,7 +398,7 @@ def _build_custom_agent(
             kwargs["output_schema"] = REGISTRY.output_schema(cfg.output_schema)
         if cfg.planner:
             kwargs["planner"] = REGISTRY.planner(cfg.planner)()
-        if cfg.hitl:
+        if hitl_attached:
             # Session-style agents take a review-loop handler instead of tools.
             from CoScientist.agents.common import hitl_handler
             kwargs["hitl_handler"] = hitl_handler

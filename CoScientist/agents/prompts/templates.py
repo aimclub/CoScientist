@@ -3183,13 +3183,15 @@ _static("microfluidics_route_selection", '''
 ### ПРОВЕРЕННЫЙ ЛИТЕРАТУРНЫЙ АНАЛИЗ
 {literature_analysis?}
 
-### ПРАВИЛА ОТБОРА
+### ПРАВИЛА РЕКОМЕНДАЦИИ
 - Верни один decisions[] на каждый route_id без пропусков и дубликатов.
 - recommendation — только «оставить» или «отсеять»; «оставить» должен быть
   ровно один маршрут, совпадающий с selected_route_id. Если пригодных нет,
   selected_route_id пустой и все маршруты «отсеять».
 - Явное нарушение ТЗ (запрещённый реагент/катализатор, температура вне
-  диапазона, другой продукт) заноси в hard_violations и отсеивай.
+  диапазона, другой продукт) заноси в hard_violations как информацию для
+  человека. Не удаляй и не блокируй маршрут: все candidates будут переданы
+  следующему модулю, а окончательный выбор сделает человек.
 - Отсутствие полного текста, locator, численного выхода, чистоты или будущего
   экспериментального результата — warning, а не самостоятельная причина
   отсева.
@@ -3315,7 +3317,7 @@ nodes directly.
 ### CASE CONTEXT — STRUCTURED ТЗ (empty until module A has run)
 {structured_tz?}
 
-### ROUTE QUALIFICATION (empty until ModuleB has run)
+### ROUTE HAND-OFF STATUS (empty until Module A has run)
 {qualified_routes?}
 
 ### HUMAN SCREENING OVERRIDE (empty unless explicitly authorized)
@@ -3335,33 +3337,22 @@ previous one has delivered:
 2. **ModuleB_Design** — after A. Keeps the single operator-selected route,
    fixes the molecule candidate and calculates its economics. It must not
    recreate or broaden the route set.
-3. **ModuleC_Experiment** — after B only when `qualified_routes.status` is
-   `ok` (production execution) or `screening_only` (planning-only verification).
-   `operator_route_override` may additionally authorize a `planning_only`
-   verification hand-off for `no_compliant_routes`; it can never authorize
-   production execution.
+3. **ModuleC_Experiment** — immediately after B for the human-confirmed active
+   route. Do not introduce another qualification, screening, or transition
+   approval after the route selection.
 4. **ReportAgent** — always last. Run it after C, or immediately after B when
    no A2A hand-off is possible; it must report the blockers rather than end the
    session without a customer-facing result.
 
 ### RULES
-- The sole source of the B→C routing decision is the parsed
-  `qualified_routes.status`, plus a validated `operator_route_override`. Never
-  infer the decision from prose, an agent's narration, `economics.status`,
-  `economics.reason`, or `economics_skipped`. In particular,
-  `economics_skipped="missing_eligible_routes"` is compatible with
-  `qualified_routes.status="screening_only"` and MUST NOT skip ModuleC.
-- The operator has already selected the only active route at the end of
-  ModuleA. For status `ok`, call ModuleC without a duplicate transition
-  approval. For `screening_only`, call ModuleC in planning-only mode without
-  another approval; planning-only cannot run equipment. Physical execution is
-  approved separately inside the A2A lifecycle.
-- For `no_compliant_routes`, do not call ModuleC unless the operator explicitly
-  approves `operator_authorize_screening_override(route_ids, rationale)`. Call
-  it with only real, non-stub route IDs from `synthesis_routes`, summarize the
-  failed/unknown checks, and require a concrete rationale. If it returns
-  `authorized=true`, call ModuleC exactly once: it may only create a
-  planning-only verification task. Otherwise skip C and call ReportAgent.
+- A human-confirmed active route is final. Call ModuleB immediately after
+  ModuleA and ModuleC immediately after B. Never re-run ModuleA, request a
+  second route decision, or apply a later qualification/screening gate.
+- ModuleA has already selected the only active route at its end. Start
+  ModuleB immediately after ModuleA returns; do not request a second HITL
+  confirmation for the route hand-off. The confirmed route is delivered to
+  economics and to ModuleC as-is. Physical execution is approved separately
+  inside the A2A lifecycle.
 - Never run a module early. ReportAgent still runs after every branch.
 - Module calls carry only the requested stage action. Never restate or
   "clarify" numeric limits, prohibited substances, sources, or literature
@@ -3717,10 +3708,23 @@ economics server (supplier price lists) and compare them.
 4. **Разбор пробелов** — для маршрутов partial / invalid / unpriceable и для
    подозрительных совпадений: `get_price` или `search_by_structure` по каждой
    позиции из missing, чтобы понять причину (нет в прайсах, другая форма,
-   неверное совпадение). Если маршрут можно исправить — пересчитай его
+   неверное совпадение). Если прямой `get_price` по названию не нашёл вещество
+   или вернул близкое, но другое название, повтори запрос, добавив к названию
+   цифру из известной маркировки — прежде всего чистоту (например, для
+   ванилина попробуй `ванилин 99` / `ванилин 99,00%`). Не считай найденной
+   ценой результат, пока `name_raw` не подтверждает нужное вещество: «анилин»
+   не является совпадением для «ванилина». Если маршрут можно исправить — пересчитай его
    `rank_routes_by_cost` под тем же route_id.
 5. По необходимости — сравнение с strategy="single_supplier" для 1–2 лучших
    маршрутов (один поставщик на всё).
+6. **Веб-поиск как fallback.** Если ценовой MCP не находит стоимость позиции,
+   выполни `tavily_search` по точному английскому названию или SMILES, добавив
+   фасовку и единицы (например, `"1-dodecanol price 1 kg RUB"`). Используй
+   найденные страницы, чтобы уточнить вещество, форму, поставщика и доступность,
+   но не выдавай сниппет поисковой выдачи за подтверждённую цену. В итоговой
+   таблице явно помечай такие значения как «web estimate», указывай источник,
+   валюту, фасовку и дату/дату доступа; если этих данных нет — оставь цену
+   неустановленной.
 
 ### ДОПУЩЕНИЯ — ОБЪЯВИ ИХ В ПЛАНЕ, ЧЕЛОВЕК ИХ ПРОВЕРИТ
 - Целевое количество продукта: из ТЗ («Масштаб результата», «Минимальная масса
@@ -3741,7 +3745,8 @@ economics server (supplier price lists) and compare them.
 - Цифры — только из ответов сервера, с валютой. Не пересчитывай валюты.
 - Доступность в РФ сервер прямо не сообщает. Косвенный признак: есть ли
   предложения в RUB у российских поставщиков или только в другой валюте. Так
-  и называй это — «косвенный признак»; сроки поставки не выдумывай.
+  и называй это — «косвенный признак»; веб-поиск можно использовать для
+  дополнительного подтверждения, но сроки поставки не выдумывай.
 - partial называй нижней границей, invalid — «не посчитан» с причиной.
 
 ### ВЫХОД (на русском)
@@ -3781,6 +3786,35 @@ steps locally and do not rewrite its plan or measurement results.
 {operator_route_override?}
 ### ЭКОНОМИЧЕСКИЙ РЕЙТИНГ
 {economics_ranking?}
+
+### КОНТРАКТ `economics_ranking` ДЛЯ `optimization_start`
+Нужен непустой JSON-объект следующей формы (не заменяй его текстовым
+описанием):
+```json
+{
+  "target_qty": 100,
+  "target_unit": "g",
+  "rank_by": "per_unit",
+  "preferred_currency": "RUB",
+  "routes": {
+    "route-id": {
+      "status": "ok",
+      "rank": 1,
+      "currency": "RUB",
+      "cost_per_unit": 123.45,
+      "cost_packs": 150.00
+    }
+  }
+}
+```
+Ключи `routes` должны в точности совпадать с `qualified_routes.routes`
+(`route_id`). Для маршрута со статусом `ok` или `partial` обязательны
+положительный целочисленный уникальный `rank`, та же `currency`, что в
+`preferred_currency`, и неотрицательные `cost_per_unit` / `cost_packs`.
+`invalid` и `unpriceable` можно сохранить без ранга, но хотя бы один маршрут
+должен быть `ok` или `partial`. Допустимы только единицы `g`, `kg`, `mol`,
+`mmol` и `rank_by`: `per_unit` либо `packs`.
+
 ### ТЕКУЩАЯ ЗАДАЧА A2A
 {optimization_a2a_task?}
 
@@ -3797,9 +3831,18 @@ steps locally and do not rewrite its plan or measurement results.
    `mode="screening_only"`; иначе не вызывай A2A и кратко объясни, какие
    нарушения не позволяют планировать скрининг. Этот override не отменяет
    нарушения и не разрешает оборудование.
-   Инструмент проверяет передаваемые данные. При invalid_input исправь данные
-   на предыдущем этапе или сообщи о пробеле; не выдумывай стоимость и не
-   запускай обходной путь.
+   Инструмент проверяет передаваемые данные. При `invalid_input` НИКОГДА не
+   завершай сессию: сначала прочитай текст ошибки и восстанови недостающие
+   сведения. Если не хватает стоимости/поставщика/формы вещества, используй
+   `tavily_search` с точным английским названием или SMILES, фасовкой и валютой
+   (например, `"1-dodecanol price 1 kg RUB"`). Поиск служит только источником
+   доказательств: не превращай сниппет в выдуманный `economics_ranking`.
+   Если после поиска отсутствуют обязательные поля ranking или подтверждение
+   цены, вызови `request_approval` от имени `OptimizerAgent` и попроси человека
+   дать/подтвердить конкретные недостающие данные (для этой ошибки — непустой
+   `economics_ranking`: routes, target_qty, target_unit, rank_by,
+   preferred_currency и цены маршрутов). После ответа продолжай восстановление;
+   не вызывай `optimization_start` повторно, пока состояние не исправлено.
    Повторный вызов возвращает ту же задачу даже после завершения.
 2. submitted/working: вызови `sleep_tool(minutes=0.1)`, затем
    optimization_get_status. Не опрашивай задачу без паузы.

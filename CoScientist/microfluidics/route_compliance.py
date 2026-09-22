@@ -476,6 +476,40 @@ def _completeness_checks(
     ]
 
 
+def _costing_shape_check(route: SynthesisRoute) -> ComplianceCheck:
+    """Check the minimum reaction graph required by the costing MCP.
+
+    The economics service processes every submitted route as one request.  A
+    step without either side of the reaction makes that entire request fail,
+    rather than returning an ``invalid`` row for just that route.  Therefore a
+    route with an incomplete reaction graph is suitable for evidence-gathering
+    only and must not enter ``qualified_routes.routes``.
+    """
+    incomplete: list[str] = []
+    for index, step in enumerate(route.steps, 1):
+        missing = []
+        if not step.reactants:
+            missing.append("reactants")
+        if not step.products:
+            missing.append("products")
+        if missing:
+            incomplete.append(f"стадия {index}: {', '.join(missing)}")
+    if incomplete:
+        return ComplianceCheck(
+            constraint_id="SYS-ECONOMICS-ROUTE-SHAPE",
+            status="unknown",
+            reason=(
+                "Маршрут нельзя передать в rank_routes_by_cost: "
+                + "; ".join(incomplete) + "."
+            ),
+        )
+    return ComplianceCheck(
+        constraint_id="SYS-ECONOMICS-ROUTE-SHAPE",
+        status="pass",
+        reason="Каждая стадия содержит reactants и products для расчёта экономики.",
+    )
+
+
 def evaluate_route(
     route: SynthesisRoute,
     spec: RequirementsSpec,
@@ -515,10 +549,21 @@ def evaluate_route(
         ))
 
     checks.extend(_completeness_checks(route, records))
+    checks.append(_costing_shape_check(route))
 
     hard = {constraint.constraint_id for constraint in spec.constraints if constraint.hardness == "hard"}
     if any(check.constraint_id in hard and check.status == "fail" for check in checks):
         status = "rejected"
+    elif any(
+        check.constraint_id in {
+            "SYS-CONDITIONS-COMPLETE",
+            "SYS-YIELDS-COMPLETE",
+            "SYS-ECONOMICS-ROUTE-SHAPE",
+        }
+        and check.status in {"unknown", "unverified"}
+        for check in checks
+    ):
+        status = "experimental"
     elif any(
         check.status == "unknown"
         and check.constraint_id in hard
@@ -767,6 +812,12 @@ def guard_economics_routes(
             actual_yield = actual.get("yield", actual.get("yield_fraction"))
             if actual_yield != expected.yield_fraction:
                 errors.append(f"{route_id}: step {index} yield differs from verified value")
+            missing = [field for field in ("reactants", "products") if not actual.get(field)]
+            if missing:
+                errors.append(
+                    f"{route_id}: step {index} requires nonempty {', '.join(missing)} "
+                    "for rank_routes_by_cost"
+                )
     if not errors:
         return None
     return {
