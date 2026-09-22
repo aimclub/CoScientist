@@ -82,3 +82,33 @@ def test_a_location_the_model_does_not_know_is_skipped_quietly():
     assert _contract_lines([{"loc": ["tasks", 0, "no_such_field"]}]) == []
     assert _contract_lines([{"msg": "no loc at all"}]) == []
     assert _contract_lines("not even a list") == []
+
+
+def test_the_critique_can_be_switched_off_without_losing_schema_validation(monkeypatch):
+    """Skipping the critique must not also skip the contract.
+
+    A plan that does not parse is unusable whatever the policy says, so schema
+    validation stays on. What comes off is the semantic layer — hypothesis and
+    operation coverage — which was refusing plans over duplicate hypotheses in
+    the research graph, upstream of the planner and unfixable by it.
+    """
+    from CoScientist.config import get_settings
+
+    settings = get_settings().experiments
+    assert hasattr(settings, "plan_critique_enabled")
+
+    monkeypatch.setattr(settings, "plan_critique_enabled", False)
+    assert settings.plan_critique_enabled is False
+    monkeypatch.setattr(settings, "plan_critique_enabled", True)
+    assert settings.plan_critique_enabled is True
+
+
+def test_a_skipped_critique_is_announced_not_silent():
+    """A check that is off and quiet is one that quietly becomes permanent."""
+    source = (
+        __import__("pathlib").Path(__import__("CoScientist.experiments.review",
+                                              fromlist=["review"]).__file__).read_text()
+    )
+    assert "EXPERIMENT_PLAN_CRITIQUE_SKIPPED" in source
+    # And the verdict is still recorded on the plan either way.
+    assert 'state["experiment_plan_critique"] = critique_json' in source

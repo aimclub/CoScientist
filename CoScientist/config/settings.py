@@ -447,6 +447,20 @@ class ExperimentsSettings(BaseModel):
     # this leaves room for one human round plus a couple of genuine planner
     # mistakes without letting a broken plan burn eight planner calls.
     max_plan_revisions: int = Field(default=4, ge=1, le=8)
+    # Whether PlanCritique's deterministic policy checks can refuse a plan.
+    #
+    # Off for now, deliberately. Schema validation still runs and still refuses
+    # — a plan that does not parse is unusable. What this drops is the semantic
+    # layer: hypothesis coverage, operation coverage, tool-inventory policy.
+    # Those checks were rejecting plans over a defect upstream of the planner
+    # (duplicate hypotheses in the research graph gave two ids for one
+    # statement, and the plan cited the postponed twin), which burned the whole
+    # revision budget and left the experiment paused before anything ran.
+    #
+    # Turn it back on with EXPERIMENTS__PLAN_CRITIQUE_ENABLED=1 once the graph
+    # stops producing duplicates; every skipped critique is announced in the
+    # audit log so this cannot quietly become permanent.
+    plan_critique_enabled: bool = False
     # Which FEDOT engine backs the fedot_mas route.
     #
     # "mas" (default) is the single-shot routing config. "maw" is a fixed

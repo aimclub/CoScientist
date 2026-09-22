@@ -741,7 +741,16 @@ class ExperimentReviewSessionAgent(SessionAgent):
 
         critique_json = critique.model_dump(mode="json")
         state["experiment_plan_critique"] = critique_json
-        if critique.verdict != "approve":
+        if not cfg.plan_critique_enabled:
+            # Announced every time: a check that is off and silent is one that
+            # quietly becomes permanent. The verdict is still recorded, so the
+            # plan carries what the critique would have said.
+            if critique.verdict != "approve":
+                _audit("EXPERIMENT_PLAN_CRITIQUE_SKIPPED verdict=%s issues=%s" % (
+                    critique.verdict,
+                    json.dumps([i.get("issue_id") for i in critique_json.get("issues") or []],
+                               ensure_ascii=True)))
+        elif critique.verdict != "approve":
             issue_text = "; ".join(
                 f"{i.severity}/{i.category}: {i.message} Suggestion: {i.suggestion}"
                 for i in critique.issues if i.is_blocking
