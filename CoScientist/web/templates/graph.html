@@ -64,60 +64,71 @@
 
     /* canvas + panels */
     #net { position: absolute; top: 46px; bottom: 0; left: 0; right: 0; }
-    #detail { position: fixed; top: 46px; right: 0; width: 400px; bottom: 0; background: var(--surface);
+    /* Width is a variable so the grip below and the panel agree; the reader
+       drags the left edge and the width is remembered. The type is a size up
+       from the canvas: the panel is read, the canvas is scanned. */
+    :root { --dw: 480px; }
+    #detail { position: fixed; top: 46px; right: 0; width: var(--dw); bottom: 0; background: var(--surface);
       border-left: 1px solid var(--line); padding: 0; overflow-y: auto; z-index: 18; display: none;
-      box-shadow: -12px 0 32px rgba(0,0,0,.4); }
-    #detail .dhead { padding: 16px 18px 12px; border-bottom: 1px solid var(--line);
+      box-shadow: -12px 0 32px rgba(0,0,0,.4); font-size: 14.5px; line-height: 1.5; }
+    #dgrip { position: fixed; top: 46px; bottom: 0; right: calc(var(--dw) - 5px); width: 10px;
+      cursor: col-resize; z-index: 19; display: none; touch-action: none; }
+    #dgrip::after { content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px;
+      background: transparent; transition: background .12s; }
+    #dgrip:hover::after, #dgrip.on::after { background: var(--accent); }
+    body.resizing { cursor: col-resize; user-select: none; }
+    body.resizing #detail { pointer-events: none; }
+    #detail .dhead { padding: 18px 20px 14px; border-bottom: 1px solid var(--line);
       position: sticky; top: 0; background: var(--surface); }
-    #detail .dbody { padding: 14px 18px 24px; }
-    #detail h3 { margin: 0 0 4px; font-size: 16px; word-break: break-word; }
-    #detail .sub { color: var(--ink3); font-size: 12px; }
+    #detail .dbody { padding: 16px 20px 28px; }
+    #detail h3 { margin: 0 0 5px; font-size: 19px; word-break: break-word; }
+    #detail .sub { color: var(--ink3); font-size: 13.5px; }
     #detail .badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-weight: 700;
-      font-size: 11px; margin-top: 8px; }
-    #detail .close { float: right; cursor: pointer; color: var(--ink3); font-size: 20px; line-height: 1; }
+      font-size: 12.5px; margin-top: 8px; }
+    #detail .close { float: right; cursor: pointer; color: var(--ink3); font-size: 22px; line-height: 1; }
     #detail .close:hover { color: var(--ink); }
-    #detail .k { color: var(--accent); font-weight: 600; font-size: 11px; text-transform: uppercase;
+    #detail .k { color: var(--accent); font-weight: 600; font-size: 12.5px; text-transform: uppercase;
       letter-spacing: .4px; margin: 14px 0 4px; }
     /* pre-wrap: a Method's tool list is one server per line, and a formulation
        written over several lines keeps them. */
     #detail .attr { margin: 3px 0; color: var(--ink); word-break: break-word;
       white-space: pre-wrap; }
     #detail .attr .ak { color: var(--ink2); }
-    .chars { color: var(--ink3); font-size: 10px; letter-spacing: 0;
+    .chars { color: var(--ink3); font-size: 11.5px; letter-spacing: 0;
       text-transform: none; margin-left: 6px; }
     #detail pre { white-space: pre-wrap; word-break: break-word; background: var(--bg); padding: 10px;
-      border-radius: 8px; color: var(--ink); font-size: 12px; line-height: 1.5; margin: 4px 0 0;
+      border-radius: 8px; color: var(--ink); font-size: 13.5px; line-height: 1.5; margin: 4px 0 0;
       border: 1px solid var(--line);
       /* The whole value is here; long ones scroll rather than being cut. */
       max-height: 46vh; overflow-y: auto; }
     #detail .prov { background: var(--bg); border: 1px solid var(--line); border-left: 3px solid var(--accent);
       border-radius: 8px; padding: 9px 11px; margin: 6px 0; cursor: pointer; transition: border-color .12s, background .12s; }
     #detail .prov:hover { border-color: var(--accent); background: #1a1f28; }
-    #detail .prov .tool { font-weight: 700; color: var(--accent); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; }
-    #detail .prov .jump { float: right; color: var(--accent); font-size: 10px; opacity: .65; }
-    #detail .prov .res { color: var(--ink2); font-size: 11.5px; margin-top: 5px; line-height: 1.5;
+    #detail .prov .tool { font-weight: 700; color: var(--accent); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13.5px; }
+    #detail .prov .jump { float: right; color: var(--accent); font-size: 11.5px; opacity: .65; }
+    #detail .prov .res { color: var(--ink2); font-size: 13px; margin-top: 5px; line-height: 1.5;
       white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; }
     #detail .empty { color: var(--ink3); font-style: italic; }
 
     /* readable values: a mapping is labelled rows, not a wall of braces */
     .kv { margin-top: 2px; }
-    .kv .row { display: grid; grid-template-columns: minmax(64px, max-content) 1fr; gap: 2px 12px;
+    .kv .row { display: grid; grid-template-columns: minmax(80px, max-content) 1fr; gap: 2px 12px;
       padding: 5px 0; border-bottom: 1px solid var(--line); align-items: baseline; }
     .kv .row:last-child { border-bottom: 0; }
-    .kv .key { color: var(--ink2); font-size: 11.5px; font-family: "IBM Plex Mono", ui-monospace, monospace;
+    .kv .key { color: var(--ink2); font-size: 13px; font-family: "IBM Plex Mono", ui-monospace, monospace;
       word-break: break-word; }
-    .kv .val { color: var(--ink); font-size: 12.5px; line-height: 1.45; white-space: pre-wrap;
+    .kv .val { color: var(--ink); font-size: 14px; line-height: 1.45; white-space: pre-wrap;
       overflow-wrap: anywhere; min-width: 0; }
     .kv .val.block { grid-column: 1 / -1; background: var(--bg); border: 1px solid var(--line);
       border-radius: 6px; padding: 7px 9px; max-height: 40vh; overflow-y: auto; }
-    .kv .val.dim { color: var(--ink3); font-size: 11px; }
-    .kv .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11.5px; }
+    .kv .val.dim { color: var(--ink3); font-size: 12.5px; }
+    .kv .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; }
     .kv .nested { grid-column: 1 / -1; margin-left: 10px; padding-left: 10px;
       border-left: 2px solid var(--line); }
-    .kv ol.items { margin: 0; padding-left: 18px; color: var(--ink); font-size: 12.5px; }
+    .kv ol.items { margin: 0; padding-left: 18px; color: var(--ink); font-size: 14px; }
     .kv ol.items li { margin: 3px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
     .kv ol.items li + li { border-top: 1px dashed var(--line); padding-top: 3px; }
-    .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11.5px;
+    .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 13px;
       background: var(--surface2); border: 1px solid var(--line); color: var(--ink);
       margin: 0 4px 4px 0; white-space: nowrap; }
 
@@ -127,14 +138,14 @@
       user-select: none; }
     .call .hd:hover { background: #1a1f28; }
     .call .st { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-    .call .tool { font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 700; font-size: 12px;
+    .call .tool { font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 700; font-size: 13.5px;
       color: var(--accent); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
       white-space: nowrap; }
-    .call .when { color: var(--ink3); font-size: 11px; font-variant-numeric: tabular-nums;
+    .call .when { color: var(--ink3); font-size: 12.5px; font-variant-numeric: tabular-nums;
       white-space: nowrap; }
-    .call .caret { color: var(--ink3); font-size: 9px; transition: transform .12s; }
+    .call .caret { color: var(--ink3); font-size: 10px; transition: transform .12s; }
     .call.open .caret { transform: rotate(90deg); }
-    .call .gist { color: var(--ink2); font-size: 11.5px; padding: 0 10px 8px 26px;
+    .call .gist { color: var(--ink2); font-size: 13px; padding: 0 10px 8px 26px;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .call .bd { display: none; padding: 0 10px 10px; border-top: 1px solid var(--line); }
     .call.open .bd { display: block; }
@@ -143,27 +154,27 @@
 
     /* an agent's report, rendered from its markdown */
     .report { background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
-      padding: 10px 12px; font-size: 12.5px; line-height: 1.55; max-height: 52vh; overflow-y: auto;
+      padding: 10px 12px; font-size: 14px; line-height: 1.55; max-height: 52vh; overflow-y: auto;
       overflow-wrap: anywhere; }
     .report > :first-child { margin-top: 0; } .report > :last-child { margin-bottom: 0; }
-    .report h1, .report h2, .report h3, .report h4 { font-size: 13px; margin: 12px 0 4px; color: var(--ink); }
-    .report h1 { font-size: 14px; }
+    .report h1, .report h2, .report h3, .report h4 { font-size: 15px; margin: 12px 0 4px; color: var(--ink); }
+    .report h1 { font-size: 16.5px; }
     .report p, .report ul, .report ol { margin: 6px 0; } .report li { margin: 2px 0; }
-    .report code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11.5px; background: var(--surface2);
+    .report code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; background: var(--surface2);
       padding: 1px 4px; border-radius: 4px; }
     .report pre { max-height: none; margin: 6px 0; } .report pre code { background: none; padding: 0; }
     .report a { color: var(--accent); } .report img { max-width: 100%; border-radius: 6px; }
-    .report table { border-collapse: collapse; font-size: 11.5px; }
+    .report table { border-collapse: collapse; font-size: 13px; }
     .report th, .report td { border: 1px solid var(--line); padding: 3px 6px; }
     .report blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--line); color: var(--ink2); }
     /* artifacts: what the agent left behind */
-    .art { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+    .art { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
     .art:last-child { border-bottom: 0; }
     .art .ic { flex: none; }
-    .art .uri { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11.5px; overflow-wrap: anywhere; color: var(--ink); }
+    .art .uri { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; overflow-wrap: anywhere; color: var(--ink); }
     .art a.uri { color: var(--accent); text-decoration: none; } .art a.uri:hover { text-decoration: underline; }
-    .art .by { color: var(--ink3); font-size: 11px; white-space: nowrap; margin-left: auto; }
-    #detail .note { color: var(--ink3); font-size: 11.5px; font-style: italic; margin: 2px 0 0; }
+    .art .by { color: var(--ink3); font-size: 12.5px; white-space: nowrap; margin-left: auto; }
+    #detail .note { color: var(--ink3); font-size: 13px; font-style: italic; margin: 2px 0 0; }
   </style>
 </head>
 <body>
@@ -193,6 +204,7 @@
   </div>
 
   <div id="net"></div>
+  <div id="dgrip" title="drag to resize · double-click to reset"></div>
   <div id="detail"></div>
 
   <script>
@@ -203,7 +215,8 @@
     const C = getComputedStyle(document.documentElement);
     const col = n => C.getPropertyValue(n).trim();
     const GOOD=col('--good'), WARN=col('--warn'), CRIT=col('--crit'), INFO=col('--info'),
-          ORANGE=col('--orange'), SLATE=col('--slate'), VIOLET=col('--violet'), INK=col('--ink');
+          ORANGE=col('--orange'), SLATE=col('--slate'), VIOLET=col('--violet'), INK=col('--ink'),
+          INK2=col('--ink2');
 
     const R_STATUS = {  // status -> {color, glyph, label}
       confirmed:{c:GOOD,g:'✓'}, validated:{c:GOOD,g:'✓'}, met:{c:GOOD,g:'✓'},
@@ -220,34 +233,70 @@
       derived:{c:SLATE,g:'▣'},
     };
     const rStatus = s => R_STATUS[s] || {c:SLATE,g:'•'};
-    // What KIND of thing a card is, in colour. Status used to be the only thing
-    // colour said, which made an `open` question and a `planned` method the
-    // same blue — the reader had to read every card to find out what it was.
-    // Now the box is the kind, and the status is the glyph and the word: the
-    // split the hand-drawn reference uses.
+    // What KIND of thing a card is, in colour — for EVERY kind, with no
+    // exceptions and no two the same. Status used to be the only thing colour
+    // said, which made an `open` question and a `planned` method the same
+    // blue; the first fix moved colour onto the type but left `Hypothesis` out
+    // of the table so it could keep carrying its verdict, and that put the
+    // study's central claim on the status palette: a hypothesis
+    // `under_verification` came out amber, which is where `Evidence` already
+    // lives. The two cards a reader most needs to tell apart were the one pair
+    // that looked alike.
     //
-    // The hypothesis is the deliberate exception and is absent from this table:
-    // it is the one card whose STATUS is the message, because the whole study
-    // exists to settle it, so it keeps the verdict colour.
+    // Two rules hold this table together:
+    //   * every type in the server's NODE_TYPES appears exactly once, with a
+    //     hue no other type uses — a card's colour answers "what is this?"
+    //     before a word is read;
+    //   * no type may take `--good` or `--crit`. Green and red are the
+    //     verdict's, and a green card would read as a confirmed one whatever
+    //     its label said.
+    // Both are pinned by tests, because neither fails visibly: a duplicate
+    // just makes two types look the same, which is the defect this replaces.
     const R_KIND = {
-      framing:              "#d29922",  // the setup, agreed with the operator
-      researchquestion:     "#3b82f6",  // what was asked
-      planstep:             "#64748b",  // the intention: background, not record
+      // The setup, agreed with the operator: one family, three weights.
+      framing:              "#d29922",  // gold
+      constraint:           "#b45309",  // burnt amber — the setup's boundary
+      empiricalbase:        "#0ea5e9",  // sky: where the material came from
+      resource:             "#84cc16",  // lime: what the run is allowed to use
+      researchquestion:     "#3b82f6",  // blue: what was asked
+      // The claim the whole study exists to settle. Yellow because it is the
+      // one card a reader should find first, and because it is far from both
+      // the verdict colours and from the orange of an observation.
+      hypothesis:           "#facc15",
+      confirmationcriteria: "#8b5cf6",  // violet: the bar
+      verificationmethod:   "#14b8a6",  // teal: by what means
+      planstep:             "#64748b",  // slate: the intention, background
       // The same track one grain finer, and deliberately NOT a shade of the
       // step's slate: a reader has to tell the general plan from the detailed
-      // one at a glance, and magenta is the one hue no other card here uses.
-      experimenttask:       "#e879f9",
-      confirmationcriteria: "#8b5cf6",  // the bar
-      verificationmethod:   "#14b8a6",  // by what means
-      tool:                 "#a9682a",
-      evidence:             "#f97316",  // what was measured
-      generateddata:        "#a9682a",
-      codeartifact:         "#a9682a",
-      conclusion:           "#fb923c",  // what it adds up to — evidence's family
-      report:               "#fb923c",
-      publication:          "#fb923c",
-      outcome:              "#94a3b8",
+      // one at a glance.
+      experimenttask:       "#e879f9",  // magenta
+      tool:                 "#a9682a",  // brown: the instrument
+      evidence:             "#f97316",  // orange: what was measured
+      generateddata:        "#06b6d4",  // cyan: what the run produced
+      codeartifact:         "#f472b6",  // pink: the code that produced it
+      conclusion:           "#fdba74",  // light orange: what it adds up to
+      // Paper: the deliverable is the one card that should look like a
+      // document, and near-white is a tone no other type can be given.
+      // It also keeps green off the cards entirely — see the rule above.
+      report:               "#e2e8f0",
+      publication:          "#a855f7",  // purple
+      spec:                 "#6366f1",  // indigo
+      outcome:              "#94a3b8",  // light slate: the summary card
+      // The efficiency family, rare and always together, so they are told
+      // apart from each other rather than from the rest of the graph.
+      efficiencyjustification: "#2dd4bf",
+      efficiencymetric:        "#22d3ee",
+      costmodel:               "#c2410c",
     };
+    // Which statuses are a verdict, and which way. Everything absent from both
+    // sets is neither — in progress, postponed, not yet measured — and reads in
+    // neutral ink. `inconclusive` belongs there too: it is the honest "we
+    // measured and it did not settle", not a failure.
+    const STATUS_GOOD = new Set(["confirmed", "validated", "met", "approved",
+                                 "done", "available"]);
+    const STATUS_BAD = new Set(["refuted", "rejected", "failed", "creation_failed"]);
+    const statusInk = st => STATUS_GOOD.has(st) ? GOOD
+                          : STATUS_BAD.has(st) ? CRIT : INK2;
 
     const R_ICON = { researchquestion:'❓', hypothesis:'💡', evidence:'🔬', conclusion:'✅',
       verificationmethod:'⚙️', confirmationcriteria:'🎯', tool:'🔧', resource:'🔋',
@@ -261,6 +310,26 @@
       framing:0, outcome:5 };
     const R_EDGE = { supports:GOOD, refutes:CRIT, refines:WARN,
       supersedes:SLATE, frames:SLATE, concludes:INFO };
+    // An untyped link — motivates, tested_by, produces, uses — used to be
+    // drawn in #4a5160 on a #14161a canvas, and its label in #aeb6c2 at 12px.
+    // Three stops off the background is invisible past a dozen cards, and on
+    // this study most links are untyped. "Black", on a dark canvas, is the
+    // light end of the range.
+    const EDGE_NEUTRAL = "#cbd5e1", EDGE_BRIGHT = "#ffffff";
+    //: The plan links (realises, elaborates) stay subordinate — they say which
+    //: intention a record serves, not what the study found — but subordinate is
+    //: not the same as unreadable.
+    const EDGE_QUIET = "#94a3b8";
+    const EDGE_HALO = "#14161a";
+    //: A label is typeset by the same parser as a card, so a real weight is
+    //: available: escape the text and wrap it in <b>. Bigger type would have
+    //: been the other way to be noticed, and it costs room a graph does not
+    //: have.
+    const edgeLabel = v => { const e = visSafe(String(v == null ? "" : v));
+                             return e ? "<b>" + e + "</b>" : ""; };
+    const edgeFont = (color, size) => ({ color, size: size || 13, multi: "html",
+                                         strokeWidth: 5, strokeColor: EDGE_HALO,
+                                         bold: { color, size: size || 13, mod: "bold" } });
     // Human-readable type names (shown as "Hypothesis 1" instead of the terse id
     // "H1") and edge phrases, so a first-time viewer instantly reads the graph.
     const R_TYPE_NAME = { researchquestion:"Question", hypothesis:"Hypothesis", evidence:"Evidence",
@@ -421,8 +490,13 @@
       const idx = n.index && n.kind !== "researchquestion" ? " " + n.index : "";
       const sw = rStatusWord(n);
       const L = [];
-      L.push("<b>" + visSafe(st.g + " " + icon + " " + rTypeName(n) + idx
-                             + (sw ? " · " + sw : "")) + "</b>");
+      // The type in ink, the status in the verdict's colour. Both are bold;
+      // the status word is wrapped in <b><i> so it lands on the `boldital`
+      // class, which `researchNode` gives the status colour and a plain bold
+      // weight — the only way to get two colours into one vis label.
+      const head = visSafe(st.g + " " + icon + " " + rTypeName(n) + idx);
+      L.push(sw ? "<b>" + head + " · </b><b><i>" + visSafe(sw) + "</i></b>"
+                : "<b>" + head + "</b>");
       // A headline, still — but a wider one than the cramped column layout
       // could afford. At 150 characters an observation was cut before its
       // numbers ("mean AD=59.7%; …"), which is the part a reader came for.
@@ -505,8 +579,11 @@
       if (network) network.destroy();
       network = new vis.Network(document.getElementById("net"), { nodes, edges }, {
         nodes: { borderWidth: 2, shadow: { enabled: true, color: "rgba(0,0,0,0.35)", size: 10, x: 0, y: 3 } },
-        edges: { arrows: { to: { scaleFactor: 0.55 } }, color: { color: "#3a4150", highlight: "#64748b" },
-                 font: { color: "#8b93a1", size: r ? 12 : 10, strokeWidth: 0 },
+        edges: { arrows: { to: { scaleFactor: r ? 0.8 : 0.55 } },
+                 color: { color: r ? "#94a3b8" : "#3a4150",
+                          highlight: r ? "#ffffff" : "#64748b" },
+                 font: { color: r ? "#cbd5e1" : "#8b93a1", size: r ? 13 : 10,
+                         strokeWidth: r ? 5 : 0, strokeColor: "#14161a" },
                  // The research graph now reads top to bottom through its stage
                  // bands, so its links bend the way they travel; the log still
                  // runs along a clock, left to right.
@@ -1001,7 +1078,12 @@
                  // if the node had vanished.
                  hover: { background: rgba(c, 0.26), border: c } },
         font: { color: INK, size: 16, multi: "html",
-                face: "-apple-system, Segoe UI, sans-serif", align: "left" },
+                face: "-apple-system, Segoe UI, sans-serif", align: "left",
+                // mod "bold" rather than the default "bold italic": the status
+                // word is set in the same weight as the type it follows, and
+                // only its colour differs.
+                boldital: { color: statusInk(n.status), size: 16, mod: "bold",
+                            face: "-apple-system, Segoe UI, sans-serif" } },
         // Hovering must not re-typeset the label: labelHighlightBold redraws it
         // bold, which re-runs the parser over the very string that can throw.
         chosen: { node: true, label: false },
@@ -1387,7 +1469,9 @@
           const pairKey = [e.src, e.dst].sort().join("\u0000");
           const pairIndex = (pairSeen[pairKey] = (pairSeen[pairKey] || 0) + 1) - 1;
           const rlabel = research ? t(ekey, R_EDGE_NAME[e.type] || e.type || "") : (e.type || "");
-          const edge = { id, from:e.src, to:e.dst, label: e.provenance ? "" : rlabel };
+          const edge = { id, from:e.src, to:e.dst,
+                         label: e.provenance ? ""
+                                : (research ? edgeLabel(rlabel) : rlabel) };
           // A link inside one band joins two cards on the same row, and a
           // bezier told to bend vertically between them draws a straight line
           // straight through everything in between — the evidence that supports
@@ -1411,26 +1495,26 @@
             }
           }
           if (research && (e.type === "realises" || e.type === "elaborates")) {
-            edge.color = { color: "#4b5563", highlight: "#6b7280" };
-            edge.dashes = [2, 4]; edge.width = 1;
-            edge.font = { color: "#6b7280", size: 11, strokeWidth: 4,
-                          strokeColor: "#14161a" };
+            edge.color = { color: EDGE_QUIET, highlight: EDGE_BRIGHT };
+            edge.dashes = [2, 4]; edge.width = 1.6;
+            edge.font = edgeFont(EDGE_QUIET, 12);
           }
           else if (e.synthetic) { edge.color={color:"#2c313a",highlight:"#3a4150"}; edge.dashes=true; edge.width=1; edge.arrows=""; edge.label=""; }
           else if (research) { const c=R_EDGE[e.type];
-            edge.color={color:c||"#4a5160",highlight:c||"#64748b"}; edge.width=c?3:1.5;
-            edge.font={color:c||"#aeb6c2",size:12,strokeWidth:4,strokeColor:"#14161a"}; }
+            edge.color={color:c||EDGE_NEUTRAL,highlight:c||EDGE_BRIGHT};
+            edge.width=c?3:2.2;
+            edge.font=edgeFont(c||EDGE_NEUTRAL); }
           // How the study MOVED: the verdict that retired one hypothesis and
           // the change that produced the next. Without the label this is just
           // an unexplained arrow between two look-alike cards.
           if (research && e.type === "supersedes") {
             const v = (e.attrs || {}).verdict || "other";
             const c = v === "refuted" ? CRIT : v === "confirmed" ? GOOD : WARN;
-            edge.dashes = [5, 4]; edge.width = 1.8;
+            edge.dashes = [5, 4]; edge.width = 2.2;
             edge.color = { color: c, highlight: c, hover: c };
-            edge.font = { color: c, size: 12, strokeWidth: 4, strokeColor: "#14161a" };
-            edge.label = t('graph.edge.supersedes.' + v,
-                           { reason: (e.attrs || {}).reason || "" });
+            edge.font = edgeFont(c);
+            edge.label = edgeLabel(t('graph.edge.supersedes.' + v,
+                                     { reason: (e.attrs || {}).reason || "" }));
           } else if (research && e.rerouted) {
             // The link ran through something folded into a card. Drawn thinner
             // so it reads as inferred, and the tooltip names what it went via.
@@ -1723,7 +1807,9 @@
       const head = `<div class="dhead"><span class="close" onclick="closeDetail()">✕</span>`
         + `<h3>${R_ICON[n.kind]||"•"} ${esc(rTypeName(n))}${n.index ? " " + n.index : ""}</h3>`
         + `<div class="sub">${esc(n.id)}${n.executor_agent ? esc(" · " + t('graph.detail.by', { agent: n.executor_agent })) : ""}</div>`
-        + `<span class="badge" style="background:${rgba(st.c,.18)};color:${st.c};border:1px solid ${st.c}">${st.g} ${esc(rStatusWord(n))}</span></div>`;
+        // The same word must not be green on the card and amber in the
+        // panel, so the badge reads off the same three-way scale.
+        + (() => { const sc = statusInk(n.status); return `<span class="badge" style="background:${rgba(sc,.18)};color:${sc};border:1px solid ${sc}">${st.g} ${esc(rStatusWord(n))}</span></div>`; })();
       paint(n, head + `<div class="dbody">${body}</div>`);
     }
     // How it got here: every move, who made it and what they gave as the reason.
@@ -1979,6 +2065,7 @@
       const box = document.getElementById("detail");
       const top = paintedId === n.id ? box.scrollTop : 0;
       box.innerHTML = html; box.style.display = "block"; box.scrollTop = top;
+      document.getElementById("dgrip").style.display = "block";
       paintedId = n.id;
       if (focusCallId) {
         const el = box.querySelector(`.call[data-call="${CSS.escape(focusCallId)}"]`);
@@ -2097,7 +2184,8 @@
     }
     function closeDetail(){ selectedId=null; lastDetailStamp=null; paintedId=null;
       focusCallId=null; focusPending=false;
-      document.getElementById("detail").style.display="none"; }
+      document.getElementById("detail").style.display="none";
+      document.getElementById("dgrip").style.display="none"; }
 
     // Jump from an Evidence's provenance to the exact tool call in the
     // execution log. The call is folded into its agent's card, so the agent is
@@ -2173,6 +2261,38 @@
       lastDetailStamp = JSON.stringify(nodeData[host]);
       showDetail(nodeData[host]);
     }
+    // ── panel width: drag the left edge, remembered per browser ─────────────
+    const DW_KEY = "graph.detailWidth", DW_DEFAULT = 480, DW_MIN = 340;
+    function setDetailWidth(px, save){
+      const max = Math.max(DW_MIN, Math.round(window.innerWidth * 0.85));
+      const w = Math.min(max, Math.max(DW_MIN, Math.round(px)));
+      document.documentElement.style.setProperty("--dw", w + "px");
+      if (save) { try { localStorage.setItem(DW_KEY, String(w)); } catch (e) {} }
+      return w;
+    }
+    (() => {
+      let saved = null;
+      try { saved = parseInt(localStorage.getItem(DW_KEY), 10); } catch (e) {}
+      if (saved) setDetailWidth(saved, false);
+      const grip = document.getElementById("dgrip");
+      grip.addEventListener("pointerdown", e => {
+        e.preventDefault(); grip.setPointerCapture(e.pointerId); grip.classList.add("on");
+        document.body.classList.add("resizing");
+        const move = ev => setDetailWidth(window.innerWidth - ev.clientX, false);
+        const up = ev => {
+          grip.removeEventListener("pointermove", move); grip.removeEventListener("pointerup", up);
+          grip.removeEventListener("pointercancel", up); grip.classList.remove("on");
+          document.body.classList.remove("resizing");
+          setDetailWidth(window.innerWidth - ev.clientX, true);
+        };
+        grip.addEventListener("pointermove", move); grip.addEventListener("pointerup", up);
+        grip.addEventListener("pointercancel", up);
+      });
+      grip.addEventListener("dblclick", () => setDetailWidth(DW_DEFAULT, true));
+      window.addEventListener("resize", () => setDetailWidth(
+        parseInt(getComputedStyle(document.documentElement).getPropertyValue("--dw"), 10) || DW_DEFAULT, false));
+    })();
+
     // ── wiring ────────────────────────────────────────────────────────────────
     let lastDetailStamp = null;
     function hardReset(){ nodes.clear(); edges.clear(); lastDetailStamp = null;

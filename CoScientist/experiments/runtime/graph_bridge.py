@@ -131,13 +131,13 @@ def _sync_uncovered_hypotheses(
                 updates.append({
                     "id": nid,
                     "status": "formulated",
-                    "reason": "plan task covers this hypothesis",
+                    "reason": "задача плана покрывает эту гипотезу",
                 })
         elif status == "formulated":
             updates.append({
                 "id": nid,
                 "status": "postponed",
-                "reason": "no_method_this_stage: no plan task tests this hypothesis",
+                "reason": "no_method_this_stage: ни одна задача плана не проверяет эту гипотезу",
             })
     if not updates:
         return 0, 0
@@ -377,39 +377,75 @@ def _overlap(left: set[str], right: set[str]) -> float:
     return len(left & right) / min(len(left), len(right))
 
 
+#: At least this many shared words before the text is allowed to decide. One
+#: word is an accident: «Предсказание LD50 (мышь)» shared exactly «метабол»
+#: with «Собрать литературные данные о метаболитах» and nothing with the step
+#: it belonged to, which scored a confident 1.00 on the wrong step.
+_MIN_SHARED = 2
+
+
+def _task_match_text(task: dict[str, Any]) -> str:
+    """The task's own words, from the fields the PLAN uses.
+
+    `_task_attrs` writes `title` from `name` and `question` from
+    `design.experiment_question`; reading the graph's names off a plan task is
+    what made this matcher a no-op. Both readers now start here.
+    """
+    design = task.get("design") or {}
+    return f"{task.get('name') or ''} {design.get('experiment_question') or ''}"
+
+
 def _plan_step_texts(state: MutableMapping[str, Any]) -> list[tuple[str, set[str]]]:
-    """(TASK-n, vocabulary) for every step of the outer plan."""
+    """(TASK-n, vocabulary) for every step an experiment task could carry out.
+
+    Only steps handed to an executor are candidates. A step assigned to the
+    hypothesis generator, the literature agent or the reporter asks for
+    something an ExperimentTask does not do, and its description is the worst
+    possible distractor: the hypothesis step spells out the pipeline the tasks
+    implement, so it shares vocabulary with every one of them.
+    """
     out: list[tuple[str, set[str]]] = []
     for step in (state.get("_master_active_tasks") or []):
         if not isinstance(step, dict):
             continue
         task_id = str(step.get("id") or "").strip()
-        if task_id:
-            out.append((task_id,
-                        _words(f"{step.get('title') or ''} "
-                               f"{step.get('description') or ''}")))
+        if not task_id:
+            continue
+        if str(step.get("assignee") or "") not in _EXECUTOR_ASSIGNEES:
+            continue
+        out.append((task_id,
+                    _words(f"{step.get('title') or ''} "
+                           f"{step.get('description') or ''}")))
     return out
 
 
 def _step_for_task(task: dict[str, Any],
                    steps: list[tuple[str, set[str]]],
-                   fallback: str) -> str:
+                   fallback: str) -> tuple[str, float, float]:
     """Which step of the OUTER plan this experiment task carries out.
+
+    Returns (step id, best score, runner-up score) — the two numbers go into
+    the audit line, because a wrong line on the graph is only fixable if it can
+    be read back to the pair of titles and the margin that produced it.
 
     ``fallback`` — the dispatched step — is used when nothing matches well
     enough: a weak guess is left where it used to go rather than moved
     somewhere invented.
     """
     if not steps:
-        return fallback
-    mine = _words(f"{task.get('title') or ''} {task.get('question') or ''}")
-    scored = sorted(((_overlap(mine, vocab), task_id) for task_id, vocab in steps),
-                    reverse=True)
+        return fallback, 0.0, 0.0
+    mine = _words(_task_match_text(task))
+    scored = []
+    for task_id, vocab in steps:
+        shared = mine & vocab
+        scored.append((_overlap(mine, vocab) if len(shared) >= _MIN_SHARED else 0.0,
+                       task_id))
+    scored.sort(reverse=True)
     best, best_id = scored[0]
     runner = scored[1][0] if len(scored) > 1 else 0.0
     if best >= _MATCH_FLOOR and best - runner >= _MATCH_LEAD:
-        return best_id
-    return fallback
+        return best_id, best, runner
+    return fallback, best, runner
 
 
 def _outer_step(store: Any, state: MutableMapping[str, Any]) -> tuple[str, str]:
@@ -440,6 +476,20 @@ def _outer_step(store: Any, state: MutableMapping[str, Any]) -> tuple[str, str]:
         if str((node.get("attrs") or {}).get("plan_task_id") or "") == task_id:
             return str(node.get("id") or ""), task_id
     return "", task_id
+
+
+#: Status codes in the words the card already uses for them, so a reason
+#: does not read «задача EXP-3: success» in the middle of a Russian sentence.
+_RU_STATUS = {
+    "success": "успех", "partial": "частично", "failure": "неудача",
+    "failed": "не удался", "skipped": "пропущена", "done": "выполнена",
+    "running": "выполняется", "planned": "запланирована",
+}
+
+
+def _ru_status(status: Any) -> str:
+    code = str(status or "").strip()
+    return _RU_STATUS.get(code, code)
 
 
 def _graph_full(store: Any) -> dict[str, Any]:
@@ -484,9 +534,11 @@ def publish_plan_detail_to_graph(store: Any,
             task_id = str(task.get("id") or "").strip()
             if not task_id:
                 continue
-            own_task_id = _step_for_task(task, step_texts, step_task_id)
+            own_task_id, best, runner = _step_for_task(task, step_texts,
+                                                       step_task_id)
             own_step_id = step_nodes.get(own_task_id, "") or step_id
-            matched.append(f"{task_id}->{own_task_id or 'none'}")
+            matched.append(f"{task_id}->{own_task_id or 'none'}"
+                           f"({best:.2f}/{runner:.2f})")
             attrs = _task_attrs(task, plan, own_task_id)
             status = _task_status(state, task_id)
             existing = known.get(task_id)
@@ -496,8 +548,8 @@ def publish_plan_detail_to_graph(store: Any,
                 nodes.append({"id": existing, "attrs": attrs})
                 if graph_nodes[existing].get("status") != status:
                     updates.append({"id": existing, "status": status,
-                                    "reason": f"experiment plan revision "
-                                              f"{plan.get('revision') or '?'}"})
+                                    "reason": f"правка плана эксперимента "
+                                              f"№{plan.get('revision') or '?'}"})
                 continue
             ref = f"xt{index}"
             ref_to_task[ref] = task_id
@@ -704,7 +756,8 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
         # Tasks dropped by a replan: mark their still-live VMs as failed.
         current = {str(t.get("id") or "") for t in tasks}
         stale = [
-            {"id": vm, "status": "failed", "reason": "replanned: task removed from plan"}
+            {"id": vm, "status": "failed",
+             "reason": "перепланировано: задача убрана из плана"}
             for task_id, vm in vm_ids.items()
             if task_id not in current
             and graph_nodes.get(vm, {}).get("status") in ("planned", "running")
@@ -801,7 +854,7 @@ def _advance_task_card(store: Any, state: MutableMapping[str, Any],
         if current.get("status") == final:
             return
         update: dict[str, Any] = {"id": xt_id, "status": final,
-                                  "reason": f"task {task_id} result: {status}"}
+                                  "reason": f"задача {task_id}: {_ru_status(status)}"}
         # A card that says a thing failed and not why is the gap the graph
         # reports as `unreasoned_failures`, so the failure carries its message.
         attrs = None
@@ -851,7 +904,7 @@ def publish_result_to_graph(
             store.commit(
                 source=_SOURCE,
                 status_updates=[{"id": vm_id, "status": "running",
-                                 "reason": f"task {task_id} executed"}],
+                                 "reason": f"задача {task_id} запущена"}],
                 enforce_permissions=False,
             )
 
@@ -898,7 +951,7 @@ def publish_result_to_graph(
         if current_vm_status in ("planned", "running") and current_vm_status != final:
             status_updates.append({
                 "id": vm_id, "status": final,
-                "reason": f"task {task_id} result: {status}",
+                "reason": f"задача {task_id}: {_ru_status(status)}",
             })
         result = store.commit(
             source=_SOURCE, nodes=nodes, edges=edges,

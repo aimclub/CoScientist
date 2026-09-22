@@ -192,6 +192,7 @@ agent_events.log
 runs/
 logs/
 workspace/
+local_papers/
 tz_documents/
 tz_microfluidics/
 conversations*/

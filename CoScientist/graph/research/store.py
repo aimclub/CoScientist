@@ -2061,7 +2061,7 @@ class ResearchGraphStore:
                 history = list(node.get("status_history") or [])
                 history.append({"from": "formulated", "to": "under_verification",
                                 "source": "graph-maintainer",
-                                "at": now, "reason": "auto: evidence attached"})
+                                "at": now, "reason": "auto: к гипотезе приложено свидетельство"})
                 node["status_history"] = history
                 committed["status_updates"].append(
                     {"id": hid, "from": "formulated", "to": "under_verification",
@@ -2114,8 +2114,8 @@ class ResearchGraphStore:
             c["status"] = "postponed"
             c["attrs"].setdefault(
                 "postponed_reason",
-                "alternative hypothesis — kept as backlog while the selected "
-                "ones are verified")
+                "альтернативная гипотеза — отложена в очередь, пока "
+                "проверяются выбранные")
         kept_labels = ", ".join(
             f'"{self._label(c, 60) or c.get("ref") or "?"}"'
             for c in ranked[:max_active])

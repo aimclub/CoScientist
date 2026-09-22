@@ -8,8 +8,10 @@ schema permissions for the new ContextInitAgent writer.
 from collections import Counter
 
 from CoScientist.context_init.agent import (
+    FRAME_COMPLETED_STATE_KEY,
     apply_form_values,
     coerce_frame,
+    frame_is_initialized,
     frame_to_form,
 )
 from CoScientist.context_init.commit import frame_to_init_kwargs, seed_frame
@@ -95,6 +97,13 @@ def test_coerce_frame_accepts_dict_and_json():
     f = _filled_frame()
     assert isinstance(coerce_frame(f.model_dump()), ResearchFrame)
     assert isinstance(coerce_frame(f.model_dump_json()), ResearchFrame)
+
+
+def test_frame_is_initialized_only_after_completion_marker():
+    # A drafted frame alone may belong to an interrupted first turn, so it
+    # cannot suppress the retry.  Only the post-seeding marker does.
+    assert frame_is_initialized({"research_frame": _filled_frame().model_dump()}) is False
+    assert frame_is_initialized({FRAME_COMPLETED_STATE_KEY: True}) is True
 
 
 # ── privileged graph seeding ──────────────────────────────────────────────────
