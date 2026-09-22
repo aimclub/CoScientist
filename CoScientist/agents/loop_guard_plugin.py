@@ -9,8 +9,9 @@ change approach instead of executing the call again.
 
 It never blocks a *different* call, so legitimate polling of a job (check_job
 with a new job_id) or paging through distinct queries is unaffected. Repeated
-identical polling of the same job_id is allowed too — that is the sanctioned
-way to wait — via the POLLING_TOOLS exemption.
+identical polling is allowed too — that is the sanctioned way to wait — via the
+POLLING_TOOLS exemption, which matters most for the tools that take no
+arguments to vary.
 
 Disable with REPEAT_CALL_GUARD=0; tune with REPEAT_CALL_LIMIT (default 4).
 """
@@ -24,7 +25,21 @@ from typing import Any, Dict, Optional
 from google.adk.plugins.base_plugin import BasePlugin
 
 # Tools whose whole purpose is to be called again with the same arguments.
-POLLING_TOOLS = {"check_job", "research_triggers", "get_active_tasks"}
+#
+# Waiting is not thrashing. A job that runs for minutes or hours is asked about
+# with the same arguments every time — `check_sandbox_task` takes none at all
+# (the sandbox is the one bound to the session), and `check_mcp_build` is asked
+# about the same job_id until that build ends. Both were counted as loops and
+# cut off after four questions, which left an agent unable to learn whether its
+# own work had finished. Anything added here must be a tool whose repetition is
+# the point; a lookup that merely happens to take no arguments does not belong.
+POLLING_TOOLS = {
+    "check_job",
+    "check_sandbox_task",
+    "check_mcp_build",
+    "research_triggers",
+    "get_active_tasks",
+}
 
 
 def _enabled() -> bool:
@@ -79,7 +94,8 @@ class RepeatCallGuardPlugin(BasePlugin):
                 f"{n} times. Repeating it will not produce a different result. "
                 "Change approach: use different arguments, a different tool, or "
                 "state plainly what is blocking you and stop. If you are waiting "
-                "for a long job, poll it with check_job instead."
+                "for a long job, poll it with the tool meant for that "
+                "(check_job for a local job, check_sandbox_task in the sandbox)."
             ),
         }
 
