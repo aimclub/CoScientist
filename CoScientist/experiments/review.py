@@ -385,6 +385,119 @@ def render_experiment_results(state: Any) -> str:
     return "\n".join(L)
 
 
+
+def _resolve(node: dict, root: dict) -> dict:
+    """Follow a `$ref` (and one level of anyOf/items) to the schema that matters."""
+    seen = 0
+    while isinstance(node, dict) and seen < 8:
+        seen += 1
+        if "$ref" in node:
+            node = root.get("$defs", {}).get(node["$ref"].rsplit("/", 1)[-1], {})
+        elif "items" in node and "enum" not in node:
+            node = node["items"]
+        elif "anyOf" in node:
+            options = [o for o in node["anyOf"] if o.get("type") != "null"]
+            node = options[0] if options else {}
+        else:
+            return node
+    return node if isinstance(node, dict) else {}
+
+
+def _contract_at(loc: tuple) -> str | None:
+    """What the schema actually asks for at the place an error was raised.
+
+    The revision message used to carry only pydantic's complaint. That says
+    what was wrong and never what is right, so a planner corrects the field it
+    was told about and invents the next one: `direction: "in"`, then `OP-1` for
+    an id, then `task_id`/`title` for `id`/`name` — three rejections, each a
+    different shape. Read straight off the model, so this can never drift from
+    what the validator enforces.
+    """
+    root = ExperimentPlan.model_json_schema()
+    node, path = root, []
+    for part in loc:
+        if isinstance(part, int):
+            continue
+        node = _resolve(node, root)
+        props = node.get("properties") or {}
+        if part not in props:
+            return None
+        required = part in (node.get("required") or [])
+        node, path = props[part], path + [str(part)]
+    field = _resolve(node, root)
+    where = ".".join(path)
+    if not where:
+        return None
+    choices = field.get("enum") or ([field["const"]] if "const" in field else None)
+    if choices:
+        return f"{where} — допустимо только: {' | '.join(map(str, choices))}"
+    kind = field.get("type") or "значение"
+    note = " (обязательное)" if required else ""
+    pattern = field.get("pattern")
+    return (f"{where} — {kind}{note}"
+            + (f", шаблон {pattern}" if pattern else ""))
+
+
+def _contract_lines(errors: Any) -> list[str]:
+    """One line per distinct place the plan was rejected, deduplicated."""
+    out: list[str] = []
+    for err in errors if isinstance(errors, list) else []:
+        loc = err.get("loc") if isinstance(err, dict) else None
+        if not loc:
+            continue
+        try:
+            line = _contract_at(tuple(loc))
+        except Exception:  # noqa: BLE001 - a hint must never break the revision
+            line = None
+        if line and line not in out:
+            out.append(line)
+    return out
+
+
+
+#: A rejected plan is shown to the planner again, so a revision corrects rather
+#: than rewrites. Capped: the whole point is to fit beside the errors.
+_PREVIOUS_PLAN_CHARS = 6000
+
+
+
+def _rejected_payload(payload: Any, runtime: dict | None) -> Any:
+    """The plan the planner just sent, or the last one that got as far as state.
+
+    A payload that failed to parse at all is still the most useful thing to
+    show back: it is what the planner wrote.
+    """
+    if isinstance(payload, (dict, list)):
+        return payload
+    return (runtime or {}).get("plan")
+
+
+def _revision_instruction(edit_prefix: str, detail: Any, *,
+                          contract: list[str] | None = None,
+                          previous_plan: Any = None) -> str:
+    """What to send back when a plan is refused.
+
+    Errors alone left the planner writing a fresh plan each round, blind to
+    both the contract it had broken and the plan it had just written. It gets
+    all three now: what was wrong, what the schema asks for there, and what it
+    last sent.
+    """
+    parts = [f"{edit_prefix} {detail}"]
+    if contract:
+        parts.append("Схема требует здесь:\n" + "\n".join(f"- {line}" for line in contract))
+    if previous_plan is not None:
+        try:
+            dumped = json.dumps(previous_plan, ensure_ascii=False, indent=1, default=str)
+        except Exception:  # noqa: BLE001 - a hint must never break the revision
+            dumped = None
+        if dumped:
+            if len(dumped) > _PREVIOUS_PLAN_CHARS:
+                dumped = dumped[:_PREVIOUS_PLAN_CHARS] + "\n… (план обрезан)"
+            parts.append(
+                "Твой предыдущий план — исправь ЕГО, не пиши заново:\n" + dumped)
+    return "\n\n".join(parts)
+
+
 def _plan_outcome(response: HITLResponse) -> str:
     """How the human left this round of the plan, in the record's vocabulary."""
     if response.approved:
@@ -473,7 +586,8 @@ class ExperimentReviewSessionAgent(SessionAgent):
 
     def _revise(
         self, *, ctx: InvocationContext, detail: Any, pause_prefix: str, edit_prefix: str,
-        inventory_blocker: bool = False, **_kwargs: Any,
+        inventory_blocker: bool = False, contract: list[str] | None = None,
+        previous_plan: Any = None, **_kwargs: Any,
     ) -> HITLResponse:
         state = ctx.session.state
         try:
@@ -493,7 +607,11 @@ class ExperimentReviewSessionAgent(SessionAgent):
             revisions >= max_rev
             or hits >= self.max_inventory_blocker_hits
         ):
-            return HITLResponse(action=HITLAction.EDIT, approved=False, instructions=f"{edit_prefix} {detail}")
+            return HITLResponse(
+                action=HITLAction.EDIT, approved=False,
+                instructions=_revision_instruction(
+                    edit_prefix, detail, contract=contract, previous_plan=previous_plan),
+            )
         state["experiment_plan_review_paused"] = True
         reason = (
             "inventory_blocker_repeated"
@@ -585,6 +703,11 @@ class ExperimentReviewSessionAgent(SessionAgent):
     async def _review_plan(self, ctx: InvocationContext, output_text: Any) -> HITLResponse:
         state, cfg = ctx.session.state, get_settings().experiments
         user_id, session_id = session_key(ctx)
+        # Bound before the try: a plan that fails to parse must still be
+        # showable back to the planner, and that is exactly when these would
+        # otherwise be unassigned.
+        payload: Any = None
+        runtime: dict[str, Any] = {}
         try:
             context = state.get("experiment_context") or {}
             runtime = state.get("experiment_runtime") or {}
@@ -612,6 +735,8 @@ class ExperimentReviewSessionAgent(SessionAgent):
                 ctx=ctx, detail=errors,
                 pause_prefix="Plan validation failed repeatedly; experiment remains paused. Last errors:",
                 edit_prefix="Deterministic schema validation failed. Return a complete corrected ExperimentPlan JSON. Errors:",
+                contract=_contract_lines(errors),
+                previous_plan=_rejected_payload(payload, runtime),
             )
 
         critique_json = critique.model_dump(mode="json")
@@ -633,6 +758,7 @@ class ExperimentReviewSessionAgent(SessionAgent):
                     if inv else "Deterministic PlanCritique requires revision:"
                 ),
                 inventory_blocker=inv,
+                previous_plan=plan.model_dump(mode="json"),
             )
 
         state["experiment_plan_review_paused"] = False
