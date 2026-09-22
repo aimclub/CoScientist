@@ -64,60 +64,71 @@
 
     /* canvas + panels */
     #net { position: absolute; top: 46px; bottom: 0; left: 0; right: 0; }
-    #detail { position: fixed; top: 46px; right: 0; width: 400px; bottom: 0; background: var(--surface);
+    /* Width is a variable so the grip below and the panel agree; the reader
+       drags the left edge and the width is remembered. The type is a size up
+       from the canvas: the panel is read, the canvas is scanned. */
+    :root { --dw: 480px; }
+    #detail { position: fixed; top: 46px; right: 0; width: var(--dw); bottom: 0; background: var(--surface);
       border-left: 1px solid var(--line); padding: 0; overflow-y: auto; z-index: 18; display: none;
-      box-shadow: -12px 0 32px rgba(0,0,0,.4); }
-    #detail .dhead { padding: 16px 18px 12px; border-bottom: 1px solid var(--line);
+      box-shadow: -12px 0 32px rgba(0,0,0,.4); font-size: 14.5px; line-height: 1.5; }
+    #dgrip { position: fixed; top: 46px; bottom: 0; right: calc(var(--dw) - 5px); width: 10px;
+      cursor: col-resize; z-index: 19; display: none; touch-action: none; }
+    #dgrip::after { content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px;
+      background: transparent; transition: background .12s; }
+    #dgrip:hover::after, #dgrip.on::after { background: var(--accent); }
+    body.resizing { cursor: col-resize; user-select: none; }
+    body.resizing #detail { pointer-events: none; }
+    #detail .dhead { padding: 18px 20px 14px; border-bottom: 1px solid var(--line);
       position: sticky; top: 0; background: var(--surface); }
-    #detail .dbody { padding: 14px 18px 24px; }
-    #detail h3 { margin: 0 0 4px; font-size: 16px; word-break: break-word; }
-    #detail .sub { color: var(--ink3); font-size: 12px; }
+    #detail .dbody { padding: 16px 20px 28px; }
+    #detail h3 { margin: 0 0 5px; font-size: 19px; word-break: break-word; }
+    #detail .sub { color: var(--ink3); font-size: 13.5px; }
     #detail .badge { display: inline-block; padding: 2px 10px; border-radius: 20px; font-weight: 700;
-      font-size: 11px; margin-top: 8px; }
-    #detail .close { float: right; cursor: pointer; color: var(--ink3); font-size: 20px; line-height: 1; }
+      font-size: 12.5px; margin-top: 8px; }
+    #detail .close { float: right; cursor: pointer; color: var(--ink3); font-size: 22px; line-height: 1; }
     #detail .close:hover { color: var(--ink); }
-    #detail .k { color: var(--accent); font-weight: 600; font-size: 11px; text-transform: uppercase;
+    #detail .k { color: var(--accent); font-weight: 600; font-size: 12.5px; text-transform: uppercase;
       letter-spacing: .4px; margin: 14px 0 4px; }
     /* pre-wrap: a Method's tool list is one server per line, and a formulation
        written over several lines keeps them. */
     #detail .attr { margin: 3px 0; color: var(--ink); word-break: break-word;
       white-space: pre-wrap; }
     #detail .attr .ak { color: var(--ink2); }
-    .chars { color: var(--ink3); font-size: 10px; letter-spacing: 0;
+    .chars { color: var(--ink3); font-size: 11.5px; letter-spacing: 0;
       text-transform: none; margin-left: 6px; }
     #detail pre { white-space: pre-wrap; word-break: break-word; background: var(--bg); padding: 10px;
-      border-radius: 8px; color: var(--ink); font-size: 12px; line-height: 1.5; margin: 4px 0 0;
+      border-radius: 8px; color: var(--ink); font-size: 13.5px; line-height: 1.5; margin: 4px 0 0;
       border: 1px solid var(--line);
       /* The whole value is here; long ones scroll rather than being cut. */
       max-height: 46vh; overflow-y: auto; }
     #detail .prov { background: var(--bg); border: 1px solid var(--line); border-left: 3px solid var(--accent);
       border-radius: 8px; padding: 9px 11px; margin: 6px 0; cursor: pointer; transition: border-color .12s, background .12s; }
     #detail .prov:hover { border-color: var(--accent); background: #1a1f28; }
-    #detail .prov .tool { font-weight: 700; color: var(--accent); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; }
-    #detail .prov .jump { float: right; color: var(--accent); font-size: 10px; opacity: .65; }
-    #detail .prov .res { color: var(--ink2); font-size: 11.5px; margin-top: 5px; line-height: 1.5;
+    #detail .prov .tool { font-weight: 700; color: var(--accent); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13.5px; }
+    #detail .prov .jump { float: right; color: var(--accent); font-size: 11.5px; opacity: .65; }
+    #detail .prov .res { color: var(--ink2); font-size: 13px; margin-top: 5px; line-height: 1.5;
       white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; }
     #detail .empty { color: var(--ink3); font-style: italic; }
 
     /* readable values: a mapping is labelled rows, not a wall of braces */
     .kv { margin-top: 2px; }
-    .kv .row { display: grid; grid-template-columns: minmax(64px, max-content) 1fr; gap: 2px 12px;
+    .kv .row { display: grid; grid-template-columns: minmax(80px, max-content) 1fr; gap: 2px 12px;
       padding: 5px 0; border-bottom: 1px solid var(--line); align-items: baseline; }
     .kv .row:last-child { border-bottom: 0; }
-    .kv .key { color: var(--ink2); font-size: 11.5px; font-family: "IBM Plex Mono", ui-monospace, monospace;
+    .kv .key { color: var(--ink2); font-size: 13px; font-family: "IBM Plex Mono", ui-monospace, monospace;
       word-break: break-word; }
-    .kv .val { color: var(--ink); font-size: 12.5px; line-height: 1.45; white-space: pre-wrap;
+    .kv .val { color: var(--ink); font-size: 14px; line-height: 1.45; white-space: pre-wrap;
       overflow-wrap: anywhere; min-width: 0; }
     .kv .val.block { grid-column: 1 / -1; background: var(--bg); border: 1px solid var(--line);
       border-radius: 6px; padding: 7px 9px; max-height: 40vh; overflow-y: auto; }
-    .kv .val.dim { color: var(--ink3); font-size: 11px; }
-    .kv .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11.5px; }
+    .kv .val.dim { color: var(--ink3); font-size: 12.5px; }
+    .kv .mono { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; }
     .kv .nested { grid-column: 1 / -1; margin-left: 10px; padding-left: 10px;
       border-left: 2px solid var(--line); }
-    .kv ol.items { margin: 0; padding-left: 18px; color: var(--ink); font-size: 12.5px; }
+    .kv ol.items { margin: 0; padding-left: 18px; color: var(--ink); font-size: 14px; }
     .kv ol.items li { margin: 3px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
     .kv ol.items li + li { border-top: 1px dashed var(--line); padding-top: 3px; }
-    .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11.5px;
+    .pill { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 13px;
       background: var(--surface2); border: 1px solid var(--line); color: var(--ink);
       margin: 0 4px 4px 0; white-space: nowrap; }
 
@@ -127,14 +138,14 @@
       user-select: none; }
     .call .hd:hover { background: #1a1f28; }
     .call .st { width: 8px; height: 8px; border-radius: 50%; flex: none; }
-    .call .tool { font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 700; font-size: 12px;
+    .call .tool { font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 700; font-size: 13.5px;
       color: var(--accent); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
       white-space: nowrap; }
-    .call .when { color: var(--ink3); font-size: 11px; font-variant-numeric: tabular-nums;
+    .call .when { color: var(--ink3); font-size: 12.5px; font-variant-numeric: tabular-nums;
       white-space: nowrap; }
-    .call .caret { color: var(--ink3); font-size: 9px; transition: transform .12s; }
+    .call .caret { color: var(--ink3); font-size: 10px; transition: transform .12s; }
     .call.open .caret { transform: rotate(90deg); }
-    .call .gist { color: var(--ink2); font-size: 11.5px; padding: 0 10px 8px 26px;
+    .call .gist { color: var(--ink2); font-size: 13px; padding: 0 10px 8px 26px;
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .call .bd { display: none; padding: 0 10px 10px; border-top: 1px solid var(--line); }
     .call.open .bd { display: block; }
@@ -143,27 +154,27 @@
 
     /* an agent's report, rendered from its markdown */
     .report { background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
-      padding: 10px 12px; font-size: 12.5px; line-height: 1.55; max-height: 52vh; overflow-y: auto;
+      padding: 10px 12px; font-size: 14px; line-height: 1.55; max-height: 52vh; overflow-y: auto;
       overflow-wrap: anywhere; }
     .report > :first-child { margin-top: 0; } .report > :last-child { margin-bottom: 0; }
-    .report h1, .report h2, .report h3, .report h4 { font-size: 13px; margin: 12px 0 4px; color: var(--ink); }
-    .report h1 { font-size: 14px; }
+    .report h1, .report h2, .report h3, .report h4 { font-size: 15px; margin: 12px 0 4px; color: var(--ink); }
+    .report h1 { font-size: 16.5px; }
     .report p, .report ul, .report ol { margin: 6px 0; } .report li { margin: 2px 0; }
-    .report code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11.5px; background: var(--surface2);
+    .report code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; background: var(--surface2);
       padding: 1px 4px; border-radius: 4px; }
     .report pre { max-height: none; margin: 6px 0; } .report pre code { background: none; padding: 0; }
     .report a { color: var(--accent); } .report img { max-width: 100%; border-radius: 6px; }
-    .report table { border-collapse: collapse; font-size: 11.5px; }
+    .report table { border-collapse: collapse; font-size: 13px; }
     .report th, .report td { border: 1px solid var(--line); padding: 3px 6px; }
     .report blockquote { margin: 6px 0; padding-left: 10px; border-left: 3px solid var(--line); color: var(--ink2); }
     /* artifacts: what the agent left behind */
-    .art { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+    .art { display: flex; align-items: baseline; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 13.5px; }
     .art:last-child { border-bottom: 0; }
     .art .ic { flex: none; }
-    .art .uri { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 11.5px; overflow-wrap: anywhere; color: var(--ink); }
+    .art .uri { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; overflow-wrap: anywhere; color: var(--ink); }
     .art a.uri { color: var(--accent); text-decoration: none; } .art a.uri:hover { text-decoration: underline; }
-    .art .by { color: var(--ink3); font-size: 11px; white-space: nowrap; margin-left: auto; }
-    #detail .note { color: var(--ink3); font-size: 11.5px; font-style: italic; margin: 2px 0 0; }
+    .art .by { color: var(--ink3); font-size: 12.5px; white-space: nowrap; margin-left: auto; }
+    #detail .note { color: var(--ink3); font-size: 13px; font-style: italic; margin: 2px 0 0; }
   </style>
 </head>
 <body>
@@ -193,6 +204,7 @@
   </div>
 
   <div id="net"></div>
+  <div id="dgrip" title="drag to resize · double-click to reset"></div>
   <div id="detail"></div>
 
   <script>
@@ -1979,6 +1991,7 @@
       const box = document.getElementById("detail");
       const top = paintedId === n.id ? box.scrollTop : 0;
       box.innerHTML = html; box.style.display = "block"; box.scrollTop = top;
+      document.getElementById("dgrip").style.display = "block";
       paintedId = n.id;
       if (focusCallId) {
         const el = box.querySelector(`.call[data-call="${CSS.escape(focusCallId)}"]`);
@@ -2097,7 +2110,8 @@
     }
     function closeDetail(){ selectedId=null; lastDetailStamp=null; paintedId=null;
       focusCallId=null; focusPending=false;
-      document.getElementById("detail").style.display="none"; }
+      document.getElementById("detail").style.display="none";
+      document.getElementById("dgrip").style.display="none"; }
 
     // Jump from an Evidence's provenance to the exact tool call in the
     // execution log. The call is folded into its agent's card, so the agent is
@@ -2173,6 +2187,38 @@
       lastDetailStamp = JSON.stringify(nodeData[host]);
       showDetail(nodeData[host]);
     }
+    // ── panel width: drag the left edge, remembered per browser ─────────────
+    const DW_KEY = "graph.detailWidth", DW_DEFAULT = 480, DW_MIN = 340;
+    function setDetailWidth(px, save){
+      const max = Math.max(DW_MIN, Math.round(window.innerWidth * 0.85));
+      const w = Math.min(max, Math.max(DW_MIN, Math.round(px)));
+      document.documentElement.style.setProperty("--dw", w + "px");
+      if (save) { try { localStorage.setItem(DW_KEY, String(w)); } catch (e) {} }
+      return w;
+    }
+    (() => {
+      let saved = null;
+      try { saved = parseInt(localStorage.getItem(DW_KEY), 10); } catch (e) {}
+      if (saved) setDetailWidth(saved, false);
+      const grip = document.getElementById("dgrip");
+      grip.addEventListener("pointerdown", e => {
+        e.preventDefault(); grip.setPointerCapture(e.pointerId); grip.classList.add("on");
+        document.body.classList.add("resizing");
+        const move = ev => setDetailWidth(window.innerWidth - ev.clientX, false);
+        const up = ev => {
+          grip.removeEventListener("pointermove", move); grip.removeEventListener("pointerup", up);
+          grip.removeEventListener("pointercancel", up); grip.classList.remove("on");
+          document.body.classList.remove("resizing");
+          setDetailWidth(window.innerWidth - ev.clientX, true);
+        };
+        grip.addEventListener("pointermove", move); grip.addEventListener("pointerup", up);
+        grip.addEventListener("pointercancel", up);
+      });
+      grip.addEventListener("dblclick", () => setDetailWidth(DW_DEFAULT, true));
+      window.addEventListener("resize", () => setDetailWidth(
+        parseInt(getComputedStyle(document.documentElement).getPropertyValue("--dw"), 10) || DW_DEFAULT, false));
+    })();
+
     // ── wiring ────────────────────────────────────────────────────────────────
     let lastDetailStamp = null;
     function hardReset(){ nodes.clear(); edges.clear(); lastDetailStamp = null;
