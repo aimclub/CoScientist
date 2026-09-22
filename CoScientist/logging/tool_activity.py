@@ -106,6 +106,29 @@ def _agent_name(tool_context: Any) -> str:
     return getattr(tool_context, "agent_name", None) or "system"
 
 
+def _agent_instance(tool_context: Any) -> Optional[str]:
+    """Return the runtime session that distinguishes repeated agent runs.
+
+    A parallel pair of AgentTool delegations can run the same configured agent
+    name at once.  ADK gives each delegated run its own child session, whereas
+    ``agent_name`` alone is necessarily identical.  Keep the public session
+    scope out of this value: the UI needs the transient runtime identity to
+    render two branches, not another routing key.
+    """
+    invocation = (
+        getattr(tool_context, "_invocation_context", None)
+        or getattr(tool_context, "invocation_context", None)
+    )
+    session = getattr(tool_context, "session", None) or getattr(invocation, "session", None)
+    value = getattr(session, "id", None)
+    return str(value) if value else None
+
+
+def _parent_agent_instance(tool_context: Any) -> Optional[str]:
+    """Return the runtime identity of a nested callback's caller, if known."""
+    return _agent_instance(getattr(tool_context, "_parent_ctx", None))
+
+
 def _call_id(tool_context: Any) -> Optional[str]:
     """The id ADK assigns to this function call.
 
@@ -236,7 +259,9 @@ class ToolActivityPlugin(BasePlugin):
         payload = {
             "phase": "agent_start",
             "author": author,
+            "agent_instance": _agent_instance(callback_context),
             "parent": parent,
+            "parent_instance": _parent_agent_instance(callback_context),
             "agent_class": getattr(getattr(agent, "__class__", None), "__name__", "Agent"),
         }
         await self._dispatch(callback_context, payload)
@@ -247,6 +272,7 @@ class ToolActivityPlugin(BasePlugin):
         payload = {
             "phase": "agent_end",
             "author": author,
+            "agent_instance": _agent_instance(callback_context),
         }
         await self._dispatch(callback_context, payload)
         return None
@@ -259,11 +285,13 @@ class ToolActivityPlugin(BasePlugin):
         payload = {
             "phase": "call",
             "author": author,
+            "agent_instance": _agent_instance(tool_context),
             "tool": getattr(tool, "name", "?"),
             "call_id": _call_id(tool_context),
             "args": preview,
             "args_truncated": truncated,
             "parent": parent,
+            "parent_instance": _parent_agent_instance(tool_context),
         }
         if target:
             payload["is_delegation"] = True
@@ -286,6 +314,7 @@ class ToolActivityPlugin(BasePlugin):
         payload = {
             "phase": "result",
             "author": _agent_name(tool_context),
+            "agent_instance": _agent_instance(tool_context),
             "tool": tool_name,
             "call_id": _call_id(tool_context),
             "result": preview,
@@ -304,6 +333,7 @@ class ToolActivityPlugin(BasePlugin):
         payload = {
             "phase": "error",
             "author": _agent_name(tool_context),
+            "agent_instance": _agent_instance(tool_context),
             "tool": getattr(tool, "name", "?"),
             "call_id": _call_id(tool_context),
             "error": preview,
