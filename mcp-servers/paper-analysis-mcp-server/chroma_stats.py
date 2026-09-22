@@ -285,7 +285,7 @@ class PaperStatisticsCache:
     # ── reading ─────────────────────────────────────────────────────────────
 
     def report(self) -> str:
-        """The current statistics as the tool's plain-text answer. Instant."""
+        """The current statistics as the tool's answer (Markdown, in Russian). Instant."""
         self.start()  # normally already running, started with the server
         with self._lock:
             stats = self._stats
@@ -305,38 +305,79 @@ class PaperStatisticsCache:
         if stats is None:
             if progress:
                 return (
-                    "The paper database statistics are still being computed "
-                    f"({progress}). Try again in a few minutes."
+                    "Статистика базы статей ещё рассчитывается "
+                    f"({progress}). Повторите запрос через несколько минут."
                 )
             if error:
                 return (
-                    "Could not compute the paper database statistics. The last "
-                    f"attempt at {_clock(error_at)} failed: {error}. "
-                    "Retrying automatically."
+                    "Не удалось рассчитать статистику базы статей: попытка "
+                    f"{_clock(error_at)} завершилась ошибкой ({error}). "
+                    "Повторная попытка будет выполнена автоматически."
                 )
             return (
-                "The paper database statistics are being prepared. "
-                "Try again in a few minutes."
+                "Статистика базы статей готовится. "
+                "Повторите запрос через несколько минут."
             )
 
         notes = [
-            f"Computed {_clock(computed_at)} ({_ago(now_mono - computed_mono)}); "
-            "refreshed automatically when the collection changes."
+            f"Данные на {_clock(computed_at)} ({_ago(now_mono - computed_mono)}). "
+            "Статистика обновляется автоматически при изменении коллекции."
         ]
         if progress:
             notes.append(
-                f"A refresh is running ({progress}); "
-                "these numbers are from the previous scan."
+                f"Идёт обновление ({progress}); показаны данные предыдущего расчёта."
             )
         if error:
             notes.append(
-                f"The last refresh failed at {_clock(error_at)} ({error}); "
-                "these numbers are from the previous scan."
+                f"Последнее обновление ({_clock(error_at)}) завершилось ошибкой "
+                f"({error}); показаны данные предыдущего расчёта."
             )
         return format_paper_statistics(stats, notes)
 
 
 # ── formatting ───────────────────────────────────────────────────────────────
+# The report is Markdown in Russian: the web page renders it as a dashboard,
+# agents read the same text. Numbers use the Russian style - a no-break space
+# between thousands, a decimal comma.
+
+NBSP = " "
+
+# OpenAlex domain and field names, as the metadata stores them, in Russian.
+# A name that is not listed is shown as stored.
+RUSSIAN_NAMES = {
+    UNKNOWN: "Не указано",
+    # domains
+    "Physical Sciences": "Физические науки",
+    "Life Sciences": "Науки о жизни",
+    "Health Sciences": "Науки о здоровье",
+    "Social Sciences": "Социальные науки",  # also a field
+    # fields
+    "Agricultural and Biological Sciences": "Сельскохозяйственные и биологические науки",
+    "Arts and Humanities": "Искусство и гуманитарные науки",
+    "Biochemistry, Genetics and Molecular Biology": "Биохимия, генетика и молекулярная биология",
+    "Business, Management and Accounting": "Бизнес, менеджмент и бухгалтерский учёт",
+    "Chemical Engineering": "Химическая технология",
+    "Chemistry": "Химия",
+    "Computer Science": "Компьютерные науки",
+    "Decision Sciences": "Науки о принятии решений",
+    "Dentistry": "Стоматология",
+    "Earth and Planetary Sciences": "Науки о Земле и планетах",
+    "Economics, Econometrics and Finance": "Экономика, эконометрика и финансы",
+    "Energy": "Энергетика",
+    "Engineering": "Инженерные науки",
+    "Environmental Science": "Науки об окружающей среде",
+    "Health Professions": "Медицинские профессии",
+    "Immunology and Microbiology": "Иммунология и микробиология",
+    "Materials Science": "Материаловедение",
+    "Mathematics": "Математика",
+    "Medicine": "Медицина",
+    "Neuroscience": "Нейронауки",
+    "Nursing": "Сестринское дело",
+    "Pharmacology, Toxicology and Pharmaceutics": "Фармакология, токсикология и фармацевтика",
+    "Physics and Astronomy": "Физика и астрономия",
+    "Psychology": "Психология",
+    "Veterinary": "Ветеринария",
+}
 
 
 def _now() -> datetime:
@@ -344,97 +385,141 @@ def _now() -> datetime:
 
 
 def _clock(moment: datetime | None) -> str:
-    return moment.strftime("%Y-%m-%d %H:%M %Z") if moment else "an unknown time"
+    return moment.strftime("%d.%m.%Y %H:%M %Z") if moment else "в неизвестное время"
 
 
 def _ago(seconds: float) -> str:
     minutes = int(seconds // 60)
     if minutes < 1:
-        return "less than a minute ago"
+        return "меньше минуты назад"
     if minutes < 60:
-        return f"{minutes} min ago"
+        return f"{minutes} мин назад"
     hours, minutes = divmod(minutes, 60)
-    return f"{hours} h {minutes} min ago"
+    return f"{hours} ч {minutes} мин назад"
+
+
+def _num(count: int) -> str:
+    return f"{count:,}".replace(",", NBSP)
+
+
+def _pct(part: int, whole: int) -> str:
+    return f"{part / whole * 100:.1f}".replace(".", ",") + f"{NBSP}%"
+
+
+def _plural(count: int, one: str, few: str, many: str) -> str:
+    """Russian noun form for a count: 1 статья, 2 статьи, 5 статей, 11 статей."""
+    count = abs(count) % 100
+    if 11 <= count <= 14:
+        return many
+    count %= 10
+    if count == 1:
+        return one
+    if 2 <= count <= 4:
+        return few
+    return many
+
+
+def _papers(count: int) -> str:
+    return f"{_num(count)} {_plural(count, 'статья', 'статьи', 'статей')}"
 
 
 def _progress(started_at: datetime, elapsed: float, rows: int, total: int | None) -> str:
-    parts = [f"started {_clock(started_at)}"]
-    parts.append(f"{rows:,} of {total:,} chunks read" if total else f"{rows:,} chunks read")
+    parts = [f"начато {_clock(started_at)}"]
+    parts.append(
+        f"прочитано фрагментов: {_num(rows)} из {_num(total)}"
+        if total
+        else f"прочитано фрагментов: {_num(rows)}"
+    )
     if rows and total and rows < total:
         left = (total - rows) * elapsed / rows
         parts.append(
-            "less than a minute left" if left < 60 else f"about {math.ceil(left / 60)} min left"
+            "осталось меньше минуты" if left < 60 else f"осталось около {math.ceil(left / 60)} мин"
         )
     return ", ".join(parts)
 
 
-def _papers(count: int) -> str:
-    return f"{count:,} paper" if count == 1 else f"{count:,} papers"
+def _name(stored: str) -> str:
+    # A pipe or a line break would break the Markdown table row.
+    return RUSSIAN_NAMES.get(stored, stored).replace("|", "/").replace("\n", " ")
 
 
-def _format_distribution(
-    counter: Counter, total: int, width: int | None = None
-) -> list[str]:
-    width = width or max(len(name) for name in counter)
-    rows = sorted(counter.items(), key=lambda item: (-item[1], item[0]))
-    return [
-        f"  {name:<{width}}  {count:>5}  {count / total * 100:5.1f}%"
-        for name, count in rows
+def _table(headers: Sequence[str], rows: Iterable[Sequence[str]], align: str) -> str:
+    """A Markdown table; ``align`` holds "l" or "r" for each column."""
+    marks = {"l": "---", "r": "---:"}
+    lines = [
+        "| " + " | ".join(headers) + " |",
+        "|" + "|".join(marks[a] for a in align) + "|",
     ]
+    lines += ["| " + " | ".join(row) + " |" for row in rows]
+    return "\n".join(lines)
 
 
-def _format_fields_by_domain(stats: PaperStatistics) -> list[str]:
-    """One block per domain, listing its fields as a share of that domain."""
-    fields_of: dict[str, Counter] = {}
-    for (domain, field), count in stats.domain_fields.items():
-        fields_of.setdefault(domain, Counter())[field] = count
+def _by_count(items: Iterable[tuple[str, int]]) -> list[tuple[str, int]]:
+    """Largest first, ties by name; papers without a label always last."""
+    return sorted(items, key=lambda item: (item[0] == UNKNOWN, -item[1], _name(item[0])))
 
-    # One width across every block, so the field columns line up throughout.
-    width = max(len(field) for _, field in stats.domain_fields)
 
-    lines: list[str] = []
-    for domain, domain_total in stats.domains.most_common():
-        lines.append(f"  {domain} - {_papers(domain_total)}")
-        lines += [
-            f"  {row}"
-            for row in _format_distribution(fields_of[domain], domain_total, width)
-        ]
-    return lines
+def _share_table(name_header: str, share_header: str, counter: Counter, total: int) -> str:
+    rows = _by_count(counter.items())
+    return _table(
+        (name_header, "Статей", share_header),
+        [(_name(name), _num(count), _pct(count, total)) for name, count in rows],
+        "lrr",
+    )
 
 
 def format_paper_statistics(stats: PaperStatistics, notes: Sequence[str] = ()) -> str:
-    """Render the statistics as the plain-text report the MCP tool returns.
+    """Render the statistics as the report the MCP tool returns: Markdown, in Russian.
 
-    ``notes`` go right under the header line: freshness, a running refresh,
-    a failed one.
+    ``notes`` come first: freshness, a running refresh, a failed one. The
+    report does not name the collection or where the database runs.
     """
-    where = f" at {stats.location}" if stats.location else ""
-    lines = [
-        f"Scientific paper database: collection '{stats.collection}'{where}",
+    named_domains = [d for d in stats.domains if d != UNKNOWN]
+    named_fields = [f for f in stats.fields if f != UNKNOWN]
+    blocks = [
         *notes,
-        "",
+        "## Сводка",
+        _table(
+            ("Показатель", "Значение"),
+            [
+                ("Статей в базе", _num(stats.total_papers)),
+                ("Областей науки", _num(len(named_domains))),
+                ("Научных направлений", _num(len(named_fields))),
+                ("Фрагментов в коллекции", _num(stats.total_chunks)),
+            ],
+            "lr",
+        ),
     ]
 
     if not stats.total_papers:
-        lines.append(
-            f"No papers found. Scanned {stats.total_chunks:,} chunks, "
-            f"none of them usable (outdated summary chunks are ignored)."
+        blocks.append(
+            "Статей пока нет: в коллекции не найдено фрагментов с идентификатором "
+            "статьи (устаревшие аннотации не учитываются)."
         )
-        return "\n".join(lines)
+        return "\n\n".join(blocks)
 
-    lines += [
-        f"Unique papers: {stats.total_papers:,}",
-        f"Chunks: {stats.total_chunks:,} in the collection, "
-        f"{stats.counted_chunks:,} counted, "
-        f"{stats.skipped_chunks:,} ignored (outdated summaries and rows without article_id)",
-        "",
-        f"Domains ({_papers(stats.total_papers)} = 100%):",
-        *_format_distribution(stats.domains, stats.total_papers),
-        "",
-        f"Fields ({_papers(stats.total_papers)} = 100%):",
-        *_format_distribution(stats.fields, stats.total_papers),
-        "",
-        "Fields within each domain (% of that domain's papers):",
-        *_format_fields_by_domain(stats),
+    fields_of: dict[str, Counter] = {}
+    for (domain, field), count in stats.domain_fields.items():
+        fields_of.setdefault(domain, Counter())[field] = count
+    domains = _by_count(stats.domains.items())
+
+    blocks += [
+        "## Области науки",
+        _share_table("Область науки", "Доля", stats.domains, stats.total_papers),
+        "## Направления внутри областей",
     ]
-    return "\n".join(lines)
+    for domain, domain_total in domains:
+        if domain == UNKNOWN and set(fields_of[domain]) == {UNKNOWN}:
+            continue  # nothing to break down; the domain table already counts these papers
+        blocks += [
+            f"### {_name(domain)} · {_papers(domain_total)}",
+            _share_table("Направление", "Доля в области", fields_of[domain], domain_total),
+        ]
+    blocks += [
+        "## Все научные направления",
+        _share_table("Научное направление", "Доля", stats.fields, stats.total_papers),
+        f"Учтено фрагментов: {_num(stats.counted_chunks)} из {_num(stats.total_chunks)}. "
+        "Устаревшие аннотации и фрагменты без идентификатора статьи не учитываются; "
+        "область и направление статьи определяются по большинству её фрагментов.",
+    ]
+    return "\n\n".join(blocks)

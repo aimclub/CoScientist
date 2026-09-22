@@ -1,4 +1,4 @@
-# papers-search-mcp-server
+# paper-analysis-mcp-server
 
 ## Environment
 
@@ -35,7 +35,7 @@ This server's MCP tools include:
 - Purpose: Report what the papers database (Chroma, `CHROMADB_COLLECTION`) holds: the number of unique papers and their share per research domain and field, across the whole database and within each domain.
 - Input: none.
 - Output:
-	- Plain-text report (a string, not JSON). Example below.
+	- A report in Russian, formatted as Markdown (a string, not JSON): summary, domains, fields within each domain, all fields. The web UI's statistics page renders it as a dashboard. Example below.
 - Use when:
 	- the question is about the database itself (how many papers it holds, which domains or fields it covers), not about what the papers say.
 - Notes:
@@ -44,28 +44,61 @@ This server's MCP tools include:
 	- Each scan is logged with its duration, e.g. `Paper statistics: 1135 papers from 12459 chunks, scanned in 8.6s`.
 	- Papers are unique `article_id` values. Chunks with `role="summary"` are outdated and ignored. A paper's domain and field are the values most of its chunks carry, so every section shares one denominator.
 
-```
-Scientific paper database: collection 'coscientist_papers' at 10.32.1.36:9941
-Computed 2026-09-21 17:24 UTC (12 min ago); refreshed automatically when the collection changes.
+```markdown
+Данные на 21.09.2026 17:24 UTC (12 мин назад). Статистика обновляется автоматически при изменении коллекции.
 
-Unique papers: 142
-Chunks: 25,310 in the collection, 24,980 counted, 330 ignored (outdated summaries and rows without article_id)
+## Сводка
 
-Domains (142 papers = 100%):
-  Physical Sciences     78   54.9%
-  Life Sciences         41   28.9%
-  ...
+| Показатель | Значение |
+|---|---:|
+| Статей в базе | 142 |
+| Областей науки | 3 |
+| Научных направлений | 6 |
+| Фрагментов в коллекции | 25 134 |
 
-Fields (142 papers = 100%):
-  Chemistry             52   36.6%
-  Materials Science     26   18.3%
-  ...
+## Области науки
 
-Fields within each domain (% of that domain's papers):
-  Physical Sciences - 78 papers
-    Chemistry           52   66.7%
-    Materials Science   26   33.3%
-  ...
+| Область науки | Статей | Доля |
+|---|---:|---:|
+| Физические науки | 78 | 54,9 % |
+| Науки о жизни | 41 | 28,9 % |
+| Науки о здоровье | 23 | 16,2 % |
+
+## Направления внутри областей
+
+### Физические науки · 78 статей
+
+| Направление | Статей | Доля в области |
+|---|---:|---:|
+| Химия | 52 | 66,7 % |
+| Материаловедение | 26 | 33,3 % |
+
+### Науки о жизни · 41 статья
+
+| Направление | Статей | Доля в области |
+|---|---:|---:|
+| Биохимия, генетика и молекулярная биология | 30 | 73,2 % |
+| Сельскохозяйственные и биологические науки | 11 | 26,8 % |
+
+### Науки о здоровье · 23 статьи
+
+| Направление | Статей | Доля в области |
+|---|---:|---:|
+| Фармакология, токсикология и фармацевтика | 16 | 69,6 % |
+| Медицина | 7 | 30,4 % |
+
+## Все научные направления
+
+| Научное направление | Статей | Доля |
+|---|---:|---:|
+| Химия | 52 | 36,6 % |
+| Биохимия, генетика и молекулярная биология | 30 | 21,1 % |
+| Материаловедение | 26 | 18,3 % |
+| Фармакология, токсикология и фармацевтика | 16 | 11,3 % |
+| Сельскохозяйственные и биологические науки | 11 | 7,7 % |
+| Медицина | 7 | 4,9 % |
+
+Учтено фрагментов: 24 850 из 25 134. Устаревшие аннотации и фрагменты без идентификатора статьи не учитываются; область и направление статьи определяются по большинству её фрагментов.
 ```
 
 ## Run With uv

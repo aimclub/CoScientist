@@ -438,15 +438,16 @@ def get_papers_database_statistics() -> str:
     the server starts they may still be computing; the report then says so.
 
     Returns:
-        str: A plain-text report with the paper count and the domain and field
-            distribution, or a note that the statistics are not ready yet.
+        str: A report in Russian, formatted as Markdown: the paper count, then
+            the domain and field distributions as tables. Or a note that the
+            statistics are not ready yet.
     """
     logger.info("Running get_papers_database_statistics tool...")
     try:
         return paper_statistics.report()
     except Exception as e:
         logger.error(f"get_papers_database_statistics ERROR: {e}")
-        return f"Could not report the papers database statistics. Error: {e}"
+        return f"Не удалось получить статистику базы статей. Ошибка: {e}"
 
 
 if __name__ == "__main__":
