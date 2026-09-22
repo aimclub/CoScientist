@@ -139,6 +139,16 @@ class KnowledgeGraph:
         self.ensure_seeded()
         return self._store.full(self.run_id)
 
+    def restore(self, payload: dict) -> None:
+        """Replace this session trace with a checkpointed snapshot."""
+        self._store.replace(self.run_id, payload)
+        with self._lock:
+            self._seeded = any(
+                node.get("id") == ROOT_ID for node in payload.get("nodes", [])
+                if isinstance(node, dict)
+            )
+        self.ensure_seeded()
+
     def tool_vs_coder(self) -> Dict[str, Any]:
         """Whether this run used a tool from the catalogue or wrote code from
         scratch. See :func:`CoScientist.graph.projection.tool_vs_coder`."""

@@ -195,9 +195,11 @@ workspace/
 local_papers/
 tz_documents/
 tz_microfluidics/
+TZ_*.md
 conversations*/
 task_tracker_data.json
 *_report.md
+local_papers/
 
 # Reference PDFs and vendored templates pulled in for the write-up
 CoScientist/docs/*.pdf
@@ -226,3 +228,10 @@ benchmarks/alembic/pre_comparison
 # Exported run folders and stray configs — session data, never source
 *_cossession/
 CoScientist/some.yaml
+
+# Stubs and isolated stub outputs
+stubs/
+antioxidant_output_stub/
+
+# microfluidics: final reports saved by ReportAgent (research_record.record_conclusion)
+reports/

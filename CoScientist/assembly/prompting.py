@@ -155,6 +155,32 @@ Keep the order honest and specific: a human who reads "search the literature"
 learns nothing; "искать в PubMed РКИ по X с 2015 года, без описаний клинических
 случаев" is something they can correct."""
 
+# Appended to the protocol for agents with `work_order_step_review: true`.
+# No curly braces here either (ADK state injection).
+_WORK_ORDER_STEP_REVIEW_SECTION = """\
+### Step review — the human checks every step
+
+The human confirms each step of your order before you go on: what you sent,
+what you expected and what you found. So:
+- Every step that calls a tool has `inputs` — exactly what you will send to
+  the tool (search queries, substance names, SMILES, route ids, parameter
+  values) — and `expected_outcome` — what you expect back, as concretely as
+  you can (fields, counts, ranges, units). A step without `inputs` is refused.
+- One step, one purpose: keep calls that answer different questions in
+  different steps, so each can be judged on its own.
+- Before a step's first tool call, mark it `in_progress` with
+  `update_work_step`. A tool call made while no step is in progress is BLOCKED.
+- When the step is finished, call `update_work_step` with status `done`, a
+  short `note` and `result` — what the step actually produced: numbers with
+  units, statuses, ids, what is missing. The system shows the human every call
+  of the step next to your result, so report what came back, not what you hoped.
+- Read the answer:
+  - `accepted` — go on to the next step; follow operator notes if any.
+  - `revise` — redo this step as the feedback says (it is in progress again),
+    then mark it `done` with the new result.
+  - `rejected` — the human stopped the order: call no more tools, submit your
+    work report with `not_met` and say what was done and what was not."""
+
 _WORK_ORDER_HINTS = (
     (("websearch",),
      "For searches, the query formulations and the source selection criteria "
@@ -178,6 +204,33 @@ _WORK_ORDER_HINTS = (
      "assumptions "
      '(e.g. "Активность соединений выражена в нМ", '
      '"Основной источник активностей — ChEMBL v33 или новее").'),
+    (("economics_mcp",),
+     "For the economics server, each of these is a separate atomic assumption: "
+     "the target amount and unit of product (g, kg, mol or mmol), the step "
+     "yields you use (from the source, or default_yield), strategy (cheapest or "
+     "single_supplier), similarity (soft or hard), preferred_currency, and how "
+     "solvents and catalysts are counted (amount / overrides, or left out). In "
+     "`inputs` list the route ids and every substance you send, by English name "
+     'or SMILES (e.g. "Целевое количество продукта — 100 g").'),
+    (("retrosynthesis",),
+     "For the retrosynthesis service, the molecule forms you send (neutral "
+     "parent instead of a salt), the search mode and how many routes you keep "
+     "per candidate are assumptions; in `inputs` list every SMILES you send "
+     '(e.g. "Для соли ищем маршрут к нейтральной кислоте").'),
+    (("cfd_mcp",),
+     "For the CFD service, each value you pass is an atomic assumption with its "
+     "unit: the reactor id, inlet speed (m/s), concentrations (mol/m3), rate "
+     "constant (m3/(mol*s)), temperature (K), turnovers. In `inputs` name the "
+     "request_id of each run; a wait between polls is not a step "
+     '(e.g. "Константа скорости 1e-3 м3/(моль·с) — из литературы").'),
+    (("cfd_mcp_stub",),
+     "For the CFD simulation, the channel geometry, flow rates and fluid "
+     "properties you pass are assumptions — list them with units "
+     '(e.g. "Суммарный расход 0.5 мл/мин").'),
+    (("rig_mcp_stub", "microfluidics"),
+     "Commands to the microfluidic rig change a physical setup: put each "
+     "command (or one experiment point) in its own step, with the setpoints in "
+     "`inputs` and the telemetry you expect in `expected_outcome`."),
     (("research_graph",),
      "If you will write the research graph, name in the steps which nodes you will "
      "create or change."),
@@ -219,6 +272,27 @@ class PromptContext:
     def has_subordinate(self, agent_name: str) -> bool:
         return any(s.name == agent_name for s in self.subordinates)
 
+    def _delegators_beside_me(self) -> List[AgentConfig]:
+        """Enabled agents that sit beside me under the same composite parent and
+        delegate to subordinates of their own.
+
+        The planner is a CHILD of a composite (it runs before the orchestrator
+        rather than under it), so its roster cannot be found through
+        ``parents_of``, which only walks subordinates. Found by SHAPE rather
+        than by name: the profiles name their orchestrator differently
+        (OrchestratorAgent, LiteratureOrchestrator), and a roster that silently
+        empties on a rename is worse than no roster at all.
+        """
+        out = []
+        for parent in self.system.agents.values():
+            if self.config.name not in parent.children or not parent.is_enabled():
+                continue
+            for name in parent.children:
+                agent = self.system.agent(name)
+                if name != self.config.name and agent.subordinates and agent.is_enabled():
+                    out.append(agent)
+        return out
+
     def siblings(self) -> List[AgentConfig]:
         """Enabled co-subordinates: my parents' other enabled subordinates.
 
@@ -227,8 +301,9 @@ class PromptContext:
         steps to.
         """
         if self.config.name == "PlannerAgent":
-            if "OrchestratorAgent" in self.system.agents:
-                return self.system.enabled_subordinates("OrchestratorAgent")
+            delegators = self._delegators_beside_me()
+            if delegators:
+                return self.system.enabled_subordinates(delegators[0].name)
 
         seen, out = set(), []
         for parent in self.system.parents_of(self.config.name):
@@ -291,6 +366,8 @@ class PromptContext:
                 section += "\n" + _HITL_RESEARCH_COOP_ORCHESTRATOR
         if self.work_order_attached:
             section += "\n\n" + _WORK_ORDER_SECTION
+            if self.config.work_order_step_review:
+                section += "\n\n" + _WORK_ORDER_STEP_REVIEW_SECTION
             hints = [
                 hint for keys, hint in _WORK_ORDER_HINTS
                 if any(self.has_tool(key) for key in keys)

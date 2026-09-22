@@ -24,6 +24,7 @@ const i18n = {
   // Agent descriptions in side nav
   'agent.OrchestratorAgent.desc': { en: 'Master Orchestrator', ru: 'Главный оркестратор' },
   'agent.PlannerAgent.desc': { en: 'Roadmap Planner', ru: 'Планировщик задач' },
+  'agent.TZSpecAgent.desc': { en: 'Technical Spec', ru: 'Техническое задание' },
   'agent.ToolsViewer.desc': { en: 'Tools Viewer', ru: 'Вызовы инструментов' },
   'agent.KnowledgeGraph.desc': { en: 'Knowledge Graph', ru: 'Граф знаний' },
   'agent.SessionTrace.desc': { en: 'Session Trace', ru: 'Трассировка сессии' },
@@ -649,6 +650,35 @@ const i18n = {
   'workOrder.reason.no_work_order': { en: 'no work order declared yet', ru: 'план работы ещё не объявлен' },
   'workOrder.reason.rejected': { en: 'work order was rejected', ru: 'план работы отклонён' },
   'workOrder.reason.undeclared_tool': { en: 'tool not in the work order', ru: 'инструмента нет в плане работы' },
+  'workOrder.reason.no_active_step': { en: 'no step marked in progress', ru: 'ни один шаг не отмечен как выполняемый' },
+  'workStep.title': { en: 'Step check', ru: 'Проверка шага' },
+  'workStep.step': { en: 'Step', ru: 'Шаг' },
+  'workStep.sends': { en: 'sends', ru: 'отправит' },
+  'workStep.expects': { en: 'expects', ru: 'ожидает' },
+  'workStep.found': { en: 'found', ru: 'найдено' },
+  'workStep.sent': { en: 'Sent', ru: 'Отправлено' },
+  'workStep.expected': { en: 'Expected', ru: 'Ожидалось' },
+  'workStep.foundTitle': { en: 'Found', ru: 'Найдено' },
+  'workStep.calls': { en: 'Calls (recorded by the system)', ru: 'Вызовы (записаны системой)' },
+  'workStep.noCalls': {
+    en: 'No tool calls were recorded for this step',
+    ru: 'Для этого шага не записано ни одного вызова инструмента',
+  },
+  'workStep.callError': { en: 'error', ru: 'ошибка' },
+  'workStep.history': { en: 'Earlier rounds', ru: 'Предыдущие раунды' },
+  'workStep.review.accepted': { en: 'step accepted', ru: 'шаг принят' },
+  'workStep.review.revise': { en: 'sent back', ru: 'на доработке' },
+  'workStep.review.rejected': { en: 'stopped', ru: 'остановлено' },
+  'workStep.countdown': { en: 'Accepted automatically in {s} s', ru: 'Автоматическое принятие через {s} с' },
+  'workStep.btn.redo': { en: 'Redo the step', ru: 'Переделать шаг' },
+  'workStep.btn.stop': { en: 'Stop the work', ru: 'Остановить работу' },
+  'workStep.ph.notes': {
+    en: 'What to fix or check (required to redo the step)…',
+    ru: 'Что исправить или проверить (обязательно, чтобы переделать шаг)…',
+  },
+  'workStep.accepted': { en: '✓ Step {step} accepted', ru: '✓ Шаг {step} принят' },
+  'workStep.sentBack': { en: '↺ Step {step} sent back', ru: '↺ Шаг {step} отправлен на доработку' },
+  'workStep.stopped': { en: '✗ Work stopped at step {step}', ru: '✗ Работа остановлена на шаге {step}' },
 
   // ── Work Report cards (hitl.js) ──
   'hitl.msg.workReport': {
@@ -697,6 +727,10 @@ const i18n = {
   'workReport.warn.done_not_met': { en: 'Done criteria: {verdict}', ru: 'Критерий готовности: {verdict}' },
   'workReport.warn.findings_without_evidence': {
     en: 'Findings without evidence: {findings}', ru: 'Находки без подтверждения: {findings}'
+  },
+  'workReport.warn.unreviewed_steps': {
+    en: 'Steps finished without your check: {steps}',
+    ru: 'Шаги, завершённые без вашей проверки: {steps}',
   },
   'workReport.warn.deviations': { en: 'Blocked calls during the run: {count}', ru: 'Заблокированных вызовов за работу: {count}' },
   'workReport.countdown': { en: 'Accepted automatically in {s} s', ru: 'Автоматическое принятие через {s} с' },

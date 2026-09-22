@@ -61,6 +61,7 @@
         if (window.RoadmapModal && typeof window.RoadmapModal.feed === 'function') {
           window.RoadmapModal.feed(data);
         }
+        if (window.TZPanel) window.TZPanel.feed(data);
         switch (data.type) {
           case 'connected':
             addTelemetry('INIT :: ' + data.message);
@@ -125,6 +126,7 @@
             break;
           case 'final_response':
             hideTyping();
+            if (window.TZPanel) TZPanel.clearRequest(null);
             resetAgents();
             activityMarkIdle();
             currentPlannerHitlRequest = null;
@@ -139,15 +141,16 @@
               currentPlannerHitlRequest = data;
               updateRoadmapModalButtons();
             }
-            addTelemetry('HITL :: ' + data.agent_name + ' requests ' + data.action_type);
+            addTelemetry('HITL :: ' + ((window.StatusIndicator && StatusIndicator.agentName) ? StatusIndicator.agentName(data.agent_name) : data.agent_name) + ' requests ' + data.action_type);
             break;
           case 'hitl_timeout':
             disableHitlControls(data.request_id);
+            if (window.TZPanel) TZPanel.clearRequest(data.request_id, 'Нет ответа — ТЗ принято как есть.');
             document.getElementById('hitl-panel').classList.add('hidden');
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();
             addSystemMsg(hitlTimeoutSummary(data));
-            addTelemetry('HITL :: auto-approve on timeout (' + (data.agent_name || '?') + ')');
+            addTelemetry('HITL :: auto-approve on timeout (' + ((window.StatusIndicator && StatusIndicator.agentName) ? StatusIndicator.agentName(data.agent_name) : (data.agent_name || '?')) + ')');
             break;
           case 'hitl_hold':
             applyWorkOrderHold(data.request_id);
@@ -155,10 +158,11 @@
             break;
           case 'work_order_notice':
             renderWorkOrderNotice(data);
-            addTelemetry('WORK ORDER :: ' + (data.agent_name || '?') + ' ' + (data.kind || ''));
+            addTelemetry('WORK ORDER :: ' + ((window.StatusIndicator && StatusIndicator.agentName) ? StatusIndicator.agentName(data.agent_name) : (data.agent_name || '?')) + ' ' + (data.kind || ''));
             break;
           case 'hitl_cancelled':
             disableHitlControls(data.request_id);
+            if (window.TZPanel) TZPanel.clearRequest(data.request_id, 'Запрос отменён вместе с запуском.');
             document.getElementById('hitl-panel').classList.add('hidden');
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();
@@ -192,6 +196,20 @@
             currentLang = reportLanguage || currentLang;
             applyLanguage();
             break;
+          case 'checkpoint_created':
+            if (window.CheckpointsModal) CheckpointsModal.onCreated(data);
+            addTelemetry('CHECKPOINT :: ' + (data.title || data.agent || '?'));
+            break;
+          case 'checkpoint_restored':
+            addSystemMsg(
+              `Состояние восстановлено перед стадией ${Number(data.stage_index) + 1}`
+              + ` из ${data.stage_count || '?'}: ${data.title || data.agent || 'stage'}.`
+              + (data.continue ? '\nПродолжение запущено автоматически.' : '')
+            , data.timestamp);
+            applyDatasetUrl(data.dataset_url || '');
+            applyReportLanguage(data.report_language || '');
+            addTelemetry('CHECKPOINT RESTORE :: ' + (data.title || data.agent || '?'));
+            break;
           case 'chat_accepted': {
             const input = document.getElementById('chat-input');
             if (input.value.trim() === String(data.message_text || '').trim()) {
@@ -212,4 +230,3 @@
         }
       };
     }
-

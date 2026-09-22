@@ -135,6 +135,40 @@ def test_duplicate_a2a_port_rejected(config):
         SystemConfig.model_validate(raw)
 
 
+# ── the `loop` primitive ─────────────────────────────────────────────────────
+# A cyclic stage (body repeats until a tool escalates) is a composite like
+# sequential/parallel, backed by ADK's LoopAgent.
+
+def _loop_config(**loop_overrides) -> dict:
+    loop = {"class": "loop", "root": True, "children": ["Body"]}
+    loop.update(loop_overrides)
+    return {"agents": {"Loop": loop, "Body": {"class": "llm", "prompt": "hypotheses"}}}
+
+
+def test_loop_builds_a_loop_agent_over_its_children():
+    from google.adk.agents.loop_agent import LoopAgent
+
+    config = SystemConfig.model_validate(_loop_config(options={"max_iterations": 3}))
+    root = build_system(config).root
+
+    assert isinstance(root, LoopAgent)
+    assert [child.name for child in root.sub_agents] == ["Body"]
+    assert root.max_iterations == 3
+
+
+def test_loop_without_children_rejected():
+    raw = _loop_config()
+    raw["agents"]["Loop"]["children"] = []
+    with pytest.raises(Exception, match="children"):
+        SystemConfig.model_validate(raw)
+
+
+def test_loop_cannot_have_a_prompt_of_its_own():
+    """A loop only sequences children — prompts/tools belong to its body."""
+    with pytest.raises(Exception, match="prompt"):
+        SystemConfig.model_validate(_loop_config(prompt="hypotheses"))
+
+
 # ── built system invariants ──────────────────────────────────────────────────
 
 def test_all_agents_built_under_their_names(config, system):

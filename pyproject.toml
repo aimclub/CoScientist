@@ -27,6 +27,7 @@ dependencies = [
     "pymongo>=4.6.3",
     "rag-tools",
     "rank-bm25>=0.2.2",
+    "rdkit>=2026.3.6",
     "sqlalchemy>=2.0.51",
 ]
 

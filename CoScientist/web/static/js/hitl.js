@@ -141,6 +141,14 @@ function showHITL(data, { history = false } = {}) {
   const panel = history ? null : document.getElementById('hitl-panel');
   hitlCards.set(data.request_id || '', data);
 
+  // The microfluidics ТЗ has its own panel, which owns both the form and the
+  // running document; hand the request over and let it draw the card.
+  if (data.form && data.form.kind === 'tz' && window.TZPanel) {
+    TZPanel.onHitlRequest(data, { history });
+    scrollChat();
+    return;
+  }
+
   // Structured intake (e.g. the research frame): render a per-field form
   // instead of the free-text review, then stop — the other HITL points keep
   // the free-text / option path below.
@@ -152,6 +160,10 @@ function showHITL(data, { history = false } = {}) {
     // backend ships it structured next to the rendered Markdown, so it gets a
     // view of its own rather than a <pre> of pipe-separated rows.
     renderExperimentPlanReview(panel, data);
+  } else if (data.trigger === 'work_step') {
+    // One finished step of a Work Order: what was sent, expected and found,
+    // with the calls the system recorded — accept, redo, or stop the order.
+    renderWorkStepCard(panel, data);
   } else if (data.trigger === 'work_report') {
     // Work Report (what the agent found, against its order): accept, send back
     // for rework with findings marked wrong, or reject.
@@ -170,7 +182,10 @@ function showHITL(data, { history = false } = {}) {
 function renderHitlCard(panel, data) {
   const messageHtml = hitlDynamic(data, 'message', localizeHitlMessage(data));
   const viaHtml = hitlDynamic(data, 'via', describeHitlVia(data));
-  const agentHtml = `<span class="font-bold text-on-surface">${escHtml(data.agent_name || '—')}</span>`;
+  const displayAgent = (window.StatusIndicator && StatusIndicator.agentName)
+    ? StatusIndicator.agentName(data.agent_name)
+    : (data.agent_name || '—');
+  const agentHtml = `<span class="font-bold text-on-surface">${escHtml(displayAgent)}</span>`;
 
   let openRoadmapSidebarBtn = '';
   let openRoadmapChatBtn = '';
@@ -314,6 +329,11 @@ function hitlResponseSummary(response) {
     return t('workOrder.approved')
       + (rejected ? ' — ' + t('workOrder.rejectedAssumptions').replace('{n}', rejected) : '')
       + (feedback ? ': ' + feedback : '');
+  }
+  if (request.trigger === 'work_step') {
+    const key = action === 'approve' ? 'workStep.accepted' : action === 'edit' ? 'workStep.sentBack' : 'workStep.stopped';
+    const stepId = ((request.context || {}).step || {}).id || '';
+    return t(key).replace('{step}', stepId) + (feedback ? ': ' + feedback : '');
   }
   if (request.trigger === 'work_report') {
     const disputed = ((response.form_values || {}).disputed_finding_ids || []).length;
@@ -611,9 +631,24 @@ function woStepRow(step) {
             <span class="text-on-surface">${escHtml(step.title || '')}</span>
             <span class="flex flex-wrap gap-1">${tools}</span>
           </div>
-          ${step.expected_outcome ? `<p class="pl-6 text-[11px] text-outline-variant">→ ${escHtml(step.expected_outcome)}</p>` : ''}
+          ${step.inputs ? `<p class="pl-6 text-[11px] text-outline-variant">↑ ${escHtml(t('workStep.sends'))}: ${escHtml(step.inputs)}</p>` : ''}
+          ${step.expected_outcome ? `<p class="pl-6 text-[11px] text-outline-variant">↓ ${escHtml(t('workStep.expects'))}: ${escHtml(step.expected_outcome)}</p>` : ''}
+          ${step.result ? `<p class="pl-6 text-[11px] text-on-surface">✓ ${escHtml(t('workStep.found'))}: ${escHtml(step.result)}</p>` : ''}
           <p data-wo-note class="pl-6 text-[11px] text-on-surface-variant italic">${escHtml(step.note || '')}</p>
+          ${woStepReviewBadge(step.review)}
         </li>`;
+}
+
+const WS_REVIEW_STYLE = {
+  accepted: 'text-primary border-primary/30 bg-primary/10',
+  revise: 'text-tertiary border-tertiary/30 bg-tertiary/10',
+  rejected: 'text-error border-error/30 bg-error/10',
+};
+
+function woStepReviewBadge(review) {
+  if (!review || !review.status || review.status === 'pending') return '';
+  const notes = review.notes ? ` <span class="text-[11px] text-outline-variant">${escHtml(review.notes)}</span>` : '';
+  return `<p class="pl-6">${woChip(t('workStep.review.' + review.status, review.status), WS_REVIEW_STYLE[review.status])}${notes}</p>`;
 }
 
 // The contract itself. interactive=true renders assumptions as checkboxes.
@@ -666,6 +701,9 @@ function workOrderDiff(ctx) {
 
 function woHeader(icon, titleKey, tier, agent, revision) {
   const tierCls = WO_TIER_STYLE[tier] || WO_TIER_STYLE.compute;
+  const displayAgent = (window.StatusIndicator && StatusIndicator.agentName)
+    ? StatusIndicator.agentName(agent)
+    : (agent || '—');
   return `
         <div class="flex items-center gap-3 flex-wrap">
           <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
@@ -673,7 +711,7 @@ function woHeader(icon, titleKey, tier, agent, revision) {
           </div>
           <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${hitlLabel(titleKey)}</h3>
           ${tier ? `<span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${tierCls}">${hitlLabel('workOrder.tier.' + tier)}</span>` : ''}
-          <span class="text-[11px] font-bold text-on-surface">${escHtml(agent || '—')}</span>
+          <span class="text-[11px] font-bold text-on-surface">${escHtml(displayAgent)}</span>
           <span class="font-mono text-[10px] text-outline-variant">rev ${escHtml(String(revision || 1))}</span>
         </div>`;
 }
@@ -977,6 +1015,97 @@ function renderWorkReportCard(panel, data) {
                 </button>` : ''}
                 <button onclick="respondWorkOrder('${rid}', 'reject')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
                   <span class="material-symbols-outlined text-base">close</span> ${hitlLabel('hitl.btn.reject')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>`);
+
+  if (timeout > 0 && !data.held) startWorkOrderCountdown(rid, timeout);
+}
+
+// ── Work Step cards (step review) ────────────────────────────────────────
+function wsCallRow(call) {
+  const err = call.is_error;
+  return `
+          <li class="flex flex-col gap-0.5">
+            <div class="flex items-baseline gap-2 flex-wrap">
+              ${woChip(call.tool || '?', err ? WS_REVIEW_STYLE.rejected : '')}
+              ${err ? `<span class="text-[10px] text-error font-bold uppercase">${escHtml(t('workStep.callError'))}</span>` : ''}
+            </div>
+            ${call.args ? `<pre class="pl-2 text-[11px] font-mono text-secondary whitespace-pre-wrap break-all bg-surface-container-high p-2 rounded border border-outline-variant/10 max-h-40 overflow-auto">${escHtml(call.args)}</pre>` : ''}
+            ${call.result_excerpt ? `<pre class="pl-2 text-[11px] font-mono ${err ? 'text-error' : 'text-on-surface-variant'} whitespace-pre-wrap break-all bg-surface-container-high p-2 rounded border border-outline-variant/10 max-h-56 overflow-auto">${escHtml(call.result_excerpt)}</pre>` : ''}
+          </li>`;
+}
+
+function workStepBody(order, step, calls) {
+  const review = step.review || {};
+  const history = (review.history || []).map(h => `
+            <p class="text-[11px] text-outline-variant"><span class="font-mono">${escHtml(t('workReport.round').replace('{n}', h.round || '?'))}</span>
+              ${escHtml(h.result || '—')}${h.notes ? ` — <span class="text-tertiary">${escHtml(h.notes)}</span>` : ''}</p>`).join('');
+  const callRows = (calls || []).map(wsCallRow).join('');
+  return `
+        <div class="text-xs text-on-surface-variant leading-relaxed">
+          ${woSection('workOrder.goal', `<p>${escHtml(order.goal || '')}</p>`)}
+          ${woSection('workStep.step', `<p class="text-on-surface"><span class="font-mono text-[10px] text-outline-variant">${escHtml(step.id || '')}</span> ${escHtml(step.title || '')}</p>
+            <div class="flex flex-wrap gap-1 mt-1">${woToolChips(step.tools, step.internal_tools)}</div>`)}
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+            <div><p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${hitlLabel('workStep.sent')}</p><p>${escHtml(step.inputs || '—')}</p></div>
+            <div><p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${hitlLabel('workStep.expected')}</p><p>${escHtml(step.expected_outcome || '—')}</p></div>
+            <div><p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${hitlLabel('workStep.foundTitle')}</p><p class="text-on-surface">${escHtml(step.result || '—')}</p>
+              ${step.note ? `<p class="text-[11px] text-outline-variant italic mt-1">${escHtml(step.note)}</p>` : ''}</div>
+          </div>
+          ${woSection('workStep.calls', callRows
+    ? `<ol class="flex flex-col gap-2">${callRows}</ol>`
+    : `<p class="text-[11px] text-tertiary">⚠ ${escHtml(t('workStep.noCalls'))}</p>`)}
+          ${woSection('workStep.history', history)}
+        </div>`;
+}
+
+function renderWorkStepCard(panel, data) {
+  const rid = data.request_id;
+  const ctx = data.context || {};
+  const order = ctx.work_order || {};
+  const step = ctx.step || {};
+  const tier = ctx.tier || order.tier || 'compute';
+  const timeout = panel ? (Number(data.timeout_seconds) || 0) : 0;
+  const messageHtml = hitlDynamic(data, 'message', localizeHitlMessage(data));
+  const round = (step.review || {}).round || 1;
+
+  if (panel) {
+    panel.classList.remove('hidden');
+    panel.innerHTML = `
+        <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-2">
+          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${hitlLabel('workStep.title')} ${escHtml(step.id || '')}</h3>
+          <p class="text-[11px] text-on-surface-variant">${messageHtml}</p>
+          <p class="text-[10px] text-outline-variant leading-relaxed">${hitlLabel('hitl.answerInChat')}</p>
+        </div>`;
+  }
+
+  placeHitlCard(rid, `
+        <div class="my-6 relative msg-enter" data-hitl-card="${escHtml(rid || '')}" data-ws-agent="${escHtml(data.agent_name || '')}">
+          <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
+            ${woHeader('checklist', 'workStep.title', tier, data.agent_name, order.revision)}
+            <p class="font-mono text-[10px] text-outline-variant mt-1">${escHtml(t('workReport.round').replace('{n}', round))}</p>
+            <p class="text-sm text-on-surface-variant leading-relaxed mt-2">${messageHtml}</p>
+            ${workStepBody(order, step, ctx.step_calls || step.calls)}
+            ${woCountdown(panel, data, timeout, 'workStep.countdown')}
+            <div id="hitl-controls-${rid}" class="mt-4 flex flex-col gap-2">
+              <textarea id="hitl-feedback-${rid}" rows="2" data-i18n-placeholder="workStep.ph.notes" placeholder="${escHtml(t('workStep.ph.notes'))}"
+                class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
+              <div class="flex flex-wrap gap-3">
+                <button onclick="respondWorkOrder('${rid}', 'approve')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+                  <span class="material-symbols-outlined text-base">check_circle</span> ${hitlLabel('hitl.btn.accept')}
+                </button>
+                ${timeout > 0 && !data.held ? `
+                <button id="wo-pause-${rid}" onclick="holdWorkOrder('${rid}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-tertiary/30 text-tertiary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-tertiary/10 transition-all">
+                  <span class="material-symbols-outlined text-base">pause</span> ${hitlLabel('workOrder.btn.pause')}
+                </button>` : ''}
+                <button onclick="respondWorkOrder('${rid}', 'edit')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
+                  <span class="material-symbols-outlined text-base">replay</span> ${hitlLabel('workStep.btn.redo')}
+                </button>
+                <button onclick="respondWorkOrder('${rid}', 'reject')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
+                  <span class="material-symbols-outlined text-base">stop_circle</span> ${hitlLabel('workStep.btn.stop')}
                 </button>
               </div>
             </div>

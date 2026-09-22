@@ -4,6 +4,8 @@
     const AGENTS = [
       { name: "OrchestratorAgent", icon: "hub", desc: "Master Orchestrator" },
       { name: "PlannerAgent", icon: "map", desc: "Roadmap Planner" },
+      // The microfluidics pipeline plans through a ТЗ rather than a roadmap.
+      { name: "TZSpecAgent", icon: "assignment", desc: "Technical Spec" },
       { name: "ToolsViewer", icon: "science", desc: "Tools Viewer" },
       // The knowledge memory is gone; this graph is the research record.
       { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Research Graph", id: "graph-link", href: "/graph" },
@@ -48,6 +50,8 @@
         openSettings();
       } else if (name === "PlannerAgent") {
         openRoadmapEditor();
+      } else if (name === "TZSpecAgent") {
+        openTzPanel();
       } else if (name === "ToolsViewer") {
         openToolsViewer();
       } else if (name === "KnowledgeGraph" || name === "SessionTrace") {
@@ -137,8 +141,10 @@
       InitAgent: 'flag',
       PlannerAgent: 'map',
       PlanCriticAgent: 'rate_review',
+      TZSpecAgent: 'assignment',
       HypothesesAgent: 'lightbulb',
       ResearchAgent: 'travel_explore',
+      PaperRetriever: 'menu_book',
       TaskExecutorAgent: 'alt_route',
       ToolPipelineAgent: 'checklist',
       ToolPreparerAgent: 'precision_manufacturing',
@@ -158,6 +164,20 @@
       ContextInitAgent: 'assignment',
       ContextInitSessionAgent: 'assignment',
       ResultAggregatorAgent: 'summarize',
+      RootOrchestrator: 'hub',
+      ModuleA_TZLiterature: 'menu_book',
+      TZAgent: 'assignment',
+      TZQueryGenAgent: 'manage_search',
+      LiteratureOrchestrator: 'hub',
+      LiteratureSynthesisAgent: 'summarize',
+      EvidenceVerifierAgent: 'fact_check',
+      ModuleB_Design: 'science',
+      MolDesignAgent: 'biotech',
+      SynthRouteAgent: 'account_tree',
+      EconomicsAgent: 'payments',
+      ModuleC_Experiment: 'science',
+      OptimizerAgent: 'tune',
+      ReportAgent: 'description',
     };
 
     const KNOWN_AGENTS = new Set(Object.keys(AGENT_ICONS));
@@ -377,8 +397,8 @@
         addExperimentToolCall(author, {
           name: tool, args: data.args, callId: data.call_id,
           truncated: !!data.args_truncated, timestamp: data.timestamp,
-          parent: data.parent, is_delegation: data.is_delegation,
-          target_agent: data.target_agent,
+          parent: data.parent, parentInstance: data.parent_instance, is_delegation: data.is_delegation,
+          target_agent: data.target_agent, agentInstance: data.agent_instance,
         });
         if (!quiet) addTelemetry('TOOL_CALL :: ' + author + ' → ' + tool);
         return;
@@ -394,12 +414,14 @@
       addExperimentToolResponse(author, {
         name: tool, response: response, callId: data.call_id,
         truncated: truncated, failed: failed, timestamp: data.timestamp,
+        agentInstance: data.agent_instance,
       });
       if (!quiet) {
         addTelemetry((failed ? 'TOOL_ERROR :: ' : 'TOOL_RESULT :: ') + author
           + (failed ? ' ✖ ' : ' ← ') + tool);
       }
     }
+
 
     function activityResponseFailed(response) {
       if (!response) return false;
@@ -559,8 +581,11 @@
             ? `<span class="material-symbols-outlined text-[12px] text-primary/80 shrink-0" title="Delegated">alt_route</span>`
             : '';
 
-          const cleanName = escHtml(entry.name.replace(/Agent$/, ''));
-          let hint = `${entry.name}${entry.calls ? ` — ${entry.calls} tool call(s)` : ''}${entry.transferred ? ' — delegated' : ''}`;
+          const displayName = (window.StatusIndicator && StatusIndicator.agentName)
+            ? StatusIndicator.agentName(entry.name)
+            : entry.name.replace(/Agent$/, '');
+          const cleanName = escHtml(displayName);
+          let hint = `${displayName}${entry.calls ? ` — ${entry.calls} tool call(s)` : ''}${entry.transferred ? ' — delegated' : ''}`;
           if (busy) hint += ' (Running)';
 
           return `
@@ -578,7 +603,9 @@
       const selected = activityAgents.get(activitySelected);
       const labelEl = document.getElementById('activity-selected-agent-label');
       if (labelEl) {
-        labelEl.textContent = selected ? `[${selected.name.replace(/Agent$/, '')}]` : '';
+          labelEl.textContent = selected
+            ? `[${(window.StatusIndicator && StatusIndicator.agentName) ? StatusIndicator.agentName(selected.name) : selected.name}]`
+            : '';
       }
 
       const tools = selected ? [...selected.tools.values()] : [];
@@ -586,7 +613,10 @@
       if (toolsBox) {
         if (!tools.length) {
           const noToolsText = (typeof t === 'function' ? t('rail.standby') : null) || 'Standby — awaiting tool invocation';
-          toolsBox.innerHTML = `<div class="flex items-center gap-2 py-0.5 px-2 text-[10px] font-mono text-outline-variant/50 italic shrink-0"><span class="w-1.5 h-1.5 rounded-full bg-outline-variant/30"></span><span>${selected ? escHtml(selected.name) + ' — ' + noToolsText : noToolsText}</span></div>`;
+          const selectedName = selected
+            ? ((window.StatusIndicator && StatusIndicator.agentName) ? StatusIndicator.agentName(selected.name) : selected.name)
+            : '';
+          toolsBox.innerHTML = `<div class="flex items-center gap-2 py-0.5 px-2 text-[10px] font-mono text-outline-variant/50 italic shrink-0"><span class="w-1.5 h-1.5 rounded-full bg-outline-variant/30"></span><span>${selected ? escHtml(selectedName) + ' — ' + noToolsText : noToolsText}</span></div>`;
         } else {
           const selectedFresh = (now - selected.lastSeen) < ACTIVITY_IDLE_MS;
           toolsBox.innerHTML = tools.map(tool => {
@@ -657,4 +687,3 @@
       localStorage.setItem(SIDE_NAV_KEY, collapsed ? 'on' : 'off');
       applySideNavState();
     }
-

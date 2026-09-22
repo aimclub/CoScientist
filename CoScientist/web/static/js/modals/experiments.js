@@ -22,11 +22,11 @@
 
     let toolCallRecords = [];          // every call of the run, oldest first
     let toolCallsById = new Map();     // uid -> record
-    let agentNodes = new Map();        // agent name -> { name, calls: [], firstSeenAt }
-    let agentOrder = [];               // agent names, in first-seen order
-    let agentParent = new Map();       // child agent name -> parent agent name
-    let agentSpawnCall = new Map();    // child agent name -> uid of its delegation call
-    const collapsedAgents = new Set(); // agent names whose branch is folded
+    let agentNodes = new Map();        // runtime key -> { name, calls: [], firstSeenAt }
+    let agentOrder = [];               // runtime keys, in first-seen order
+    let agentParent = new Map();       // child runtime key -> parent runtime key
+    let agentSpawnCall = new Map();    // child runtime key -> uid of its delegation call
+    const collapsedAgents = new Set(); // runtime keys whose branch is folded
     let toolSeq = 0;
     const tvOpenCards = new Set();     // uids whose bodies are unfolded
     const tvExpandedBlocks = new Set();
@@ -72,12 +72,20 @@
     // The branch a call belongs to — created on first use, kept for the rest
     // of the run so every later call from (or delegation into) this agent
     // lands in the same place.
-    function agentNode(name) {
-      let node = agentNodes.get(name);
+    // The configured name is a label, not an identity: two parallel AgentTool
+    // calls can both be `CoderAgent`.  Child ADK session ids distinguish those
+    // runs while retaining the friendly name in the branch header.
+    function agentKey(name, instance = null) {
+      return instance ? `${name}\u0000${instance}` : name;
+    }
+
+    function agentNode(name, instance = null) {
+      const key = agentKey(name, instance);
+      let node = agentNodes.get(key);
       if (!node) {
-        node = { name, calls: [], firstSeenAt: new Date() };
-        agentNodes.set(name, node);
-        agentOrder.push(name);
+        node = { key, name, calls: [], firstSeenAt: new Date() };
+        agentNodes.set(key, node);
+        agentOrder.push(key);
       }
       return node;
     }
@@ -186,19 +194,21 @@
       return false;
     }
 
-    function resolveAndLinkParent(child, parentHint = null, spawnUid = null) {
+    function resolveAndLinkParent(childKey, parentHint = null, spawnUid = null, parentInstance = null) {
+      const childNode = agentNodes.get(childKey);
+      const child = childNode ? childNode.name : childKey;
       if (!child || isInternalAgent(child)) return;
-      agentNode(child);
-      if (spawnUid && !agentSpawnCall.has(child)) {
-        agentSpawnCall.set(child, spawnUid);
+      if (!childNode) childKey = agentNode(child).key;
+      if (spawnUid && !agentSpawnCall.has(childKey)) {
+        agentSpawnCall.set(childKey, spawnUid);
       }
-      if (agentParent.has(child)) return;
+      if (agentParent.has(childKey)) return;
 
       const parent = resolveNonInternalParent(parentHint) || resolveNonInternalParent(STATIC_PARENT_MAP.get(child));
-      if (parent && parent !== child && !isInternalAgent(parent) && !isAncestor(child, parent)) {
-        agentParent.set(child, parent);
-        agentNode(parent);
-        resolveAndLinkParent(parent);
+      const parentKey = parent ? agentNode(parent, parentInstance).key : null;
+      if (parent && parent !== child && !isInternalAgent(parent) && !isAncestor(childKey, parentKey)) {
+        agentParent.set(childKey, parentKey);
+        resolveAndLinkParent(parentKey);
       }
     }
 
@@ -218,9 +228,10 @@
 
     function addExperimentAgentEvent(author, data) {
       if (isInternalAgent(author)) return;
-      const node = agentNode(author);
+      const node = agentNode(author, data.agent_instance);
       if (data.agent_class) node.agentClass = data.agent_class;
-      resolveAndLinkParent(author, data.parent);
+      const spawnUid = data.phase === 'agent_start' ? findDelegationSpawn(author, data.parent, data.parent_instance) : null;
+      resolveAndLinkParent(node.key, data.parent, spawnUid, data.parent_instance);
       node.status = (data.phase === 'agent_start') ? 'running' : 'idle';
       if (data.timestamp) {
         node.lastActive = new Date(data.timestamp);
@@ -236,12 +247,14 @@
         return;
       }
 
-      resolveAndLinkParent(author, tc.parent);
+      const node = agentNode(author, tc.agentInstance);
+      resolveAndLinkParent(node.key, tc.parent, null, tc.parentInstance);
 
       const rec = {
         uid: 'call-' + (++toolSeq),
         callId: tc.callId || null,
         author: author,
+        authorKey: node.key,
         name: tc.name,
         args: tc.args,
         argsTruncated: !!tc.truncated,
@@ -255,16 +268,32 @@
         endedAt: null,
       };
 
-      if (target) {
-        resolveAndLinkParent(target, author, rec.uid);
-      }
+      // The nested run publishes its own `agent_start` with a distinct child
+      // session id.  Linking it here by configured name would pre-create one
+      // shared target node and merge concurrent identical delegations.
 
-      agentNode(author).calls.push(rec);
+      node.calls.push(rec);
       toolCallRecords.push(rec);
       toolCallsById.set(rec.uid, rec);
       if (tvExpandAll) tvOpenCards.add(rec.uid);
       trimExperimentLog();
       renderExperimentFeed();
+    }
+
+    // A child starts after its AgentTool call was announced.  Pair it with an
+    // as-yet-unclaimed delegation from the same runtime parent, so concurrent
+    // launches of the same named agent remain next to their own hand-off row.
+    function findDelegationSpawn(target, parent, parentInstance) {
+      if (!parent) return null;
+      const parentKey = agentKey(parent, parentInstance);
+      const claimed = new Set(agentSpawnCall.values());
+      for (let i = toolCallRecords.length - 1; i >= 0; i--) {
+        const rec = toolCallRecords[i];
+        if (rec.isDelegation && rec.targetAgent === target && rec.authorKey === parentKey && !claimed.has(rec.uid)) {
+          return rec.uid;
+        }
+      }
+      return null;
     }
 
     // A result names its own call through `call_id`, which is what makes the
@@ -274,12 +303,12 @@
     function matchToolCall(author, tr) {
       for (let i = toolCallRecords.length - 1; i >= 0; i--) {
         const rec = toolCallRecords[i];
-        if (tr.callId && rec.callId === tr.callId) return rec;
+        if (tr.callId && rec.callId === tr.callId && rec.authorKey === agentKey(author, tr.agentInstance)) return rec;
       }
       if (tr.callId) return null;
       for (let i = toolCallRecords.length - 1; i >= 0; i--) {
         const rec = toolCallRecords[i];
-        if (rec.status === 'running' && rec.author === author && rec.name === tr.name) return rec;
+        if (rec.status === 'running' && rec.authorKey === agentKey(author, tr.agentInstance) && rec.name === tr.name) return rec;
       }
       return null;
     }
@@ -536,25 +565,25 @@
         toolCallsById.delete(rec.uid);
         tvOpenCards.delete(rec.uid);
         ['args', 'result', 'error'].forEach(field => tvExpandedBlocks.delete(`tv-${rec.uid}-${field}`));
-        const node = agentNodes.get(rec.author);
+        const node = agentNodes.get(rec.authorKey);
         if (node) {
           node.calls = node.calls.filter(call => call !== rec);
-          touchedAgents.add(rec.author);
+          touchedAgents.add(rec.authorKey);
         }
       });
       // A branch with nothing left of its own and no child branch to carry
       // is dead weight — drop it. One still holding a child stays, as a bare
       // header, so that child keeps its place in the tree.
-      touchedAgents.forEach(name => {
-        const node = agentNodes.get(name);
+      touchedAgents.forEach(key => {
+        const node = agentNodes.get(key);
         if (!node || node.calls.length) return;
-        const hasChildren = agentOrder.some(n => agentParent.get(n) === name);
+        const hasChildren = agentOrder.some(n => agentParent.get(n) === key);
         if (hasChildren) return;
-        agentNodes.delete(name);
-        agentOrder = agentOrder.filter(n => n !== name);
-        agentParent.delete(name);
-        agentSpawnCall.delete(name);
-        collapsedAgents.delete(name);
+        agentNodes.delete(key);
+        agentOrder = agentOrder.filter(n => n !== key);
+        agentParent.delete(key);
+        agentSpawnCall.delete(key);
+        collapsedAgents.delete(key);
       });
     }
 
@@ -677,14 +706,16 @@
     // spawned it. Two agents delegated to in parallel therefore stay next to
     // their own hand-off rows instead of both piling up after the parent's
     // last call, where neither could be told apart.
-    function renderAgentNode(name, visited = new Set()) {
-      if (!name || isInternalAgent(name) || visited.has(name)) return '';
-      visited.add(name);
+    function renderAgentNode(key, visited = new Set()) {
+      const node = agentNodes.get(key);
+      if (!node || isInternalAgent(node.name) || visited.has(key)) return '';
+      visited.add(key);
 
-      const node = agentNodes.get(name);
-      if (!node) return '';
       const calls = node.calls;
-      const children = agentOrder.filter(n => agentParent.get(n) === name && !visited.has(n) && !isInternalAgent(n));
+      const children = agentOrder.filter(n => {
+        const child = agentNodes.get(n);
+        return agentParent.get(n) === key && !visited.has(n) && child && !isInternalAgent(child.name);
+      });
       // A child whose delegation card is gone — trimmed out of the log, or
       // never seen because the feed joined the run late — still belongs to
       // this branch: it goes at the tail rather than disappearing.
@@ -709,7 +740,7 @@
         failed ? `<span class="text-error">${failed} failed</span>` : '',
         (!running && calls.length) ? `<span class="text-secondary">${done - failed}/${calls.length} ok</span>` : '',
       ].filter(Boolean).join('<span class="text-outline-variant/30">·</span>');
-      const collapsed = collapsedAgents.has(name);
+      const collapsed = collapsedAgents.has(key);
       const lastActive = calls.length
         ? (calls[calls.length - 1].endedAt || calls[calls.length - 1].startedAt)
         : (node.lastActive || node.firstSeenAt);
@@ -725,14 +756,14 @@
           ${nestBranches(tailChildren)}
         </div>`;
 
-      const cleanName = escHtml(name.replace(/Agent$/, ''));
+      const cleanName = escHtml(node.name.replace(/Agent$/, ''));
 
       return `
         <div class="rounded-lg border border-outline-variant/15 bg-surface-container-low/40">
-          <button type="button" onclick="toggleAgentNode('${escHtml(name)}')"
+          <button type="button" onclick="toggleAgentNode(${JSON.stringify(key)})"
             class="w-full flex items-center gap-2 px-2.5 py-2 text-left hover:bg-surface-variant/20 transition-colors">
             <span class="material-symbols-outlined text-[14px] text-outline-variant shrink-0">${collapsed ? 'chevron_right' : 'expand_more'}</span>
-            <span class="material-symbols-outlined text-[14px] text-primary shrink-0">${agentIcon(name)}</span>
+            <span class="material-symbols-outlined text-[14px] text-primary shrink-0">${agentIcon(node.name)}</span>
             <span class="text-[11px] font-bold uppercase tracking-wider text-on-surface shrink-0">${cleanName}</span>
             ${calls.length ? `<span class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-primary/10 text-primary shrink-0">${calls.length} call${calls.length === 1 ? '' : 's'}</span>` : `<span class="text-[8px] font-mono uppercase px-1.5 py-0.5 rounded bg-outline-variant/10 text-outline-variant/60 shrink-0">0 calls</span>`}
             <span class="flex-1"></span>
@@ -760,7 +791,10 @@
       const expandBtn = document.getElementById('experiment-expand-all');
       if (expandBtn) expandBtn.textContent = tvExpandAll ? 'Collapse all' : 'Expand all';
 
-      const roots = agentOrder.filter(name => !agentParent.has(name) && !isInternalAgent(name));
+      const roots = agentOrder.filter(key => {
+        const node = agentNodes.get(key);
+        return !agentParent.has(key) && node && !isInternalAgent(node.name);
+      });
 
       if (toolCallRecords.length === 0 && (roots.length === 0 || agentNodes.size === 0)) {
         feed.innerHTML = `
@@ -776,7 +810,7 @@
       // every event must not yank the feed away from a card being read.
       const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
       const keepTop = feed.scrollTop;
-      feed.innerHTML = roots.map(name => renderAgentNode(name)).join('');
+      feed.innerHTML = roots.map(key => renderAgentNode(key)).join('');
       initTvToggles(feed);
       feed.scrollTop = atBottom ? feed.scrollHeight : keepTop;
     }

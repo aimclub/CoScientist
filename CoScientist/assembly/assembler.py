@@ -8,6 +8,8 @@ constructs every declared agent:
                        callbacks, HITL tools, output_key/schema, planner
   * ``sequential``  -> SequentialAgent over ``children``
   * ``parallel``    -> ParallelAgent over ``children``
+  * ``loop``        -> LoopAgent over ``children``, repeating them until one
+                       escalates (``options.max_iterations`` bounds the loop)
   * ``custom:<x>``  -> the registered class (e.g. SessionAgent), passing
                        ``options`` through as constructor kwargs; ``critic:``
                        hands it a plan critic for its review loop
@@ -30,6 +32,7 @@ from typing import Dict, List, Optional, Set
 
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.agents.llm_agent import LlmAgent
+from google.adk.agents.loop_agent import LoopAgent
 from google.adk.agents.parallel_agent import ParallelAgent
 from google.adk.agents.sequential_agent import SequentialAgent
 from google.adk.tools.agent_tool import AgentTool
@@ -48,6 +51,7 @@ from CoScientist.assembly.prompting import PromptContext
 from CoScientist.agents.prompts.templates import _LANGUAGE_REQUIREMENT
 from CoScientist.assembly.registry import REGISTRY, ToolEntry
 from CoScientist.assembly.schema import (
+    COMPOSITE_CLASSES,
     PIPELINE_ROOT_NAME,
     AgentConfig,
     SystemConfig,
@@ -58,6 +62,12 @@ from CoScientist.assembly.schema import (
 _logger = logging.getLogger(__name__)
 
 _PLACEHOLDER_RE = re.compile(r"<<[A-Z_]+>>")
+
+_COMPOSITE_AGENT_CLASSES = {
+    "sequential": SequentialAgent,
+    "parallel": ParallelAgent,
+    "loop": LoopAgent,
+}
 
 
 @dataclass
@@ -191,7 +201,7 @@ def _work_order_tool_names(
 
 
 def _attach_work_order_callbacks(
-    kwargs: dict, agent_name: str, internal_tools: List[str]
+    kwargs: dict, agent_name: str, internal_tools: List[str], step_review: bool = False
 ) -> None:
     """Reset the contract and enforce it FIRST: on agent start, before anything
     reads the state; before a tool, so a call the contract blocks never reaches
@@ -202,6 +212,7 @@ def _attach_work_order_callbacks(
         make_reset_work_order,
         make_work_order_guard,
         make_work_report_fallback,
+        make_work_step_journal,
     )
 
     def as_list(value) -> list:
@@ -215,6 +226,13 @@ def _attach_work_order_callbacks(
     kwargs["before_tool_callback"] = (
         [make_work_order_guard(agent_name, internal_tools=internal_tools)] + as_list(kwargs.get("before_tool_callback"))
     )
+    if step_review:
+        # First after the tool: the journal records the answer as the tool gave
+        # it, before any other callback could replace it.
+        kwargs["after_tool_callback"] = (
+            [make_work_step_journal(agent_name, internal_tools=internal_tools)]
+            + as_list(kwargs.get("after_tool_callback"))
+        )
     # Last after the agent: the other after_agent callbacks (e.g. collectors)
     # see the answer as the agent gave it; the human's verdict may replace it.
     kwargs["after_agent_callback"] = (
@@ -291,6 +309,7 @@ def _build_llm_agent(
         tools.extend(make_work_order_tools(
             cfg.name, _work_order_tool_names(cfg, system, tool_entries),
             internal_tools=system.internal_tools,
+            step_review=cfg.work_order_step_review,
         ))
 
     if hitl_attached:
@@ -321,7 +340,10 @@ def _build_llm_agent(
 
     callbacks = _callback_kwargs(cfg, ctx)
     if work_order_attached:
-        _attach_work_order_callbacks(callbacks, cfg.name, system.internal_tools)
+        _attach_work_order_callbacks(
+            callbacks, cfg.name, system.internal_tools,
+            step_review=cfg.work_order_step_review,
+        )
 
     kwargs = dict(
         name=cfg.name,
@@ -431,11 +453,10 @@ def build_system(
         cfg = config.agent(name)
         if cfg.cls == "llm":
             agent = _build_llm_agent(cfg, config, built, remote_subagents)
-        elif cfg.cls in ("sequential", "parallel"):
-            cls = SequentialAgent if cfg.cls == "sequential" else ParallelAgent
+        elif cfg.cls in COMPOSITE_CLASSES:
+            cls = _COMPOSITE_AGENT_CLASSES[cfg.cls]
             # Workflow agents also honor before/after_agent callbacks (e.g. EM
             # ToolPreparer → assess_experiment_inventory_feasibility).
-            ctx = PromptContext(config=cfg, system=config, tool_entries=[])
             sub_agents = [built[c] for c in cfg.children] if cfg.is_enabled() else []
             ctx = PromptContext(config=cfg, system=config)
             agent = cls(
@@ -483,7 +504,7 @@ def load_config_cli() -> None:  # pragma: no cover — `python -m` helper
         if cfg.hitl:
             bits.append("hitl")
         if cfg.work_order:
-            bits.append("work_order")
+            bits.append("work_order+step_review" if cfg.work_order_step_review else "work_order")
         if cfg.uses_critic():
             bits.append("critic")
         if cfg.a2a:

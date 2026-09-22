@@ -1205,6 +1205,26 @@ class ResearchGraphStore:
                                source, "; ".join(result.errors[:3]))
             return result
 
+    def record(self, source: str,
+               nodes: Optional[List[Dict[str, Any]]] = None,
+               edges: Optional[List[Dict[str, Any]]] = None,
+               status_updates: Optional[List[Dict[str, Any]]] = None) -> CommitResult:
+        """Privileged write for DETERMINISTIC stage recorders (code, not an LLM).
+
+        Same transaction as :meth:`commit`, but the per-agent ACL is skipped —
+        exactly like the context star in :meth:`init_research`. Structural
+        validation (node types, subtypes, edge endpoints, status vocabularies)
+        still applies. ``source`` is recorded on every node as the writer, so
+        the graph still shows which stage produced what.
+        """
+        with self._lock:
+            result = self._commit_locked(source, list(nodes or []),
+                                         list(edges or []), list(status_updates or []),
+                                         enforce_permissions=False)
+            if result.ok:
+                self._save()
+            return result
+
     # ── reads ─────────────────────────────────────────────────────────────────
 
     def get_context_slice(self, node_id: str, depth: int = 1,
@@ -1287,6 +1307,42 @@ class ResearchGraphStore:
     def full(self) -> Dict[str, Any]:
         with self._lock:
             return self._serialize()
+
+    def restore(self, data: Dict[str, Any], archive: bool = True) -> Optional[str]:
+        """Replace the active blackboard with a checkpointed snapshot.
+
+        The displaced graph is archived by default, so rollback never destroys
+        the later research branch even though it is removed from active state.
+        """
+        if not isinstance(data, dict):
+            raise ValueError("research graph snapshot must be an object")
+        nodes = data.get("nodes", [])
+        edges = data.get("edges", [])
+        if not isinstance(nodes, list) or not isinstance(edges, list):
+            raise ValueError("research graph nodes and edges must be arrays")
+        graph = nx.MultiDiGraph()
+        for node in nodes:
+            if not isinstance(node, dict) or not node.get("id"):
+                raise ValueError("every research graph node must have an id")
+            graph.add_node(str(node["id"]), **dict(node))
+        for edge in edges:
+            if not isinstance(edge, dict) or not edge.get("from") or not edge.get("to"):
+                raise ValueError("every research graph edge must have from and to")
+            value = dict(edge)
+            source = str(value.pop("from"))
+            target = str(value.pop("to"))
+            edge_type = value.get("type")
+            graph.add_edge(source, target, key=edge_type, **value)
+        with self._lock:
+            archived = None
+            if archive and self._g.number_of_nodes():
+                archived = self._archive_data(self._serialize())
+            self._g = graph
+            self._research_id = data.get("research_id", "research")
+            self._created_at = data.get("created_at", time.time())
+            self._root_id = data.get("root_id")
+            self._save()
+        return archived
 
     def full_graph(self) -> nx.MultiDiGraph:
         """Snapshot copy for the trigger queries. NetworkX ``copy()`` copies the
