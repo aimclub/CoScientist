@@ -30,9 +30,13 @@ material; repeated-failure paths become optimisation targets.
 
 - **Active** graph-guided planning is the priority (orchestrator reads graph
   state to decide), not passive-only logging.
-- **Central Graph service** holds the graph; every A2A server's emitter pushes
-  nodes/edges to it; the orchestrator queries a summary. Works across the A2A
-  mesh.
+- In the default Web/CLI deployment, an in-process registry holds one execution
+  graph per public `(user_id, session_id)` and snapshots it to
+  `graph_runs/sessions/<user>/<session>/execution.json`. Every prompt in that
+  session appends another goal tree. A new session gets a different graph;
+  refresh, reconnect and Stop preserve the existing one.
+- The central Graph service/emitter remains the integration surface for a fully
+  distributed A2A mesh; cross-process scope propagation is still required there.
 - **Raw agent-call granularity** first (nodes = delegations + tool calls from the
   `event_logger` stream). Semantic abstraction (research-intention nodes) is a
   later layer.
@@ -46,7 +50,7 @@ Node:
   kind: goal | agent_call | tool_call | decision | reflection
   executor_agent: str | None
   label: str              # request text / command / short summary
-  status: running | success | failed | pruned
+  status: running | success | failed | interrupted | pruned
   parent_ids: list[str]
   input: Any | None
   output: str | None
@@ -64,9 +68,10 @@ Edge:
 
 ## Graph identity over A2A — `run_id` propagation (the systems contribution)
 
-The graph is one; agents live on separate A2A servers with separate sessions. A
-stable `run_id` must ride through each delegation so a sub-agent's events land in
-the same graph. `context_id` changes per call, so:
+The graph is one **within a public research session**, not across all Web users.
+When agents live on separate A2A servers with separate internal sessions, a
+stable public scope/run id must ride through each delegation so a sub-agent's
+events land in that session's graph. `context_id` changes per call, so:
 
 - the orchestrator derives a stable `run_id` from its own session at task start;
 - it attaches `run_id` to each A2A delegation via the `RemoteA2aAgent`

@@ -1,18 +1,21 @@
-"""In-process knowledge graph shared by every agent (web / cli).
+"""Session-scoped in-process execution graph shared by agents in one session.
 
 Reuses the Dynamic Execution Graph data layer (GraphStore + Node/Edge) but, for
 the single-process web/cli runs, exposes it directly (no HTTP service) so:
 
-* it is **seeded at startup** with a root describing the whole system — every
-  agent and its capabilities. This root is what the orchestrator and planner
-  receive up front (see ``inject_graph_root``);
-* it **grows** as agents act (``GraphMemoryPlugin``);
+* it holds a single root node that the session's turns hang from. The agent
+  roster is NOT part of it — that is configuration, read by ``agents_info`` and
+  handed to the orchestrator and planner up front (see ``inject_graph_root``),
+  so the graph shows what a session did rather than what the system is;
+* it **grows** as agents act (``GraphMemoryPlugin``) — an agent node exists
+  because that agent acted;
 * it is **readable by ANY agent at ANY time** via the graph toolset
   (``CoScientist.graph.agent_tools``), so an agent can check the history and the
   info about all other agents.
 
-One process-wide store keyed by a single session ``run_id`` (KG_RUN_ID), so the
-whole session accumulates into one graph that can be snapshotted and visualised.
+Each ``(user_id, session_id)`` receives its own graph. The graph accumulates
+across all prompts in that session and can be snapshotted and visualised without
+leaking activity from another user's work.
 """
 from __future__ import annotations
 
@@ -22,6 +25,12 @@ import time
 from typing import Any, Dict, List, Optional
 
 from CoScientist.graph.models import Edge, Node, StatusUpdate
+from CoScientist.graph.session_scope import (
+    DEFAULT_SESSION_KEY,
+    SessionKey,
+    session_key,
+    storage_dir,
+)
 from CoScientist.graph.store import GraphStore
 
 SESSION_RUN_ID = os.getenv("KG_RUN_ID", "session")
@@ -70,16 +79,20 @@ class KnowledgeGraph:
 
     # ── seeding ───────────────────────────────────────────────────────────────
     def ensure_seeded(self) -> None:
-        """Create the root + one node per agent (idempotent, best-effort)."""
+        """Create the root the session's turns hang from (idempotent).
+
+        The roster used to be seeded here as well — one node per configured
+        agent, joined to the root by `has_member`. It made every graph open on
+        the same picture of the system rather than on what the session did, and
+        the viewer filtered most of it back out again. The roster is
+        configuration, so `agents_info` now reads it from the config and the
+        graph carries only what happened: an agent appears when it acts.
+        """
         if self._seeded:
             return
         with self._lock:
             if self._seeded:
                 return
-            try:
-                roster = _roster_from_config()
-            except Exception:  # noqa: BLE001 — the graph must never break the app
-                roster = []
             self._store.add_node(
                 Node(
                     id=ROOT_ID,
@@ -87,32 +100,18 @@ class KnowledgeGraph:
                     kind="system",
                     label="CoScientist multi-agent system",
                     status="success",
-                    input={"agents": [a["name"] for a in roster]},
+                    input={"agents": [a["name"] for a in self.agents_info()]},
                     t_start=_now(),
                 )
             )
-            for a in roster:
-                aid = f"agent:{a['name']}"
-                self._store.add_node(
-                    Node(
-                        id=aid,
-                        run_id=self.run_id,
-                        kind="agent",
-                        label=a["name"],
-                        executor_agent=a["name"],
-                        status="success",
-                        parent_ids=[ROOT_ID],
-                        input=a,
-                        t_start=_now(),
-                    )
-                )
-                self._store.add_edge(Edge(run_id=self.run_id, src=ROOT_ID, dst=aid, type="has_member"))
             self._seeded = True
 
     def reset_session(self) -> None:
-        """Clear this session's execution graph and re-seed the root/roster.
-        Called on a fresh start / interrupt so a new run begins with a clean
-        trace. Does NOT touch the cross-run knowledge memory."""
+        """Explicitly clear one session's trace and re-seed its root/roster.
+
+        Normal prompts, browser refresh and Web Stop append/preserve the trace.
+        This maintenance reset never touches global cross-run knowledge.
+        """
         with self._lock:
             self._store.clear(self.run_id)
             self._seeded = False
@@ -134,13 +133,24 @@ class KnowledgeGraph:
         self.ensure_seeded()
         return self._store.full(self.run_id)
 
+    def tool_vs_coder(self) -> Dict[str, Any]:
+        """Whether this run used a tool from the catalogue or wrote code from
+        scratch. See :func:`CoScientist.graph.projection.tool_vs_coder`."""
+        from CoScientist.graph.projection import tool_vs_coder
+
+        return tool_vs_coder(self.full())
+
     def agents_info(self) -> List[Dict[str, Any]]:
-        """Structured info about every agent in the system (the roster)."""
-        return [
-            n.get("input") or {"name": n.get("label")}
-            for n in self.full()["nodes"]
-            if n.get("kind") == "agent"
-        ]
+        """Structured info about every agent in the system (the roster).
+
+        Read from configuration, not from the graph: the roster is the same for
+        every session, and keeping it out of the trace leaves the graph showing
+        only what a session actually did.
+        """
+        try:
+            return _roster_from_config()
+        except Exception:  # noqa: BLE001 — the graph must never break the app
+            return []
 
     def history(self, limit: int = 40) -> List[Dict[str, Any]]:
         """Chronological list of what has happened so far (compact)."""
@@ -195,5 +205,44 @@ def _short(value: Any, n: int = 200) -> str:
     return s if len(s) <= n else s[:n] + "…"
 
 
-# Process-wide shared instance (like task_tracker_instance).
+# Legacy/default graph used by standalone helpers and tests without an ADK
+# context. Web and agent callbacks resolve through ``get_knowledge_graph``.
 knowledge_graph = KnowledgeGraph()
+_knowledge_graphs: Dict[SessionKey, KnowledgeGraph] = {
+    DEFAULT_SESSION_KEY: knowledge_graph,
+}
+_registry_lock = threading.RLock()
+
+
+def get_knowledge_graph(
+    context: Any = None,
+    *,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> KnowledgeGraph:
+    """Return the execution graph belonging to one ADK user/session."""
+    key = session_key(context, user_id=user_id, session_id=session_id)
+    with _registry_lock:
+        graph = _knowledge_graphs.get(key)
+        if graph is None:
+            directory = storage_dir(
+                os.getenv("GRAPH_SNAPSHOT_DIR", "./graph_runs"),
+                key,
+            )
+            graph = KnowledgeGraph(run_id="execution", snapshot_dir=str(directory))
+            _knowledge_graphs[key] = graph
+        return graph
+
+
+def reset_knowledge_graph(
+    context: Any = None,
+    *,
+    user_id: Optional[str] = None,
+    session_id: Optional[str] = None,
+) -> None:
+    """Clear only the selected session's execution trace."""
+    get_knowledge_graph(
+        context,
+        user_id=user_id,
+        session_id=session_id,
+    ).reset_session()

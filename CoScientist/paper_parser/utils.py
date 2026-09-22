@@ -83,6 +83,7 @@ def prompt_func(data):
             "type": "image_url",
             "image_url": f"data:image/jpeg;base64,{img}",
         }
+        # image_part = {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img}"}}
         content_parts.append(image_part)
 
     text_part = {"type": "text", "text": text}

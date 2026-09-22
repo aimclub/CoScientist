@@ -27,6 +27,11 @@ class NodeTypeSpec:
     attr_docs: Dict[str, str] = field(default_factory=dict)
     subtypes: Tuple[str, ...] = ()   # allowed attrs.subtype values
     subtype_required: bool = False
+    #: subtype -> attributes that subtype cannot be created without. Declared
+    #: here so `permitted_summary` can tell an agent what it must supply: a
+    #: requirement the validator enforces and the prompt never mentions is a
+    #: refusal the agent cannot act on.
+    required_attrs_by_subtype: Dict[str, Tuple[str, ...]] = field(default_factory=dict)
 
 
 NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
@@ -37,19 +42,37 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
         attr_docs={
             "formulation": "the question itself",
             "domain": "subject area",
+            "specificity": "how narrow/precise the question is",
             "gap": "the knowledge gap it addresses",
+            "decomposition": "sub-questions it breaks into",
             "target_setting": "целевая постановка (what kind of answer is sought)",
-            "research_form": "fundamental / exploratory / applied (+ TRL)",
+            "research_form": "fundamental / exploratory / applied",
+            "trl": "УГТ — technology readiness level",
+            "completion_criteria": "when the research is done: exhaustive / "
+                                   "pragmatic / resource / economic",
+            "ai_application_model": "autonomy level: lab-assistant / assistant / "
+                                    "copilot / architect",
         },
     ),
     NodeTypeSpec(
         "Hypothesis", "H", 1,
-        statuses=("formulated", "under_verification", "confirmed", "refuted", "postponed"),
+        # `inconclusive` is the verdict a validator reaches when the branch was
+        # tested and the evidence did not settle it. Without it that outcome was
+        # written as `postponed`, which means "in the backlog, not attempted" —
+        # so a hypothesis that had been worked on for an hour was recorded as
+        # never having been tried, and the graph reported an idle study.
+        statuses=("formulated", "under_verification", "confirmed", "refuted",
+                  "inconclusive", "postponed"),
         creatable=("formulated", "postponed"),
         attr_docs={
             "formulation": "the testable statement",
             "rationale": "why it is plausible",
             "priority": "verification priority (e.g. 1..5 or high/medium/low)",
+            "inconclusive_reason": "what the evidence failed to settle — required "
+                                   "when a verdict of inconclusive is written",
+            "not_tested_reason": "why this hypothesis was left untested — set it "
+                                 "instead of verifying, when a verdict already "
+                                 "obtained makes the test unnecessary",
         },
     ),
     NodeTypeSpec(
@@ -58,11 +81,18 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
         attr_docs={
             "subtype": "REQUIRED — literature / experimental / computational / expert / meta",
             "content": "the observation or fact",
+            "measured_on": "REQUIRED for computational/experimental evidence — "
+                           "WHAT was actually measured, named exactly: the repo "
+                           "and commit, the dataset, the deployed service. Say so "
+                           "here if it is a stand-in for what the hypothesis names "
+                           "(e.g. 'local reimplementation; upstream repo 404')",
             "reliability": "weight / reliability estimate",
             "source_ref": "paper DOI, dataset, run id, …",
         },
         subtypes=("literature", "experimental", "computational", "expert", "meta"),
         subtype_required=True,
+        required_attrs_by_subtype={"computational": ("measured_on",),
+                                   "experimental": ("measured_on",)},
     ),
     NodeTypeSpec(
         "Conclusion", "CL", 1,
@@ -103,6 +133,12 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
             "name": "tool/service name",
             "tool_type": "computational / laboratory / analytical / informational",
             "requirements": "what it needs to run",
+            # Without this a Tool is only a name. A worker told to "use GOLEM"
+            # and given no path has to guess where it is, and what it does
+            # instead is write its own — which is how a run silently stops using
+            # the library it was supposed to build on.
+            "location": "WHERE it is: repo URL, local path, MCP server or API "
+                        "endpoint — required for anything the coder must read or run",
         },
     ),
     NodeTypeSpec(
@@ -168,7 +204,9 @@ STATUS_TRANSITIONS: Dict[str, FrozenSet[Tuple[str, str]]] = {
                              ("formulated", "postponed"),
                              ("under_verification", "confirmed"),
                              ("under_verification", "refuted"),
+                             ("under_verification", "inconclusive"),
                              ("under_verification", "postponed"),
+                             ("inconclusive", "under_verification"),
                              ("postponed", "formulated")}),
     "Evidence": frozenset({("obtained", "validated"), ("obtained", "rejected")}),
     "Conclusion": frozenset({("draft", "approved")}),
@@ -176,7 +214,8 @@ STATUS_TRANSITIONS: Dict[str, FrozenSet[Tuple[str, str]]] = {
                                      ("running", "done"), ("running", "failed"),
                                      ("failed", "planned")}),
     "ConfirmationCriteria": frozenset({("not_met", "met"), ("met", "not_met")}),
-    "Tool": frozenset({("needs_adaptation", "being_created"),
+    "Tool": frozenset({("needs_adaptation", "available"),
+                       ("needs_adaptation", "being_created"),
                        ("being_created", "available"),
                        ("being_created", "creation_failed"),
                        ("creation_failed", "being_created")}),
@@ -320,6 +359,14 @@ class AgentPerm:
     update_attrs: FrozenSet[str]
     transitions: FrozenSet[Tuple[str, str, str]]
     edges: FrozenSet[Tuple[str, str, str]]
+    #: Single (type, attribute) pairs an agent may write on a node it may not
+    #: otherwise touch. The protocol asks for reasons — why a branch was left
+    #: untested, what the evidence failed to settle — from the role that knows
+    #: them, and that role is rarely the owner of the node. Without this the
+    #: instruction is one no agent can carry out: the triggers told the
+    #: orchestrator to commit `attrs.not_tested_reason` and the store refused
+    #: it, so the study stayed open and the agent learned to shrug.
+    update_fields: FrozenSet[Tuple[str, str]] = frozenset()
 
 
 def _edges(*specs) -> FrozenSet[Tuple[str, str, str]]:
@@ -357,7 +404,8 @@ def _transitions(*specs) -> FrozenSet[Tuple[str, str, str]]:
 # seeding — the agent is not choosing types freely, the tool constructs them), so
 # they are absent from the orchestrator's mid-run create-set above.
 INIT_SEED_TYPES = frozenset({"ResearchQuestion", "Tool", "Resource",
-                             "EmpiricalBase", "Constraint"})
+                             "EmpiricalBase", "Constraint",
+                             "ConfirmationCriteria", "CostModel"})
 
 
 # Spec §2 roles mapped onto the agents that actually exist in system.yaml:
@@ -374,19 +422,26 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         # postpones verification, approves conclusions, and wires constraints. The
         # VERDICT (under_verification→confirmed/refuted) and the Conclusion belong
         # to the ValidatorAgent, so they are absent here.
-        create=frozenset({"ResearchQuestion", "Report", "Publication", "Spec",
+        create=frozenset({"ResearchQuestion", "Evidence", "Report", "Publication", "Spec",
                           "EfficiencyJustification", "CostModel", "EfficiencyMetric"}),
-        update_attrs=frozenset({"Resource", "ResearchQuestion"}),
+        update_attrs=frozenset({"Resource", "ResearchQuestion", "EmpiricalBase", "Tool"}),
         transitions=_transitions(
             "ResearchQuestion", "Resource",
+            ("Tool", "needs_adaptation", "available"),
+            ("Tool", "needs_adaptation", "being_created"),
+            ("Tool", "being_created", "available"),
             ("Conclusion", "draft", "approved"),               # approval
             ("Hypothesis", "formulated", "under_verification"),  # start verification
             ("Hypothesis", "formulated", "postponed"),
-            ("Hypothesis", "under_verification", "postponed"),
             ("Hypothesis", "postponed", "formulated")),          # scheduling only
         edges=_edges("contextualizes", "defines_scope", "derived_from", "applies_to",
                      "motivates", "regulates", "constrains",
+                     "relates_to", "supports", "refutes", "refines",
                      ("produces", "Conclusion", "ResearchQuestion")),
+        # It decides what gets tested, so it is the one that can say why a
+        # branch was not. Only that: the formulation and the verdict stay with
+        # the agents that own them.
+        update_fields=frozenset({("Hypothesis", "not_tested_reason")}),
     ),
     # Spec Module 4 — the judge. Given ONE hypothesis's evidence slice it weighs
     # the evidence against the criteria, sets the verdict, and writes the
@@ -398,12 +453,18 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         transitions=_transitions(
             ("Hypothesis", "under_verification", "confirmed"),
             ("Hypothesis", "under_verification", "refuted"),
-            ("Hypothesis", "under_verification", "postponed"),
+            # A branch that was tested and did not settle is inconclusive, not
+            # postponed: writing it as postponed says the work never happened.
+            ("Hypothesis", "under_verification", "inconclusive"),
             "ConfirmationCriteria", "Evidence"),
         # supports/refutes/refines: the validator assigns the POLARITY of evidence
         # that reached the hypothesis only as relates_to (focus auto-link).
         edges=_edges("based_on", "determines_sufficiency",
                      "supports", "refutes", "refines"),
+        # It writes the inconclusive verdict, so it writes what the evidence
+        # failed to settle — the schema asks for that reason and nobody could
+        # supply it.
+        update_fields=frozenset({("Hypothesis", "inconclusive_reason")}),
     ),
     "HypothesesAgent": AgentPerm(
         # May also declare the Tools its methods need (as needs_adaptation — a
@@ -450,13 +511,32 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
                      "relates_to", "derived_from",
                      ("produces", "VerificationMethod", "Evidence")),
     ),
+    # The pre-stage context-initialization agent seeds the framing frame at the
+    # start of a run. It writes the whole context star through the PRIVILEGED
+    # init path (store.init_research, enforce_permissions=False), so these rights
+    # matter only if it ever writes through research_commit directly; they are
+    # kept aligned with INIT_SEED_TYPES for clarity and for schema tests.
+    "ContextInitAgent": AgentPerm(
+        create=frozenset({"ResearchQuestion", "Constraint", "Tool", "Resource",
+                          "EmpiricalBase", "ConfirmationCriteria", "CostModel"}),
+        update_attrs=frozenset({"ResearchQuestion"}),
+        transitions=frozenset(),
+        edges=_edges("contextualizes", "defines_scope", "applies_to"),
+    ),
     # The human writes through the HITL bridge (web endpoint / approval flow),
-    # never through an LLM toolset.
+    # never through an LLM toolset. Expert evidence is the human's own layer-1
+    # contribution in the meta-model ("Свидетельство … подтипы: … экспертное;
+    # Человек в контуре — экспертные"), and it is checked to actually carry
+    # subtype=expert in validate_node_draft. Without the edges the human could
+    # create a Constraint but never attach it to anything, leaving it orphaned.
     "human": AgentPerm(
-        create=frozenset({"Constraint"}),
+        create=frozenset({"Constraint", "Evidence"}),
         update_attrs=frozenset(),
         transitions=_transitions(("Conclusion", "draft", "approved")),
-        edges=frozenset(),
+        edges=_edges("contextualizes", "regulates", "relates_to",
+                     ("refines", "Evidence", "Hypothesis"),
+                     ("supports", "Evidence", "Hypothesis"),
+                     ("refutes", "Evidence", "Hypothesis")),
     ),
 }
 
@@ -501,6 +581,25 @@ def validate_node_draft(agent: str, node_type: str, status: str,
             errors.append(
                 f"{node_type} requires attrs.subtype — one of: "
                 f"{', '.join(spec.subtypes)}.")
+        # Measured evidence must say what it was measured on. A run once
+        # benchmarked a locally written stand-in because the repository the
+        # hypothesis named returned 404, and reported the result as a comparison
+        # of the named systems: the substitution was mentioned in the coder's
+        # report and nowhere in the record, so nothing downstream could see it.
+        for needed in spec.required_attrs_by_subtype.get(subtype, ()):
+            if not str((attrs or {}).get(needed, "")).strip():
+                errors.append(
+                    f"{subtype} {node_type} requires attrs.{needed} — "
+                    f"{spec.attr_docs.get(needed, 'see the schema')}")
+        # The human may file evidence, but only the kind a human actually is:
+        # expert judgement. Routing a computational or literature result through
+        # the HITL bridge would launder its provenance.
+        if enforce_permissions and agent == "human" and node_type == "Evidence" \
+                and subtype != "expert":
+            errors.append(
+                "the human may only file Evidence with subtype='expert'; a "
+                f"'{subtype or 'missing'}' result must be recorded by the agent "
+                "that produced it.")
     return errors
 
 
@@ -561,7 +660,10 @@ def permitted_summary(agent: str) -> Dict[str, List[str]]:
     for t in sorted(perm.create):
         spec = NODE_TYPES[t]
         sub = f" (attrs.subtype: {'/'.join(spec.subtypes)})" if spec.subtype_required else ""
-        create.append(f"{t}{sub}")
+        must = "; ".join(
+            f"{st} REQUIRES attrs.{', attrs.'.join(keys)}"
+            for st, keys in sorted(spec.required_attrs_by_subtype.items()))
+        create.append(f"{t}{sub}" + (f" — {must}" if must else ""))
     edges_by_type: Dict[str, List[str]] = {}
     for edge, f, t in sorted(perm.edges):
         edges_by_type.setdefault(edge, []).append(f"{f}→{t}")
@@ -570,9 +672,14 @@ def permitted_summary(agent: str) -> Dict[str, List[str]]:
     for typ, f, t in sorted(perm.transitions):
         trans_by_type.setdefault(typ, []).append(f"{f}→{t}")
     transitions = [f"{typ}: {', '.join(pairs)}" for typ, pairs in trans_by_type.items()]
+    fields_by_type: Dict[str, List[str]] = {}
+    for typ, attr in sorted(perm.update_fields):
+        fields_by_type.setdefault(typ, []).append(f"attrs.{attr}")
     return {
         "create": create,
         "edges": edges,
         "transitions": transitions,
-        "update_attrs": sorted(perm.update_attrs),
+        "update_attrs": sorted(perm.update_attrs)
+        + [f"{typ} ({', '.join(attrs)} only)"
+           for typ, attrs in sorted(fields_by_type.items())],
     }

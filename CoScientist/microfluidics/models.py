@@ -19,21 +19,13 @@ JSON-like text instead of Enum reprs.
 """
 from __future__ import annotations
 
-from typing import List, Literal
+from typing import List
 
 from pydantic import BaseModel, Field
 
-# How a ТЗ field value was obtained — downstream agents treat these differently.
-FieldStatus = Literal[
-    "задано заказчиком",
-    "уточнено оператором",
-    "не задано",
-    "свободный комментарий",
-    "рассчитывается агентом",
-]
-
-# Statuses meaning "there is no usable value here".
-OPEN_STATUSES = ("не задано", "рассчитывается агентом")
+# Field-status vocabulary is shared with the research frame intake — one name
+# for one thing. Re-exported here so existing importers keep working.
+from CoScientist.hitl.field_status import FieldStatus, OPEN_STATUSES
 
 # Canonical block set of the reference ТЗ document, in document order.
 CANONICAL_BLOCKS: tuple[str, ...] = (

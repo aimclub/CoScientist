@@ -84,12 +84,26 @@ research_agent, orchestrator_agent, ...` re-exports the assembled instances.
 ## 3. system.yaml field reference
 
 ```yaml
+defaults:
+  model: main
+  reasoning: off            # system-wide default for per-agent `reasoning`
+
+pipeline:                   # run lifecycle around the root (separate from the tree)
+  pre: [ContextInitAgent]
+  post: [ResultAggregatorAgent]
+
+internal_tools:             # TOOL NAMES (not registry keys) that serve the system:
+  - sleep_tool              # exempt from Work Orders, hidden on the web card (§4.1.2)
+
 agents:
   MyAgent:
     class: llm              # llm | sequential | parallel | custom:<registered name>
     root: false             # exactly ONE agent has root: true
     enabled: true           # bool or "${dotted.settings.path}" (see §4.4)
     model: main             # main | coder | literal litellm model string
+    reasoning: low          # false/"off" | minimal | low | medium | high (unset → defaults)
+    llm_timeout: 600        # opt-in deadline for the FIRST LLM response, seconds
+    include_contents: default  # default | none (ADK: pass conversation history or not)
     description: ...        # THE one description (parent prompt roster,
                             # AgentTool declaration, A2A card)
     routing: ...            # "when to pick me" bullet in the parent's prompt
@@ -106,6 +120,12 @@ agents:
       before_agent: []
       after_agent: []
     hitl: false             # see §4.5
+    work_order: false       # declare a Work Order before acting; a guard enforces
+                            # it (class: llm + hitl: true only; tool tiers §4.1.2)
+    critic: false           # LLM critic reviews my output once — see §4.5a
+                            # (custom:session only; bool or "${settings.path}")
+    report_output: false    # post my final answer to the chat (see below)
+    internal: false         # plumbing — hidden in the web UI's rail and agent tree
     output_key: my_results  # ADK session-state key for the agent's output
     output_schema: ...      # registered pydantic schema name (structured output)
     planner: plan_react     # registered ADK planner name
@@ -124,6 +144,15 @@ Semantics worth knowing:
   it disappears from rosters, routing, the planner's roster, and the critic's
   roster automatically.
 - `subordinates` order = roster order in the prompt = tool order.
+- **`report_output: true` puts the agent's final answer in the chat.** A
+  subordinate runs as an `AgentTool`, so its deliverable (the hypotheses, the
+  research summary) comes back inside the *caller's* function_response and is
+  never spoken in the event stream — the user only saw the orchestrator's
+  retelling of it. `AgentOutputPlugin` (`logging/agent_output.py`) closes that
+  gap: it reports the answer of every flagged agent to the web UI, which renders
+  it as a message authored by that agent. Reserve it for agents whose output IS
+  a deliverable — pipeline internals (rerankers, retrievers) would only add
+  noise.
 - A composite (`sequential`/`parallel`) cannot have `tools`, `prompt`, `model`
   or `subordinates` — the schema rejects it.
 - Unknown keys anywhere are rejected (`extra="forbid"`), so typos fail loudly.
@@ -132,55 +161,171 @@ Semantics worth knowing:
 
 ## 4. Recipes
 
-### 4.1 Give an existing agent a new tool
+### 4.1 Add a new tool
 
-1. **Register the tool** in `assembly/bindings.py` — a factory plus a `ToolDoc`
-   per tool the entry contributes:
+A tool has two names, and mixing them up is the most common mistake:
 
-   ```python
-   def _weather():
-       from CoScientist.tools.weather_tools import weather_toolset_instance
-       return weather_toolset_instance
+| Name | Example | Where it is used |
+|---|---|---|
+| **registry key** — one per `ToolEntry` (a tool *or a whole toolset*) | `coder`, `websearch`, `sleep` | `system.yaml` `tools:`, `ctx.has_tool(...)`, `_WORK_ORDER_HINTS`, `graph/projection.py` |
+| **tool name** — what the model calls | `execute_bash`, `tavily_search`, `sleep_tool` | `ToolDoc.name`, `internal_tools`, `TOOL_TIERS` and every other name-keyed table below |
 
-   REGISTRY.register_tool(ToolEntry(
-       key="weather",
-       factory=_weather,
-       docs=(
-           ToolDoc(
-               name="get_forecast",                      # exact callable name
-               signature="get_forecast(location, days)", # shown in the prompt
-               purpose="Fetch a weather forecast for a location.",
-               usage=("Prefer ISO country codes for ambiguous city names.",),
-           ),
-       ),
-   ))
-   ```
+First decide which kind of tool you are adding — the paths differ a lot:
 
-   Flags:
-   - `optional=True` — factory may return `None` (unconfigured service); the
-     tool then silently drops out of the agent **and** its prompt.
-   - `runtime_resolved=True` — for MCP toolsets whose real tool list comes from
-     the remote server; exempts the entry from the attached-vs-documented name
-     check (the docs are trusted as written).
+| Kind | Example | Path |
+|---|---|---|
+| **A.** In-process function / `BaseToolset` | `sleep_tool`, `coder`, `task_tracker` | steps 1–5, then the conditional list |
+| **B.** A remote MCP server wired to an agent permanently | `paper_analysis`, `vault` | step 1b, then steps 2–5 and the conditional list |
+| **C.** An MCP server the `ExperimentAgent` picks up at runtime from the catalogue | tox / chemistry servers | [§4.1.3](#413-catalogue-mcp-servers-no-code-change) — no Python changes |
 
-   Keep factories lazy (import inside the function) — bindings must be
-   importable without constructing MCP sessions.
+#### 4.1.1 Required steps
 
-2. **Add the name to the agent** in `system.yaml`:
+**1a. Implement the tool** (kind A) in `CoScientist/tools/<module>.py` (or
+the feature package, e.g. `verify/tools.py`, `graph/research/agent_tools.py`).
 
-   ```yaml
-   ResearchAgent:
-     tools: [websearch, paper_analysis, papers_search, weather]
-   ```
+- A plain `async def` wrapped in `FunctionTool` (`tools/sleep_tool.py`), a list
+  of `FunctionTool`s (`alembic_tools.ALEMBIC_TOOLS`), or a `BaseToolset` whose
+  `get_tools()` returns the bound methods (`coder_tools.CoderToolset`,
+  `task_tracker.TaskTrackerToolset`).
+- **The docstring and type hints ARE the function schema the model sees**, so
+  write `Args:` / `Returns:` carefully. A `tool_context: ToolContext` parameter
+  is injected by ADK and hidden from the model.
+- Return a JSON-able `dict`, and report failures as data
+  (`{"status": "error", "message": ...}`) rather than raising — a raised
+  exception reaches the model only as a bare error string.
+- A `BaseToolset(tool_name_prefix=...)` renames its tools: the prefixed name is
+  the tool name every later step must use.
 
-3. Done. The prompt's `<<TOOLS>>` section now includes `get_forecast` — you do
-   not edit the prompt. Verify: `python -m CoScientist.assembly && pytest
-   tests/unit/test_assembly.py -q`.
+**1b. Or wire an MCP server** (kind B):
+
+- Add the URL to `MCPSettings` in `config/settings.py` (`my_server_url:
+  Optional[str] = None` → `MCP__MY_SERVER_URL` in `.env`, documented in
+  `examples/example_config.env`).
+- Build the toolset with `_http_mcp_toolset(url, sse_read_timeout=...,
+  headers=..., tool_filter=[...])` in `tools/research_tools.py`. It returns
+  `None` when the URL is unset. Use `tool_filter` when the server exposes more
+  than an agent should call (see `VAULT_WORKER_TOOLS`).
+- The server itself lives in `mcp-servers/<name>-mcp-server/` (Dockerfile,
+  `.env.example`, README) and gets a service in `mcp-servers/docker-compose.yml`.
+
+**2. Export it (optional)** from `CoScientist/tools/__init__.py`. Note that
+importing `CoScientist.tools` imports *every* tool module and so builds the
+MCP toolsets. A new factory may import its own module directly instead, as
+`_sleep_tool` and `_alembic` do.
+
+**3. Register it** in `assembly/bindings.py`: a lazy factory plus a `ToolDoc`
+for every tool the entry contributes:
+
+```python
+def _weather():
+    from CoScientist.tools.weather_tools import weather_toolset_instance
+    return weather_toolset_instance
+
+REGISTRY.register_tool(ToolEntry(
+    key="weather",
+    factory=_weather,
+    optional=True,          # factory returns None when MCP__WEATHER_URL is unset
+    runtime_resolved=True,  # MCP / BaseToolset: names come from the server/get_tools()
+    docs=(
+        ToolDoc(
+            name="get_forecast",                      # EXACT name the model calls
+            signature="get_forecast(location, days)", # shown in the prompt
+            purpose="Fetch a weather forecast for a location.",
+            usage=("Prefer ISO country codes for ambiguous city names.",),
+        ),
+    ),
+))
+```
+
+| `ToolEntry` field | Meaning |
+|---|---|
+| `key` | registry key, unique (a duplicate is an error at import) |
+| `factory` | zero-arg callable returning a tool, a list of tools, or a toolset — or `None` when unavailable. Import lazily **inside** it: bindings must load without opening MCP sessions |
+| `docs` | tuple of `ToolDoc`, or a zero-arg callable returning one when the text depends on configuration (`_sandbox_docs`). Always read it through `resolved_docs()` |
+| `optional` | `True`: a `None` from the factory silently drops the tool from the agent **and** its prompt. `False`: `None` is a build error |
+| `runtime_resolved` | `True` for MCP toolsets and `BaseToolset`s: the attached-vs-documented name check is skipped, and the docs are trusted as written |
+
+| `ToolDoc` field | Meaning |
+|---|---|
+| `name` | exact tool name. It is not only prompt text: `guard_unknown_tools` and the Work Order build their *allowed-names* sets from it, so a wrong name on a `runtime_resolved` entry gets **real calls blocked** |
+| `signature` | what the prompt shows (name + key args) |
+| `purpose` | one-line description, the bullet text |
+| `usage` | optional sub-bullets with rules of use |
+
+A placeholder name in angle brackets (`<dynamic MCP tools>`) marks a surface
+that cannot be listed at build time. It switches off `guard_unknown_tools` and
+Work Order name checks for that agent. Use it only for truly dynamic surfaces.
+
+**4. Attach it** to agents in the YAML: `tools: [..., weather]`. Do it in every
+profile that should have the tool: `agents/system.yaml`, and
+`agents/microfluidics.yaml` if needed (`COSCIENTIST_CONFIG` selects the
+profile).
+
+**5. Prompt.** `<<TOOLS>>` picks up the new `ToolDoc` by itself, so you do not
+edit the template. Touch `agents/prompts/templates.py` only for workflow prose
+that mentions the tool, and gate that prose on `ctx.has_tool("weather")`
+(registry key) so it disappears with the tool (§5, rule 1).
+
+Verify: `python -m CoScientist.assembly && pytest tests/unit/test_assembly.py -q`,
+then look at `build_system().agent("X").instruction`.
 
 The `ToolDoc`s in bindings are the ONLY place tool descriptions for prompts
 live. If you change a tool's behavior, update its docstring (the ADK schema)
 *and* its ToolDoc — the test suite can't read your mind about semantics, only
 about names.
+
+#### 4.1.2 Conditional steps — every other place a tool name is keyed
+
+Go through this list for every new tool. Each row is a hardcoded table, so
+nothing will warn you when a row is skipped. The only exception is
+`internal_tools`, which a test checks.
+
+| # | When | File → what to add | Key by |
+|---|---|---|---|
+| 1 | The tool is on an agent with `work_order: true` (today: Hypotheses, Research, DatasetCollector, Medical, Experiment) | `hitl/work_order_risk.py` → `TOOL_TIERS`: `read` / `compute` / `side_effect`. **An unlisted tool counts as `compute`** (veto window on every contract that names it) | tool name |
+| 2 | Its very nature is a side effect (install, external share, deletion…) | `hitl/work_order_risk.py` → `TOOL_SIDE_EFFECTS` (+ a new `SideEffectKind` if needed). The contract then declares the effect implicitly and gets a blocking review | tool name |
+| 3 | It only reads the agent's own context and must work *before* a Work Order is declared | `hitl/work_order_risk.py` → `ORIENTATION_TOOLS` | tool name |
+| 4 | It serves the system, not the task (bookkeeping, waiting, graph reads/writes) | top-level `internal_tools:` in `system.yaml`. A Work Order allows it without declaring it, and the web card hides it unless "Show internal agents and tools" is on. `test_internal_tools_are_real_tool_names` fails if the name is not in some `ToolDoc` | tool name |
+| 5 | The agent must state domain assumptions for it in its Work Order | `assembly/prompting.py` → `_WORK_ORDER_HINTS` (one hint per tuple of keys) | registry key |
+| 6 | The tool must be switchable from settings / the web UI | factory returns `None` when off + `optional=True` (§4.4). Setting: a `WebSettings` field + env var in `config/settings.py`. UI: `web/app.py` (apply block **and** `_current_settings`), field in `web/static/js/modals/settings.js`, labels `settings.f.<id>.*` in `web/static/js/i18n.js` | registry key |
+| 7 | Every call needs human approval (not just the contract) | add `hitl_before_tool` to the agent's `callbacks.before_tool`, and extend `target_tools` in `_hitl_before_tool` in `bindings.py` (today only `run_sandbox_task`). Matching is exact name or substring | tool name |
+| 8 | It is meant to be called repeatedly with the same args (polling a job) | `agents/loop_guard_plugin.py` → `POLLING_TOOLS`, or `RepeatCallGuardPlugin` refuses the 5th identical call (`REPEAT_CALL_LIMIT`) | tool name |
+| 9 | The orchestrator calls it and it is pure bookkeeping | `agents/callbacks/critic.py` → `MANAGEMENT_TOOLS`, so the pre-action critic doesn't spend an LLM call on it | tool name |
+| 10 | It writes to the vault / S3 under the session scope | declare `user_id` and `session_id` params. `SessionScopePlugin` fills them in, and the model never supplies them | param names |
+| 11 | It takes or returns URLs | give the agent `before_tool: [resolve_link_refs]` / `after_tool: [register_tool_result_links]` (already on most agents): the model sees `[[linkXXXX]]` refs, and the tool gets real URLs | — |
+| 12 | It returns figures/tables for the report | return presigned URLs or `bucket` + `s3_key`. `McpArtifactCapturePlugin` indexes them for `format_results` automatically | — |
+| 13 | It returns large payloads | results are capped per string by `ToolResultTruncationPlugin` (`TOOL_RESULT_MAX_CHARS`, default 12000). The UI preview is also capped, except for plan-like names matched by the regex in `logging/tool_activity.py` (`after_tool_callback`) | tool name regex |
+| 14 | It is a plan/task tool | the regexes `create_plan\|task_status\|active_tasks…` in `logging/tool_activity.py`, `web/static/status_indicator.js` and `web/static/js/modals/roadmap.js` drive the plan tracker | tool name regex |
+| 15 | The web UI should show a fitting status phrase and icon | `web/static/status_indicator.js` → `RULES` (name regex → category; the first match wins, so order matters; add a `CATEGORIES` + `REVIEW` entry for a new category). The same rules are then tried against the tool's description, and the last fallback is "Using a tool". Icon: `toolIcon()` in `web/static/js/activity_rail.js` | tool name regex |
+| 16 | It is how an agent executes work (the MCP vs coder metric) | `graph/projection.py` → `_MCP_TOOLSETS` / `_CODER_TOOLSETS` | registry key |
+| 17 | A plugin must see or gate it (like `ArtifactGatePlugin` gating training `execute_bash`) | a plugin in `verify/` or `agents/`, registered in **all three** runners: `CoScientist/main.py`, `CoScientist/agent.py` (adk web), `a2a/server.py` | tool name |
+| 18 | Its module needs env vars before import on an A2A server | the agent's `a2a.env` in the YAML (§4.9) | — |
+| 19 | It covers a chemistry capability from the coverage list | tick it in `tools_checklist.md` | — |
+
+Tests to extend: `test_assembly.py` covers wiring automatically. Add a case to
+`tests/unit/test_work_order_risk.py` for a tier or side effect (rows 1–2), and
+an agent-specific assertion in `test_assembly.py` for gated prose (rows 5–6,
+following `test_knowledge_graph_switch_drops_graph_tools_and_prompt`).
+
+#### 4.1.3 Catalogue MCP servers (no code change)
+
+`ExperimentAgent` has no fixed tools: `dynamic_tools` (`tools/dynamic_tools.py`)
+exposes whatever servers the tool-prep pipeline selected for the task
+(`state["filtered_tools"]` / `state["deployed_mcps"]`). To make a server
+discoverable there, add it to the rag_tools catalogue. Nothing in bindings or
+the YAML changes:
+
+```bash
+python scripts/rag_tools/cli.py add --url http://host:port/mcp --name chem --description "..."
+python scripts/rag_tools/cli.py load scripts/rag_tools/servers.json   # batch
+python scripts/rag_tools/cli.py sync <server_id>                      # re-read its tools
+```
+
+Servers built by Alembic (`build_mcp_server`) are registered by
+`tools/registry_bridge.py` on their own. The server's own tool descriptions are
+what retrieval and reranking score, so write them for that. Rows 1, 13 and 15
+of §4.1.2 still apply to catalogue tools, because those tables key on the tool
+name whatever its origin.
 
 ### 4.2 Add a brand-new agent (end to end)
 
@@ -261,6 +406,68 @@ Flipping the setting re-shapes every prompt that mentions the agent on the next
 build — e.g. the orchestrator's planning step switches between "call the
 PlannerAgent first" and "there is NO planner tool" automatically.
 
+To toggle a *single tool on a single agent*, register a gated alias of the tool
+whose factory returns `None` when the setting is off, and mark it `optional`:
+
+```python
+def _planner_retrieval():
+    if not get_settings().web.planner_retrieval_enabled:
+        return None
+    return _retrieval()
+
+REGISTRY.register_tool(ToolEntry(
+    key="planner_retrieval", factory=_planner_retrieval,
+    optional=True, docs=_RETRIEVAL_DOCS,
+))
+```
+
+The agent lists the alias (`tools: [planner_retrieval, ...]`) and the prompt
+template branches on `ctx.has_tool("planner_retrieval")`, so a disabled tool
+disappears from the agent AND from its prompt in one step. `planner_retrieval`
+and `planner_graph` (Settings → PlannerAgent in the web UI) work exactly this
+way; every other agent keeps the ungated `retrieval` / `graph` entries.
+
+To gate a tool **everywhere at once**, skip the alias and put the check in the
+entry's own factory, marking the entry `optional`. Three switches in the web UI
+work this way:
+
+| Switch | Setting | Effect when off |
+|--------|---------|-----------------|
+| Graphs → Knowledge Graph | `web.knowledge_graph_enabled` | `graph` drops off every agent, `inject_graph_root` yields nothing, and `GraphMemoryPlugin` stops recording |
+| Graphs → Research Graph | `research_graph.enabled` | `research_graph` / `research_graph_orchestrator` drop out with their prompt sections |
+| CoderAgent → Coder Execution Mode | `web.coder_mode` (`local`/`openhands`) | When set to `openhands`, `coder` local toolset drops out, leaving the coder family with OpenHands `sandbox` tools only |
+
+Prose that names specific tools has to branch too, or the prompt will advertise
+a tool the agent cannot call and `guard_unknown_tools` will fire on every
+attempt. The coder prompt swaps its whole persona on `ctx.has_tool("coder")` —
+with the local toolset it is an engineer with the full operating manual, without
+it a thin **sandbox relay** whose only job is to forward the incoming task
+verbatim to `run_sandbox_task` (attaching `dataset_url`, choosing
+`new_sandbox`) and pass the sandbox agent's report straight back; it is
+deliberately given no engineering guidance, since writing instructions for the
+sandbox agent is the sandbox agent's job. The orchestrator's KNOWLEDGE GRAPH
+section renders only under `ctx.has_tool("graph")`.
+
+When a tool's *documentation* depends on what else is configured, pass a
+callable as `docs` — `ToolEntry.resolved_docs()` calls it at build time. The
+`sandbox` entry uses this to stop cross-referencing `execute_bash` once the
+local coder tools are switched off.
+
+To make a **constructor kwarg** follow a setting, put the reference in
+`options` — values there take `"${settings.path}"` too (resolved at build time
+by `AgentConfig.resolved_options()`, keeping their own type):
+
+```yaml
+PlannerAgent:
+  options:
+    critic_max_rounds: ${web.planner_critic_rounds}   # Settings -> PlannerAgent
+```
+
+That is the whole path from a web-UI field to a runtime knob: the UI posts to
+`/api/settings` → `web/app.py` writes `settings.web` → the next system build
+resolves the reference. No code change per knob, and one place (`_settings_payload`)
+that a GET and the echo of a POST both answer from, so they cannot drift.
+
 ### 4.5 HITL
 
 `hitl: true` means "this agent uses human-in-the-loop *when HITL is globally
@@ -274,12 +481,69 @@ enabled*" (`HITL__ENABLED` in `.env`). What it does depends on the class:
 
 Your template must contain `<<HITL>>` (it renders empty when off).
 
+`work_order: true` adds a contract around the run (`hitl/work_order*.py`):
+the agent declares a Work Order before acting, the guard keeps it inside the
+declared tools, and **before its final answer** the agent calls
+`submit_work_report` — summary, findings with evidence and confidence, a
+`met` / `partial` / `not_met` verdict on the done criteria, the actual outcome
+and artifacts. The web card sets these claims against what the system
+recorded (step statuses, calls per tool, performed side effects, amendments,
+blocked calls) and flags the gaps (`report_warnings`). The human accepts it,
+sends it back for rework (the tool returns `revise` and the agent keeps
+working in the same run, findings marked wrong included), or rejects it. It is
+confirmed at the order's tier, like the declaration. An agent that finishes
+without an accepted report hits `make_work_report_fallback` (last
+`after_agent` callback): the card is built from the record and the final
+answer, and a rejection replaces the answer so the parent can delegate again.
+
+### 4.5a Critics
+
+Three critics exist, wired independently — you can run any subset:
+
+| Critic | Wiring | Judges |
+|---|---|---|
+| Pre-action | `callbacks.after_model: [pre_action_critique]` on the orchestrator | the delegation it is about to make (approve / revise args / reject) |
+| Post-action | `callbacks.after_tool: [post_action_critique]` | the result a sub-agent returned (annotates it with a `_critic` directive) |
+| Plan | `critic: true` on a `custom:session` agent (the planner) | the roadmap the planner registered |
+
+All three are LLM calls returning strict JSON, built by *context factories* so
+their prompts embed the roster they are judging against — the orchestrator's
+subordinates for the first two, the planner's siblings (the agents a plan may
+assign to) for the plan critic. Each prompt section that documents a critic is
+gated on that critic actually being wired, so a prompt never announces a review
+that cannot happen.
+
+The plan critic is not a callback: no callback can make the planner redo its
+roadmap. `make_plan_critique()` returns `async (task, plan) -> feedback | None`
+and the assembler hands it to `SessionAgent`, which already owns the
+generate → review → revise loop and feeds the critique back as a user turn — the
+same mechanism as a human rejection, so the planner replans instead of patching
+prose. Differences from HITL: it runs whether or not HITL is enabled (before the
+human sees anything), and its budget is **one round** (`critic_max_rounds`) — a
+reviewer that never tires would otherwise loop forever. After the rewrite the
+plan stands, reviewed or not. A critic that fails or cannot articulate an
+objection accepts the plan; the review must never take a run down with it.
+
+Both knobs live in the web UI under Settings → PlannerAgent (and in `.env` for
+headless runs):
+
+| UI control | Setting | `.env` |
+|---|---|---|
+| Plan Critic | `web.planner_critic_enabled` → `PlannerAgent.critic` | `PLANNER__CRITIC_ENABLED` |
+| Revision Rounds | `web.planner_critic_rounds` → `options.critic_max_rounds` | `PLANNER__CRITIC_ROUNDS` |
+
+The budget is settable but never absent: the UI floor is one round, and a
+rejected `criticRounds < 1` keeps the previous value — a zero-round critic is
+just a critic that never runs, which is what the switch is for. Both apply to
+new sessions (the system is built once per session), and the critic costs an
+extra LLM call per planning run plus a whole planning round whenever it objects.
+
 ### 4.6 Composite pipelines
 
 `sequential` / `parallel` agents list `children` in execution order:
 
 ```yaml
-TaskExecutorAgent:
+ToolPipelineAgent:
   class: sequential
   children: [ToolPreparerAgent, ExperimentAgent]
 ```
@@ -288,6 +552,13 @@ Children are full agents declared in the same file. Note that pipeline stages
 usually communicate through ADK session state: one agent's `output_key` is the
 next agent's `{state_key}` prompt injection (see §5) — renaming an
 `output_key` means updating the prompts and callbacks that read it.
+
+A composite can itself be a `subordinate`: listed that way it is attached as an
+AgentTool and an LLM agent above it decides *whether* to run the whole pipeline.
+That is how `TaskExecutorAgent` works — an LLM router whose subordinates are
+`ToolPipelineAgent` (the discover→deploy→run MCP pipeline) and `CoderAgent`, so
+the choice between "a ready tool exists" and "this needs engineering" is made
+inside the executor instead of by the orchestrator.
 
 ### 4.7 Custom agent classes
 
@@ -368,7 +639,7 @@ fully static text use `_static("name", '''...''')`.
 | `ctx.is_enabled("TaskExecutorAgent")` | gate on any agent's enabled flag |
 | `ctx.siblings()` | my parents' other enabled subordinates (e.g. coder's scope boundary) |
 | `ctx.render_sibling_roster()` | planner-style roster from each sibling's `planning` text |
-| `ctx.render_critic_roster()` | compact roster for critic prompts |
+| `ctx.render_critic_roster()` | compact roster for critic prompts (pass `ctx.siblings()` for a critic judging peers, as the plan critic does) |
 
 Two templating systems coexist — don't confuse them:
 
@@ -435,6 +706,9 @@ Debugging tips:
   from CoScientist.assembly.schema import get_config
   cfg = get_config()
   print(REGISTRY.prompt("pre_action_critic")(PromptContext(config=cfg.root, system=cfg)))
+  # the plan critic renders against the PLANNER's context, not the root's:
+  planner = PromptContext(config=cfg.agent("PlannerAgent"), system=cfg)
+  print(REGISTRY.prompt("plan_critic")(planner))
   ```
 
 - **Config is cached per process** (`get_config()` is `lru_cache`d): a running
@@ -475,5 +749,7 @@ CoScientist/
 tests/unit/test_assembly.py   assembly invariants
 ```
 
-A typical change touches at most three places: `bindings.py` (new names),
-`templates.py` (new prompt), `system.yaml` (the wiring) — and nothing else.
+A typical agent change touches at most three places: `bindings.py` (new names),
+`templates.py` (new prompt), `system.yaml` (the wiring). A new *tool* may also
+need entries in the name-keyed tables listed in §4.1.2 (`hitl/work_order_risk.py`,
+`internal_tools`, plugins, web UI rules).

@@ -8,6 +8,35 @@ from botocore.client import Config
 from dotenv import load_dotenv, find_dotenv
 load_dotenv(find_dotenv())
 
+# Bounds for one S3 call. The defaults are 60 s to connect, 60 s to read, and up
+# to 5 attempts, so an endpoint that drops packets blocks the caller for about
+# 300 s. An MCP tool runs inside that call, and the ADK client gives up at 300 s.
+# The client then closes the stream, and the server logs a ClosedResourceError
+# for a response nobody waits for. Fail in seconds instead, so the tool returns
+# an error the agent can read.
+_CONNECT_TIMEOUT_SECONDS = 5
+_READ_TIMEOUT_SECONDS = 30
+_MAX_ATTEMPTS = 3
+
+_CLIENT_CONFIG = Config(
+    signature_version="s3v4",
+    connect_timeout=_CONNECT_TIMEOUT_SECONDS,
+    read_timeout=_READ_TIMEOUT_SECONDS,
+    retries={"max_attempts": _MAX_ATTEMPTS, "mode": "standard"},
+)
+
+# Config for the client that presigns URLs for browsers. Path-style addressing
+# and an explicit region match the vault MCP server: MinIO answers
+# SignatureDoesNotMatch when the signed Host or region differs from what the
+# browser sends.
+_SIGNING_CONFIG = Config(
+    signature_version="s3v4",
+    s3={"addressing_style": "path"},
+    connect_timeout=_CONNECT_TIMEOUT_SECONDS,
+    read_timeout=_READ_TIMEOUT_SECONDS,
+    retries={"max_attempts": _MAX_ATTEMPTS, "mode": "standard"},
+)
+
 
 class S3BucketService:
     """
@@ -28,6 +57,7 @@ class S3BucketService:
             access_key: str,
             secret_key: str,
             bucket_name: str = "default",
+            external_endpoint: str = None,
     ) -> None:
         """
         Initializes the class based on the definition of the fields required for operation.
@@ -37,11 +67,17 @@ class S3BucketService:
             access_key: user's login
             secret_key: user's password
             bucket_name: bucket names for work
+            external_endpoint: URL of S3 compatible service that a browser can
+                reach. When set, presigned URLs are minted against this endpoint
+                instead of the internal one, so the signed Host header matches
+                what the user's client sends. When None, presigned URLs keep
+                using the internal endpoint.
         """
         self.bucket_name = bucket_name
         self.endpoint = endpoint
         self.access_key = access_key
         self.secret_key = secret_key
+        self.external_endpoint = external_endpoint
 
     def create_s3_client(self) -> boto3.client:
         """
@@ -55,7 +91,25 @@ class S3BucketService:
             endpoint_url=self.endpoint,
             aws_access_key_id=self.access_key,
             aws_secret_access_key=self.secret_key,
-            config=Config(signature_version="s3v4"),
+            config=_CLIENT_CONFIG,
+        )
+        return client
+
+    def create_signing_client(self) -> boto3.client:
+        """
+        Creates a client for minting presigned URLs against the external endpoint.
+
+        Returns:
+            A boto3 client pointed at the external endpoint with path-style
+            addressing and region us-east-1, mirroring the vault MCP server.
+        """
+        client = boto3.client(
+            "s3",
+            endpoint_url=self.external_endpoint,
+            aws_access_key_id=self.access_key,
+            aws_secret_access_key=self.secret_key,
+            region_name="us-east-1",
+            config=_SIGNING_CONFIG,
         )
         return client
     
@@ -84,7 +138,25 @@ class S3BucketService:
         
         buffer = BytesIO(content)
         client.upload_fileobj(buffer, self.bucket_name, destination_path)
-    
+
+    def upload_bytes(self, prefix: str, source_file_name: str, data: bytes) -> str:
+        """
+        Uploads bytes to S3 bucket with specified prefix and file name.
+
+        Args:
+            prefix: The prefix/folder path in the S3 bucket where the file will be stored
+            source_file_name: The name of the file to be stored in S3
+            data: Raw bytes to upload
+
+        Returns:
+            S3 key (path) of the uploaded object, for use with generate_presigned_url
+        """
+        client = self.create_s3_client()
+        destination_path = (Path(prefix, source_file_name)).as_posix()
+        buffer = BytesIO(data)
+        client.upload_fileobj(buffer, self.bucket_name, destination_path)
+        return destination_path
+
     def list_objects(self, prefix: str) -> list[str]:
         """
         Lists all objects in the S3 bucket with the given prefix.
@@ -156,22 +228,37 @@ class S3BucketService:
         except Exception as e:
             print(e)
     
-    def generate_presigned_url(self, s3_key: str, method: str = 'get_object', expiration: int = 360) -> str:
+    def generate_presigned_url(
+            self,
+            s3_key: str,
+            method: str = 'get_object',
+            expiration: int = 360,
+            bucket_name: str = None,
+    ) -> str:
         """
         Generates a presigned URL for accessing an S3 object.
+
+        When an external endpoint is configured, the URL is minted with the
+        signing client against it, so the signed Host header matches what a
+        browser sends. Otherwise the URL is minted against the internal
+        endpoint, as before.
 
         Args:
             s3_key: The key (path) of the S3 object
             method: HTTP method for the presigned URL (default: 'get_object')
             expiration: Time in seconds for the URL to remain valid (default: 360)
+            bucket_name: Bucket that holds the object (default: the service bucket)
 
         Returns:
             A presigned URL string for accessing the S3 object
         """
-        client = self.create_s3_client()
+        if self.external_endpoint:
+            client = self.create_signing_client()
+        else:
+            client = self.create_s3_client()
         return client.generate_presigned_url(
             method,
-            Params={'Bucket': self.bucket_name, 'Key': s3_key},
+            Params={'Bucket': bucket_name or self.bucket_name, 'Key': s3_key},
             ExpiresIn=expiration
         )
     
@@ -236,7 +323,8 @@ s3_service = S3BucketService(
     endpoint=os.getenv("S3__ENDPOINT_URL"),
     access_key=os.getenv("S3__ACCESS_KEY"),
     secret_key=os.getenv("S3__SECRET_KEY"),
-    bucket_name=os.getenv("S3__BUCKET_NAME")
+    bucket_name=os.getenv("S3__BUCKET_NAME"),
+    external_endpoint=os.getenv("S3__EXTERNAL_ENDPOINT_URL"),
 )
 
 if __name__ == "__main__":

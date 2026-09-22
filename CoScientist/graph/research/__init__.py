@@ -10,6 +10,10 @@ auto-recorded observational trace. This package is deliberately import-light —
 the ADK toolsets live in .agent_tools and are imported lazily by the assembly
 bindings.
 """
-from CoScientist.graph.research.store import ResearchGraphStore, research_graph
+from CoScientist.graph.research.store import (
+    ResearchGraphStore,
+    get_research_graph,
+    research_graph,
+)
 
-__all__ = ["ResearchGraphStore", "research_graph"]
+__all__ = ["ResearchGraphStore", "get_research_graph", "research_graph"]

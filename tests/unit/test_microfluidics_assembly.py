@@ -219,10 +219,7 @@ def test_tz_agents_have_hitl_review_loops(config, system):
         assert cfg.hitl is True, f"{name} must declare hitl"
         agent = system.agent(name)
         assert isinstance(agent, SessionAgent)
-        if get_settings().hitl.enabled:
-            assert agent.hitl_handler is not None, f"{name}: no HITL handler wired"
-        else:
-            assert agent.hitl_handler is None, f"{name}: handler despite HITL off"
+        assert agent.hitl_handler is not None, f"{name}: no HITL handler wired"
 
 
 def test_tz_review_shows_rendered_document_and_publishes_it(config, system, tmp_path):

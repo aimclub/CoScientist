@@ -12,7 +12,12 @@ import os
 from google.adk.apps import App
 
 from CoScientist.logging.event_logger import EventLoggerPlugin
+from CoScientist.logging.metrics import UsageMetricsPlugin
+from CoScientist.graph.plugin import GraphMemoryPlugin
+from CoScientist.graph.research.validator import BackgroundValidatorPlugin
 from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
+from CoScientist.tools.mcp_artifact_plugin import McpArtifactCapturePlugin
+from CoScientist.tools.session_scope_plugin import SessionScopePlugin
 from CoScientist.main import _compaction_config
 
 if os.getenv("A2A_MODE"):
@@ -24,6 +29,20 @@ else:
 # the directory name ("CoScientist"). Truncation is last so the logger sees the
 # full tool result before the model gets a context-bounded copy; compaction
 # summarizes the context once it crosses the token threshold.
-app = App(name="CoScientist", root_agent=root_agent,
-          plugins=[EventLoggerPlugin(), ToolResultTruncationPlugin()],
-          events_compaction_config=_compaction_config())
+app = App(
+    name="CoScientist",
+    root_agent=root_agent,
+    plugins=[
+        EventLoggerPlugin(),
+        UsageMetricsPlugin(),
+        GraphMemoryPlugin(),
+        BackgroundValidatorPlugin(),
+        # An MCP server builds its S3 key from user_id and session_id. Without
+        # this plugin every adk web user writes to the same unknown_user prefix.
+        SessionScopePlugin(),
+        # Capture runs before truncation, so it still sees the full URL.
+        McpArtifactCapturePlugin(),
+        ToolResultTruncationPlugin(),
+    ],
+    events_compaction_config=_compaction_config(),
+)

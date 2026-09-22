@@ -30,6 +30,7 @@ from google.genai import types
 from CoScientist.hitl.models import HITLAction, HITLRequest, HITLResponse
 from CoScientist.hitl.session_agent import SessionAgent
 from CoScientist.microfluidics.render import render_tz_document
+from CoScientist.graph.session_scope import session_key
 
 logger = logging.getLogger(__name__)
 
@@ -124,7 +125,7 @@ class TZSessionAgent(SessionAgent):
         if not questions:
             return response
 
-        answers = await self._interview(questions)
+        answers = await self._interview(questions, ctx)
         # Nothing that changes the ТЗ — no rewrite needed, keep the approval.
         if not answers or all(a == "не знаю" for _b, a in answers.values()):
             return response
@@ -142,7 +143,7 @@ class TZSessionAgent(SessionAgent):
             action=HITLAction.EDIT, approved=False, instructions=feedback
         )
 
-    async def _interview(self, questions) -> dict:
+    async def _interview(self, questions, ctx: InvocationContext) -> dict:
         """Ask ONE HITL window per question; return {qid: (block, answer)}."""
         from CoScientist.microfluidics.questionnaire import (
             OPT_AGENT,
@@ -156,12 +157,19 @@ class TZSessionAgent(SessionAgent):
         silent_in_a_row = 0
         total = len(questions)
         for i, q in enumerate(questions, 1):
+            user_id, session_id = session_key(ctx)
             request = HITLRequest(
                 agent_name=self.name,
                 action_type=HITLAction.PROVIDE_INPUT,
                 message=f"Уточнение ТЗ — вопрос {i} из {total}: «{q.block}»",
                 options=list(QUESTION_OPTIONS),
-                context={"output": render_question_card(q, i, total)},
+                context={
+                    "output": render_question_card(q, i, total),
+                    "_session": {
+                        "user_id": user_id,
+                        "session_id": session_id,
+                    },
+                },
                 invoked_via="internal_loop",
             )
             response = await self.hitl_handler.handle_request(request)

@@ -133,7 +133,8 @@ def test_tz_table_drives_the_literature_requests():
 
     # 3) The plan assigns the literature tasks to ResearchAgent.
     active = state.get("active_tasks")
-    tasks = active.get("tasks") if isinstance(active, dict) else active
+    assert isinstance(active, list), f"active_tasks must be a session-local list: {active!r}"
+    tasks = active
     assert tasks, f"planner registered no tasks: {active!r}"
     research_tasks = [t for t in tasks if t.get("assignee") == "ResearchAgent"]
     assert research_tasks, f"no plan task assigned to ResearchAgent: {tasks}"
