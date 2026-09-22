@@ -16,11 +16,11 @@ from typing import Optional
 import logging
 
 from google.adk.sessions import InMemorySessionService
-from google.adk.runners import Runner
 from google.adk.agents.run_config import RunConfig
 from google.genai import types
 
 from CoScientist.config import get_settings
+from CoScientist.checkpoints.runner import CheckpointRunner as Runner
 from CoScientist.agents import orchestrator_agent, root_agent
 from CoScientist.agents.callbacks import cleanup_uploaded_papers
 from CoScientist.hitl.tool import hitl_toolset

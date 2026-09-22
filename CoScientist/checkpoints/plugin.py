@@ -32,17 +32,18 @@ Scoping rules learned the hard way (adversarial review):
   counter is also released in ``on_tool_error_callback`` and force-reset at the
   turn boundary, so one failed FEDOT call can never suppress checkpoints
   forever.
-* The legacy (non-LlmAgent-root) runner path can skip ``after_run_callback``
-  on an escaping exception — busy entries therefore expire after
-  ``_BUSY_STALE_SECONDS`` so the restore endpoint cannot 409 forever.
+* Use CheckpointRunner: it holds the busy gate until the invocation iterator
+  closes, including errors where ADK skips ``after_run_callback``. Elapsed
+  time never proves quiescence.
 * ``any_busy()`` is process-wide (all plugin instances): run_all serves six
   A2A apps in one process and restore mutates process-wide store singletons.
 """
 from __future__ import annotations
 
 import logging
-import time
 import weakref
+from collections.abc import Iterator
+from contextlib import contextmanager
 from typing import Dict, Optional, Set, Tuple
 
 from google.adk.plugins.base_plugin import BasePlugin
@@ -72,10 +73,6 @@ HITL_TOOL_NAMES = {"request_approval", "request_selection"}
 # branches (long external work: FEDOT, delegations to sub-agents).
 LONG_TOOL_NAMES = {"fedot_tool"} | set(FUNC_RESPONSE_TRIGGERS)
 
-# A busy entry older than this is considered leaked (legacy runner path can
-# skip after_run on an escaping exception) and no longer blocks restore.
-_BUSY_STALE_SECONDS = 3600.0
-
 
 class CheckpointPlugin(BasePlugin):
     # process-wide roster: restore must refuse while ANY runner is active,
@@ -87,7 +84,7 @@ class CheckpointPlugin(BasePlugin):
         self._store = store  # resolved lazily so settings load once
         self._fired: Set[Tuple[str, str, str]] = set()    # (invocation, label, event)
         self._inflight_tools: Dict[str, int] = {}          # run_key -> count
-        self._active: Dict[Tuple[str, str], float] = {}    # (run_key, invocation_id) -> t0
+        self._active: Set[object] = set()                 # live Runner scopes
         self._root_service = None                          # the root Runner's session service
         self._child_runs: Set[str] = set()                 # AgentTool-spawned run_keys
         CheckpointPlugin._instances.add(self)
@@ -100,13 +97,18 @@ class CheckpointPlugin(BasePlugin):
         return self._store
 
     def is_busy(self) -> bool:
-        """Any (non-stale) invocation currently executing on this runner?"""
-        now = time.monotonic()
-        stale = [k for k, t0 in self._active.items() if now - t0 > _BUSY_STALE_SECONDS]
-        for k in stale:
-            logger.warning("checkpoint: dropping stale busy entry %s (no after_run seen)", k)
-            self._active.pop(k, None)
+        """Any invocation whose Runner iterator has not finished closing?"""
         return bool(self._active)
+
+    @contextmanager
+    def track_run(self) -> Iterator[None]:
+        """Hold restore until actual Runner completion, not a plugin callback."""
+        token = object()
+        self._active.add(token)
+        try:
+            yield
+        finally:
+            self._active.discard(token)
 
     @classmethod
     def any_busy(cls) -> bool:
@@ -136,7 +138,7 @@ class CheckpointPlugin(BasePlugin):
             self._fired.clear()
         return False
 
-    # ── run lifecycle (child detection + busy gate + T5) ─────────────────────
+    # ── run lifecycle (child detection + T5) ─────────────────────────────────
     async def before_run_callback(self, *, invocation_context) -> None:
         session = invocation_context.session
         svc = getattr(invocation_context, "session_service", None)
@@ -149,7 +151,6 @@ class CheckpointPlugin(BasePlugin):
             # only the delegation sub-conversation — never checkpoint it
             self._child_runs.add(run_key(session))
             return None
-        self._active[(run_key(session), invocation_context.invocation_id)] = time.monotonic()
         return None
 
     async def after_run_callback(self, *, invocation_context) -> None:
@@ -161,7 +162,6 @@ class CheckpointPlugin(BasePlugin):
         try:
             await self._save(session, "T5_invocation_end", reason="turn_boundary")
         finally:
-            self._active.pop((rid, invocation_context.invocation_id), None)
             # safety net: a raising tool can leak the in-flight counter (no
             # after_tool on error paths ADK misses); the turn boundary is by
             # definition quiescent, so force-reset

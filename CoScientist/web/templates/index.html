@@ -793,7 +793,14 @@
         // no-store + cache-bust: the endpoint sends no cache headers, so a plain
         // fetch can be served stale by the browser and the list would freeze.
         const r = await fetch('/api/checkpoints?_=' + Date.now(), { cache: 'no-store' });
-        if (!r.ok) return;
+        if (!r.ok) {
+          _cpSig = null;
+          const el = document.getElementById("checkpoint-list");
+          if (el) el.textContent = [401, 503].includes(r.status)
+            ? "Управление снимками доступно через Synapse."
+            : "Не удалось загрузить снимки (HTTP " + r.status + ").";
+          return;
+        }
         const d = await r.json();
         renderCheckpoints(d.checkpoints || []);
       } catch (e) { console.error('checkpoints refresh failed', e); }

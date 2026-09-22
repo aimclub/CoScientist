@@ -13,7 +13,7 @@ import logging
 import threading
 from typing import Dict, Optional
 
-import httpx
+from CoScientist.checkpoints.notifications import enqueue_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +41,13 @@ def traceparent_for(context_id: str) -> Optional[str]:
     with _LOCK:
         entry = _RUN_CONTEXT.get(context_id)
         return entry["traceparent"] if entry else None
+
+
+def registered_run_context(context_id: str) -> Optional[Dict[str, Optional[str]]]:
+    """Return an atomic copy, preserving missing vs registered-without-root."""
+    with _LOCK:
+        entry = _RUN_CONTEXT.get(context_id)
+        return dict(entry) if entry is not None else None
 
 
 def clear_runs() -> None:
@@ -73,10 +80,7 @@ def notify_snapshot_saved(manifest) -> None:
         "label": manifest.label,
         "snapshot_ref": manifest.snapshot_ref,
     }
-    try:
-        httpx.post(f"{cfg.callback_url.rstrip('/')}/points", json=body, timeout=5.0)
-    except Exception as exc:  # noqa: BLE001 — never break the run
-        logger.warning("synapse: snapshot-ready callback failed: %s", exc)
+    enqueue_snapshot(f"{cfg.callback_url.rstrip('/')}/points", body)
 
 
 # ── minimal OTel: hang our steps under the platform's traceparent ────────────
@@ -87,6 +91,8 @@ from opentelemetry.trace import (
 
 _TRACER = None
 _OTEL_READY = False
+_OTEL_LOCK = threading.Lock()
+_OTLP_EXPORT_TIMEOUT_SECONDS = 3.0
 
 
 def setup_otel() -> None:
@@ -94,22 +100,30 @@ def setup_otel() -> None:
     global _TRACER, _OTEL_READY
     if _OTEL_READY:
         return
-    _OTEL_READY = True
-    cfg = _synapse_cfg()
-    try:
-        if cfg.otlp_endpoint:
-            from opentelemetry.sdk.trace import TracerProvider
-            from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-            from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
-                OTLPSpanExporter,
-            )
-            provider = TracerProvider()
-            provider.add_span_processor(
-                SimpleSpanProcessor(OTLPSpanExporter(endpoint=cfg.otlp_endpoint)))
-            _ot_trace.set_tracer_provider(provider)
-        _TRACER = _ot_trace.get_tracer("coscientist.synapse")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("synapse: OTel setup failed: %s", exc)
+    with _OTEL_LOCK:
+        if _OTEL_READY:
+            return
+        try:
+            cfg = _synapse_cfg()
+            if cfg.otlp_endpoint:
+                from opentelemetry.sdk.trace import TracerProvider
+                from opentelemetry.sdk.trace.export import BatchSpanProcessor
+                from CoScientist.checkpoints.trace_context import RunIdSpanProcessor
+                from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+                    OTLPSpanExporter,
+                )
+                provider = TracerProvider()
+                exporter = OTLPSpanExporter(
+                    endpoint=cfg.otlp_endpoint,
+                    timeout=_OTLP_EXPORT_TIMEOUT_SECONDS,
+                )
+                provider.add_span_processor(RunIdSpanProcessor())
+                provider.add_span_processor(BatchSpanProcessor(exporter))
+                _ot_trace.set_tracer_provider(provider)
+            _TRACER = _ot_trace.get_tracer("coscientist.synapse")
+            _OTEL_READY = True
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("synapse: OTel setup failed: %s", exc)
 
 
 def _parent_ctx(traceparent: Optional[str]):
@@ -130,7 +144,9 @@ def _parent_ctx(traceparent: Optional[str]):
 def _start_run_span(context_id: str, agent_name: str, run_id: str):
     if _TRACER is None:
         return None
-    ctx = _parent_ctx(traceparent_for(context_id))
+    from CoScientist.checkpoints.trace_context import active_run_id
+
+    ctx = None if active_run_id() == run_id else _parent_ctx(traceparent_for(context_id))
     return _TRACER.start_span(
         "invoke_agent", context=ctx,
         attributes={"gen_ai.operation.name": "invoke_agent",
@@ -159,7 +175,9 @@ class SynapseTracePlugin(_BasePlugin):
 
     async def before_run_callback(self, *, invocation_context):
         s = invocation_context.session
-        rid = run_id_for(s.id) or f"{s.app_name}__{s.id}"
+        from CoScientist.checkpoints.trace_context import active_run_id
+
+        rid = active_run_id() or run_id_for(s.id) or f"{s.app_name}__{s.id}"
         self._spans[invocation_context.invocation_id] = _start_run_span(
             s.id, invocation_context.agent.name, rid)
         return None
