@@ -33,10 +33,182 @@ from CoScientist.agents.callbacks.tool_callbacks import (
 from CoScientist.experiments.runtime.graph_bridge import (
     _plan_step_texts,
     _step_for_task,
+    _task_attrs,
+    _task_match_text,
+    _words,
 )
 
-#: The outer plan of that session, verbatim.
+#: The plan of session_989a309886da43a4a612f1e23c55fa74 (2026-09-22) as the
+#: tracker held it — three steps, descriptions trimmed to the part that carries
+#: the vocabulary. The assignees are real: only an executor's step can host an
+#: experiment task, and TASK-1's description is the distractor that made text
+#: matching fail before the filter — it recaps the whole pipeline.
 STEPS = [
+    {"id": "TASK-1", "assignee": "HypothesesAgent", "status": "DONE",
+     "title": "Сформулировать гипотезу для пайплайна",
+     "description": "Зафиксировать одну проверяемую гипотезу о том, что покажет "
+                    "пайплайн токсикологического профилирования метаболитов "
+                    "Heracleum sosnowskyi: кластер фуранокумаринов окажется "
+                    "наиболее токсичным по предсказанным LD50, ADMET-флаги "
+                    "кардиотоксичности преобладают"},
+    {"id": "TASK-2", "assignee": "ExperimentModuleAgent", "status": "TODO",
+     "title": "Собрать литературные данные и SMILES метаболитов",
+     "description": "Составить стандартизированный корпус метаболитов Heracleum "
+                    "sosnowskyi и их SMILES: собрать из научной литературы "
+                    "(EB1, PubMed/PubChem/ChEMBL) структурные данные по "
+                    "фуранокумаринам (бергаптен, псорален, ксантотоксин, "
+                    "бергамоттин, императорин, умбеллиферон, скополетин), "
+                    "кумаринам, терпеноидам и жирным кислотам растения. Выход: "
+                    "валидированный список SMILES метаболитов с источниками "
+                    "(уникальность, канонизация через RDKit/PubChem). Успех: "
+                    "готовый машинно-читаемый список SMILES, пригодный для "
+                    "передачи в шаг профилирования."},
+    {"id": "TASK-3", "assignee": "ExperimentModuleAgent", "status": "TODO",
+     "title": "Провести структурную кластеризацию и полное in-silico "
+              "токсикологическое профилирование",
+     "description": "На сервере heracleum-tox по списку SMILES из TASK-2 "
+                    "выполнить: (1) chemical_space_clustering — кластеризацию по "
+                    "структурному сходству (ECFP4 + агломеративная "
+                    "кластеризация) с построением дендрограммы; (2) для каждого "
+                    "метаболита predict_molecule_profile — предсказание LD50 для "
+                    "мыши по всем путям введения там, где нет экспериментальных "
+                    "данных, и оценку домена применимости модели (kNN(5)+Gaussian "
+                    "AD). По результатам определить наиболее токсичный кластер; "
+                    "для его соединений использовать predict_molecule_profile для "
+                    "предсказания гепатотоксичности, кардиотоксичности (hERG), "
+                    "DILI и канцерогенности; для 3 наиболее перспективных "
+                    "соединений получить оценку стоимости синтеза (ASKCOS). "
+                    "Успех: получены дендрограмма кластеризации, LD50 всех "
+                    "метаболитов с AD, предсказания 4 эндпоинтов для наиболее "
+                    "токсичного кластера и стоимости синтеза 3 соединений."},
+]
+
+#: Its experiment plan, in the shape a PLAN has: `name`, and the question under
+#: `design`. Written out because that is the whole point of these tests.
+TASKS = [
+    ("EXP-1", "Сбор литературных данных о метаболитах Heracleum sosnowskyi и их SMILES",
+     "Какие метаболиты Heracleum sosnowskyi и их SMILES присутствуют в "
+     "реконструированном литературном корпусе?", "TASK-2"),
+    # Declines: 0.45 on the clustering step against 0.36 on the corpus step,
+    # whose description also names SMILES and the metabolites. 0.09 of lead is
+    # under the bar, and lowering the bar to catch it put a WRONG line on the
+    # 2026-09-21 study, so it stays where it was dispatched.
+    ("EXP-2", "Кластеризация метаболитов по структурному сходству",
+     "Какие структурные кластеры образуются среди метаболитов корпуса и какие "
+     "соединения входят в фуранокумариновый кластер?", None),
+    ("EXP-3", "Предсказание LD50 (мышь) для всех путей введения",
+     "Каковы предсказанные значения LD50 (мышь, мг/кг, lg-шкала) для метаболитов "
+     "корпуса по всем путям введения?", "TASK-3"),
+    ("EXP-4", "Оценка домена применимости QSAR-моделей",
+     "Какая доля предсказаний LD50 фуранокумаринового кластера попадает в домен "
+     "применимости моделей (kNN(5)+Gaussian AD)?", "TASK-3"),
+    ("EXP-5", "Предсказание гепато-/кардиотоксичности, DILI и канцерогенности "
+     "наиболее токсичного кластера",
+     "Каковы предсказанные значения гепатотоксичности, кардиотоксичности, DILI и "
+     "канцерогенности для наиболее токсичного (фуранокумаринового) кластера?", "TASK-3"),
+    ("EXP-6", "Оценка стоимости синтеза 3 перспективных соединений",
+     "Какова оценка стоимости синтеза (USD/g) трёх перспективных соединений из "
+     "наиболее токсичного кластера?", "TASK-3"),
+]
+
+
+def _plan_task(name, question):
+    """A task as the plan writes it — NOT as the graph stores it."""
+    return {"id": "EXP-x", "name": name,
+            "design": {"experiment_question": question}}
+
+
+# ── which step ──────────────────────────────────────────────────────────────
+
+def test_the_matcher_and_the_card_read_the_same_words():
+    """The defect that made the whole matcher a no-op.
+
+    `_task_attrs` writes the card's `title` from the plan's `name` and its
+    `question` from `design.experiment_question`. The matcher used to read
+    `task["title"]` and `task["question"]` — the names those fields have AFTER
+    the bridge has written them — so it scored two empty strings and every task
+    fell back to the dispatched step. Nothing failed: the graph just hung six
+    tasks off one step.
+    """
+    task = _plan_task("Предсказание LD50 (мышь)", "Каковы значения LD50?")
+    text = _task_match_text(task)
+    assert "Предсказание LD50" in text and "Каковы значения" in text
+    # And the card the reader sees is built from the same two fields.
+    attrs = _task_attrs(task, {"plan_id": "PLAN-1"}, "TASK-3")
+    assert attrs["title"] in text
+    assert attrs["question"] in text
+    # A graph-shaped task carries no words for this matcher, which is exactly
+    # how the bug hid: both the code and its test used that shape.
+    assert not _words(_task_match_text({"title": "x", "question": "y"}))
+
+
+def test_each_task_lands_on_the_step_it_carries_out():
+    """Five of the six, measured on the live run that hung all six off the
+    literature step. EXP-2 is the honest gap: «Кластеризация метаболитов по
+    структурному сходству» scores 0.45 on the clustering step against 0.36 on
+    the corpus step — the plan's own description mentions the SMILES corpus —
+    and 0.09 of lead is under the bar, so it stays where it was dispatched
+    rather than being moved on a coin toss."""
+    steps = _plan_step_texts({"_master_active_tasks": STEPS})
+    for task_id, name, question, expected in TASKS:
+        got, best, runner = _step_for_task(_plan_task(name, question), steps, "TASK-2")
+        assert got == (expected or "TASK-2"), f"{task_id}: {got} at {best:.2f}/{runner:.2f}"
+
+
+def test_a_step_an_experiment_task_cannot_carry_out_is_never_offered():
+    """A hypothesis step's description recaps the pipeline the tasks implement,
+    so it shares vocabulary with every one of them — on the 2026-09-21 study
+    «ADMET-профилирование наиболее токсичного кластера» scored a confident 1.00
+    against «Сформулировать гипотезу исследования». No threshold removes that;
+    the assignee does."""
+    steps = _plan_step_texts({"_master_active_tasks": STEPS})
+    assert [s for s, _ in steps] == ["TASK-2", "TASK-3"]
+    got, _, _ = _step_for_task(
+        _plan_task("ADMET-профилирование наиболее токсичного кластера фуранокумаринов",
+                   "Каковы ADMET-флаги кардиотоксичности?"), steps, "TASK-2")
+    assert got == "TASK-3", got
+
+
+def test_one_shared_word_does_not_decide():
+    """«Предсказание LD50 (мышь)» shares exactly «метабол» with a corpus step
+    and nothing with the step it belongs to. A single incidental word must not
+    settle where a task hangs."""
+    steps = _plan_step_texts({"_master_active_tasks": [
+        {"id": "TASK-2", "assignee": "ExperimentModuleAgent",
+         "title": "Собрать метаболиты", "description": ""},
+        {"id": "TASK-3", "assignee": "ExperimentModuleAgent",
+         "title": "Построить графики", "description": ""},
+    ]})
+    got, best, _ = _step_for_task(
+        _plan_task("Предсказание LD50 для метаболитов", ""), steps, "TASK-9")
+    assert got == "TASK-9" and best == 0.0
+
+
+def test_two_steps_that_read_alike_leave_the_link_where_it_was():
+    """A lead over the runner-up, not just a floor: when two steps describe the
+    same work, the text cannot say which one, and inventing a winner puts a
+    confident wrong line on the graph."""
+    steps = _plan_step_texts({"_master_active_tasks": [
+        {"id": "TASK-1", "assignee": "TaskExecutorAgent",
+         "title": "Предсказание LD50 по кластерам метаболитов", "description": ""},
+        {"id": "TASK-2", "assignee": "TaskExecutorAgent",
+         "title": "Предсказание LD50 по кластерам метаболитов", "description": ""},
+    ]})
+    got, _, _ = _step_for_task(
+        _plan_task("Предсказание LD50 по кластерам метаболитов", ""), steps, "TASK-9")
+    assert got == "TASK-9"
+
+
+def test_no_outer_plan_means_no_invented_step():
+    got, _, _ = _step_for_task(_plan_task("что угодно", ""), [], "")
+    assert got == ""
+
+
+#: The status half needs a plan with two executor steps to move, and the
+#: hogweed study's five-step plan is what those assertions were written
+#: against. Kept separate from STEPS so a change to the matcher's fixture
+#: cannot silently rewrite what "a step follows its tasks" is tested on.
+STATUS_STEPS = [
     {"id": "TASK-1", "title": "Сформулировать гипотезу исследования",
      "assignee": "HypothesesAgent", "status": "DONE"},
     {"id": "TASK-2", "title": "Собрать литературные данные о метаболитах и их SMILES",
@@ -48,60 +220,6 @@ STEPS = [
     {"id": "TASK-5", "title": "ADMET-эндпоинты для токсичного кластера и стоимость синтеза",
      "assignee": "TaskExecutorAgent", "status": "TODO"},
 ]
-
-#: Its detailed plan, verbatim, with the step a reader assigns by eye.
-TASKS = [
-    ("EXP-1", "Сбор литературного перечня метаболитов и canonical SMILES", "TASK-2"),
-    ("EXP-2", "Структурная кластеризация метаболитов (ECFP4 + Butina)", "TASK-3"),
-    ("EXP-3", "Предсказание LD50 (мышь, все пути) по кластерам", "TASK-4"),
-    ("EXP-4", "Оценка домена применимости моделей предсказания", "TASK-4"),
-    ("EXP-5", "ADMET-профилирование наиболее токсичного кластера", "TASK-5"),
-    ("EXP-6", "Оценка стоимости синтеза 3 перспективных соединений", "TASK-5"),
-]
-
-
-# ── which step ──────────────────────────────────────────────────────────────
-
-def test_each_task_lands_on_the_step_it_carries_out():
-    """Seven tasks, four steps. Before this, all seven said TASK-3."""
-    steps = _plan_step_texts({"_master_active_tasks": STEPS})
-    got = {task_id: _step_for_task({"title": title}, steps, "TASK-3")
-           for task_id, title, _ in TASKS}
-    want = {task_id: expected for task_id, _, expected in TASKS}
-    assert got == want, got
-
-
-def test_a_task_that_serves_no_step_keeps_the_dispatched_one():
-    """The seventh task of that plan — assembling figures and tables — carries
-    out no step of the outer plan. A guess would be worse than the link it
-    already had."""
-    steps = _plan_step_texts({"_master_active_tasks": STEPS})
-    assert _step_for_task(
-        {"title": "Сборка итоговых визуализаций и сравнительных таблиц"},
-        steps, "TASK-3") == "TASK-3"
-
-
-def test_two_steps_that_read_alike_leave_the_link_where_it_was():
-    """A lead over the runner-up, not just a floor: when two steps describe the
-    same work, the text cannot say which one, and inventing a winner puts a
-    confident wrong line on the graph."""
-    steps = _plan_step_texts({"_master_active_tasks": [
-        {"id": "TASK-1", "title": "Предсказание LD50 по кластерам метаболитов"},
-        {"id": "TASK-2", "title": "Предсказание LD50 по кластерам метаболитов"},
-    ]})
-    assert _step_for_task({"title": "Предсказание LD50 по кластерам метаболитов"},
-                          steps, "TASK-9") == "TASK-9"
-
-
-def test_the_question_counts_when_the_title_is_terse():
-    steps = _plan_step_texts({"_master_active_tasks": STEPS})
-    task = {"title": "Расчёт",
-            "question": "Каковы предсказанные LD50 (мышь, все пути) по кластерам?"}
-    assert _step_for_task(task, steps, "TASK-3") == "TASK-4"
-
-
-def test_no_outer_plan_means_no_invented_step():
-    assert _step_for_task({"title": "что угодно"}, [], "") == ""
 
 
 # ── how far along ───────────────────────────────────────────────────────────
@@ -171,7 +289,7 @@ def test_the_step_of_a_finished_task_stops_saying_not_started(monkeypatch):
     graph.commit = lambda **kw: updates.append(kw) or SimpleNamespace(
         ok=True, errors=[], committed={"nodes": []})
 
-    state = {"_master_active_tasks": [dict(s) for s in STEPS],
+    state = {"_master_active_tasks": [dict(s) for s in STATUS_STEPS],
              # the mirror has already created these two steps
              "_vm_by_task": {"gen": "", "ids": {}}}
     # Pretend the steps were mirrored earlier: key them the way the mirror does.
@@ -180,7 +298,8 @@ def test_the_step_of_a_finished_task_stops_saying_not_started(monkeypatch):
     )
     state[_VM_BY_TASK_KEY] = {
         "gen": _study_generation(graph),
-        "ids": {_task_key(STEPS[3]): "PS4", _task_key(STEPS[4]): "PS5"},
+        "ids": {_task_key(STATUS_STEPS[3]): "PS4",
+                _task_key(STATUS_STEPS[4]): "PS5"},
     }
 
     sync_plan_to_research_graph(state["_master_active_tasks"], graph, state)
@@ -207,7 +326,7 @@ def test_a_blocked_step_is_not_talked_out_of_it(monkeypatch):
     from CoScientist.agents.callbacks.tool_callbacks import (
         _study_generation, _task_key, _VM_BY_TASK_KEY,
     )
-    steps = [dict(s) for s in STEPS]
+    steps = [dict(s) for s in STATUS_STEPS]
     steps[3]["status"] = "FAILED"          # the tracker's word for blocked
     state = {"_master_active_tasks": steps,
              _VM_BY_TASK_KEY: {"gen": _study_generation(graph),

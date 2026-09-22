@@ -377,39 +377,75 @@ def _overlap(left: set[str], right: set[str]) -> float:
     return len(left & right) / min(len(left), len(right))
 
 
+#: At least this many shared words before the text is allowed to decide. One
+#: word is an accident: «Предсказание LD50 (мышь)» shared exactly «метабол»
+#: with «Собрать литературные данные о метаболитах» and nothing with the step
+#: it belonged to, which scored a confident 1.00 on the wrong step.
+_MIN_SHARED = 2
+
+
+def _task_match_text(task: dict[str, Any]) -> str:
+    """The task's own words, from the fields the PLAN uses.
+
+    `_task_attrs` writes `title` from `name` and `question` from
+    `design.experiment_question`; reading the graph's names off a plan task is
+    what made this matcher a no-op. Both readers now start here.
+    """
+    design = task.get("design") or {}
+    return f"{task.get('name') or ''} {design.get('experiment_question') or ''}"
+
+
 def _plan_step_texts(state: MutableMapping[str, Any]) -> list[tuple[str, set[str]]]:
-    """(TASK-n, vocabulary) for every step of the outer plan."""
+    """(TASK-n, vocabulary) for every step an experiment task could carry out.
+
+    Only steps handed to an executor are candidates. A step assigned to the
+    hypothesis generator, the literature agent or the reporter asks for
+    something an ExperimentTask does not do, and its description is the worst
+    possible distractor: the hypothesis step spells out the pipeline the tasks
+    implement, so it shares vocabulary with every one of them.
+    """
     out: list[tuple[str, set[str]]] = []
     for step in (state.get("_master_active_tasks") or []):
         if not isinstance(step, dict):
             continue
         task_id = str(step.get("id") or "").strip()
-        if task_id:
-            out.append((task_id,
-                        _words(f"{step.get('title') or ''} "
-                               f"{step.get('description') or ''}")))
+        if not task_id:
+            continue
+        if str(step.get("assignee") or "") not in _EXECUTOR_ASSIGNEES:
+            continue
+        out.append((task_id,
+                    _words(f"{step.get('title') or ''} "
+                           f"{step.get('description') or ''}")))
     return out
 
 
 def _step_for_task(task: dict[str, Any],
                    steps: list[tuple[str, set[str]]],
-                   fallback: str) -> str:
+                   fallback: str) -> tuple[str, float, float]:
     """Which step of the OUTER plan this experiment task carries out.
+
+    Returns (step id, best score, runner-up score) — the two numbers go into
+    the audit line, because a wrong line on the graph is only fixable if it can
+    be read back to the pair of titles and the margin that produced it.
 
     ``fallback`` — the dispatched step — is used when nothing matches well
     enough: a weak guess is left where it used to go rather than moved
     somewhere invented.
     """
     if not steps:
-        return fallback
-    mine = _words(f"{task.get('title') or ''} {task.get('question') or ''}")
-    scored = sorted(((_overlap(mine, vocab), task_id) for task_id, vocab in steps),
-                    reverse=True)
+        return fallback, 0.0, 0.0
+    mine = _words(_task_match_text(task))
+    scored = []
+    for task_id, vocab in steps:
+        shared = mine & vocab
+        scored.append((_overlap(mine, vocab) if len(shared) >= _MIN_SHARED else 0.0,
+                       task_id))
+    scored.sort(reverse=True)
     best, best_id = scored[0]
     runner = scored[1][0] if len(scored) > 1 else 0.0
     if best >= _MATCH_FLOOR and best - runner >= _MATCH_LEAD:
-        return best_id
-    return fallback
+        return best_id, best, runner
+    return fallback, best, runner
 
 
 def _outer_step(store: Any, state: MutableMapping[str, Any]) -> tuple[str, str]:
@@ -484,9 +520,11 @@ def publish_plan_detail_to_graph(store: Any,
             task_id = str(task.get("id") or "").strip()
             if not task_id:
                 continue
-            own_task_id = _step_for_task(task, step_texts, step_task_id)
+            own_task_id, best, runner = _step_for_task(task, step_texts,
+                                                       step_task_id)
             own_step_id = step_nodes.get(own_task_id, "") or step_id
-            matched.append(f"{task_id}->{own_task_id or 'none'}")
+            matched.append(f"{task_id}->{own_task_id or 'none'}"
+                           f"({best:.2f}/{runner:.2f})")
             attrs = _task_attrs(task, plan, own_task_id)
             status = _task_status(state, task_id)
             existing = known.get(task_id)
