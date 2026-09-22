@@ -208,6 +208,29 @@
       return typeof value === 'string' && stripThinking(value).length > 0;
     }
 
+    // Tools that put a question to the operator: the text written next to such
+    // a call is the context of the decision, so it stays in the chat.
+    const OPERATOR_QUESTION_TOOLS = ['request_approval', 'request_selection', 'request_input', 'adk_request_input'];
+
+    // Text that belongs outside the chat, in the telemetry panel:
+    //  * a non-final `agent_event` written before the model's own tool call
+    //    («Проверю граф…», «Запускаю ResearchAgent…») — an aside to the model,
+    //    not a message to the reader. Server notices (the sandbox links) are
+    //    non-final too but carry no call, so they stay;
+    //  * anything the planner and its critic say: the plan has its own button
+    //    and view, and the planner's approval card still reaches the chat as a
+    //    `hitl_request`.
+    const PLAN_AGENTS = ['PlannerAgent', 'PlanCriticAgent'];
+
+    function isChatNoise(event) {
+      if (!event) return false;
+      if (PLAN_AGENTS.includes(event.author)) return true;
+      if (event.is_final) return false;
+      const calls = event.tool_calls || [];
+      return calls.length > 0
+        && !calls.some(call => OPERATOR_QUESTION_TOOLS.includes(call.name));
+    }
+
     function addAgentMsg(author, text, timestamp = null) {
       // Blank-but-present text produces an empty bubble; such events carry a
       // function call, not an utterance. (Also guards history recorded before
