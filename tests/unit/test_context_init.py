@@ -9,6 +9,8 @@ from collections import Counter
 
 from CoScientist.context_init.agent import (
     FRAME_COMPLETED_STATE_KEY,
+    FRAME_STATE_KEY,
+    ContextInitSessionAgent,
     apply_form_values,
     coerce_frame,
     frame_is_initialized,
@@ -172,3 +174,33 @@ def test_context_init_agent_cannot_write_others_nodes():
         "ContextInitAgent", "Hypothesis", "formulated", {})
     assert schema.validate_edge(
         "ContextInitAgent", "supports", "Evidence", "Hypothesis")
+
+
+def test_post_final_events_seeds_graph_and_emits_no_chat_message(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    store = ResearchGraphStore(directory=str(tmp_path))
+    monkeypatch.setattr("CoScientist.context_init.agent.get_research_graph", lambda _ctx: store)
+
+    frame = _filled_frame()
+    agent = ContextInitSessionAgent(name="ContextInitSessionAgent", output_key="research_frame")
+    ctx = SimpleNamespace(
+        session=SimpleNamespace(state={"research_frame": frame.model_dump()}),
+        invocation_id="inv-42",
+        branch="main",
+    )
+
+    events = list(agent._post_final_events(ctx, ""))
+    assert len(events) == 1
+    event = events[0]
+
+    # Verify state delta is populated correctly
+    assert event.actions.state_delta[FRAME_STATE_KEY] == frame.model_dump()
+    assert event.actions.state_delta[FRAME_COMPLETED_STATE_KEY] is True
+    assert event.actions.state_delta["orchestrator_root_goal"] == frame.original_request
+
+    # Verify graph is seeded
+    g = store.full_graph()
+    assert len(g.nodes) > 0
+
+    # Verify no visible chat text is emitted
+    assert event.content is None
