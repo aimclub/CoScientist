@@ -193,6 +193,7 @@ logs/
 workspace/
 tz_documents/
 tz_microfluidics/
+local_papers/
 conversations*/
 task_tracker_data.json
 *_report.md
