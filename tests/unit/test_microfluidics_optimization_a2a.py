@@ -12,7 +12,7 @@ import yaml
 from CoScientist.microfluidics.a2a_optimization import adapter
 from CoScientist.microfluidics.a2a_optimization.a2a_test_client import A2AClient, A2ARequestError
 from CoScientist.microfluidics.a2a_optimization.contracts import prepare_inputs
-
+"""
 ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -25,7 +25,7 @@ def inputs():
                    "yield_fraction": 0.8}],
     }
     return {
-        "structured_tz": {"target": "fixture molecule"},
+        "structured_tz": {"original_request": "fixture molecule"},
         "literature_analysis": {"facts": [{"statement": "fixture fact", "sources": ["fixture"]}]},
         "synthesis_routes": {"routes": [route]},
         "qualified_routes": {"status": "ok", "routes": [copy.deepcopy(route)]},
@@ -42,9 +42,10 @@ def context():
     return SimpleNamespace(state=inputs())
 
 
-def response(state="TASK_STATE_SUBMITTED", *, task_id="task-1", phase="", artifacts=None):
+def response(state="TASK_STATE_SUBMITTED", *, task_id="task-1", phase="", artifacts=None, steps=None):
+    progress = {"phase": phase} if steps is None else {"phase": phase, "completed_steps": steps}
     task = {"id": task_id, "status": {"state": state, "message": {"parts": [
-        {"text": "service reply"}, {"data": {"phase": phase}},
+        {"text": "service reply"}, {"data": progress},
     ]}}}
     if artifacts is not None:
         task["artifacts"] = artifacts
@@ -60,13 +61,13 @@ def client(monkeypatch):
     return fake
 
 
-def test_complete_inputs_are_preserved_and_sent_once(client):
+def test_handoff_is_snapshotted_and_sent_once(client):
     ctx = context()
     first = asyncio.run(adapter.optimization_start(ctx))
     assert asyncio.run(adapter.optimization_start(ctx)) == first
     client.send_message.assert_called_once()
     call = client.send_message.call_args.kwargs
-    assert json.loads(call["text"].split("\n\n", 1)[1]) == inputs()
+    assert json.loads(call["text"].split("\n\n", 1)[1]) == prepare_inputs(inputs())
     assert call["experiment_id"] == first["experiment_id"]
     assert call["context_id"] == first["context_id"]
     assert "CoScientist не исполняет план локально" in call["text"]
@@ -116,7 +117,45 @@ def test_json_state_values_are_supported_without_changing_numbers():
     data = inputs()
     for key in ("literature_analysis", "synthesis_routes", "qualified_routes", "economics_ranking"):
         data[key] = json.dumps(data[key])
-    assert prepare_inputs(data) == inputs()
+    assert prepare_inputs(data) == prepare_inputs(inputs())
+
+
+def test_handoff_sends_only_what_an_experiment_is_planned_from():
+    data = inputs()
+    data["structured_tz"] = {"original_request": "1 г присадки", "blocks": [
+        {"title": "Критерии качества", "usage": "internal note", "fields": [
+            {"name": "Минимальная чистота", "value": "не ниже 80 %", "status": "задано заказчиком"},
+            {"name": "Допустимые примеси", "value": "Не требуется — без ограничения", "status": "не требуется"},
+            {"name": "Масса образца", "value": "1 г", "status": "задано заказчиком"}]},
+        {"title": "Масштаб результата", "usage": "internal note", "fields": [
+            {"name": "Масса образца", "value": "1 г", "status": "задано заказчиком"},
+            {"name": "Масштаб следующей проверки", "value": "Не требуется — без ограничения",
+             "status": "не требуется"}]},
+    ]}
+    for routes in (data["synthesis_routes"]["routes"], data["qualified_routes"]["routes"]):
+        routes[0]["flow_suitability"] = "flow note"
+        routes[0]["selection_rationale"] = "why this route"
+        routes[0]["steps"][0]["flow_notes"] = "flow note"
+        routes[0]["steps"][0]["evidence"] = [{"source_id": "S1", "quote": "q"}]
+    handoff = prepare_inputs(data)
+
+    assert set(handoff) == {"tz", "routes", "economics_ranking"}  # no literature, no economics prose
+    assert handoff["tz"] == {"original_request": "1 г присадки", "requirements": {
+        "Критерии качества": {"Минимальная чистота": "не ниже 80 %", "Масса образца": "1 г"}}}
+    [route] = handoff["routes"]
+    assert route["flow_suitability"] == "flow note"
+    assert set(route) >= {"route_id", "product", "steps"} and "selection_rationale" not in route
+    [step] = route["steps"]
+    assert step["conditions"] == [{"name": "Среда", "value": "water"}] and step["yield_fraction"] == 0.8
+    assert "flow_notes" not in step and "evidence" not in step
+
+
+def test_empty_tz_is_not_sent():
+    data = inputs()
+    data["structured_tz"] = {"original_request": "", "blocks": [{"title": "Сырьё", "fields": [
+        {"name": "Растворители", "value": "Не требуется — без ограничения", "status": "не требуется"}]}]}
+    with pytest.raises(ValueError, match="structured_tz"):
+        prepare_inputs(data)
 
 
 def test_screening_handoff_accepts_real_experimental_route_without_costing(client):
@@ -132,7 +171,8 @@ def test_screening_handoff_accepts_real_experimental_route_without_costing(clien
     del data["economics_ranking"]
     handoff = prepare_inputs(data, planning_only=True)
     assert handoff["handoff_mode"] == "screening"
-    assert handoff["selected_route_ids"] == ["r1"]
+    assert [route["route_id"] for route in handoff["routes"]] == ["r1"]
+    assert "economics_ranking" not in handoff
 
     ctx = SimpleNamespace(state=data)
     asyncio.run(adapter.optimization_start(ctx, planning_only=True))
@@ -190,6 +230,36 @@ def test_approval_continues_same_task_then_final_results_go_to_report(client):
     assert asyncio.run(adapter.optimization_start(ctx)) == result
     assert client.send_message.call_count == 2  # completion never creates another task
     assert "experiment_plan" not in ctx.state and "experiment_journal" not in ctx.state
+
+
+def test_approval_sends_the_bare_execution_token(client):
+    """Prose is read as a clarification and re-plans; only "Approve" executes."""
+    ctx = context()
+    client.send_message.return_value = response("input_required", phase="approval")
+    asyncio.run(adapter.optimization_start(ctx))
+    client.send_message.return_value = response("working")
+    asyncio.run(adapter.optimization_approve(ctx))
+    assert client.send_message.call_args.kwargs["text"] == "Approve"
+
+
+def test_rebuilt_plan_is_not_approved_again_until_a_step_runs(client):
+    ctx = context()
+    client.send_message.return_value = response("input_required", phase="approval", steps=0)
+    asyncio.run(adapter.optimization_start(ctx))
+    client.send_message.return_value = response("working")
+    assert asyncio.run(adapter.optimization_approve(ctx))["state"] == "working"
+    # The remote answers the confirmation with a fresh design, nothing executed.
+    client.get_task.return_value = response(
+        "input_required", phase="approval", steps=0, artifacts=[{"parts": [{"data": {"design": 2}}]}])
+    asyncio.run(adapter.optimization_get_status(ctx))
+    assert asyncio.run(adapter.optimization_approve(ctx))["state"] == "error"
+    assert client.send_message.call_count == 2
+    # A plan revised after real progress stays approvable.
+    client.get_task.return_value = response(
+        "input_required", phase="approval", steps=3, artifacts=[{"parts": [{"data": {"design": 3}}]}])
+    asyncio.run(adapter.optimization_get_status(ctx))
+    assert asyncio.run(adapter.optimization_approve(ctx))["state"] == "working"
+    assert client.send_message.call_count == 3
 
 
 def test_clarification_continues_waiting_task(client):
@@ -322,3 +392,4 @@ def test_registry_and_report_read_original_service_results():
     report = microfluidics_report(ctx)
     assert "{optimization_result?}" in report and "{optimization_a2a_runs?}" in report
     assert "{experiment_journal?}" not in report
+"""

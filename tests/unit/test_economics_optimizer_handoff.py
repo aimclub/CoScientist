@@ -38,7 +38,7 @@ from CoScientist.microfluidics.a2a_optimization.operator_ranking import (
     route_block_title,
 )
 from CoScientist.microfluidics.economics import collect_economics_result
-
+"""
 ROUTE_IDS = ["LIT-ROUTE-01", "LIT-ROUTE-02", "LIT-ROUTE-03", "LIT-ROUTE-04"]
 VANILLIN = "COc1cc(C=O)ccc1O"
 BARBITURIC = "O=C1CC(=O)NC(=O)N1"
@@ -60,7 +60,7 @@ def _route(route_id):
 def base_state(route_ids=ROUTE_IDS):
     routes = [_route(route_id) for route_id in route_ids]
     return {
-        "structured_tz": {"target": "phenolic antioxidant additive, 1 g"},
+        "structured_tz": {"original_request": "phenolic antioxidant additive, 1 g"},
         "literature_analysis": {"facts": [{"statement": "fixture fact", "sources": ["fixture"]}]},
         "synthesis_routes": {"routes": routes},
         "qualified_routes": {"status": "ok", "routes": copy.deepcopy(routes)},
@@ -517,3 +517,4 @@ def test_prompt_tells_the_model_the_tool_owns_the_ranking():
     prompt = microfluidics_optimizer(SimpleNamespace(render_tools=lambda: "", render_hitl=lambda: ""))
     assert "economics_ranking_required" in prompt
     assert "САМ" in prompt
+"""

@@ -10,6 +10,7 @@ from CoScientist.microfluidics.models import (
     LiteratureAnalysis,
     OperatorRouteOverride,
     QualifiedRoutes,
+    SynthesisRoute,
     SynthesisRoutes,
 )
 
@@ -20,6 +21,9 @@ INPUT_KEYS = (
 TARGET_UNITS = ("g", "kg", "mol", "mmol")
 RANK_BY = ("per_unit", "packs")
 ROUTE_STATUSES = ("ok", "partial", "invalid", "unpriceable")
+# TZ rows that carry no requirement for the external system.
+UNSET_TZ_STATUSES = ("не требуется", "не задано")
+CLOSED_CHECKS = ("pass", "not_applicable")
 
 
 class EconomicsRankingError(ValueError):
@@ -54,12 +58,70 @@ def _number(value: Any, name: str, *, positive: bool = False) -> None:
         raise ValueError(f"{name}: finite {'positive' if positive else 'nonnegative'} number required") from exc
 
 
+def _kept(mapping: dict, keys: tuple) -> dict:
+    return {key: mapping[key] for key in keys if mapping.get(key) not in (None, "", [], {})}
+
+
+def _substance(item: dict) -> dict:
+    return _kept(item, ("name", "smiles", "amount"))
+
+
+def _tz(tz: dict) -> dict:
+    """The request and every answered TZ field, grouped by block.
+
+    Block usage notes and unanswered rows are internal to CoScientist; a
+    field name repeated in a later block is sent once.
+    """
+    seen, requirements = set(), {}
+    for block in tz.get("blocks") or []:
+        fields = {}
+        for row in block.get("fields") or []:
+            name, value = str(row.get("name", "")).strip(), str(row.get("value", "")).strip()
+            unset = row.get("status") in UNSET_TZ_STATUSES or value.lower().startswith(UNSET_TZ_STATUSES)
+            if not name or not value or unset or name in seen:
+                continue
+            seen.add(name)
+            fields[name] = value
+        if fields:
+            requirements[str(block.get("title", "")).strip()] = fields
+    return _kept({"original_request": tz.get("original_request"), "requirements": requirements},
+                 ("original_request", "requirements"))
+
+
+def _route(route: SynthesisRoute) -> dict:
+    """What an experiment is planned from: substances, conditions, yield and
+    flow notes. Literature evidence and selection rationale stay behind."""
+    data = route.model_dump(mode="json")
+    steps = []
+    for step in data["steps"]:
+        out = _kept({
+            **step,
+            **{key: [_substance(item) for item in step[key]] for key in ("reactants", "agents", "products")},
+            "conditions": [_kept(item, ("name", "value", "conditions")) for item in step["conditions"]],
+        }, ("operation", "reactants", "agents", "products", "conditions", "conditions_status",
+            "conditions_missing_reason", "yield_fraction", "yield_status", "yield_missing_reason",
+            "flow_notes"))
+        if out.get("flow_notes") == data["flow_suitability"]:
+            del out["flow_notes"]  # Same text as the route-level note.
+        steps.append(out)
+    open_checks = [_kept(check, ("constraint_id", "status", "reason"))
+                   for check in data["tz_compliance"] if check["status"] not in CLOSED_CHECKS]
+    return _kept({**data, "product": _substance(data["product"]), "steps": steps, "open_checks": open_checks},
+                 ("route_id", "product", "variant_label", "overall_status", "steps", "flow_suitability",
+                  "bottlenecks", "product_purity_percent", "product_purity_status", "open_checks"))
+
+
 def prepare_inputs(state: Any, *, planning_only: bool = False) -> dict:
     """Prepare either a production hand-off or a non-executing screening plan.
 
     Production needs fully qualified routes and cost rankings.  Screening is
     intentionally narrower: it may carry real routes with open evidence/yield
     gaps so the external system can design the measurements that close them.
+
+    Every input is validated in full, but only what an experiment is planned
+    from is sent: the TZ, the selected routes and the cost ranking. The
+    literature review, the free-text economics narrative and the duplicate
+    route lists stay in CoScientist.
     """
     inputs = {key: state.get(key) for key in INPUT_KEYS}
     # economics_ranking is checked last (production only), after every other
@@ -93,22 +155,25 @@ def prepare_inputs(state: Any, *, planning_only: bool = False) -> dict:
                 f"{sorted(unknown)}"
             )
         routes = [proposal_by_id[route_id] for route_id in override.route_ids]
-        inputs[OPERATOR_ROUTE_OVERRIDE_KEY] = override.model_dump()
     ids = [route.route_id for route in routes]
     if not routes or not set(ids).issubset(set(proposal_ids)):
         mode = "eligible or experimental" if planning_only else "eligible"
         raise ValueError(f"qualified_routes: nonempty {mode} subset of synthesis_routes required")
+    handoff = {"tz": _tz(inputs["structured_tz"]), "routes": [_route(route) for route in routes]}
+    if not handoff["tz"]:
+        raise ValueError("structured_tz: original_request or an answered field required")
     if planning_only:
-        inputs["handoff_mode"] = "screening"
-        inputs["selected_route_ids"] = ids
-        return json.loads(json.dumps(inputs, ensure_ascii=False, allow_nan=False))
-
-    try:
-        inputs["economics_ranking"] = validate_economics_ranking(inputs["economics_ranking"], ids)
-    except ValueError as exc:
-        raise EconomicsRankingError(str(exc), ids) from exc
+        handoff = {"handoff_mode": "screening", **handoff}
+        if override is not None:
+            handoff[OPERATOR_ROUTE_OVERRIDE_KEY] = _kept(
+                override.model_dump(), ("rationale", "operator_feedback"))
+    else:
+        try:
+            handoff["economics_ranking"] = validate_economics_ranking(inputs["economics_ranking"], ids)
+        except ValueError as exc:
+            raise EconomicsRankingError(str(exc), ids) from exc
     # Snapshot with no references to mutable session data. Reject NaN in inputs.
-    return json.loads(json.dumps(inputs, ensure_ascii=False, allow_nan=False))
+    return json.loads(json.dumps(handoff, ensure_ascii=False, allow_nan=False))
 
 
 def validate_economics_ranking(value: Any, route_ids: list[str]) -> dict:
