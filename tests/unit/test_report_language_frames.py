@@ -85,7 +85,7 @@ def test_an_unreadable_state_does_not_raise():
 # ── the work order ──────────────────────────────────────────────────────────
 def test_a_russian_work_order_has_no_english_frame():
     text = render_work_order(_order(), "ru")
-    assert "Наряд на работу" in text
+    assert "План работы агента" in text
     assert "## Цель" in text and "## Шаги" in text
     assert "## Условия и ограничения" in text
     for english in ("Work Order:", "Goal:", "Done when:", "Assumptions:", "Steps:",
@@ -105,7 +105,7 @@ def test_english_is_still_available_for_a_session_that_asked_for_it():
     text = render_work_order(_order(), "en")
     assert "# Work Order — HypothesesAgent" in text
     assert "## Goal" in text and "## Steps" in text
-    assert "Наряд" not in text
+    assert "План работы" not in text
 
 
 def test_the_order_is_markdown_now():

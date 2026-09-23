@@ -6,7 +6,7 @@
     // among these, so it lives on the gear in the footer.
     const NAV_GROUPS = [
       { key: 'nav.group.work', items: ['OrchestratorAgent', 'PlannerAgent', 'KnowledgeGraph'] },
-      { key: 'nav.group.observe', items: ['ToolsViewer', 'SessionTrace', 'FedotTrace', 'FedotDemo'] },
+      { key: 'nav.group.observe', items: ['ToolsViewer', 'SessionTrace', 'PaperStatistics', 'FedotTrace', 'FedotDemo'] },
       { key: 'nav.group.tools', items: ['MCPBuilder', 'CoderSandbox'] },
     ];
 
