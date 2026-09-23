@@ -155,6 +155,34 @@ class S3Settings(BaseModel):
 
 
 # =========================
+# ARTIFACTS (the session's own copy of what the run produced)
+# =========================
+class ArtifactsSettings(BaseModel):
+    """Mirroring tool output into the session directory.
+
+    A tool hands back a presigned link to its own storage, and one measured on a
+    live run was valid for six minutes. Storing that string is how a figure
+    becomes unreachable. Mirroring copies the bytes here while the link works.
+
+    The caps exist because this writes to disk on every tool call. What exceeds
+    one is recorded as a skipped artifact with a reason — never dropped quietly.
+    """
+
+    #: Master switch. Off means the run behaves exactly as it did before.
+    enabled: bool = True
+    #: Per file. Bigger than this is recorded as ``skipped/oversize``.
+    max_file_mb: int = 100
+    #: Per session, across every mirrored file.
+    max_session_mb: int = 2048
+    max_files_per_session: int = 500
+    #: One fetch of one artifact. The link may already be dead; do not hang.
+    download_timeout: int = 60
+    #: Also push a copy to our S3, giving the artifact a second durable address
+    #: that works from another host. Best effort — the local copy is the home.
+    mirror_to_s3: bool = True
+
+
+# =========================
 # OPIK
 # =========================
 class OpikSettings(BaseModel):
@@ -548,6 +576,7 @@ class Settings(BaseSettings):
     hosts_ports: HostsPortsSettings = HostsPortsSettings()
     collections: CollectionsSettings = CollectionsSettings()
     s3: S3Settings = S3Settings()
+    artifacts: ArtifactsSettings = ArtifactsSettings()
     opik: OpikSettings = OpikSettings()
     hitl: HITLSettings = HITLSettings()
     nir: NIRSettings = NIRSettings()
@@ -568,16 +597,30 @@ class Settings(BaseSettings):
     )
 
     @property
+    def nir_buildable(self) -> bool:
+        """There is a normcontrol server to reach, so the agent can be built.
+
+        system.yaml attaches NirReportAgent on ``enabled: ${nir_buildable}``,
+        and attachment is decided ONCE, when the agent tree is assembled at
+        import. ``nir.enabled`` deliberately does not appear here: it is an
+        operator switch the web UI flips per session, and a gate read at build
+        time could never see that. Without the server there is nothing to gate —
+        the toolset is dropped as unconfigured, and an agent advertising a
+        capability it does not have is worse than an absent one.
+
+        Whether the operator is actually *asked* remains a runtime decision, in
+        ``reporting/nir/callback.py``, which reads ``nir_ready`` on every call.
+        """
+        return bool(self.mcp.normcontrol_url)
+
+    @property
     def nir_ready(self) -> bool:
         """The NIR stage is on AND there is a normcontrol server to reach.
 
-        system.yaml attaches NirReportAgent on ``enabled: ${nir_ready}``. The
-        flag alone is not enough: with NIR__ENABLED set and no
-        MCP__NORMCONTROL_URL, the agent would appear in the aggregator's roster
-        while its only toolset had been dropped as unconfigured — a capability
-        advertised and not present. Read through a property rather than fixed at
-        construction so a setting changed at runtime (the web UI writes some)
-        still decides correctly.
+        The runtime gate: what decides whether the operator sees the question
+        at all. Read through a property rather than fixed at construction so a
+        setting changed at runtime (the web UI writes some) still decides
+        correctly.
         """
         return bool(self.nir.enabled and self.mcp.normcontrol_url)
 

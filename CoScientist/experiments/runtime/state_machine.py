@@ -1111,7 +1111,8 @@ def record_result(
             text=route_response_text(state, result),
         )
 
-    artifacts, artifact_warnings = normalise_artifacts(raw_artifacts, runtime=runtime, task_runtime=task_runtime, attempt=attempt)
+    artifacts, artifact_warnings = normalise_artifacts(raw_artifacts, runtime=runtime, task_runtime=task_runtime,
+                                                        attempt=attempt, state=state)
     artifacts_ok, missing_artifacts = required_artifacts_present(task, artifacts, route=attempt_route)
     criteria_ok, failed_criteria = criteria_valid(task, checks, route=attempt_route)
     durable_ok = has_durable_family_evidence(

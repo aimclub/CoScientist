@@ -658,3 +658,68 @@
       applySideNavState();
     }
 
+    // ── The right rail: plan, pending question, spend ──────────────────────
+    // Hidden or resized per browser, the same way the left one is hidden and
+    // the graph page's detail panel is resized.
+    const RAIL_DEFAULT = 320, RAIL_MIN = 260;
+
+    function setSideRailWidth(px, save) {
+      const max = Math.max(RAIL_MIN, Math.round(window.innerWidth * 0.6));
+      const width = Math.min(max, Math.max(RAIL_MIN, Math.round(px)));
+      document.documentElement.style.setProperty('--rail-w', width + 'px');
+      if (save) {
+        try { localStorage.setItem(SIDE_RAIL_WIDTH_KEY, String(width)); } catch (_) { }
+      }
+      return width;
+    }
+
+    function applySideRailState() {
+      const collapsed = localStorage.getItem(SIDE_RAIL_KEY) === 'off';
+      document.body.classList.toggle('rail-collapsed', collapsed);
+      const icon = document.getElementById('side-rail-toggle-icon');
+      const button = document.getElementById('side-rail-toggle');
+      if (icon) icon.textContent = collapsed ? 'right_panel_open' : 'right_panel_close';
+      if (button) button.title = t(collapsed ? 'rail.show' : 'rail.hide');
+    }
+
+    function toggleSideRail() {
+      const collapsed = document.body.classList.contains('rail-collapsed');
+      localStorage.setItem(SIDE_RAIL_KEY, collapsed ? 'on' : 'off');
+      applySideRailState();
+    }
+
+    function initSideRail() {
+      let saved = null;
+      try { saved = parseInt(localStorage.getItem(SIDE_RAIL_WIDTH_KEY), 10); } catch (_) { }
+      if (saved) setSideRailWidth(saved, false);
+      applySideRailState();
+
+      const grip = document.getElementById('rail-grip');
+      if (!grip) return;
+      // The rail is the LAST column, so its width is the distance from the
+      // pointer to the right edge of the window.
+      const widthFrom = event => window.innerWidth - event.clientX;
+      grip.addEventListener('pointerdown', event => {
+        event.preventDefault();
+        grip.setPointerCapture(event.pointerId);
+        grip.classList.add('on');
+        document.body.classList.add('resizing');
+        const move = ev => setSideRailWidth(widthFrom(ev), false);
+        const up = ev => {
+          grip.removeEventListener('pointermove', move);
+          grip.removeEventListener('pointerup', up);
+          grip.removeEventListener('pointercancel', up);
+          grip.classList.remove('on');
+          document.body.classList.remove('resizing');
+          setSideRailWidth(widthFrom(ev), true);
+        };
+        grip.addEventListener('pointermove', move);
+        grip.addEventListener('pointerup', up);
+        grip.addEventListener('pointercancel', up);
+      });
+      grip.addEventListener('dblclick', () => setSideRailWidth(RAIL_DEFAULT, true));
+      window.addEventListener('resize', () => setSideRailWidth(
+        parseInt(getComputedStyle(document.documentElement).getPropertyValue('--rail-w'), 10)
+        || RAIL_DEFAULT, false));
+    }
+

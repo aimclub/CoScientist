@@ -338,7 +338,7 @@ Links: {links_context?}
 3. Synthesize a comprehensive, self-contained Markdown report:
    - **Executive Summary / Objective**: The core scientific question and summary of outcomes.
    - **Computational Experiments & Methods**: Detailed breakdown of each executed task (EXP-1, EXP-2, etc.), tools used, and key findings.
-   - **Results, Tables & Figures**: Embed ALL collected figures (`![Figure](figures/<name>.png)`) and tables verbatim as returned by `format_results`.
+   - **Results, Tables & Figures**: Embed ALL figures and tables VERBATIM as returned by `format_results` — copy its `formatted_markdown` blocks exactly, links included. NEVER write a link to a figure, table or file yourself: a path you assemble from a filename resolves to nothing and the reader sees a broken image. If `formatted_markdown` is empty, state plainly that the run produced no embeddable artifacts instead of inventing paths.
    - **Discussion & Selectivity Analysis**: Scientific interpretation of the results, binding affinities, selectivity ratios, and trade-offs.
    - **Limitations & Next Steps**: Caveats, failed or partial tasks, and concrete recommendations for follow-up studies.
 

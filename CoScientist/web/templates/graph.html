@@ -156,6 +156,8 @@
     .report { background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
       padding: 10px 12px; font-size: 14px; line-height: 1.55; max-height: 52vh; overflow-y: auto;
       overflow-wrap: anywhere; }
+    /* The write-up card: the panel scrolls, so the document does not need to. */
+    .report.full { max-height: none; overflow-y: visible; }
     .report > :first-child { margin-top: 0; } .report > :last-child { margin-bottom: 0; }
     .report h1, .report h2, .report h3, .report h4 { font-size: 15px; margin: 12px 0 4px; color: var(--ink); }
     .report h1 { font-size: 16.5px; }
@@ -1789,7 +1791,13 @@
       if (!isResearch() && !RESEARCH_KINDS.has(n.kind)) return showDetailClassic(n);
       const st = rStatus(n.status);
       let body = "";
-      body += reportBlock(t('graph.detail.says'), n.output || n.label);
+      // A write-up card carries the whole document, not a line about itself, so
+      // the block is titled for what it is. `reportBlock` already renders
+      // markdown through marked + DOMPurify and scrolls.
+      const isWriteUp = n.kind === "report";
+      body += reportBlock(
+        isWriteUp ? t('graph.type.report') : t('graph.detail.says'),
+        n.output || n.label, isWriteUp);
       if (n.why)
         body += `<div class="k">${t('graph.why.title')}</div><pre>${esc(n.why)}</pre>`;
       else if (n.why_missing)
@@ -2113,7 +2121,7 @@
     }
     // An agent's final words, rendered as the document they are. Plain text
     // when the markdown libraries did not load.
-    function reportBlock(title, text){
+    function reportBlock(title, text, full){
       if (!text) return "";
       const raw = String(text);
       let html;
@@ -2123,8 +2131,12 @@
         catch (e) { html = null; }
       }
       const size = raw.length > 900 ? ` <span class="chars">${esc(t('graph.chars', { count: raw.length.toLocaleString() }))}</span>` : "";
+      // A quoted answer sits in a 52vh box beside the rest of the card. A
+      // write-up IS the card, and boxing a document inside a panel that already
+      // scrolls gives the reader two scrollbars and half a screen to read in.
+      const cls = full ? "report full" : "report";
       return `<div class="k">${title}${size}</div>`
-        + (html ? `<div class="report">${html}</div>` : `<pre>${esc(raw)}</pre>`)
+        + (html ? `<div class="${cls}">${html}</div>` : `<pre>${esc(raw)}</pre>`)
         + truncationNote(raw, false);
     }
     // What the agent left behind: files its tools wrote and links its report names.
@@ -2132,8 +2144,13 @@
       if (!Array.isArray(list) || !list.length) return "";
       return `<div class="k">${t('graph.detail.artifacts')} <span class="chars">${list.length}</span></div>` + list.map(a => {
         const file = a.kind === "file";
-        const name = file ? `<span class="uri">${esc(a.uri)}</span>`
-          : `<a class="uri" href="${esc(a.uri)}" target="_blank" rel="noopener noreferrer">${esc(a.uri)}</a>`;
+        // `uri` is the durable reference and stays what the reader sees; `href`
+        // is where the anchor goes. A file used to have no href at all and was
+        // drawn as plain text — an s3:// key the browser could not follow even
+        // though /api/artifact/ was already there to serve it.
+        const name = a.href
+          ? `<a class="uri" href="${esc(a.href)}" target="_blank" rel="noopener noreferrer">${esc(a.uri)}</a>`
+          : `<span class="uri">${esc(a.uri)}</span>`;
         return `<div class="art"><span class="ic">${file ? "📦" : "🔗"}</span>${name}`
           + (a.tool ? `<span class="by">${esc(a.tool)}</span>` : "") + `</div>`;
       }).join("");

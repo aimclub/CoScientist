@@ -44,6 +44,15 @@
               // takes the medical route out of running experiments, hence the
               // field's own scope hint.
               { id: 'medicalAgent', path: 'medicalAgent.enabled', type: 'toggle', scope: 'session', scopeHintKey: 'settings.f.medicalAgent.scopeHint', env: 'MEDICAL__ENABLED' },
+              // Purely a runtime gate: NirReportAgent is attached whenever a
+              // normcontrol server is configured, and this decides whether the
+              // operator is offered the GOST report at the end of a run. Greyed
+              // out where there is no server to submit the document to.
+              {
+                id: 'nirReport', path: 'nirReport.enabled', type: 'toggle', scope: 'instant',
+                env: 'NIR__ENABLED',
+                inactive: d => !getSettingPath(d, 'nirReport.available'),
+              },
             ],
           },
           {
@@ -553,7 +562,7 @@
                 <span data-default-marker class="hidden w-1.5 h-1.5 rounded-full bg-primary/70"></span>
                 ${scope}${envInfo}
               </div>
-              ${desc ? `<p class="text-[11.5px] text-on-surface-variant/75 mt-1 leading-relaxed">${desc}</p>` : ''}
+              ${desc ? `<p class="text-[12px] text-on-surface-variant/75 mt-1 leading-relaxed">${desc}</p>` : ''}
               ${inactiveNote}
               <p data-error class="hidden text-[11px] text-error mt-1.5 flex items-center gap-1"></p>
             </div>
@@ -913,7 +922,7 @@
         if (pending) {
           confirmBlock = `
             <div class="mt-3 p-3 rounded-md bg-error-container/20 border border-error/20 space-y-2">
-              <p class="text-[11.5px] text-on-surface">${escHtml(tf(`settings.danger.${target}.confirm`, { name: session }))}</p>
+              <p class="text-[12px] text-on-surface">${escHtml(tf(`settings.danger.${target}.confirm`, { name: session }))}</p>
               <div class="flex flex-wrap items-center gap-2">
                 <button type="button" id="settings-danger-confirm" data-action="danger-confirm" ${settingsDanger.busy ? 'disabled' : ''}
                   class="px-3 py-1.5 rounded-md text-[11px] font-bold bg-error text-on-error hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed">
@@ -928,7 +937,7 @@
             <div class="flex items-start justify-between gap-6">
               <div class="min-w-0">
                 <p class="text-[13px] font-semibold text-on-surface">${escHtml(t(`settings.danger.${target}.label`))}</p>
-                <p class="text-[11.5px] text-on-surface-variant/75 mt-1 leading-relaxed">${escHtml(t(`settings.danger.${target}.desc`))}</p>
+                <p class="text-[12px] text-on-surface-variant/75 mt-1 leading-relaxed">${escHtml(t(`settings.danger.${target}.desc`))}</p>
                 ${noSession ? `<p class="text-[11px] text-tertiary/90 mt-1.5">${escHtml(t('settings.danger.noSession'))}</p>` : ''}
               </div>
               <button type="button" data-action="danger-ask" data-target="${target}" ${noSession || pending || settingsDanger.busy ? 'disabled' : ''} class="${btnCls}">

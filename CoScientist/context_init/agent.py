@@ -246,7 +246,13 @@ class ContextInitSessionAgent(SessionAgent):
             action_type=HITLAction.APPROVE,
             message=_HITL_MESSAGE,
             form=frame_to_form(frame),
-            context={"_session": {"user_id": user_id, "session_id": session_id}},
+            # `output` is what the web handler publishes as the request's
+            # document; without it the frame would be the one review with no
+            # readable body to open.
+            context={
+                "_session": {"user_id": user_id, "session_id": session_id},
+                "output": render_frame_summary(frame),
+            },
             invoked_via="internal_loop",
         )
         response = await self.hitl_handler.handle_request(request)

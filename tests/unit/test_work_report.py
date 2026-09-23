@@ -284,8 +284,11 @@ def test_the_card_carries_the_record_next_to_the_claim(hitl_on):
     assert context["journal"]["side_effects"] == ["package_install"]
     assert {w["code"] for w in context["warnings"]} >= {
         "findings_without_evidence", "deviations", "open_steps"}
-    # The console and any other client read the same report as plain text.
-    assert "Work Report" in context["output"]
+    # The console and any other client read the same report — as Markdown now,
+    # and in the session's language, because this text is what the chat writes
+    # into the document a person opens.
+    assert context["output"].startswith("# Отчёт о работе — DatasetCollectorAgent")
+    assert "\n## Цель" in context["output"]
 
 
 def test_with_work_orders_off_the_report_is_not_put_to_anyone(monkeypatch):

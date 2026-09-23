@@ -34,6 +34,7 @@ import io
 import json
 import logging
 import os
+import re
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -62,6 +63,116 @@ _SANDBOX_TRAJECTORY = "sandbox_trajectory.json"
 _MCP_BUILDS_JOBS = "mcp_builds/jobs.json"
 _MCP_BUILDS_LOGS = "mcp_builds/logs/"
 _MCP_BUILDS_BUNDLES = "mcp_builds/bundles/"
+# The files the run produced, and the index describing them. Without these a
+# bundle opened on another machine shows a graph full of artifacts it cannot
+# display — which is most of what a reader wanted to see.
+_ARTIFACT_MANIFEST = "artifacts/manifest.json"
+_ARTIFACT_INDEX = "artifacts/index.json"
+_ARTIFACT_FILES = "artifacts/files/"
+
+#: A bundle is a file the operator can edit, so an entry name from inside one is
+#: checked before it becomes a path — the same argument the report-language
+#: block makes about its own member.
+_ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _pack_artifacts(zf: "zipfile.ZipFile", user_id: str, session_id: str) -> None:
+    """Put the run's own files in the bundle, with the manifest describing them.
+
+    Best-effort, like the sandbox trajectory: a session that cannot be read
+    still exports everything else. What does not fit the budget is written into
+    the exported manifest as ``skipped/bundle_quota``, so the importer can say
+    *why* a figure is missing instead of rendering a hole.
+    """
+    try:
+        from CoScientist.reporting import artifact_index, session_files
+
+        key = (user_id, session_id)
+        manifest = session_files.load_manifest(session_id, user_id)
+        if not manifest:
+            return
+
+        budget = int(os.getenv("BUNDLE__MAX_ARTIFACT_MB", "512")) * 1024 * 1024
+        spent, packed = 0, 0
+        exported = dict(manifest)
+        for artifact_id, record in manifest.items():
+            if record.get("state") != session_files.STATE_STORED:
+                continue
+            path = session_files.resolve_path(key, artifact_id)
+            if path is None:
+                continue
+            size = path.stat().st_size
+            if spent + size > budget:
+                exported[artifact_id] = {
+                    **record,
+                    "state": session_files.STATE_SKIPPED,
+                    "reason": session_files.REASON_BUNDLE_QUOTA,
+                }
+                continue
+            zf.write(path, f"{_ARTIFACT_FILES}{artifact_id}")
+            spent += size
+            packed += 1
+
+        zf.writestr(_ARTIFACT_MANIFEST, _json_bytes({"artifacts": exported}))
+        index = artifact_index.load(session_id, user_id)
+        if index:
+            zf.writestr(_ARTIFACT_INDEX, _json_bytes({"artifacts": index}))
+        logger.info(
+            "bundle: packed %d/%d artifacts (%.1f MB)",
+            packed, len(manifest), spent / (1024 * 1024),
+        )
+    except Exception as exc:  # noqa: BLE001 — never sink an export over this
+        logger.warning("Could not include session artifacts in export: %s", exc)
+
+
+def _restore_artifacts(zf: "zipfile.ZipFile", user_id: str, session_id: str) -> int:
+    """Unpack a bundle's files under the NEW session, and return how many.
+
+    Nothing is rewritten on the way in. Graph attrs and report markdown hold
+    ``cos-artifact:<id>`` references that carry no session, and the link is
+    built from whoever is reading — so the same bytes answer under the new id.
+    """
+    try:
+        from CoScientist.reporting import artifact_index, session_files
+    except Exception:  # noqa: BLE001
+        return 0
+
+    key = (user_id, session_id)
+    restored = 0
+    try:
+        raw = json.loads(zf.read(_ARTIFACT_MANIFEST))
+    except (KeyError, json.JSONDecodeError):
+        return 0  # a bundle from before artifacts travelled
+
+    try:
+        target = session_files.files_dir(key)
+        target.mkdir(parents=True, exist_ok=True)
+        for entry in zf.namelist():
+            if not entry.startswith(_ARTIFACT_FILES) or entry.endswith("/"):
+                continue
+            name = Path(entry).name
+            if not _ARTIFACT_NAME_RE.match(name):
+                logger.warning("bundle: refusing artifact name %r", name)
+                continue
+            (target / name).write_bytes(zf.read(entry))
+            restored += 1
+
+        records = raw.get("artifacts") if isinstance(raw, dict) else raw
+        if isinstance(records, dict):
+            session_files.record_entries(
+                list(records.values()), user_id=user_id, session_id=session_id
+            )
+        try:
+            index = json.loads(zf.read(_ARTIFACT_INDEX))
+            entries = index.get("artifacts") if isinstance(index, dict) else index
+            if isinstance(entries, list):
+                artifact_index.record(entries, user_id=user_id, session_id=session_id)
+        except (KeyError, json.JSONDecodeError):
+            pass
+        logger.info("bundle: restored %d artifact(s) for %s", restored, session_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not restore session artifacts: %s", exc)
+    return restored
 
 
 def _json_bytes(obj: Any) -> bytes:
@@ -243,6 +354,7 @@ async def export_session(
                 zf.writestr(_SANDBOX_TRAJECTORY, _json_bytes(sandbox_trajectory))
             except Exception as exc:  # noqa: BLE001 - a huge/odd trace must not sink the export
                 logger.warning("Could not include sandbox trajectory in export: %s", exc)
+        _pack_artifacts(zf, user_id, session_id)
         if mcp_jobs is not None:
             zf.writestr(_MCP_BUILDS_JOBS, _json_bytes(mcp_jobs))
         for jid, log_text in mcp_logs.items():
@@ -416,6 +528,9 @@ async def import_session(
 
     # --- Restore graphs ---
     _restore_graph_files(user_id, session_id, execution_graph_data, research_graph_data)
+
+    # --- Restore the run's own files, so the graph has something to show ---
+    _restore_artifacts(zf, user_id, session_id)
 
     # --- Restore MCP builds ---
     _restore_mcp_builds(zf, rebuild_mcp)

@@ -911,15 +911,13 @@ def print_research_agent_tool_call(
     except Exception as e:
         logger.error("Failed to persist downloaded paper S3 keys: %s", e)
 
-def capture_mcp_artifacts(
+async def capture_mcp_artifacts(
     tool: BaseTool,
     args: Dict[str, Any],
     tool_context: ToolContext,
     tool_response: Any,
 ) -> None:
-    """after_tool: stash figure/table artifact URLs a tool returned into
-    ``state['mcp_artifacts']`` so the graph-first Result Aggregator's
-    ``format_results`` downloads them into the report folder.
+    """after_tool: mirror the artifacts a tool returned, and record where.
 
     Many MCP tools (e.g. the tox-antitargets suite) render a plot server-side and
     return a presigned URL to it (commonly ``metadata.figure.artifact``). That link
@@ -927,6 +925,11 @@ def capture_mcp_artifacts(
     none`` it never reaches the report unless captured here — at the AGENT's own
     tool boundary, which fires for sub-agent (AgentTool) MCP calls where an
     App-level plugin does not.
+
+    The mirroring itself lives in ``reporting.mirror`` and is shared with
+    ``McpArtifactCapturePlugin``. It used to be duplicated, and the two copies
+    drifted: the plugin wrote the durable on-disk index and this one did not, so
+    a sub-agent's figures were lost on restart. One body now, two thin callers.
     """
     try:
         from CoScientist.reporting.collect import find_artifact_urls
@@ -935,18 +938,60 @@ def capture_mcp_artifacts(
         return
     if not urls:
         return
+
+    name = getattr(tool, "name", None)
+    mirrored = []
     try:
+        import asyncio
+
+        from CoScientist.graph.session_scope import session_key
+        from CoScientist.reporting.mirror import mirror_tool_result
+
+        # Resolved on the loop — see the plugin's twin: `session_key` mutates
+        # ADK state, and the download runs in a thread.
+        scope = session_key(tool_context)
+        mirrored = await asyncio.to_thread(
+            mirror_tool_result, tool, tool_context, tool_response, scope
+        )
+    except Exception as e:  # noqa: BLE001
+        logger.warning("capture_mcp_artifacts: mirroring failed: %s", e)
+
+    try:
+        from CoScientist.reporting.artifact_index import record
+
+        by_url = {
+            m["source_url"]: m for m in mirrored
+            if isinstance(m, dict) and m.get("source_url")
+        }
         existing = list(tool_context.state.get("mcp_artifacts") or [])
         seen = {a.get("url") for a in existing if isinstance(a, dict)}
-        name = getattr(tool, "name", None)
+        entries = []
         for u in urls:
+            mirror_record = by_url.get(u) or {}
+            entries.append({
+                "bucket": mirror_record.get("bucket"),
+                "s3_key": mirror_record.get("s3_key"),
+                "artifact_id": mirror_record.get("artifact_id"),
+                "tool": name,
+                "label": mirror_record.get("label") or "artifact",
+                "url": u,
+            })
             if u in seen:
                 continue
             seen.add(u)
-            existing.append({"url": u, "tool": name})
+            existing.append({
+                "url": u, "tool": name,
+                "artifact_id": mirror_record.get("artifact_id"),
+            })
         tool_context.state["mcp_artifacts"] = existing
-        logger.info("capture_mcp_artifacts: %s → +%d artifact URL(s) (%d total)",
-                    name, len(urls), len(existing))
+        # The half this callback never did. State lives in an in-memory session
+        # service; the file on disk is what survives a restart.
+        record(entries, tool_context)
+        logger.info(
+            "capture_mcp_artifacts: %s → +%d artifact URL(s), %d mirrored (%d total)",
+            name, len(urls),
+            sum(1 for m in mirrored if m.get("state") == "stored"), len(existing),
+        )
     except Exception as e:  # noqa: BLE001
         logger.error("capture_mcp_artifacts failed: %s", e)
 

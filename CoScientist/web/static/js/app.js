@@ -12,6 +12,7 @@ renderActivityRail();
 StatusIndicator.mount(document.getElementById('status-indicator'));
 
 applySideNavState();
+initSideRail();
 bootstrap();
 loadSettings();
 connectDatasetLogsSSE();

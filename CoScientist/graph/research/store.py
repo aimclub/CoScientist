@@ -40,6 +40,12 @@ logger = logging.getLogger(__name__)
 
 _REF_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 _ATTR_CHAR_CAP = 2000
+#: The write-up is the one attribute meant to be read at length, so it is not
+#: held to the cap every other attribute is. Still bounded: `to_view` ships
+#: every node on the page's poll, and an unbounded document there is bandwidth
+#: spent once a second. The file itself is attached beside the node, so the cap
+#: costs a reader nothing.
+_REPORT_CHAR_CAP = 120_000
 _COMMIT_HINT = ("Fix the listed items and call research_commit again. "
                 "NOTHING from this call was saved.")
 
@@ -190,6 +196,18 @@ def _headline(kind: str, attrs: Dict[str, Any]) -> str:
                 return str(value).strip()
         return ""
 
+    if kind == "Report":
+        # The card is a title, the panel is the document. Without this the whole
+        # write-up becomes the label and the card is unreadable.
+        title = text("title", "name")
+        if title:
+            return _short(title, 120)
+        for line in str(attrs.get("content") or "").splitlines():
+            if line.strip().startswith("#"):
+                return _short(line.lstrip("# ").strip(), 120)
+            if line.strip():
+                return _short(line.strip(), 120)
+        return "Результаты исследования"
     if kind == "Resource":
         left, total = attrs.get("remaining"), attrs.get("limit")
         unit = text("resource_type")
@@ -254,6 +272,9 @@ def _headline(kind: str, attrs: Dict[str, Any]) -> str:
 #: Keys a headline already speaks for, per type; repeating them underneath is
 #: the same sentence twice.
 _CONSUMED_BY_HEADLINE = {
+    # The body is the card's whole point and the panel already shows it; listing
+    # it again under details would print the report twice.
+    "Report": {"content"},
     "Resource": {"resource_type", "remaining", "limit"},
     "EmpiricalBase": {"base_type", "volume", "name", "description"},
     "ConfirmationCriteria": {"threshold", "thresholds", "criteria", "content",
@@ -308,10 +329,13 @@ def _fields(attrs: Dict[str, Any], headline: str,
 #: reader cannot see what was intended and what came of it.
 _STORY_TYPES = ("ResearchQuestion", "Hypothesis", "VerificationMethod",
                 "Evidence", "Conclusion", "Framing", "Outcome", "PlanStep",
-                "ExperimentTask")
+                "ExperimentTask", "Report")
 #: Products of one finding — they belong to whatever they were derived from.
+#: `Report` is NOT among them: folded, the write-up would have become the label
+#: of an attachment chip on the Outcome card, which is where an 18 KB document
+#: goes to be unreadable. It gets a card, and the panel renders its markdown.
 _ARTIFACT_FOLD_TYPES = ("CodeArtifact", "GeneratedData", "Spec",
-                        "EfficiencyJustification", "Report", "Publication")
+                        "EfficiencyJustification", "Publication")
 #: The framing a study starts from: the context star.
 _FRAME_FOLD_TYPES = ("Constraint", "Resource", "EmpiricalBase", "CostModel",
                      "EfficiencyMetric")
@@ -363,7 +387,7 @@ _STAGE_BY_TYPE = {
     # experiment beside it, not the claim itself.
     "Hypothesis": "hypotheses", "ConfirmationCriteria": "hypotheses",
     "VerificationMethod": "experiment", "Evidence": "experiment",
-    "Conclusion": "report", "Outcome": "report",
+    "Conclusion": "report", "Outcome": "report", "Report": "report",
 }
 #: Subtypes and method types that mean "read", not "run". Whole tokens, never
 #: substrings: the schema allows Evidence subtypes literature / experimental /
@@ -548,14 +572,36 @@ def _why(attrs: Dict[str, Any], history: List[Dict[str, Any]]) -> str:
     return ""
 
 
-def _href(kind: str, attrs: Dict[str, Any]) -> str:
-    """Where a folded artifact actually is, so the chip can be opened."""
-    keys = ("location", "path", "uri") if kind == "Tool" else (
-        "path", "uri", "source_ref", "location")
+def _href(kind: str, attrs: Dict[str, Any], scope: Optional[Tuple[str, str]] = None) -> str:
+    """A link the chip can actually open, or "" when there is none.
+
+    Returning "" is the point. This used to hand back whatever string the attr
+    held, so a ``GeneratedData`` node whose ``path`` was
+    ``D:\\projects26\\...\\clusters.json`` rendered as an anchor that navigates
+    nowhere — in one real session, twelve of twelve attachments looked like
+    that. An artifact is openable when it was mirrored (``artifact_id``) or
+    lives in S3; a bare local path is a fact about this machine, and the panel
+    shows it as a field instead.
+    """
+    from CoScientist.utils.report_links import resolve_ref
+
+    keys = ("session_artifact_id", "location", "path", "uri") if kind == "Tool" else (
+        "session_artifact_id", "path", "uri", "source_ref", "location")
     for key in keys:
         value = attrs.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+        if not isinstance(value, str) or not value.strip():
+            continue
+        # `session_artifact_id` holds a bare id — and only ours. The experiment
+        # runtime's `artifact_id` is a different namespace entirely and is not
+        # consulted here; treating it as ours pointed a chip at a file that was
+        # never stored under that name.
+        candidate = (
+            f"cos-artifact:{value.strip()}"
+            if key == "session_artifact_id" else value.strip()
+        )
+        resolved = resolve_ref(candidate, scope)
+        if resolved:
+            return resolved
     return ""
 
 
@@ -741,19 +787,79 @@ def _fold_plan(raw_nodes: Dict[str, Dict[str, Any]],
     return host, carried, hosts_of
 
 
-def _folded_view(nid: str, data: Dict[str, Any]) -> Dict[str, Any]:
+def _readable_body(content: Any, scope: Optional[Tuple[str, str]] = None) -> str:
+    """A Report node's markdown, with its artifact references made openable.
+
+    Capped the way it always was — the card rides along on a poll — and the cap
+    is applied AFTER resolution so a reference is never cut in half.
+    """
+    text = str(content or "")
+    if not text:
+        return ""
+    try:
+        from CoScientist.utils.report_links import resolve_artifact_refs
+
+        text = resolve_artifact_refs(text, scope)
+    except Exception:  # noqa: BLE001 — the document outranks one link
+        pass
+    return text[:_REPORT_CHAR_CAP]
+
+
+#: Node kinds whose headline is supposed to NAME A FILE, and may therefore be
+#: replaced by the name of the file actually stored. A ``Tool`` also carries a
+#: ``session_artifact_id`` and is deliberately absent: its headline is the
+#: tool's name, and swapping that for a file name would say less, not more.
+_NAMED_BY_THEIR_FILE = frozenset({"CodeArtifact", "GeneratedData"})
+
+
+def _stored_name(kind: str, attrs: Dict[str, Any],
+                 scope: Optional[Tuple[str, str]] = None) -> str:
+    """The real file name behind this node's artifact, or "" when there is none.
+
+    Only ``session_artifact_id`` is consulted: it is the one attr that names a
+    file this session actually holds, so it is the one whose name we can state
+    as a fact rather than as whatever the plan hoped the file would be called.
+    """
+    if kind not in _NAMED_BY_THEIR_FILE:
+        return ""
+    aid = attrs.get("session_artifact_id")
+    if not isinstance(aid, str) or not aid.strip() or not scope:
+        return ""
+    try:
+        from CoScientist.utils.report_links import artifact_citation
+
+        citation = artifact_citation(scope, aid.strip())
+        return citation["name"] if citation else ""
+    except Exception:  # noqa: BLE001 — a label is not worth a failed render
+        return ""
+
+
+def _folded_view(nid: str, data: Dict[str, Any],
+                 scope: Optional[Tuple[str, str]] = None) -> Dict[str, Any]:
     """A folded node as it appears on the card that carries it."""
     attrs = data.get("attrs") or {}
     kind = data.get("type", "?")
     headline = _headline(kind, attrs)
     status = data.get("status", "")
+    href = _href(kind, attrs, scope)
+    # Label and target from ONE record, whenever there is a record to read.
+    # They used to be independent lookups — `description` for the chip's text,
+    # `session_artifact_id` for its href — and a live session shows what that
+    # costs: a chip reading `metabolite_smiles.json` that downloads a PDF. The
+    # description stays visible as a field, so nothing is hidden, but the name
+    # next to a link is now the name of the file behind it.
+    stored_name = _stored_name(kind, attrs, scope)
+    label = stored_name or headline
     return {
         "id": nid,
         "kind": kind.lower(),
         "type_word": _KIND_WORDS.get(kind, kind),
-        "label": headline,
-        "href": _href(kind, attrs),
-        "fields": _fields(attrs, headline, kind),
+        "label": label,
+        "href": href,
+        # `label`, not `headline`: what the headline no longer says has to be
+        # visible somewhere, so a description the plan wrote and the file did
+        # not match reappears as a field instead of vanishing.
+        "fields": _fields(attrs, label, kind),
         "status": status,
         "status_word": _STATUS_WORDS.get(status, status),
         "source": data.get("source", ""),
@@ -865,7 +971,8 @@ def _supersede_chain(raw_edges: List[Dict[str, Any]]) -> List[List[str]]:
 def _virtual_nodes(raw_nodes: Dict[str, Dict[str, Any]],
                    raw_edges: List[Dict[str, Any]],
                    carried: Dict[str, List[Tuple[str, str]]],
-                   root: Optional[str], research_id: str) -> List[Dict[str, Any]]:
+                   root: Optional[str], research_id: str,
+                   scope: Optional[Tuple[str, str]] = None) -> List[Dict[str, Any]]:
     """The two cards nobody authors: the framing, and what it all added up to.
 
     Both are derived. Materializing them as stored nodes would mean a second
@@ -879,7 +986,7 @@ def _virtual_nodes(raw_nodes: Dict[str, Dict[str, Any]],
     out: List[Dict[str, Any]] = []
     human = {"human", "user", "operator"}
 
-    members = [(_folded_view(f, raw_nodes[f]), role)
+    members = [(_folded_view(f, raw_nodes[f], scope), role)
                for role, f in carried.get(FRAME_ID, []) if f in raw_nodes]
     root_attrs = dict((raw_nodes.get(root) or {}).get("attrs") or {}) if root else {}
     root_attrs.pop("formulation", None)
@@ -921,7 +1028,7 @@ def _virtual_nodes(raw_nodes: Dict[str, Dict[str, Any]],
                   if d.get("type") == "Hypothesis"}
     settled = {n for n, d in hypotheses.items()
                if d.get("status") in ("confirmed", "refuted", "inconclusive")}
-    spare = [(_folded_view(f, raw_nodes[f]))
+    spare = [(_folded_view(f, raw_nodes[f], scope))
              for _role, f in carried.get(OUTCOME_ID, []) if f in raw_nodes]
     if not (conclusions or settled or spare):
         return out
@@ -1076,7 +1183,14 @@ def _gaps(raw_nodes: Dict[str, Dict[str, Any]], raw_edges: List[Dict[str, Any]],
 
 class ResearchGraphStore:
     def __init__(self, directory: Optional[str] = None,
-                 active_file: Optional[str] = None) -> None:
+                 active_file: Optional[str] = None,
+                 scope: Optional[Tuple[str, str]] = None) -> None:
+        #: Which session this blackboard belongs to, or None for the CLI and
+        #: unit-test constructions that have no ADK context. Only the view uses
+        #: it, to build a link to a mirrored artifact — and a link needs the
+        #: scope that is *reading*, so an imported study resolves under its new
+        #: session id without anything being rewritten.
+        self._scope = scope
         self._dir = Path(directory or _default_dir())
         self._path = self._dir / (active_file or _default_file())
         self._lock = threading.RLock()
@@ -1412,7 +1526,8 @@ class ResearchGraphStore:
         host, carried, hosts_of = _fold_plan(raw_nodes, raw_edges)
         nodes = self._project_nodes(raw_nodes, raw_edges, carried, research_id)
         drawn = {n["id"] for n in nodes}
-        nodes += _virtual_nodes(raw_nodes, raw_edges, carried, root, research_id)
+        nodes += _virtual_nodes(raw_nodes, raw_edges, carried, root, research_id,
+                                self._scope)
         drawn |= {FRAME_ID, OUTCOME_ID} & {n["id"] for n in nodes}
 
         edges = _reroute(raw_edges, host, hosts_of, drawn)
@@ -1540,7 +1655,7 @@ class ResearchGraphStore:
             why = _why(attrs, history)
             chips, attachments, criterion = [], [], ""
             for role, folded in carried.get(nid, []):
-                view = _folded_view(folded, raw_nodes[folded])
+                view = _folded_view(folded, raw_nodes[folded], self._scope)
                 if role == "chip":
                     chips.append(view)
                 elif role == "criterion":
@@ -1562,7 +1677,13 @@ class ResearchGraphStore:
                 "status_word": _STATUS_WORDS.get(status, status),
                 "executor_agent": d.get("source", ""),
                 "input": _fields(attrs, headline, kind),
-                "output": headline,
+                # For a write-up the card is the title and the panel is the
+                # document; `reportBlock` renders this as markdown. Stored
+                # references become URLs here rather than when the node was
+                # written: the node keeps the session-free form, so an imported
+                # bundle resolves its figures under whatever scope is reading.
+                "output": (_readable_body(attrs.get("content"), self._scope)
+                           if kind == "Report" else headline),
                 "provenance": attrs.get("_provenance") or [],
                 "t_start": d.get("created_at"),
                 "t_end": d.get("updated_at"),
@@ -2062,7 +2183,7 @@ class ResearchGraphStore:
                 committed["nodes"].append(echo)
                 continue
             nid = self._next_id(c["type"])
-            attrs = self._truncate_attrs(c["attrs"], warnings)
+            attrs = self._truncate_attrs(c["attrs"], warnings, c["type"])
             # A per-node source (e.g. "human" for an operator-set frame field)
             # overrides the commit's default source; edges/status keep the default.
             node_source = c.get("source") or source
@@ -2084,7 +2205,8 @@ class ResearchGraphStore:
         for m in merges:
             node = self._g.nodes[m["id"]]
             node["attrs"] = {**(node.get("attrs") or {}),
-                             **self._truncate_attrs(m["attrs"], warnings)}
+                             **self._truncate_attrs(m["attrs"], warnings,
+                                                   node.get("type", ""))}
             node["updated_at"] = now
             if m["id"] in reused:
                 # Already named in the echo as the node a draft turned out to
@@ -2543,12 +2665,18 @@ class ResearchGraphStore:
                 "to list them.")
 
     def _truncate_attrs(self, attrs: Dict[str, Any],
-                        warnings: List[str]) -> Dict[str, Any]:
+                        warnings: List[str],
+                        kind: str = "") -> Dict[str, Any]:
         out = {}
         for k, v in (attrs or {}).items():
-            if isinstance(v, str) and len(v) > _ATTR_CHAR_CAP:
-                out[k] = v[:_ATTR_CHAR_CAP] + "…[truncated]"
-                warnings.append(f"attr '{k}' exceeded {_ATTR_CHAR_CAP} chars "
+            # The write-up is the one attribute meant to be long. Held to the
+            # 2 000-character cap, an 18 KB report reached the page as its first
+            # two paragraphs and an ellipsis.
+            cap = (_REPORT_CHAR_CAP if kind == "Report" and k == "content"
+                   else _ATTR_CHAR_CAP)
+            if isinstance(v, str) and len(v) > cap:
+                out[k] = v[:cap] + "…[truncated]"
+                warnings.append(f"attr '{k}' exceeded {cap} chars "
                                 "and was truncated.")
             else:
                 out[k] = v
@@ -2700,6 +2828,7 @@ def get_research_graph(
             graph = ResearchGraphStore(
                 directory=str(directory),
                 active_file=_default_file(),
+                scope=key,
             )
             _research_graphs[key] = graph
         return graph

@@ -32,9 +32,87 @@ class RunResult:
     markdown: str
     report_dir: Optional[Path] = None
     manifest: Optional[Dict[str, Any]] = None
+    #: The session artifact holding `report.md`, when one was stored. This is
+    #: what the chat's document panel opens; the graph's Report node carries
+    #: the same id.
+    report_artifact_id: Optional[str] = None
 
     def __str__(self) -> str:  # so legacy `print(result)` / str() still reads well
         return self.markdown
+
+
+def _scope_of(session_id: str, state: Dict[str, Any]) -> tuple[str, str]:
+    """``(user_id, session_id)`` from ADK state, falling back to the run's own id."""
+    from CoScientist.graph.session_scope import (
+        GRAPH_SCOPE_SESSION_KEY,
+        GRAPH_SCOPE_USER_KEY,
+    )
+
+    return (
+        str(state.get(GRAPH_SCOPE_USER_KEY) or ""),
+        str(state.get(GRAPH_SCOPE_SESSION_KEY) or session_id),
+    )
+
+
+def _readable(markdown: str, session_id: str, state: Dict[str, Any]) -> str:
+    """Report text with every stored reference turned into a working link.
+
+    Never raises: the deliverable outranks any one link.
+    """
+    try:
+        from CoScientist.utils.report_links import (
+            remint_report_urls,
+            resolve_artifact_refs,
+        )
+
+        scope = _scope_of(session_id, state)
+        return remint_report_urls(resolve_artifact_refs(markdown, scope), scope)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("report: could not resolve links (%s)", exc)
+        return markdown
+
+
+def _publish_to_research_graph(
+    session_id: str, markdown: str, state: Dict[str, Any], path: Path
+) -> Optional[str]:
+    """Give the write-up a card in the research graph, and a file beside it.
+
+    The graph used to end on a one-line derived summary while the document it
+    summarised sat on disk, referenced from nowhere. Best-effort: the report is
+    already written by the time this runs.
+    """
+    try:
+        from CoScientist.graph.session_scope import (
+            GRAPH_SCOPE_SESSION_KEY,
+            GRAPH_SCOPE_USER_KEY,
+        )
+
+        user_id = str(state.get(GRAPH_SCOPE_USER_KEY) or "")
+        scoped_session = str(state.get(GRAPH_SCOPE_SESSION_KEY) or session_id)
+        if not user_id:
+            logger.info("report node: no user scope in state; skipping")
+            return None
+
+        artifact_id = None
+        try:
+            from CoScientist.reporting.mirror import mirror_artifact
+
+            record = mirror_artifact(
+                user_id=user_id, session_id=scoped_session, path=path,
+                filename="report.md", label="Отчёт по исследованию",
+                tool="format_results", source_kind="report",
+            )
+            artifact_id = record.get("artifact_id")
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("report node: could not mirror report.md (%s)", exc)
+
+        from CoScientist.reporting.report_node import publish_report_node
+
+        publish_report_node(user_id, scoped_session, markdown, artifact_id=artifact_id)
+        return artifact_id
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("report node: publish step failed (%s)", exc)
+    return None
 
 
 def finalize_report(
@@ -47,13 +125,20 @@ def finalize_report(
     report_dir = report_dir_for(session_id, report_config.reports_root)
     try:
         report_dir.mkdir(parents=True, exist_ok=True)
-        (report_dir / "report.md").write_text(final_markdown or "", encoding="utf-8")
+        # `report.md` is read by people and by LaTeX, neither of which knows the
+        # `cos-artifact:` scheme. The graph card keeps the portable form (see
+        # publish_report_node); the file on disk gets URLs.
+        markdown = _readable(final_markdown or "", session_id, state or {})
+        (report_dir / "report.md").write_text(markdown, encoding="utf-8")
 
         references = _extract_references(state or {})
         latex_files = render_latex(
-            final_markdown or "", report_dir, report_config.latex, references
+            markdown, report_dir, report_config.latex, references
         )
         nir = _record_nir(report_dir, state or {})
+        report_artifact_id = _publish_to_research_graph(
+            session_id, final_markdown or "", state or {}, report_dir / "report.md"
+        )
         promoted = _promote_sources(report_dir)
         manifest = _build_manifest(
             session_id, report_dir, report_config, latex_files, promoted, nir
@@ -62,7 +147,8 @@ def finalize_report(
             json.dumps(manifest, indent=2), encoding="utf-8"
         )
         logger.info("report: wrote deliverable to %s (latex=%s)", report_dir, report_config.latex)
-        return RunResult(markdown=final_markdown, report_dir=report_dir, manifest=manifest)
+        return RunResult(markdown=final_markdown, report_dir=report_dir,
+                         manifest=manifest, report_artifact_id=report_artifact_id)
     except Exception as exc:  # never let report packaging sink a completed run
         logger.error("report: failed to finalize %s (%s)", report_dir, exc)
         return RunResult(markdown=final_markdown, report_dir=None, manifest=None)

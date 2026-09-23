@@ -130,6 +130,10 @@
       </div>
     </div>
     <div class="flex items-center gap-4 text-outline-variant">
+      <button type="button" id="side-rail-toggle" onclick="toggleSideRail()" title="Hide the plan column"
+        class="text-outline-variant hover:text-primary transition-colors flex items-center">
+        <span id="side-rail-toggle-icon" class="material-symbols-outlined">right_panel_close</span>
+      </button>
       <button onclick="clearChat()" title="Clear current view (history is preserved)">
         <span
           class="material-symbols-outlined cursor-pointer hover:text-primary transition-colors">delete_sweep</span>
@@ -191,7 +195,7 @@
           <div class="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md bg-[#161a23] border border-outline-variant/15 shadow-sm">
             <span class="material-symbols-outlined text-outline-variant text-[14px]">handyman</span>
             <span data-i18n="rail.tools" class="text-[9px] font-bold font-mono tracking-widest uppercase text-on-surface-variant">Tools</span>
-            <span id="activity-selected-agent-label" class="text-[8px] font-mono text-primary/80 font-medium truncate max-w-[100px]"></span>
+            <span id="activity-selected-agent-label" class="text-[10px] font-mono text-primary font-medium truncate max-w-[140px]"></span>
           </div>
 
           <div class="relative flex-1 min-w-0 flex items-center group/rail">
@@ -211,9 +215,9 @@
       <!-- Chat Feed -->
       <div id="chat-feed"
         class="flex-1 overflow-y-auto p-6 space-y-6 no-scrollbar bg-gradient-to-b from-transparent to-surface-container-lowest/20">
-        <div class="flex flex-col items-center justify-center h-full opacity-50">
-          <span class="material-symbols-outlined text-4xl text-primary/30 mb-3">hub</span>
-          <p data-i18n="chat.sendQuery" class="text-sm text-outline-variant font-medium">Send a query to begin
+        <div class="flex flex-col items-center justify-center h-full">
+          <span class="material-symbols-outlined text-4xl text-primary/40 mb-3">hub</span>
+          <p data-i18n="chat.sendQuery" class="text-sm text-on-surface-variant font-medium">Send a query to begin
             orchestration</p>
         </div>
       </div>
@@ -271,7 +275,7 @@
           <div id="dataset-upload-details"
             class="hidden mt-3 pt-2.5 border-t border-outline-variant/10 text-[11px] font-mono text-outline-variant space-y-1">
             <div class="flex justify-between"><span class="text-outline-variant/70">Filename:</span><span
-                id="dataset-upload-filename" class="text-on-surface truncate max-w-[220px]">—</span></div>
+                id="dataset-upload-filename" class="text-on-surface truncate max-w-[260px]">—</span></div>
             <div class="flex justify-between"><span class="text-outline-variant/70">Speed:</span><span
                 id="dataset-upload-speed" class="text-on-surface">—</span></div>
             <div class="flex justify-between"><span class="text-outline-variant/70">ETA:</span><span
@@ -315,13 +319,66 @@
       </div>
     </section>
 
-    <!-- Right Sidebar: status panels, then the plan tracker sized to its content -->
-    <aside class="w-80 shrink-0 flex flex-col gap-4 min-h-0 overflow-y-auto no-scrollbar pb-8">
-      <!-- Top panels are capped and scroll on their own, so a long usage list
-           doesn't push the plan tracker below the fold. -->
-      <div class="shrink-0 max-h-[50vh] flex flex-col gap-4 overflow-y-auto no-scrollbar">
+    <!-- Right Sidebar. Order is by how often it is read: the plan (what the run
+         is doing) first, the pending question next, and the spend — an
+         occasional check, not a running concern — folded away at the bottom. -->
+    <!-- Drag to resize the column, double-click to put it back. -->
+    <div id="rail-grip" data-i18n-title="rail.resize" title="Drag to resize · double-click to reset"></div>
+
+    <aside id="side-rail" class="shrink-0 flex flex-col gap-3 min-h-0 overflow-y-auto no-scrollbar pb-8">
+      <!-- Document panel. There is one, deliberately: a message's "Open" button
+           puts its document here, and the next message's button replaces it.
+           Filled by doc_viewer.js; hidden until something is opened. -->
+      <section id="doc-viewer"
+        class="hidden shrink-0 flex flex-col bg-surface-container-low rounded-xl border border-outline-variant/15 overflow-hidden">
+        <header class="flex items-start gap-2 px-3.5 py-2.5 border-b border-outline-variant/15">
+          <span class="material-symbols-outlined text-[18px] text-primary shrink-0 mt-0.5">description</span>
+          <h4 id="doc-viewer-title" class="text-sm font-bold text-on-surface leading-snug min-w-0 flex-1 break-words">
+          </h4>
+          <button type="button" onclick="closeDocument()" data-i18n-title="doc.close" title="Close document"
+            class="text-outline-variant hover:text-on-surface transition-colors shrink-0">
+            <span class="material-symbols-outlined text-base">close</span>
+          </button>
+        </header>
+        <div id="doc-viewer-body" class="md-body px-3.5 py-3 overflow-y-auto max-h-[62vh]"></div>
+        <details id="doc-viewer-list" class="group border-t border-outline-variant/15">
+          <summary
+            class="flex items-center gap-2 px-3.5 py-2 cursor-pointer list-none select-none hover:bg-surface-container/60 transition-colors">
+            <span
+              class="material-symbols-outlined text-base text-outline-variant transition-transform group-open:rotate-90">chevron_right</span>
+            <span data-i18n="doc.sessionDocs"
+              class="text-xs font-bold text-on-surface-variant uppercase tracking-wider">Session documents</span>
+            <span id="doc-viewer-count" class="text-xs font-mono text-outline-variant"></span>
+          </summary>
+          <ol id="doc-viewer-items" class="px-3.5 pb-3 space-y-0.5"></ol>
+        </details>
+      </section>
+
+      <!-- Plan Tracker — task titles, their state and their sub-steps, filled
+           by plan_tracker.js. Starts hidden: it only appears once a plan exists
+           (see render() in plan_tracker.js), and sizes to its own content
+           rather than stretching to fill the column. -->
+      <div id="plan-tracker"
+        class="hidden shrink-0 flex flex-col bg-surface-container-lowest px-3.5 py-3 rounded-xl border border-outline-variant/10">
+        <div class="flex items-center justify-between gap-2 mb-2">
+          <h4 data-i18n="plan.header" class="text-xs font-bold text-on-surface-variant uppercase tracking-wider">Plan
+          </h4>
+          <div class="flex items-center gap-2">
+            <span id="plan-tracker-count" class="text-xs font-mono font-bold text-primary">0/0</span>
+            <button type="button" onclick="openRoadmapEditor()" data-i18n-title="plan.open" title="Open roadmap"
+              class="text-outline-variant hover:text-primary transition-colors flex items-center">
+              <span class="material-symbols-outlined text-base">open_in_full</span>
+            </button>
+          </div>
+        </div>
+        <div class="h-1 w-full rounded-full bg-surface-container-high overflow-hidden mb-2 shrink-0">
+          <div id="plan-tracker-bar" class="h-full bg-secondary transition-all duration-500" style="width:0%"></div>
+        </div>
+        <ol id="plan-tracker-list" class="relative max-h-[45vh] overflow-y-auto space-y-px -mr-2 pr-1"></ol>
+      </div>
+
       <!-- Telemetry — a few recent lines only; kept compact, hidden by default -->
-      <div class="hidden bg-surface-container-lowest px-4 py-3 rounded-xl border border-outline-variant/10 overflow-hidden relative">
+      <div class="hidden shrink-0 bg-surface-container-lowest px-4 py-3 rounded-xl border border-outline-variant/10 overflow-hidden relative">
         <div class="absolute top-3 right-3">
           <span id="telemetry-live"
             class="text-[8px] font-bold text-outline-variant font-mono tracking-tighter uppercase flex items-center gap-1">
@@ -336,53 +393,35 @@
         </div>
       </div>
 
-      <!-- Usage & Cost — what this session has spent, by agent -->
-      <div class="bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/10 overflow-hidden">
-        <div class="flex items-baseline justify-between mb-2">
-          <h4 data-i18n="usage.header" class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">
+      <!-- Usage & Cost — what this session has spent, by agent. Folded by
+           default: the two numbers worth watching (total and elapsed) stay on
+           the summary row, so folding costs nothing and the breakdown is one
+           click away. <details> carries the disclosure semantics itself, so
+           the state is keyboard- and screen-reader-correct for free; the JS
+           only remembers the choice across reloads. -->
+      <details id="usage-panel"
+        class="group shrink-0 mt-auto bg-surface-container-lowest rounded-xl border border-outline-variant/10 overflow-hidden">
+        <summary
+          class="flex items-center gap-2 px-4 py-2.5 cursor-pointer list-none select-none hover:bg-surface-container-low/60 transition-colors">
+          <span
+            class="material-symbols-outlined text-base text-outline-variant transition-transform group-open:rotate-90">chevron_right</span>
+          <h4 data-i18n="usage.header" class="text-xs font-bold text-on-surface-variant uppercase tracking-wider">
             Usage &amp; Cost</h4>
-          <span id="metrics-total" class="text-sm font-mono font-bold text-primary">$0.0000</span>
-        </div>
-        <div class="flex items-center justify-between flex-wrap gap-x-2 gap-y-1 text-[9px] font-mono text-outline-variant mb-2">
-          <div id="metrics-summary">no model calls yet</div>
-          <div id="metrics-duration-wrap" class="flex items-center gap-1 font-mono text-outline-variant shrink-0" title="Execution time">
+          <span class="flex-1"></span>
+          <div id="metrics-duration-wrap" class="flex items-center gap-1 text-xs font-mono text-outline-variant shrink-0"
+            data-i18n-title="usage.duration" title="Run duration">
             <span id="metrics-duration-dot" class="hidden w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span class="material-symbols-outlined text-[11px] text-outline-variant">schedule</span>
+            <span class="material-symbols-outlined text-[13px] text-outline-variant">schedule</span>
             <span id="metrics-duration" class="font-bold">00:00</span>
           </div>
+          <span id="metrics-total" class="text-sm font-mono font-bold text-primary shrink-0">$0.0000</span>
+        </summary>
+        <div class="px-4 pb-3 pt-1 border-t border-outline-variant/10">
+          <div id="metrics-summary" class="text-xs font-mono text-outline-variant mb-2">no model calls yet</div>
+          <div id="metrics-agents" class="space-y-1 font-mono text-xs max-h-64 overflow-y-auto no-scrollbar"></div>
+          <div id="metrics-note" class="hidden text-[11px] font-mono text-error/70 mt-2 leading-relaxed"></div>
         </div>
-        <div id="metrics-agents" class="space-y-1 font-mono text-[9px] max-h-64 overflow-y-auto no-scrollbar"></div>
-        <div id="metrics-note" class="hidden text-[8px] font-mono text-error/70 mt-2 leading-relaxed"></div>
-      </div>
-
-      <!-- HITL Pending -->
-      <div id="hitl-panel" class="hidden">
-        <!-- Filled dynamically -->
-      </div>
-      </div>
-
-      <!-- Plan Tracker — task titles and their state, filled by plan_tracker.js.
-           Starts hidden: it only appears once a plan exists (see render() in
-           plan_tracker.js), and sizes to its own content rather than
-           stretching to fill the column. -->
-      <div id="plan-tracker"
-        class="hidden shrink-0 flex flex-col bg-surface-container-lowest px-4 py-3 rounded-xl border border-outline-variant/10">
-        <div class="flex items-center justify-between gap-2 mb-2">
-          <h4 data-i18n="plan.header" class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Plan
-          </h4>
-          <div class="flex items-center gap-2">
-            <span id="plan-tracker-count" class="text-[10px] font-mono font-bold text-primary">0/0</span>
-            <button type="button" onclick="openRoadmapEditor()" data-i18n-title="plan.open" title="Open roadmap"
-              class="text-outline-variant hover:text-primary transition-colors flex items-center">
-              <span class="material-symbols-outlined text-sm">open_in_full</span>
-            </button>
-          </div>
-        </div>
-        <div class="h-1 w-full rounded-full bg-surface-container-high overflow-hidden mb-2 shrink-0">
-          <div id="plan-tracker-bar" class="h-full bg-secondary transition-all duration-500" style="width:0%"></div>
-        </div>
-        <ol id="plan-tracker-list" class="relative max-h-72 overflow-y-auto space-y-0.5 -mr-2 pr-1"></ol>
-      </div>
+      </details>
     </aside>
   </main>
 
@@ -810,6 +849,7 @@
   <script src="/static/js/i18n.js"></script>
   <script src="/static/js/activity_rail.js"></script>
   <script src="/static/js/chat.js"></script>
+  <script src="/static/js/doc_viewer.js"></script>
   <script src="/static/js/hitl.js"></script>
   <script src="/static/js/telemetry.js"></script>
   <script src="/static/js/sessions.js"></script>

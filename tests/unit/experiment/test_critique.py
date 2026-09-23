@@ -429,6 +429,9 @@ def test_render_experiment_results_prefers_http_then_s3_and_sets_manifest():
             }
         ]
     }
+    # This case is about which address wins, not about wording, so it pins the
+    # language rather than depending on the session default (Russian).
+    state["report_language"] = "en"
     text = render_experiment_results(state)
     assert "Canonical artifact locations" in text
     assert "https://storage.example-cdn.test/runs/a/candidates.csv" in text

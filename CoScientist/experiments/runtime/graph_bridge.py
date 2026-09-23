@@ -777,9 +777,24 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
 
 
 def _artifact_location(artifact: dict[str, Any]) -> str:
+    """Where this artifact can be found, best address first.
+
+    ``external_url`` is in the list because ``ArtifactRef`` names the field that
+    way while this lookup asked for ``url``: an artifact whose only canonical
+    location was an external address therefore matched nothing, returned "",
+    and was dropped — no ``GeneratedData`` node, and an empty ``source_ref`` on
+    the Evidence beside it. Silently, on every run that produced one.
+    """
+    # `session_artifact_id`, never `artifact_id`: the latter is this runtime's
+    # own identity (``ART-<uuid>``), and reading it as a store id produced
+    # ``cos-artifact:ART-…`` — a link to a file stored under no such name.
+    if aid := str(artifact.get("session_artifact_id") or "").strip():
+        # The copy in this session's own store: survives the link's expiry and
+        # travels with an exported bundle.
+        return f"cos-artifact:{aid}"
     if artifact.get("bucket") and artifact.get("s3_key"):
         return f"s3://{artifact['bucket']}/{artifact['s3_key']}"
-    for key in ("location", "url", "path", "workspace_path"):
+    for key in ("location", "external_url", "url", "path", "workspace_path"):
         if val := str(artifact.get(key) or "").strip():
             return val
     return ""
@@ -937,14 +952,16 @@ def publish_result_to_graph(
                 if not location:
                     continue
                 ref = f"gd_{i}"
-                nodes.append({
-                    "type": "GeneratedData",
-                    "ref": ref,
-                    "attrs": {
-                        "description": _clean(artifact.get("name") or artifact.get("description"), 200),
-                        "path": location,
-                    },
-                })
+                attrs = {
+                    "description": _clean(artifact.get("name") or artifact.get("description"), 200),
+                    "path": location,
+                }
+                # Kept beside `path` rather than inside it: the panel resolves
+                # this into a link, and `path` stays readable as the place the
+                # file sat on the machine that made it.
+                if aid := str(artifact.get("session_artifact_id") or "").strip():
+                    attrs["session_artifact_id"] = aid
+                nodes.append({"type": "GeneratedData", "ref": ref, "attrs": attrs})
                 edges.append({"type": "derived_from", "from": f"#{ref}", "to": "#e_0"})
         status_updates = []
         current_vm_status = _graph_nodes(store).get(vm_id, {}).get("status")

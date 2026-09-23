@@ -16,6 +16,12 @@ const i18n = {
   'nav.connected': { en: 'Connected', ru: 'Подключено' },
   'nav.disconnected': { en: 'Disconnected', ru: 'Отключено' },
   'nav.orchestrator': { en: 'Orchestrator', ru: 'Оркестратор' },
+  'rail.resize': {
+    en: 'Drag to resize · double-click to reset',
+    ru: 'Потяните, чтобы изменить ширину · двойной клик — сбросить',
+  },
+  'rail.show': { en: 'Show the plan column', ru: 'Показать колонку плана' },
+  'rail.hide': { en: 'Hide the plan column', ru: 'Скрыть колонку плана' },
 
   // ── Composer: report language (NOT the interface language) ──
   'composer.reportLang.ru': { en: 'Report: RU', ru: 'Отчёт: RU' },
@@ -46,6 +52,17 @@ const i18n = {
   'usage.durationFinished': { en: 'Completed in', ru: 'Выполнено за' },
 
   // ── Plan tracker (right sidebar) ──
+  // ── Document panel ──
+  // A long result is written to a file and opened here; the feed keeps a
+  // summary and a button.
+  'doc.open': { en: 'Open', ru: 'Открыть' },
+  'doc.close': { en: 'Close document', ru: 'Закрыть документ' },
+  'doc.untitled': { en: 'Document', ru: 'Документ' },
+  'doc.loading': { en: 'Loading…', ru: 'Загрузка…' },
+  'doc.failed': { en: 'Could not open this document.', ru: 'Не удалось открыть документ.' },
+  'doc.sessionDocs': { en: 'Session documents', ru: 'Документы сессии' },
+  'doc.empty': { en: 'No documents yet.', ru: 'Документов пока нет.' },
+
   'plan.header': { en: 'Plan', ru: 'План' },
   'plan.open': { en: 'Open roadmap', ru: 'Открыть план' },
   'plan.untitled': { en: 'Untitled task', ru: 'Задача без названия' },
@@ -53,6 +70,39 @@ const i18n = {
   'plan.status.in_progress': { en: 'In progress', ru: 'В работе' },
   'plan.status.done': { en: 'Completed', ru: 'Выполнена' },
   'plan.status.error': { en: 'Failed', ru: 'Ошибка' },
+
+  // ── Plan sub-steps ──
+  // What actually ran under a plan step, one line per agent that worked on it.
+  // The plan itself has no sub-steps — the planner registers a flat task list —
+  // so these are read off the live activity stream and named here by the agent
+  // that produced them. A name missing from this table falls back to the agent
+  // role from status_indicator.js, so a new agent still reads as something.
+  'plan.substeps': { en: 'Sub-steps', ru: 'Подшаги' },
+  'plan.substep.toolCount': { en: '{n} tool call(s)', ru: 'вызовов инструментов: {n}' },
+  'substep.OrchestratorAgent': { en: 'Coordination', ru: 'Координация работ' },
+  'substep.ContextInitAgent': { en: 'Research frame', ru: 'Рамка исследования' },
+  'substep.ContextInitSessionAgent': { en: 'Research frame', ru: 'Рамка исследования' },
+  'substep.PlannerAgent': { en: 'Planning', ru: 'Построение плана' },
+  'substep.PlanningPipelineAgent': { en: 'Planning', ru: 'Построение плана' },
+  'substep.PlanCriticAgent': { en: 'Plan review', ru: 'Проверка плана' },
+  'substep.HypothesesAgent': { en: 'Hypothesis generation', ru: 'Генерация гипотез' },
+  'substep.ResearchAgent': { en: 'Literature search', ru: 'Поиск и разбор литературы' },
+  'substep.TaskExecutorAgent': { en: 'Task execution', ru: 'Выполнение задачи' },
+  'substep.ToolPipelineAgent': { en: 'Tool selection', ru: 'Подбор инструментов' },
+  'substep.ToolPreparerAgent': { en: 'Tool preparation', ru: 'Подготовка инструментов' },
+  'substep.McpBuilderAgent': { en: 'Tool build', ru: 'Сборка инструмента' },
+  'substep.WebToolsDeployerAgent': { en: 'Tool deployment', ru: 'Подключение инструментов' },
+  'substep.CoderAgent': { en: 'Code run', ru: 'Запуск кода в песочнице' },
+  'substep.DatasetCollectorAgent': { en: 'Data collection', ru: 'Сбор данных' },
+  'substep.MedicalAgent': { en: 'Medical analysis', ru: 'Медицинский анализ' },
+  'substep.ExperimentAgent': { en: 'Experiment', ru: 'Эксперимент' },
+  'substep.ExperimentModuleAgent': { en: 'Experiment module', ru: 'Модуль экспериментов' },
+  'substep.ExperimentPlannerAgent': { en: 'Experiment planning', ru: 'Планирование эксперимента' },
+  'substep.ExperimentExecutorAgent': { en: 'Experiment run', ru: 'Проведение эксперимента' },
+  'substep.ExperimentResultReviewAgent': { en: 'Result review', ru: 'Приёмка результатов' },
+  'substep.FedotAgent': { en: 'AutoML modelling', ru: 'Подбор модели AutoML' },
+  'substep.ResultAggregatorAgent': { en: 'Report assembly', ru: 'Сборка отчёта' },
+  'substep.NirReportAgent': { en: 'R&D report', ru: 'Оформление отчёта НИР' },
 
   // ── Activity Rail HUD ──
   'rail.agents': { en: 'Agents', ru: 'Агенты' },
@@ -396,6 +446,11 @@ const i18n = {
   'settings.f.medicalAgent.scopeHint': {
     en: 'The agent is added or removed for sessions that first run after saving; turning it off also takes the medical route out of experiments already running.',
     ru: 'Агент добавляется или убирается для сессий, впервые запущенных после сохранения; выключение также убирает медицинский маршрут из уже идущих экспериментов.'
+  },
+  'settings.f.nirReport.label': { en: 'R&D report (GOST 7.32-2017)', ru: 'Отчёт о НИР (ГОСТ 7.32-2017)' },
+  'settings.f.nirReport.desc': {
+    en: 'At the end of a run, offer to produce a normative DOCX report alongside the short Markdown one, built through the "Автонормоконтроль" service. You are asked first and fill in the title-page details; declining or ignoring the question changes nothing. Needs MCP__NORMCONTROL_URL — the switch is inactive without it. Costs a strong model and dozens of pages of generation.',
+    ru: 'В конце прогона предлагать собрать нормативный документ DOCX в дополнение к краткому отчёту в Markdown — через сервис «Автонормоконтроль». Сначала спросят и попросят реквизиты титульного листа; отказ или игнорирование вопроса ничего не меняет. Требуется MCP__NORMCONTROL_URL — без него переключатель неактивен. Стоит сильной модели и десятков страниц генерации.'
   },
   'settings.f.critic.label': { en: 'Review the plan with a critic', ru: 'Проверять план критиком' },
   'settings.f.critic.desc': {
@@ -1587,6 +1642,9 @@ function applyLanguage(lang) {
     if (entry && entry[currentLang]) el.title = entry[currentLang];
   });
   if (window.PlanTracker) PlanTracker.render();
+  // The rail toggle's tooltip depends on its state, so it is not a plain
+  // data-i18n-title the loop above can swap.
+  if (typeof applySideRailState === 'function') applySideRailState();
 
   // Динамические элементы статуса и пользователя
   const nicknameEl = document.getElementById('active-nickname');

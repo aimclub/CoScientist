@@ -144,36 +144,83 @@ def save_order(state: Any, order: WorkOrder) -> None:
 _STEP_MARK = {"pending": "[ ]", "in_progress": "[~]", "done": "[x]", "skipped": "[-]"}
 
 
-def render_work_order(order: WorkOrder) -> str:
-    """Plain-text rendering for the console handler, logs and the card fallback."""
+# The frame around an agent's own words. The agent writes its goal and its
+# steps in the session's language; these labels used to be English regardless,
+# so a Russian study read "Goal: Сформировать…". One table, two columns, kept
+# parallel line for line.
+_WO_WORDS = {
+    "en": {
+        "order": "Work Order", "report": "Work Report", "rev": "rev", "round": "round",
+        "tier": "tier", "goal": "Goal", "done": "Done when", "assumptions": "Assumptions",
+        "steps": "Steps", "expect": "expected", "tools": "Tools",
+        "effects": "Side effects", "outcome": "Expected outcome", "fallback": "If it fails",
+        "rejected": "rejected", "summary": "Summary", "expected": "Expected",
+        "actual": "Actual", "findings": "Findings", "evidence": "evidence",
+        "artifacts": "Artifacts", "calls": "Tool calls",
+        "performed": "Side effects performed", "amendments": "Amendments",
+        "blocked": "Blocked calls",
+    },
+    "ru": {
+        "order": "Наряд на работу", "report": "Отчёт о работе", "rev": "ревизия",
+        "round": "раунд", "tier": "уровень", "goal": "Цель",
+        "done": "Критерий готовности", "assumptions": "Условия и ограничения",
+        "steps": "Шаги", "expect": "ожидается", "tools": "Инструменты",
+        "effects": "Побочные эффекты", "outcome": "Ожидаемый результат",
+        "fallback": "Если не получится", "rejected": "отклонено",
+        "summary": "Итог", "expected": "Ожидалось", "actual": "Получено",
+        "findings": "Находки", "evidence": "подтверждение",
+        "artifacts": "Артефакты", "calls": "Вызовы инструментов",
+        "performed": "Выполненные побочные эффекты", "amendments": "Дополнения",
+        "blocked": "Заблокированные вызовы",
+    },
+}
+
+
+def _words(lang) -> dict:
+    from CoScientist.agents.callbacks.report_language import normalize_report_language
+
+    return _WO_WORDS[normalize_report_language(lang)]
+
+
+def render_work_order(order: WorkOrder, lang: str = "en") -> str:
+    """The contract as Markdown, in the session's language.
+
+    Markdown rather than plain text because this is what the chat writes into a
+    document and renders in a panel; the console handler shows the same source,
+    which reads no worse for the headings.
+    """
+    w = _words(lang)
     lines = [
-        f"Work Order: {order.agent} (rev {order.revision}, tier {order.tier.value})",
-        f"Goal: {order.goal}",
+        f"# {w['order']} — {order.agent}",
+        "",
+        f"*{w['rev']} {order.revision} · {w['tier']} {order.tier.value}*",
+        "",
+        f"## {w['goal']}", "", order.goal or "—",
     ]
     if order.done_criteria:
-        lines.append(f"Done when: {order.done_criteria}")
+        lines += ["", f"## {w['done']}", "", order.done_criteria]
     if order.assumptions:
-        lines.append("\nAssumptions:")
+        lines += ["", f"## {w['assumptions']}", ""]
         for a in order.assumptions:
-            mark = " (rejected)" if a.rejected else ""
-            lines.append(f"  {a.id}. {a.text}{mark}")
+            mark = f" _({w['rejected']})_" if a.rejected else ""
+            lines.append(f"- **{a.id}** {a.text}{mark}")
     if order.steps:
-        lines.append("\nSteps:")
+        lines += ["", f"## {w['steps']}", ""]
         for s in order.steps:
-            tools = f" — {', '.join(s.tools)}" if s.tools else ""
-            lines.append(f"  {_STEP_MARK.get(s.status, '[ ]')} {s.id}. {s.title}{tools}")
+            tools = f" — `{'`, `'.join(s.tools)}`" if s.tools else ""
+            lines.append(f"- {_STEP_MARK.get(s.status, '[ ]')} **{s.id}** {s.title}{tools}")
             if s.expected_outcome:
-                lines.append(f"      expect: {s.expected_outcome}")
+                lines.append(f"  - {w['expect']}: {s.expected_outcome}")
     if order.planned_tools:
-        lines.append(f"\nTools: {', '.join(order.planned_tools)}")
+        lines += ["", f"## {w['tools']}", "", "`" + "`, `".join(order.planned_tools) + "`"]
     if order.side_effects:
-        lines.append("Side effects: " + "; ".join(
-            f"{s.kind.value}" + (f" ({s.detail})" if s.detail else "") for s in order.side_effects
-        ))
+        lines += ["", f"## {w['effects']}", ""]
+        lines += [f"- {s.kind.value}" + (f" ({s.detail})" if s.detail else "")
+                  for s in order.side_effects]
     if order.expected_outcome:
-        lines.append(f"Expected outcome: {order.expected_outcome}")
+        lines += ["", f"## {w['outcome']}", "", order.expected_outcome]
     if order.fallback:
-        lines.append(f"If it fails: {order.fallback}")
+        lines += ["", f"## {w['fallback']}", "", order.fallback]
     return "\n".join(lines)
 
 
@@ -209,47 +256,61 @@ def report_warnings(order: WorkOrder) -> List[Dict[str, Any]]:
     return warnings
 
 
-def render_work_report(order: WorkOrder) -> str:
-    """Plain-text rendering of the report for the console handler and logs."""
+def render_work_report(order: WorkOrder, lang: str = "en") -> str:
+    """What the agent says it did, against the contract it signed."""
+    w = _words(lang)
     report = order.report or WorkReport()
     lines = [
-        f"Work Report: {order.agent} (rev {order.revision}, round {report.round}, tier {order.tier.value})",
-        f"Goal: {order.goal}",
+        f"# {w['report']} — {order.agent}",
+        "",
+        f"*{w['rev']} {order.revision} · {w['round']} {report.round} · {w['tier']} {order.tier.value}*",
+        "",
+        f"## {w['goal']}", "", order.goal or "—",
     ]
     if report.summary:
-        lines.append(f"Summary: {report.summary}")
+        lines += ["", f"## {w['summary']}", "", report.summary]
     if order.done_criteria:
-        lines.append(f"Done when: {order.done_criteria} -> {report.done_verdict}"
-                     + (f" ({report.done_evidence})" if report.done_evidence else ""))
+        lines += ["", f"## {w['done']}", "",
+                  f"{order.done_criteria} → **{report.done_verdict}**"
+                  + (f"\n\n{report.done_evidence}" if report.done_evidence else "")]
     if order.expected_outcome or report.actual_outcome:
-        lines.append(f"Expected: {order.expected_outcome or '-'}")
-        lines.append(f"Actual: {report.actual_outcome or '-'}")
+        lines += ["", f"## {w['outcome']}", "",
+                  f"| | |", "|---|---|",
+                  f"| {w['expected']} | {_cell(order.expected_outcome)} |",
+                  f"| {w['actual']} | {_cell(report.actual_outcome)} |"]
     if report.findings:
-        lines.append("\nFindings:")
+        lines += ["", f"## {w['findings']}", ""]
         for f in report.findings:
-            lines.append(f"  {f.id}. {f.text} [{f.confidence}]")
+            lines.append(f"- **{f.id}** {f.text} _[{f.confidence}]_")
             if f.evidence:
-                lines.append(f"      evidence: {f.evidence}")
+                lines.append(f"  - {w['evidence']}: {f.evidence}")
     if order.steps:
-        lines.append("\nSteps:")
+        lines += ["", f"## {w['steps']}", ""]
         for s in order.steps:
             note = f" — {s.note}" if s.note else ""
-            lines.append(f"  {_STEP_MARK.get(s.status, '[ ]')} {s.id}. {s.title}{note}")
+            lines.append(f"- {_STEP_MARK.get(s.status, '[ ]')} **{s.id}** {s.title}{note}")
     if report.artifacts:
-        lines.append("\nArtifacts:")
+        lines += ["", f"## {w['artifacts']}", ""]
         for a in report.artifacts:
             desc = f" — {a.description}" if a.description else ""
-            lines.append(f"  [{a.kind}] {a.ref}{desc}")
+            lines.append(f"- `{a.kind}` {a.ref}{desc}")
     if order.tool_calls:
-        lines.append("\nTool calls: " + ", ".join(f"{t}×{n}" for t, n in order.tool_calls.items()))
+        lines += ["", f"## {w['calls']}", "",
+                  ", ".join(f"`{t}` ×{n}" for t, n in order.tool_calls.items())]
     effects = performed_side_effects(order)
     if effects:
-        lines.append("Side effects performed: " + ", ".join(effects))
+        lines += ["", f"## {w['performed']}", "", ", ".join(effects)]
     if order.amendments:
-        lines.append(f"Amendments: {len(order.amendments)}")
+        lines += ["", f"## {w['amendments']}", "", str(len(order.amendments))]
     if order.deviations:
-        lines.append("Blocked calls: " + ", ".join(d.get("tool", "?") for d in order.deviations))
+        lines += ["", f"## {w['blocked']}", "",
+                  ", ".join(f"`{d.get('tool', '?')}`" for d in order.deviations)]
     return "\n".join(lines)
+
+
+def _cell(value) -> str:
+    """One table cell: no pipe may survive into it, no newline may break the row."""
+    return str(value or "—").replace("|", "\\|").replace("\n", " ")
 
 
 def diff_work_orders(old: WorkOrder, new: WorkOrder) -> Dict[str, Any]:

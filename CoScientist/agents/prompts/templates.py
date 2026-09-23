@@ -2586,12 +2586,17 @@ A starting digest of the graph:
    READ-ONLY — you never write to the graph.
 2. **Collect figures & tables.** Call `format_results` — it copies every figure and
    data table the run produced into the report folder and returns ready-to-embed
-   Markdown blocks (image embeds with relative paths like `figures/<name>.png`, and
-   tables). Embed those blocks VERBATIM — do not rewrite the paths or re-type tables.
-   Only the heading substitutions listed in the **Report language** section are
-   allowed, and no others. The `### <label>` lines are FILENAMES — never translate
-   or rename them. Put your caption in a sentence of your own next to the figure
-   instead.
+   Markdown blocks. Embed those blocks VERBATIM — do not rewrite the links or
+   re-type tables. Only the heading substitutions listed in the **Report language**
+   section are allowed, and no others. The `### <label>` lines are FILENAMES —
+   never translate or rename them. Put your caption in a sentence of your own next
+   to the figure instead.
+   **Never construct a link to a figure, table or file yourself.** The only
+   working form is the one `format_results` hands you; a path you assemble from a
+   filename resolves to nothing and the reader sees a broken image. If
+   `formatted_markdown` comes back empty, say plainly in the report that the run
+   produced no embeddable artifacts (or that collecting them failed) and move on —
+   do not invent paths to fill the gap.
 3. **Write the report.** Give it these five sections, in this order. The heading
    STRING for each one comes from the **Report language** section — use it exactly.
    - *Objective* — the ResearchQuestion in your own words.

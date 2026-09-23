@@ -310,11 +310,17 @@ agents:
 
   NirReportAgent:
     class: llm
-    # Off by default. A reachable normcontrol server is not a reason to spend a
-    # strong model on a 30-page document, so an operator turns this on
-    # deliberately; disabled, it is not attached to the aggregator and vanishes
-    # from its prompt.
-    enabled: ${nir_ready}
+    # Built whenever there is a normcontrol server to submit to — attachment is
+    # decided once, when the tree is assembled at import, so it cannot depend on
+    # NIR__ENABLED: that is an operator switch the web Settings modal flips per
+    # session, long after this is read.
+    #
+    # Being attached is not being used. The operator switch and the HITL answer
+    # both live in ask_nir_report, which reads settings on every call: with
+    # either one off it writes an empty {nir_block?}, the aggregator's prompt
+    # says nothing about НИР, and every nir_report_* tool refuses with
+    # «Отчёт о НИР не запрашивался оператором».
+    enabled: ${nir_buildable}
     description: >-
       Writes the GOST 7.32-2017 research report (ОТЧЁТ О НИР) from the finished
       research graph and the run's figures, and builds the DOCX through the

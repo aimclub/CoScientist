@@ -772,12 +772,30 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         edges=_edges("tested_by", "uses", "produces", "relates_to",
                      "derived_from"),
     ),
+    # The final write-up, published by code rather than by a model. The
+    # aggregator that produces the text holds the READ-ONLY research surface,
+    # and widening an LLM's rights to record something deterministic buys
+    # nothing — `finalize_report` already has the markdown in hand. Same shape
+    # as the plan mirrors above: a named source with exactly the rights it uses.
+    # `update_attrs` matters because re-running finalize must enrich the node it
+    # already wrote instead of adding a second one, and `_stage_merge` consults
+    # this table even when enforcement is off.
+    "report-writer": AgentPerm(
+        create=frozenset({"Report"}),
+        update_attrs=frozenset({"Report"}),
+        transitions=frozenset(),
+        edges=_edges("derived_from"),
+    ),
     # The pre-stage context-initialization agent seeds the framing frame at the
     # start of a run. It writes the whole context star through the PRIVILEGED
     # init path (store.init_research, enforce_permissions=False), so these rights
     # matter only if it ever writes through research_commit directly; they are
     # kept aligned with INIT_SEED_TYPES for clarity and for schema tests.
     "ContextInitAgent": AgentPerm(
+        # `Spec` is the техническое задание, written after the frame is
+        # confirmed — through an ordinary commit, not through `init_research`,
+        # which starts a NEW study and would archive the graph it was just
+        # seeded into. So this grant is load-bearing, not decorative.
         create=frozenset({"ResearchQuestion", "Constraint", "Tool", "Resource",
                           "EmpiricalBase", "ConfirmationCriteria", "CostModel",
                           "Spec"}),
@@ -794,10 +812,6 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
     # create a Constraint but never attach it to anything, leaving it orphaned.
     "human": AgentPerm(
         create=frozenset({"Constraint", "Evidence"}),
-        # `Spec` is the техническое задание, written after the frame is
-        # confirmed — through an ordinary commit, not through `init_research`,
-        # which starts a NEW study and would archive the graph it was just
-        # seeded into. So this grant is load-bearing, not decorative.
         update_attrs=frozenset(),
         transitions=_transitions(("Conclusion", "draft", "approved")),
         edges=_edges("contextualizes", "regulates", "relates_to",

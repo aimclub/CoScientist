@@ -279,7 +279,6 @@
         hideTyping();
         resetAgents();
         activityMarkIdle();
-        document.getElementById('hitl-panel').classList.add('hidden');
         currentPlannerHitlRequest = null;
         updateRoadmapModalButtons();
         if (typeof RunTimer !== 'undefined') RunTimer.finish();
@@ -338,7 +337,7 @@
         } else if (message.type === 'agent_event') {
           activityTouchAgent(message.author, message.timestamp);
           if (hasText(message.content) && !isChatNoise(message)) {
-            addAgentMsg(message.author || 'system', message.content, message.timestamp);
+            addAgentMsg(message.author || 'system', message.content, message.timestamp, message);
             const foundUrl = extractSandboxUrlFromText(message.content);
             if (foundUrl) updateCoderSandboxButton(foundUrl);
           }
@@ -350,9 +349,12 @@
           });
         } else if (message.type === 'agent_output') {
           activityTouchAgent(message.agent, message.timestamp);
-          if (!PLAN_AGENTS.includes(message.agent)) addAgentOutputMsg(message.agent, message.content, message.timestamp, message.caller);
+          if (!PLAN_AGENTS.includes(message.agent)) {
+            addAgentOutputMsg(message.agent, message.content, message.timestamp, message.caller, message);
+          }
         } else if (message.type === 'tool_activity') {
           applyToolActivity(message, true);
+          if (window.PlanTracker) PlanTracker.feed(message);
         } else if (message.type === 'hitl_request') {
           // Drawn locked; a request that is still open is redelivered by the
           // server right after the snapshot and unlocks its card in place.
@@ -365,6 +367,11 @@
           addSystemMsg(t('common.errorPrefix', { error: message.message }), message.timestamp);
         }
       }
+      // A different session is a different store: its documents have different
+      // ids, and anything cached from the last one is now about nothing.
+      if (window.resetDocuments) resetDocuments();
+      if (window.refreshSessionDocuments) refreshSessionDocuments();
+
       if (!messages.length) clearChat();
       eventCount = messages.length;
       renderEventCount();

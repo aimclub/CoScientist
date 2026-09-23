@@ -43,10 +43,15 @@ _PROMPT_BLOCK = """
 
 
 def _availability_problem() -> Optional[str]:
-    """Why the NIR option must not be offered, or None when it may be."""
+    """Why the NIR option must not be offered, or None when it may be.
+
+    The runtime gate. ``system.yaml`` attaches ``NirReportAgent`` on a narrower
+    one — ``nir_buildable``, the server alone — because attachment is decided
+    once when the tree is assembled and cannot see a switch flipped later. So
+    the agent may well be present here while this says no; every ``nir_report_*``
+    tool refuses in that case, and the prompt below never mentions it.
+    """
     settings = get_settings()
-    # The same gate system.yaml attaches the agent on, so the question and the
-    # agent can never disagree about whether the feature is available.
     if not settings.nir_ready:
         return (
             "NIR__ENABLED is off" if not settings.nir.enabled

@@ -190,6 +190,68 @@ class WebHITLHandler(AbstractHITLHandler):
         return str(user_id), str(session_id)
 
     @staticmethod
+    def _document_source(payload: dict) -> tuple[str, str, str]:
+        """`(markdown, kind, summary)` for one request, or empty strings.
+
+        Every review already carries its own rendered body in `context.output` —
+        the plan matrix, the work order, the frame, the agent's proposed result.
+        That body is the document; this only decides what to call it and, where
+        the request knows better words than the text does, what to say about it
+        in the feed.
+        """
+        context = payload.get("context") or {}
+        markdown = str(context.get("output") or "").strip()
+        if not markdown:
+            return "", "", ""
+
+        from CoScientist.reporting.documents import short_summary
+
+        trigger = str(payload.get("trigger") or "")
+        if context.get("experiment_plan"):
+            goal = (context["experiment_plan"] or {}).get("goal")
+            return markdown, "plan", short_summary(goal)
+        if trigger == "work_report":
+            # The agent wrote this one itself: `submit_work_report` asks for the
+            # result in two to four sentences.
+            report = context.get("work_report") or {}
+            return markdown, "work_report", short_summary(report.get("summary"))
+        if trigger.startswith("work_order"):
+            order = context.get("work_order") or {}
+            return markdown, "work_order", short_summary(order.get("goal"))
+        if payload.get("form"):
+            return markdown, "frame", ""
+        return markdown, "review", ""
+
+    async def _attach_document(self, payload: dict, session_key: SessionKey | None) -> None:
+        """Publish the request's body as a document and point the card at it.
+
+        Silent on failure by design: a card with no document shows its body the
+        way it always did, which is worse to read but never missing.
+        """
+        if not session_key:
+            return
+        markdown, kind, summary = self._document_source(payload)
+        if not markdown:
+            return
+        try:
+            from CoScientist.reporting.documents import publish_document
+
+            document = await asyncio.to_thread(
+                publish_document,
+                session_key,
+                markdown=markdown,
+                kind=kind,
+                summary=summary,
+                agent=str(payload.get("agent_name") or ""),
+            )
+        except Exception as exc:  # noqa: BLE001 — never lose the request itself
+            logger.warning("HITL document not published: %s", exc)
+            return
+        if document:
+            payload["document"] = document.as_payload()
+            payload["summary"] = document.summary
+
+    @staticmethod
     def _is_experiment_review(request: HITLRequest) -> bool:
         kind = (request.context or {}).get("experiment_review_kind")
         return kind in {"plan", "result"}
@@ -221,6 +283,9 @@ class WebHITLHandler(AbstractHITLHandler):
             "timeout_seconds": timeout_sec,
             "timestamp": datetime.now().isoformat(),
         }
+        # Before `_record`: the transcript must carry the document reference
+        # too, or a reopened session would show a card with no way in.
+        await self._attach_document(payload, session_key)
         self._record(session_key, payload)
 
         log_payload = dict(payload)
