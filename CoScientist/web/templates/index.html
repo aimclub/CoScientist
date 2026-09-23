@@ -732,6 +732,13 @@
           </div>
         </div>
         <div class="flex items-center gap-2">
+          <div class="flex items-center rounded border border-outline-variant/20 overflow-hidden" role="group"
+            title="Args / output format">
+            <button type="button" data-tv-format="yaml" onclick="setToolsViewerFormat('yaml')"
+              class="text-[9px] font-bold uppercase tracking-wider text-outline-variant hover:text-primary px-2 py-1 transition-colors">YAML</button>
+            <button type="button" data-tv-format="json" onclick="setToolsViewerFormat('json')"
+              class="text-[9px] font-bold uppercase tracking-wider text-outline-variant hover:text-primary px-2 py-1 transition-colors">JSON</button>
+          </div>
           <button id="experiment-expand-all" onclick="toggleExperimentExpandAll()"
             class="text-[9px] font-bold uppercase tracking-wider text-outline-variant hover:text-primary px-2 py-1 rounded hover:bg-primary/10 transition-colors">Expand
             all</button>

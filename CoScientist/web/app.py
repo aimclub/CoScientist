@@ -2670,22 +2670,6 @@ def create_app() -> FastAPI:
             )
         return JSONResponse({"call_id": call_id, **entry})
 
-    # --- Full (untruncated) tool args/results, for the ToolsViewer's "Show
-    # full result" — the live socket stream only ever carries a preview.
-    @app.get("/api/users/{user_id}/sessions/{session_id}/tool-activity/{call_id}")
-    async def get_tool_activity_full(user_id: str, session_id: str, call_id: str):
-        try:
-            runtime.registry.require_session(user_id, session_id)
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail=str(exc)) from exc
-        entry = runtime.tool_full_values.get((user_id, session_id), {}).get(call_id)
-        if entry is None:
-            raise HTTPException(
-                status_code=404,
-                detail="No stored full result for this call (it may have expired or was never truncated)",
-            )
-        return JSONResponse({"call_id": call_id, **entry})
-
     # --- Usage and cost ---
     @app.get("/api/users/{user_id}/sessions/{session_id}/metrics")
     async def get_metrics(user_id: str, session_id: str, report: bool = False):

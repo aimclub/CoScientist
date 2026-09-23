@@ -284,6 +284,16 @@
       color: #40e56c;
     }
 
+    /* JSON view of the same values (Tools Viewer YAML/JSON toggle). */
+    .tv-json {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .tv-json-string {
+      color: #fbbf24;
+    }
+
     .tv-null,
     .tv-empty {
       color: #94a3b8;
