@@ -6,7 +6,7 @@ import functools
 import logging
 import os
 from datetime import timedelta
-from typing import Any, Callable, Mapping, MutableMapping
+from typing import Any, Callable, Collection, Mapping, MutableMapping
 from uuid import uuid4
 
 from CoScientist.config import get_settings
@@ -156,6 +156,9 @@ RUNTIME_KEY = "experiment_runtime"
 # left the budget bounding nothing. builder.py resets this key only when the
 # ask itself changes, so it bounds the run rather than a single plan.
 REPLAN_ROUNDS_KEY = "experiment_replan_rounds"
+# The agent the route agents are attached to: a route is live only while its
+# agent is one of this executor's enabled subordinates.
+EXECUTOR_AGENT = "ExperimentExecutorAgent"
 ROUTE_AGENT_BY_ROUTE = {
     ExecutionRoute.FEDOT_MAS.value: "FedotAgent",
     ExecutionRoute.REACT_TOOLS.value: "ExperimentAgent",
@@ -427,28 +430,84 @@ def _route_timeout(settings: ExperimentsSettings, route: str) -> float:
     }[route]
 
 
-def _fedot_route_available(settings: ExperimentsSettings) -> bool:
-    """FEDOT is a route only while its agent is actually in the tree.
+_TREE_CACHE: dict[str, Any] = {}
 
-    Two switches guard it from opposite sides: EXPERIMENTS__ROUTE_FEDOT picks
-    the route, while the YAML gates FedotAgent itself on
-    ``web.fedot_fallback_enabled``. With the web switch off and the route switch
-    on, ``start_task`` would hand back ``route_agent=FedotAgent`` for an agent
-    that was never attached, and ``enforce_continue_until_reporting`` would go
-    on demanding a call to it until the attempt budget ran out.
+
+def _config_tree() -> Any:
+    """The profile the next session is built from, reparsed only when it changes.
+
+    Not get_config(): build_for_mode() loads the YAML afresh for every session,
+    so a copy loaded once per process would miss an agent removed while the
+    server runs - the very edit the route check exists to see. Parsing costs
+    ~0.1 s, so the parse is keyed on the files' mtimes. ``enabled`` references
+    are resolved on each read, not here, so a settings change is seen at once.
     """
-    if not settings.route_fedot:
+    from CoScientist.assembly.schema import CONFIG_DIR, load_config, resolve_config_path
+
+    path = resolve_config_path()
+    stamp = (
+        str(path),
+        path.stat().st_mtime_ns if path.exists() else 0,
+        tuple(sorted((p.name, p.stat().st_mtime_ns) for p in CONFIG_DIR.glob("*.yaml"))),
+    )
+    if _TREE_CACHE.get("stamp") != stamp:
+        _TREE_CACHE.update(stamp=stamp, system=load_config(path))
+    return _TREE_CACHE["system"]
+
+
+def _route_agent_attached(agent_name: str, system: Any = None) -> bool:
+    """Whether ``agent_name`` is an enabled subordinate of the executor.
+
+    A profile without the executor (the main system.yaml) has no Experiment
+    Module to attach to, so there the agent's own ``enabled`` decides.
+    """
+    if system is None:
+        system = _config_tree()
+    if EXECUTOR_AGENT in system.agents:
+        return any(a.name == agent_name for a in system.enabled_subordinates(EXECUTOR_AGENT))
+    return agent_name in system.agents and system.agent(agent_name).is_enabled()
+
+
+def fedot_route_available(
+    settings: ExperimentsSettings | None = None, *, system: Any = None,
+) -> bool:
+    """The one answer to "may fedot_mas be planned, validated or run?".
+
+    EXPERIMENTS__ROUTE_FEDOT is the switch, and FedotAgent has to be listed and
+    enabled under ExperimentExecutorAgent. Every consumer asks this: the planner
+    prompt (with ``system`` = the config being built), the planner context, the
+    critique, start_task, the fallback chains and the Alembic post-build route.
+    When they asked different switches, the planner went on writing fedot_mas
+    for an agent the YAML had removed, and start_task handed back
+    ``route_agent=FedotAgent`` for an agent that was never attached, which
+    ``enforce_continue_until_reporting`` then demanded until the run stalled.
+    Fails closed: react_tools is always there to take the task.
+    """
+    if not _settings(settings).route_fedot:
         return False
     try:
-        return bool(get_settings().web.fedot_fallback_enabled)
-    except Exception:  # noqa: BLE001 - an unreadable setting must not stop a run
-        return True
+        return _route_agent_attached(ROUTE_AGENT_BY_ROUTE[ExecutionRoute.FEDOT_MAS.value], system)
+    except Exception as exc:  # noqa: BLE001 - an unreadable config must not stop a run
+        logger.warning("FEDOT.MAS route: agent tree unreadable (%s) - treating it as off", exc)
+        return False
+
+
+def _fedot_live(settings: ExperimentsSettings, route_agents: Collection[str] | None) -> bool:
+    """fedot_route_available, narrowed to the executor that is actually running.
+
+    ``route_agents`` are the route agents attached to the calling executor, when
+    the caller can see them. The YAML can change under a running session, and
+    the tree that session runs is the one that has to hold FedotAgent.
+    """
+    if route_agents is not None and ROUTE_AGENT_BY_ROUTE[ExecutionRoute.FEDOT_MAS.value] not in route_agents:
+        return False
+    return fedot_route_available(settings)
 
 
 def _medical_route_available() -> bool:
     """`medical` is a route only while MedicalAgent is actually in the tree.
 
-    Same shape as `_fedot_route_available` and for the same reason: with the
+    Same reason as `fedot_route_available`: with the
     agent switched off, `start_task` would hand back route_agent=MedicalAgent
     for an agent nobody attached, and `enforce_continue_until_reporting` would
     keep demanding a call to it until the attempt budget ran out.
@@ -461,7 +520,7 @@ def _medical_route_available() -> bool:
 
 def _route_enabled(route: str, settings: ExperimentsSettings) -> bool:
     if route == ExecutionRoute.FEDOT_MAS.value:
-        return _fedot_route_available(settings)
+        return fedot_route_available(settings)
     if route == ExecutionRoute.ALEMBIC_BUILD.value:
         return settings.route_alembic
     if route == ExecutionRoute.MEDICAL.value:
@@ -614,7 +673,14 @@ def start_task(
     *,
     settings: ExperimentsSettings | None = None,
     presign: Callable[[str, str, int], str] = generate_presigned_s3_url,
+    route_agents: Collection[str] | None = None,
 ) -> dict[str, Any]:
+    """Open a fresh attempt on the task's route and return its envelope.
+
+    ``route_agents``: the route agents attached to the calling executor, when
+    known. The envelope names ``route_agent`` for the executor to call, so a
+    route whose agent that executor does not hold must not be handed out.
+    """
     cfg = _settings(settings)
     runtime = _runtime(state)
     task_runtime = _task(runtime, task_id)
@@ -636,12 +702,20 @@ def start_task(
             f"Task {task_id} exhausted its {cfg.task_max_attempts} attempts on route {route!r}.",
         )
 
-    if route == ExecutionRoute.FEDOT_MAS.value and not _fedot_route_available(cfg):
+    # After the budget check, on purpose. Checked against react_tools instead, a
+    # task whose react_tools attempts were spent would raise here with status
+    # still 'ready' - which neither retry_task nor fallback_task accepts, and
+    # the executor would be driven to start_task until the run gave out. The
+    # price of this order is at most one react_tools attempt over budget, and
+    # only when FEDOT went away after the fallback chose it.
+    if route == ExecutionRoute.FEDOT_MAS.value and not _fedot_live(cfg, route_agents):
         route = ExecutionRoute.REACT_TOOLS.value
         task_runtime["current_route"] = route
-        task_runtime["route_history"].append(
-            {"route": route, "reason": "FEDOT unavailable (EXPERIMENTS__ROUTE_FEDOT / EXECUTOR__FEDOT_FALLBACK)"}
-        )
+        task_runtime["route_history"].append({
+            "route": route,
+            "reason": "FEDOT unavailable (EXPERIMENTS__ROUTE_FEDOT off or FedotAgent "
+                      "not attached to ExperimentExecutorAgent)",
+        })
     if not _route_enabled(route, cfg):
         raise ExperimentRuntimeError("route_disabled", f"Route {route!r} is disabled for Experiment Module v0.")
 
@@ -676,7 +750,9 @@ def start_task(
         elif session_inventory_nonempty(state) and (
             matched := match_session_inventory_tool(state, task_model, blob)
         ):
-            route = ExecutionRoute.FEDOT_MAS.value if _fedot_route_available(cfg) else ExecutionRoute.REACT_TOOLS.value
+            # One bound tool is ExperimentAgent's job. FEDOT.MAS is never a
+            # default route, so an implicit rewrite never picks it.
+            route = ExecutionRoute.REACT_TOOLS.value
             if not _route_enabled(route, cfg):
                 raise ExperimentRuntimeError("route_disabled", f"Route {route!r} is disabled for Experiment Module v0.")
             task_runtime["current_route"] = route
@@ -817,15 +893,28 @@ def mark_route_returned(state: MutableMapping[str, Any], route_agent: str) -> No
     runtime["last_route_agent"] = route_agent
 
 
+def _route_live(route: str, settings: ExperimentsSettings, route_agents: Collection[str] | None) -> bool:
+    """_route_enabled, with FEDOT narrowed to the executor that is running."""
+    if route == ExecutionRoute.FEDOT_MAS.value:
+        return _fedot_live(settings, route_agents)
+    return _route_enabled(route, settings)
+
+
 def _next_fallback(
     task_runtime: dict[str, Any],
     settings: ExperimentsSettings | None = None,
+    route_agents: Collection[str] | None = None,
 ) -> str | None:
-    chain = resolve_fallback_chains(settings)[task_runtime["planned_route"]]
+    cfg = _settings(settings)
+    chain = resolve_fallback_chains(cfg)[task_runtime["planned_route"]]
     if (index := chain.index(task_runtime["current_route"]) if task_runtime["current_route"] in chain else -1) < 0:
         return None
     used = {entry["route"] for entry in task_runtime["route_history"]}
-    return next((r for r in chain[index + 1 :] if r not in used), None)
+    # A switched-off route is skipped, not offered: fallback_task would refuse
+    # it as route_disabled and leave the task stuck in fallback_pending.
+    return next(
+        (r for r in chain[index + 1 :] if r not in used and _route_live(r, cfg, route_agents)), None,
+    )
 
 
 def _attempts_for_route(task_runtime: dict[str, Any], route: str) -> int:
@@ -860,6 +949,7 @@ def record_result(
     result: dict[str, Any],
     *,
     settings: ExperimentsSettings | None = None,
+    route_agents: Collection[str] | None = None,
 ) -> dict[str, Any]:
     cfg = _settings(settings)
     runtime, task_runtime, attempt = active_attempt(state)
@@ -1056,6 +1146,7 @@ def record_result(
                 task_runtime,
                 mcp_url=mcp_url,
                 outputs=outputs if isinstance(outputs, dict) else {},
+                settings=cfg,
             )
         else:
             task_runtime["status"] = "done"
@@ -1064,7 +1155,7 @@ def record_result(
     else:
         route = str(task_runtime.get("current_route") or "")
         attempts_left = _attempts_for_route(task_runtime, route) < cfg.task_max_attempts
-        next_fb = _next_fallback(task_runtime)
+        next_fb = _next_fallback(task_runtime, cfg, route_agents)
         # Same-route retries first; else next route in resolve_fallback_chains().
         if task_result.retryable and attempts_left:
             task_runtime["status"] = "retry_pending"
@@ -1118,6 +1209,7 @@ def fallback_task(
     reason: str,
     *,
     settings: ExperimentsSettings | None = None,
+    route_agents: Collection[str] | None = None,
 ) -> dict[str, Any]:
     cfg = _settings(settings)
     runtime = _runtime(state)
@@ -1148,6 +1240,7 @@ def fallback_task(
                 post = apply_alembic_success(
                     state, runtime, task_runtime, mcp_url=live,
                     outputs={"mcp_url": live, "mcp_endpoint": live},
+                    settings=cfg,
                 )
                 _sync_after_mutation(state, runtime, clear_active=True)
                 state["deployed_mcps"] = copy.deepcopy(
@@ -1165,7 +1258,7 @@ def fallback_task(
                         f"{post['post_build_route']}. Call start_task('{task_id}') next."
                     ),
                 }
-    route = _next_fallback(task_runtime)
+    route = _next_fallback(task_runtime, cfg, route_agents)
     if route is None or route == ExecutionRoute.CODER.value:
         from CoScientist.experiments.runtime.alembic_bridge import mcp_url_from_task_runtime
 

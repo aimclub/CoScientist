@@ -1981,8 +1981,10 @@ def orchestrator(ctx: PromptContext) -> str:
             )
         if not has_coder:
             # Compute/engineering is EM-only (no shadow-science bypass): custom
-            # code, sandbox shells, named repos/URLs to RUN, and FEDOT loops are
-            # Executor routes INSIDE the module, not orchestrator lanes.
+            # code, sandbox shells and named repos/URLs to RUN are Executor
+            # routes INSIDE the module, not orchestrator lanes. No route is
+            # named here: the module picks it, and a route named in the brief
+            # (FEDOT.MAS was) ends up in source_request and steers the planner.
             infra_clause = (
                 "\n   The ONE exception is an EXPLICIT ask to wrap/register/build a\n"
                 "   REUSABLE MCP tool server (infrastructure, not an experiment):\n"
@@ -1994,7 +1996,7 @@ def orchestrator(ctx: PromptContext) -> str:
             )
             steps.append(
                 "You have no direct CoderAgent lane. Custom code, sandbox shells,\n"
-                "   named repos/URLs to run, data assembly, and FEDOT loops are handled\n"
+                "   named repos/URLs to run and data assembly are handled\n"
                 "   INSIDE ExperimentModuleAgent (Executor routes). Never write/run code\n"
                 "   yourself — pass those asks as one ExperimentModuleAgent brief."
                 + infra_clause

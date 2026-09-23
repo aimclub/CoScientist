@@ -50,8 +50,27 @@ Root Orchestrator Goal: {orchestrator_root_goal?}
     )
 
 
+def _fedot_planned(ctx: PromptContext) -> bool:
+    """Offer FEDOT.MAS to the planner only when the tree being built can run it.
+
+    ``ctx.system`` is the very config this prompt is built into, so the planner
+    and the executor's route roster cannot disagree. A test double without a
+    real config falls back to the YAML on disk.
+    """
+    from CoScientist.assembly.schema import SystemConfig
+    from CoScientist.experiments.runtime.state_machine import fedot_route_available
+
+    system = getattr(ctx, "system", None)
+    return fedot_route_available(system=system if isinstance(system, SystemConfig) else None)
+
+
 @_register("experiment_planner")
 def experiment_planner(ctx: PromptContext) -> str:
+    # react_tools (ExperimentAgent calling the bound MCP tool itself) is the MCP
+    # route. FEDOT.MAS is not reliable enough to be a default one: it is offered
+    # only as a narrow exception, and when it is switched off the planner never
+    # hears of it - a route named in the prompt is a route the model will use.
+    fedot = _fedot_planned(ctx)
     return render_template(
         """You are ExperimentPlannerAgent (Experiment Module v1b/v1a).
 PLAN only — never call an execution tool. Emit exactly one ExperimentPlan
@@ -63,8 +82,8 @@ Authoritative context (sole MCP inventory; ignore tool names from chat):
 If revision_feedback is non-empty, fix those issues first.
 
 CLOSED ENUMS (literals only):
-- route: fedot_mas|react_tools|coder|alembic_build|research|medical
-- post_build_route (alembic_build only): fedot_mas|react_tools
+- route: <<ROUTES>>
+- post_build_route (alembic_build only): <<POST_BUILD_ROUTES>>
 - mcp_servers[].source: registry|explicit|alembic
 - mcp_servers[].health: unknown|healthy|unhealthy
 - success_criteria[].kind: threshold|artifact_exists|schema|execution|expert
@@ -102,22 +121,22 @@ RULES:
    No literature/PDB task unless source_request asks (route 2).
    If pipeline_scope is present and pipeline_scope.research is false: NEVER
    use route=research or prepare_via=research, even if the ask names scaffolds
-   or literature. Cover the ask with fedot_mas/react_tools/coder only.
+   or literature. Cover the ask with MCP compute (5.1) or coder only.
    risks/assumptions only at plan root; methods = JSON array of strings.
    Copy experiment_context.constraints into assumptions/risks when they constrain methods.
    On critique revise: uncovered OP-n → add required task(s). Uncovered hypothesis_refs
    → hang on an existing required task (also_tests). Multiple tasks may share operation_ref.
 5. Route (exact coverage & data compatibility; same-domain similarity ≠ coverage). Leftover MCP for a different operation is not coverage.
-   1) SAME-operation on-demand MCP (dynamic compute on input structures, e.g. generate_mols, calculate_docking) → fedot_mas (react_tools if FEDOT off). Bind exact inventory server_id+tool. Copy url from available_mcp_servers. Do not swap a different-family tool.
+   1) SAME-operation on-demand MCP (dynamic compute on input structures, e.g. generate_mols, calculate_docking) → react_tools (ExperimentAgent calls the bound tool directly). Bind exact inventory server_id+tool. Copy url from available_mcp_servers. Do not swap a different-family tool.<<FEDOT_RULE>>
       - If evaluating new candidate molecules across multiple targets/isoforms (selectivity/comparative profiling) or generating comparative plots where no single MCP handles multi-target scoring → route=coder.
-      - Non-empty inventory with matching operation ⇒ ≥1 fedot_mas/react_tools compute task.
+      - Non-empty inventory with matching operation ⇒ ≥1 MCP compute task (5.1).
    2) SAME-operation literature/web AND source_request asks → research, mcp_servers=[].
       Bind family tool on analysis_artifacts.path_or_tool (prepare_via=research; role=report|data).
    3) SAME-operation PubMed/PICO/DICOM AND source_request asks → medical, mcp_servers=[].
    4) route_alembic=true AND a repo_candidates[].url fits → alembic_build, repo_url=<exact
-      url>, post_build_route=fedot_mas, mcp_servers=[]. PREFERRED over coder when a repo fits.
+      url>, post_build_route=react_tools, mcp_servers=[]. PREFERRED over coder when a repo fits.
    5) else required route=coder (for multi-target scripting, comparative data tables, plots, or uncovered operations).
-   Mixed ask = one plan: research/medical evidence, fedot_mas compute, coder uncovered/comparative.
+   Mixed ask = one plan: research/medical evidence, react_tools compute, coder uncovered/comparative.
 6. Copy experiment_run_id + source_request verbatim. plan_id: one stable
    non-empty id, e.g. PLAN-<uuid>; revision: integer >= 1. On a REVISION round
    the runtime overwrites both from the previous plan, so never try to recall
@@ -127,8 +146,8 @@ RULES:
    for data/generator tools (required=false only).
    coder → concrete filenames; alembic_build → mcp_server/report.
 
-Minimal fedot_mas (copy server_id, name, url from available_mcp_servers):
-{"id":"EXP-1","name":"…","description":"…","rationale":"…","route":"fedot_mas",
+Minimal react_tools (copy server_id, name, url from available_mcp_servers):
+{"id":"EXP-1","name":"…","description":"…","rationale":"…","route":"react_tools",
  "design":{"hypothesis_ref":"H1","operation_ref":"OP-1","experiment_question":"…",
   "dataset":{"name":"…","ref":null,"notes":"…"},
   "baselines":[{"name":"…","kind":"method","ref":null}],
@@ -144,13 +163,30 @@ Minimal fedot_mas (copy server_id, name, url from available_mcp_servers):
 Deltas vs that skeleton (same design/criteria/artifact shape):
 - coder: route=coder, mcp_servers=[], launch_params="{}", prepare_via=coder, path_or_tool=filename
 - research: route=research, mcp_servers=[], prepare_via=research, path_or_tool=family tool, artifact role=report
-- alembic_build: route=alembic_build, mcp_servers=[], repo_url from repo_candidates, post_build_route=fedot_mas,
-  expected_artifacts role=mcp_server. Runtime injects the built server — never invent tools.
+- alembic_build: route=alembic_build, mcp_servers=[], repo_url from repo_candidates, post_build_route=react_tools,
+  expected_artifacts role=mcp_server. Runtime injects the built server — never invent tools.<<FEDOT_DELTA>>
 
 Top-level: schema_version, plan_id, experiment_run_id, revision, source_request,
 goal, hypothesis, hypotheses, methods, context_digest, context_refs, tasks,
 risks, assumptions, total_est_duration_min, created_at (UTC ISO-8601 Z).
 """,
+        ROUTES=(
+            "react_tools|fedot_mas|coder|alembic_build|research|medical" if fedot
+            else "react_tools|coder|alembic_build|research|medical"
+        ),
+        POST_BUILD_ROUTES="react_tools|fedot_mas" if fedot else "react_tools",
+        FEDOT_RULE=(
+            "\n      - fedot_mas ONLY when ONE task must itself chain ≥2 different bound"
+            " inventory tools in a search/optimisation loop that cannot be split into"
+            " react_tools tasks. FEDOT.MAS is less reliable than react_tools: never the"
+            " default, never for a single tool call."
+            if fedot else ""
+        ),
+        FEDOT_DELTA=(
+            "\n- fedot_mas (5.1 exception only): route=fedot_mas, mcp_servers lists every"
+            " inventory tool the loop chains."
+            if fedot else ""
+        ),
     )
 
 

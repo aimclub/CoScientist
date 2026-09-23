@@ -301,3 +301,60 @@ def test_critique_blocks_alembic_with_premature_mcp_servers():
     )
     assert critique.verdict == "revise"
     assert any("mcp_servers empty" in i.message for i in critique.issues)
+
+
+def _fedot_post_build_task() -> dict:
+    task = _alembic_task()
+    task["post_build_route"] = "fedot_mas"
+    return task
+
+
+def test_critique_blocks_a_fedot_post_build_route_while_fedot_is_off():
+    critique = critique_plan(
+        _plan(_fedot_post_build_task()),
+        settings=ExperimentsSettings(route_alembic=True, route_fedot=False),
+        available_tools=_inventory(),
+        hypothesis_refs=[{"hypothesis_id": "H1", "statement": "Fixture"}],
+        repo_candidates=[{"url": "https://github.com/whitead/synspace"}],
+    )
+    assert critique.verdict == "revise"
+    issue = next(i for i in critique.issues if "post_build_route" in i.message)
+    assert issue.severity == "blocker"
+    assert "react_tools" in issue.suggestion
+
+
+def test_alembic_success_reopens_on_react_tools_while_fedot_is_off():
+    """A built server is still used - through ExperimentAgent, not FEDOT.MAS."""
+    state: dict = {}
+    initialize_runtime(
+        state,
+        _plan(_fedot_post_build_task()),
+        critique={"verdict": "approve", "issues": [], "summary": "forced"},
+    )
+    approve_plan(state)
+    settings = ExperimentsSettings(route_alembic=True, route_fedot=False)
+    started = start_task(state, "EXP-1", settings=settings)
+    mark_route_returned(state, "McpBuilderAgent")
+    recorded = record_result(
+        state,
+        "EXP-1",
+        started["attempt_id"],
+        {
+            "status": "success",
+            "summary": "Built MCP",
+            "outputs": {
+                "mcp_url": "http://127.0.0.1:9000/mcp",
+                "mcp_endpoint": "http://127.0.0.1:9000/mcp",
+                "tools": ["synspace_score"],
+            },
+            "criteria_checks": [
+                {"criterion_id": "EXP-1-C1", "passed": True, "details": "mcp_url present"}
+            ],
+        },
+        settings=settings,
+    )
+    assert recorded["post_build"]["post_build_route"] == "react_tools"
+    task_runtime = state["experiment_runtime"]["tasks"]["EXP-1"]
+    assert task_runtime["current_route"] == "react_tools"
+    assert task_runtime["task"]["route"] == "react_tools"
+    assert task_runtime["route_history"][-1]["route"] == "react_tools"

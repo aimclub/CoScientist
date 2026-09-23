@@ -90,6 +90,7 @@ const appSettings = {
     resultAutoApprove: false,
     planReviewTimeoutS: 300,           // seconds; runs out => paused, not approved
     resultReviewTimeoutS: 300,
+    routeFedot: false,                 // FEDOT.MAS route; applies to the next session
   },
 };
 

@@ -368,6 +368,13 @@ def _apply_frontend_settings(frontend: dict) -> None:
             exp.plan_auto_approve = bool(experiment["planAutoApprove"])
         if "resultAutoApprove" in experiment:
             exp.result_auto_approve = bool(experiment["resultAutoApprove"])
+        # FEDOT.MAS route (EXPERIMENTS__ROUTE_FEDOT). The next session's tree
+        # attaches FedotAgent on it and builds the planner prompt with or
+        # without the route. Off also stops a running session at once: the
+        # critique and start_task read this flag on every call. On cannot reach
+        # a running session - its executor was built without FedotAgent.
+        if "routeFedot" in experiment:
+            exp.route_fedot = bool(experiment["routeFedot"])
         # Both windows fail closed, so a nonsense value must not become
         # "wait forever" by accident: the model declares gt=0 but a BaseModel
         # does not validate assignment, and handler.py reads <= 0 as no
@@ -482,6 +489,7 @@ def _current_settings() -> dict:
             "resultAutoApprove": settings.experiments.result_auto_approve,
             "planReviewTimeoutS": settings.experiments.plan_review_timeout_s,
             "resultReviewTimeoutS": settings.experiments.result_review_timeout_s,
+            "routeFedot": settings.experiments.route_fedot,
         },
         "plannerAgent": {
             "retrievalEnabled": web.planner_retrieval_enabled,

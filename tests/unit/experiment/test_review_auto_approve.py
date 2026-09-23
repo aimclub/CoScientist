@@ -123,7 +123,36 @@ def test_the_tab_reaches_the_reviewer_without_a_restart(_clean_env):
     assert echoed == {
         "planAutoApprove": True, "resultAutoApprove": False,
         "planReviewTimeoutS": 1800, "resultReviewTimeoutS": 900,
+        "routeFedot": get_settings().experiments.route_fedot,
     }, echoed
+
+
+def test_the_tools_tab_switches_fedot_for_the_next_session(monkeypatch):
+    """The FEDOT.MAS route lands on the one switch every route decision reads,
+    and reads back, so the modal does not show a stale toggle."""
+    from CoScientist.experiments.runtime.state_machine import fedot_route_available
+    from CoScientist.web.app import _apply_frontend_settings, _current_settings
+
+    exp = get_settings().experiments
+    monkeypatch.setattr(exp, "route_fedot", True)
+    _apply_frontend_settings({"experimentModule": {"routeFedot": False}})
+    assert exp.route_fedot is False
+    assert fedot_route_available() is False
+    assert _current_settings()["experimentModule"]["routeFedot"] is False
+
+    _apply_frontend_settings({"experimentModule": {"routeFedot": True}})
+    assert exp.route_fedot is True
+    assert _current_settings()["experimentModule"]["routeFedot"] is True
+
+
+def test_the_fedot_switch_is_in_the_tools_tab_and_session_scoped():
+    modal = _read(WEB / "modals" / "settings.js")
+    tools = modal[modal.index("id: 'tools'"):]
+    row = tools[tools.index("id: 'experimentRouteFedot'"):]
+    row = row[:row.index("},")]
+    assert "path: 'experimentModule.routeFedot'" in row
+    assert "scope: 'session'" in row
+    assert "env: 'EXPERIMENTS__ROUTE_FEDOT'" in row
 
 
 @pytest.mark.parametrize("bad", [0, -1, "", "later", None])

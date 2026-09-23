@@ -388,3 +388,34 @@ def test_build_experiment_context_falls_back_without_graph(monkeypatch):
     refs = ctx.state["experiment_context"]["hypothesis_refs"]
     assert [r["hypothesis_id"] for r in refs] == ["H1", "H2"]
     assert refs[0]["statement"] == "Prose one works."
+
+
+def test_the_planner_context_carries_the_effective_fedot_answer(monkeypatch):
+    """experiment_context.route_fedot is the answer start_task gets - switch AND
+    FedotAgent attached - where it used to be the bare switch. The planner's own
+    JSON leaves it out: its prompt is built with or without the route."""
+    from CoScientist.assembly.schema import load_config, resolve_config_path
+    from CoScientist.config import get_settings
+    from CoScientist.experiments.context import build_experiment_context
+    from CoScientist.experiments.runtime import state_machine
+
+    def build() -> dict:
+        state: dict = {
+            "filtered_tools": [],
+            "experiment_source_request": "Estimate a chemical property with ready MCP tools.",
+        }
+        build_experiment_context(SimpleNamespace(state=state, user_content=None))
+        return state
+
+    on = build()
+    assert on["experiment_context"]["route_fedot"] is True
+    assert '"route_fedot"' not in on["experiment_planner_context"]
+
+    monkeypatch.setattr(get_settings().experiments, "route_fedot", False)
+    assert build()["experiment_context"]["route_fedot"] is False
+
+    monkeypatch.setattr(get_settings().experiments, "route_fedot", True)
+    detached = load_config(resolve_config_path("experiments"))
+    detached.agents["ExperimentExecutorAgent"].subordinates.remove("FedotAgent")
+    monkeypatch.setattr(state_machine, "_config_tree", lambda: detached)
+    assert build()["experiment_context"]["route_fedot"] is False

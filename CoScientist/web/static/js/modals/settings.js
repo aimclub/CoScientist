@@ -145,6 +145,15 @@
               },
             ],
           },
+          {
+            // Session scope: FedotAgent is attached (or not) when the next
+            // session's agent tree is built, and the planner prompt with it.
+            // Off also reaches a running session, hence its own scope hint.
+            heading: 'experimentRoutes',
+            fields: [
+              { id: 'experimentRouteFedot', path: 'experimentModule.routeFedot', type: 'toggle', scope: 'session', scopeHintKey: 'settings.f.experimentRouteFedot.scopeHint', env: 'EXPERIMENTS__ROUTE_FEDOT' },
+            ],
+          },
         ],
       },
       {
@@ -513,7 +522,8 @@
       const label = escHtml(t(`settings.f.${field.id}.label`));
       const desc = i18n[`settings.f.${field.id}.desc`] ? t(`settings.f.${field.id}.desc`) : '';
       const wide = field.type === 'cards' || field.type === 'chips';
-      const scopeHint = field.scope ? `${t(`settings.scope.${field.scope}`)} — ${t(`settings.scope.${field.scope}.hint`)}` : '';
+      // scopeHintKey: a field whose effect does not fit its scope's stock hint.
+      const scopeHint = field.scope ? `${t(`settings.scope.${field.scope}`)} — ${t(field.scopeHintKey || `settings.scope.${field.scope}.hint`)}` : '';
       const scope = field.scope ? `
         <span class="material-symbols-outlined text-[14px] text-outline-variant/70 cursor-help"
           role="img" aria-label="${escHtml(scopeHint)}" title="${escHtml(scopeHint)}">${SETTINGS_SCOPES[field.scope]}</span>` : '';

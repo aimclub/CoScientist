@@ -21,14 +21,33 @@ def test_deterministic_critique_blocks_disabled_and_unknown_routes():
     )
     assert disabled.verdict == "revise"
     assert any(issue.category == "feasibility" for issue in disabled.issues)
+    # The fix is named: the same bound tool, run by ExperimentAgent.
+    blocker = next(i for i in disabled.issues if "'fedot_mas' is switched off" in i.message)
+    assert blocker.severity == "blocker"
+    assert "route=react_tools" in blocker.suggestion
 
     unknown = critique_plan(
         plan,
-        settings=ExperimentsSettings(),
+        settings=ExperimentsSettings(route_fedot=True),
         available_tools=[],
     )
     assert unknown.verdict == "revise"
     assert any("absent from the capability inventory" in issue.message for issue in unknown.issues)
+
+
+def test_revision_suggestions_never_steer_toward_fedot():
+    """Suggestions reach the planner verbatim in its revision round; they used
+    to name fedot_mas first, and did so even with the route switched off."""
+    coder = _task("EXP-1", route="coder")
+    coder["description"] = "Reimplement estimate_property in a script."
+    for route_fedot in (False, True):
+        critique = critique_plan(
+            _plan(coder),
+            settings=ExperimentsSettings(route_fedot=route_fedot),
+            available_tools=_inventory(),
+        )
+        assert any("reimplement a ready MCP" in i.message for i in critique.issues)
+        assert not [i.suggestion for i in critique.issues if "fedot" in i.suggestion.lower()]
 
 
 def test_completeness_critique_rejects_when_request_explicitly_requires_unused_tools():
@@ -101,7 +120,7 @@ def test_completeness_critique_ignores_incidental_tool_name_mentions():
     ]
     critique = critique_plan(
         plan,
-        settings=ExperimentsSettings(),
+        settings=ExperimentsSettings(route_fedot=True),
         available_tools=inventory,
         hypothesis_refs=[{"hypothesis_id": "H1", "statement": "Fixture"}],
     )
@@ -116,7 +135,7 @@ def test_completeness_critique_keeps_single_capability_plans():
     plan = _plan(_task("EXP-1"))
     critique = critique_plan(
         plan,
-        settings=ExperimentsSettings(),
+        settings=ExperimentsSettings(route_fedot=True),
         available_tools=_inventory(),
     )
     assert critique.verdict == "approve"
@@ -148,7 +167,7 @@ def test_completeness_critique_allows_named_tool_alternatives():
     plan.tasks[0].mcp_servers[0].server_id = "srv-gen"
     critique = critique_plan(
         plan,
-        settings=ExperimentsSettings(),
+        settings=ExperimentsSettings(route_fedot=True),
         available_tools=inventory,
         preferred_tools=inventory,
     )

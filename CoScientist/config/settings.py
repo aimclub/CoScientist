@@ -359,6 +359,9 @@ class WebSettings(BaseModel):
     auto_clear_graph_enabled: bool = _os.getenv("GRAPH__AUTO_CLEAR", "false").lower() in ("true", "1", "yes")
     executor_tool_keep_score: float = float(_os.getenv("EXECUTOR_TOOL_KEEP_SCORE", "0.3"))
     executor_tool_abstain_score: float = float(_os.getenv("EXECUTOR_TOOL_ABSTAIN_SCORE", "0.2"))
+    # The main profile's FEDOT.MAS reranker fallback (ExecutorSwitchAgent). The
+    # Experiment Module's route decisions do not read it: their switch is
+    # EXPERIMENTS__ROUTE_FEDOT.
     fedot_fallback_enabled: bool = _os.getenv("EXECUTOR__FEDOT_FALLBACK", "true").lower() in ("true", "1", "yes")
     # The clinical specialist: PubMed/PICO, study taxonomy and DICOM. A narrow
     # role, and a study that needs none of it pays for the agent in the
@@ -423,7 +426,16 @@ class ExperimentsSettings(BaseModel):
     environment names use the nested ``EXPERIMENTS__*`` form.
     """
 
-    route_fedot: bool = True
+    # The one FEDOT.MAS switch of the Experiment Module (EXPERIMENTS__ROUTE_FEDOT).
+    # experiments.yaml attaches FedotAgent on it, and every route decision -
+    # the planner prompt, its context, the critique, start_task, fallback and
+    # the Alembic post-build route - asks state_machine.fedot_route_available,
+    # which also requires FedotAgent to be listed under ExperimentExecutorAgent.
+    # Off by default: FEDOT.MAS is not reliable enough to be a default route,
+    # and ReAct over the bound MCP tools (react_tools) covers the same tasks.
+    # EXECUTOR__FEDOT_FALLBACK is a different switch: the main profile's
+    # reranker fallback.
+    route_fedot: bool = False
     route_coder_mcp: bool = False
     route_alembic: bool = False
     task_max_attempts: int = Field(default=2, ge=1, le=2)
@@ -466,7 +478,8 @@ class ExperimentsSettings(BaseModel):
     # (EXPERIMENTS__LENIENT_PLANNER=false) to preserve unspecified* sentinels.
     lenient_planner: bool = True
     # Route fallback chains after a failed attempt. Default: fedot → react → coder.
-    # Override via EXPERIMENTS__FALLBACK_*.
+    # Override via EXPERIMENTS__FALLBACK_*. A route that is switched off is
+    # skipped, so a chain never falls back into FEDOT.MAS while it is off.
     fallback_fedot_mas: list[str] = Field(
         default_factory=lambda: ["fedot_mas", "react_tools", "coder"]
     )

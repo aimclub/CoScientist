@@ -278,6 +278,7 @@ const i18n = {
   'settings.group.search': { en: 'Web search', ru: 'Поиск в сети' },
   'settings.group.code': { en: 'Code execution', ru: 'Выполнение кода' },
   'settings.group.toolSelection': { en: 'Tool selection', ru: 'Подбор инструментов' },
+  'settings.group.experimentRoutes': { en: 'Experiment routes', ru: 'Маршруты экспериментов' },
   'settings.group.toolSelection.desc': {
     en: 'How TaskExecutorAgent decides which of the found MCP tools to use.',
     ru: 'Как TaskExecutorAgent решает, какие из найденных MCP-инструментов использовать.'
@@ -442,6 +443,18 @@ const i18n = {
   'settings.f.workOrderVeto.envValues': {
     en: '-1 — wait for a human (no auto-start)\nN > 0 — start automatically after N seconds',
     ru: '-1 — ждать решения человека (без автостарта)\nN > 0 — стартовать автоматически через N секунд'
+  },
+  'settings.f.experimentRouteFedot.label': {
+    en: 'Use FEDOT.MAS in experiments',
+    ru: 'Использовать FEDOT.MAS в экспериментах'
+  },
+  'settings.f.experimentRouteFedot.desc': {
+    en: 'Off: the experiment plan never offers FEDOT.MAS, and MCP tools are called directly by ExperimentAgent (ReAct). On: FEDOT.MAS is kept for the rare task that has to chain several tools in one search loop. Turning it on applies from the next session; turning it off also stops FEDOT.MAS in a session already running. An experiment module served as a separate A2A service reads only the environment variable.',
+    ru: 'Выключено: план эксперимента не предлагает FEDOT.MAS, и MCP-инструменты вызывает напрямую ExperimentAgent (ReAct). Включено: FEDOT.MAS остаётся для редкой задачи, которой нужно связать несколько инструментов в одном цикле поиска. Включение действует со следующей сессии, выключение останавливает FEDOT.MAS и в уже идущей. Модуль экспериментов, запущенный отдельным A2A-сервисом, читает только переменную окружения.'
+  },
+  'settings.f.experimentRouteFedot.scopeHint': {
+    en: 'Turning it on applies to sessions that first run after saving; turning it off also stops FEDOT.MAS in sessions already running.',
+    ru: 'Включение действует для сессий, впервые запущенных после сохранения; выключение останавливает FEDOT.MAS и в уже запущенных сессиях.'
   },
   'settings.f.experimentPlanAuto.label': {
     en: 'Approve the experiment plan for me',

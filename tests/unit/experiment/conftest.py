@@ -22,4 +22,8 @@ def _experiment_module_defaults(monkeypatch):
         route_alembic=False,
     )
     monkeypatch.setattr(get_settings(), "experiments", experiments, raising=False)
+    # The suite runs on system.yaml, which has no ExperimentExecutorAgent, so
+    # fedot_route_available asks FedotAgent's own `enabled` there - and main
+    # gates that on EXECUTOR__FEDOT_FALLBACK, which a shell may have turned off.
+    monkeypatch.setattr(get_settings().web, "fedot_fallback_enabled", True)
     yield

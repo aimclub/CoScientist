@@ -582,7 +582,8 @@ def _prompt_context(context: dict[str, Any]) -> str:
         "source_request": context.get("source_request"),
         "context_digest": context.get("context_digest") or "",
         "route_alembic": bool(context.get("route_alembic")),
-        "route_fedot": bool(context.get("route_fedot")),
+        # route_fedot stays out: the planner prompt is built with or without the
+        # FEDOT.MAS route, and a switched-off route should not reach it at all.
         "available_mcp_servers": prompt_servers,
         "available_mcp_capabilities": [
             _cap_for_prompt(c) for c in (context.get("available_mcp_capabilities") or [])
@@ -785,6 +786,7 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
         FAMILY_RESEARCH,
         declared_family_capabilities,
     )
+    from CoScientist.experiments.runtime.state_machine import fedot_route_available
     experiments = get_settings().experiments
     revision_feedback: list[dict[str, Any]] = []
     if state.get("experiment_plan_validation_errors"):
@@ -860,7 +862,11 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
         "repo_candidates": repo_candidates,
         "revision_feedback": revision_feedback, "unresolved_gaps": gaps[:20],
         "context_digest": research_context[:1500] or source_request[:1500],
-        "route_alembic": bool(experiments.route_alembic), "route_fedot": bool(experiments.route_fedot),
+        # The effective FEDOT.MAS answer (switch AND FedotAgent attached), not the
+        # bare switch: the planner used to see route_fedot=true for an agent the
+        # YAML had already removed.
+        "route_alembic": bool(experiments.route_alembic),
+        "route_fedot": fedot_route_available(experiments),
     }
     scope = state.get("pipeline_scope")
     if isinstance(scope, dict) and scope.get("source") == "hitl":
