@@ -139,3 +139,37 @@ def test_the_button_endpoint_summarizes_one_agent_of_one_request(tmp_path, monke
         assert client.post(url, json={"node_id": "tool:1", "turn": "i1"}).status_code == 404
         assert client.post(url, json={"node_id": "agent:Nobody@i1"}).status_code == 404
         assert client.post(url, json={}).status_code == 422
+
+
+def test_a_model_named_without_a_provider_goes_through_the_openai_route():
+    """summary_url names the model the way the endpoint does; litellm needs
+    a provider it knows, and an OpenAI-compatible base is the route for it."""
+    assert m._routable("google/gemini-2.0-flash-lite-001", "https://openrouter.ai/api/v1") \
+        == "openai/google/gemini-2.0-flash-lite-001"
+    assert m._routable("openrouter/deepseek/deepseek-v4-flash-0731", "https://openrouter.ai/api/v1") \
+        == "openrouter/deepseek/deepseek-v4-flash-0731", "a routable name is left alone"
+
+
+def test_a_retired_small_model_falls_back_to_the_main_model(monkeypatch):
+    """A config still naming a model the endpoint no longer serves must not
+    leave the panel empty: the main model writes the summary instead."""
+    import litellm
+    from types import SimpleNamespace
+
+    import CoScientist.config as cfg
+    monkeypatch.setattr(cfg, "get_settings", lambda: SimpleNamespace(llm=SimpleNamespace(
+        agent_summary_model="openrouter/retired-model", summary_url=None,
+        main_model="openrouter/main-model", main_url="http://main", openai_api_key="k",
+        request_timeout=5)))
+    tried = []
+
+    async def fake_completion(**kw):
+        tried.append(kw["model"])
+        if "retired" in kw["model"]:
+            raise litellm.NotFoundError("No endpoints found", model=kw["model"], llm_provider="openrouter")
+        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="written by main"))])
+
+    monkeypatch.setattr(litellm, "acompletion", fake_completion)
+    text, model = asyncio.run(m._complete("sys", "trace"))
+    assert (text, model) == ("written by main", "openrouter/main-model")
+    assert tried == ["openrouter/retired-model", "openrouter/main-model"]
