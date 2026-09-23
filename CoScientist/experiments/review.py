@@ -286,7 +286,11 @@ def render_experiment_plan(plan: ExperimentPlan) -> str:
         inputs_str = "; ".join(inputs_list) if inputs_list else "none"
 
         also = f" (+{', '.join(d.also_tests)})" if d.also_tests else ""
-        op_str = f" [Operation: `{d.operation_ref}`]" if d.operation_ref else ""
+        # Named, not coded. The operator reads this card beside the research
+        # frame, and «OP-1» told them nothing there either.
+        op_no = str(d.operation_ref or "").rsplit("-", 1)[-1]
+        op_str = (f" [задача исследования {op_no} · `{d.operation_ref}`]"
+                  if d.operation_ref else "")
         notes = f" — {d.dataset.notes}" if d.dataset.notes else ""
         L += ["", f"## {t.id} · {t.name}", f"Route: `{t.route.value}`"]
         if t.route.value == "alembic_build":

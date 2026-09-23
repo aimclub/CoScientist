@@ -511,11 +511,15 @@ def test_build_for_mode_planner_run_root(monkeypatch):
         run_root = system.run_root
         assert isinstance(run_root, SequentialAgent)
         names = [a.name for a in run_root.sub_agents]
+        # Two pre-stages now: the frame is confirmed and seeded, then written
+        # out as a техническое задание by GOST 19.201-78. The second reads what
+        # the first confirmed, so the order is load-bearing.
         assert names[0] == "ContextInitAgent"
-        assert names[1] == "PlanningPipelineAgent"
+        assert names[1] == "TZSpecAgent"
+        assert names[2] == "PlanningPipelineAgent"
         assert names[-1] == "ResultAggregatorAgent"
 
-        planning_agent = run_root.sub_agents[1]
+        planning_agent = run_root.sub_agents[2]
         planning_children = [a.name for a in planning_agent.sub_agents]
         assert planning_children == ["PlannerAgent", "OrchestratorAgent"]
 

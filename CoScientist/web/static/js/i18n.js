@@ -1500,6 +1500,16 @@ const i18n = {
   'graph.field.resource_type': { en: 'Resource', ru: 'Ресурс' },
   'graph.field.remaining': { en: 'Remaining', ru: 'Осталось' },
   'graph.field.limit': { en: 'Total', ru: 'Всего' },
+  // «Основание и приёмка» — поля ТЗ по ГОСТ 19.201-78. Они ложатся атрибутами
+  // корневого вопроса, значит попадают в карточку «Постановка»; без записи здесь
+  // читатель увидел бы «basis document».
+  'graph.field.basis_document': { en: 'Basis for the work', ru: 'Основание для работы' },
+  'graph.field.customer': { en: 'Customer', ru: 'Заказчик' },
+  'graph.field.topic_name': { en: 'Name of the topic', ru: 'Наименование темы' },
+  'graph.field.deliverables': { en: 'Documents delivered', ru: 'Отчётные документы' },
+  'graph.field.stages': { en: 'Stages and deadlines', ru: 'Этапы и сроки' },
+  'graph.field.acceptance': { en: 'Acceptance procedure', ru: 'Порядок приёмки' },
+  'graph.field.expected_effect': { en: 'Expected effect', ru: 'Ожидаемый эффект' },
   'graph.field.domain': { en: 'Field', ru: 'Область' },
   'graph.field.gap': { en: 'Knowledge gap', ru: 'Пробел в знаниях' },
   'graph.field.question': { en: 'Question', ru: 'Вопрос' },

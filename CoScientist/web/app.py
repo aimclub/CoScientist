@@ -2189,10 +2189,16 @@ def create_app() -> FastAPI:
     async def get_tz_document(name: str = ""):
         """Serve a ТЗ document from tz_documents/ (the latest one by default).
 
-        The TZSpecAgent announces the file in the chat; this endpoint lets the
-        user open it in the browser.
+        The framing stage announces the file in the chat and hangs it off the
+        «Постановка» card of the research graph; both links land here.
+
+        Markdown is returned as text so the browser shows it; a .docx is
+        returned as a download, because a Word file rendered as text is a
+        screenful of binary. The file name travels in the link, so the two
+        formats of one document are two links, not a format switch.
         """
         from fastapi.responses import PlainTextResponse
+        from urllib.parse import quote
 
         tz_dir = Path("tz_documents")
         if not tz_dir.is_dir():
@@ -2203,10 +2209,24 @@ def create_app() -> FastAPI:
             if not candidate.is_file():
                 return JSONResponse({"error": f"no such document: {name}"}, status_code=404)
         else:
-            files = sorted(tz_dir.glob("TZ_*.md"))
+            # Newest of either format. `TZ_*` is the microfluidics profile's
+            # naming, `ТЗ_*` the research frame's; both live here.
+            files = sorted((p for p in tz_dir.iterdir()
+                            if p.suffix.lower() in (".md", ".docx")),
+                           key=lambda p: p.stat().st_mtime)
             if not files:
                 return JSONResponse({"error": "no ТЗ documents yet"}, status_code=404)
             candidate = files[-1]
+        if candidate.suffix.lower() == ".docx":
+            return FileResponse(
+                str(candidate),
+                media_type="application/vnd.openxmlformats-officedocument."
+                           "wordprocessingml.document",
+                # RFC 5987: the names are Russian, and a bare `filename=` would
+                # reach the browser as mojibake.
+                headers={"Content-Disposition":
+                         "attachment; filename*=UTF-8''" + quote(candidate.name)},
+            )
         return PlainTextResponse(
             candidate.read_text(encoding="utf-8"),
             media_type="text/markdown; charset=utf-8",

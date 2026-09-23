@@ -422,8 +422,15 @@ EDGE_TYPES: Dict[str, Tuple[Tuple[str, str], ...]] = {
                   ("Constraint", "ConfirmationCriteria")),
     "constrains": (("Constraint", "Hypothesis"),
                    ("Constraint", "VerificationMethod")),
+    # A study that reached no Conclusion still produced a write-up, and it has
+    # to hang off something — otherwise the one node a reader most wants is the
+    # one node with no edge to find it by.
+    # A Spec written BEFORE the study — the техническое задание the framing
+    # stage issues — has no conclusion and no evidence to derive from, and the
+    # question is the only thing it is about.
     "derived_from": tuple((a, t) for a in _ARTIFACT_TYPES
-                          for t in ("Conclusion", "Evidence")),
+                          for t in ("Conclusion", "Evidence"))
+    + (("Report", "ResearchQuestion"), ("Spec", "ResearchQuestion")),
     "contextualizes": (("Constraint", "ResearchQuestion"),),
     "defines_scope": (("ResearchQuestion", "EmpiricalBase"),),
     "relates_to": (("Evidence", "ResearchQuestion"), ("Evidence", "Hypothesis")),
@@ -772,10 +779,12 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
     # kept aligned with INIT_SEED_TYPES for clarity and for schema tests.
     "ContextInitAgent": AgentPerm(
         create=frozenset({"ResearchQuestion", "Constraint", "Tool", "Resource",
-                          "EmpiricalBase", "ConfirmationCriteria", "CostModel"}),
-        update_attrs=frozenset({"ResearchQuestion"}),
+                          "EmpiricalBase", "ConfirmationCriteria", "CostModel",
+                          "Spec"}),
+        update_attrs=frozenset({"ResearchQuestion", "Spec"}),
         transitions=frozenset(),
-        edges=_edges("contextualizes", "defines_scope", "applies_to"),
+        edges=_edges("contextualizes", "defines_scope", "applies_to",
+                     "derived_from"),
     ),
     # The human writes through the HITL bridge (web endpoint / approval flow),
     # never through an LLM toolset. Expert evidence is the human's own layer-1
@@ -785,6 +794,10 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
     # create a Constraint but never attach it to anything, leaving it orphaned.
     "human": AgentPerm(
         create=frozenset({"Constraint", "Evidence"}),
+        # `Spec` is the техническое задание, written after the frame is
+        # confirmed — through an ordinary commit, not through `init_research`,
+        # which starts a NEW study and would archive the graph it was just
+        # seeded into. So this grant is load-bearing, not decorative.
         update_attrs=frozenset(),
         transitions=_transitions(("Conclusion", "draft", "approved")),
         edges=_edges("contextualizes", "regulates", "relates_to",

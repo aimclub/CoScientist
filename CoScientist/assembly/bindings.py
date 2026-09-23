@@ -1322,6 +1322,13 @@ _cb("finish_after_plan_registered", "after_model",
 # Trim prose/fences/trailing text around a JSON answer BEFORE strict
 # output_schema validation (providers don't always honour response_format).
 _cb("sanitize_json_output", "after_model", factory=lambda ctx: _sanitize_json_output())
+def _stage_tz_draft():
+    from CoScientist.context_init.tz_agent import stage_tz_draft
+    return stage_tz_draft
+
+
+# The assembled ТЗ, staged where `{tz_draft?}` can reach it.
+_cb("stage_tz_draft", "before_agent", factory=lambda ctx: _stage_tz_draft())
 # Render the approved ТЗ into the reference Markdown document (state + file).
 _cb("save_tz_document", "after_agent", factory=lambda ctx: _save_tz_document())
 # Save the ТЗ + literature queries as shareable Markdown & HTML for hand-off.
@@ -1392,6 +1399,7 @@ def _register_classes() -> None:
     from CoScientist.hitl.session_agent import SessionAgent
     from CoScientist.microfluidics.tz_agent import TZSessionAgent
     from CoScientist.context_init.agent import ContextInitSessionAgent
+    from CoScientist.context_init.tz_agent import TZSpecSessionAgent
     from CoScientist.experiments.review import ExperimentReviewSessionAgent
 
     REGISTRY.register_agent_class("session", SessionAgent)
@@ -1403,6 +1411,10 @@ def _register_classes() -> None:
     # Context-init pre-stage: the review shows a STRUCTURED FORM (research frame)
     # and seeds the confirmed frame into the research graph.
     REGISTRY.register_agent_class("context_init_session", ContextInitSessionAgent)
+    # The ТЗ stage of the general profile: issues the document from the
+    # frame the stage above confirmed. No review of its own — the frame was
+    # the review, and this is that frame written out to GOST 19.201-78.
+    REGISTRY.register_agent_class("tz_spec_session", TZSpecSessionAgent)
     REGISTRY.register_agent_class("experiment_review", ExperimentReviewSessionAgent)
 
 
@@ -1410,6 +1422,7 @@ def _register_schemas() -> None:
     from CoScientist.storage import MCPRanking, ToolRanking
     from CoScientist.microfluidics.models import LiteratureQueries, StructuredTZ
     from CoScientist.context_init.models import ResearchFrame
+    from CoScientist.context_init.tz_agent import TZProse
     from CoScientist.experiments.schemas import (
         ExperimentPlan,
         ExperimentTask,
@@ -1425,6 +1438,7 @@ def _register_schemas() -> None:
     REGISTRY.register_output_schema("tz_literature_queries", LiteratureQueries)
     # Framing entities of the meta-model, filled per run (context_init pre-stage).
     REGISTRY.register_output_schema("research_frame", ResearchFrame)
+    REGISTRY.register_output_schema("tz_prose", TZProse)
     REGISTRY.register_output_schema("experiment_plan", ExperimentPlan)
     REGISTRY.register_output_schema("experiment_task", ExperimentTask)
     REGISTRY.register_output_schema("task_result", TaskResult)

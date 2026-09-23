@@ -56,16 +56,33 @@ _FORM_INTRO_EN = ("Fill in the research frame. The agent fills empty fields "
                   "search, expensive or cheap experiment.")
 _HITL_MESSAGE = "Подтвердите рамку исследования перед запуском."
 _HITL_MESSAGE_EN = "Confirm the research frame before the run starts."
-_OPS_BLOCK_USAGE = ("слоты плана: одна обязательная задача на операцию; "
-                    "отчёт не входит")
-_OPS_BLOCK_USAGE_EN = ("Plan slots: one mandatory task per operation; the "
-                       "report is not one of them.")
+_OPS_BLOCK_USAGE = ("что исследование обязано дать на выходе. Это задачи "
+                    "ИССЛЕДОВАНИЯ, а не эксперимента: каждая из них "
+                    "разворачивается в один или несколько экспериментов на "
+                    "этапе планирования. Отчёт задачей не считается")
+_OPS_BLOCK_USAGE_EN = ("What the research must deliver. These are tasks of the "
+                       "RESEARCH, not of an experiment: each becomes one or "
+                       "more experiments at planning time. The report is not "
+                       "one of them.")
 _OPS_FIELD_PLACEHOLDER = {
-    "en": ("Enter one deliverable the run must produce, or leave it empty so "
-           "the agent derives the slots from the ask."),
-    "ru": ("Укажите один результат, который должен дать запуск, или оставьте "
-           "поле пустым — агент выведет слоты из запроса."),
+    "en": ("Enter one deliverable the research must produce, or leave it empty "
+           "so the agent derives the tasks from the ask."),
+    "ru": ("Укажите один результат, который должно дать исследование, или "
+           "оставьте поле пустым — агент выведет задачи из запроса."),
 }
+
+
+def _task_label(operation_id: str) -> Dict[str, str]:
+    """«Задача 1 · OP-1» — the word for the reader, the id for the plan.
+
+    The id is not decoration: the experiment planner writes it into
+    `design.operation_ref`, and the plan critic refuses a plan that leaves an
+    operation uncovered. An operator who sees «OP-1» in a plan card has to be
+    able to find it here, so it stays — behind the word that says what it is.
+    """
+    number = operation_id.split("-")[-1].strip() or "?"
+    return {"en": f"Task {number} · {operation_id}",
+            "ru": f"Задача {number} · {operation_id}"}
 
 
 def coerce_frame(value: Any) -> ResearchFrame:
@@ -103,20 +120,20 @@ def frame_to_form(frame: ResearchFrame) -> Dict[str, Any]:
     ops_fields = [
         {"name": op.operation_id, "value": op.statement,
          "status": "задано заказчиком", "open": False,
-         "label": {"en": op.operation_id, "ru": op.operation_id},
+         "label": _task_label(op.operation_id),
          "placeholder": _OPS_FIELD_PLACEHOLDER}
         for op in frame.operations
     ]
     if not ops_fields:
         ops_fields = [{
             "name": "OP-1", "value": "", "status": "не задано", "open": True,
-            "label": {"en": "OP-1", "ru": "OP-1"},
+            "label": _task_label("OP-1"),
             "placeholder": _OPS_FIELD_PLACEHOLDER,
         }]
     blocks.append({
         "title": OPS_FORM_BLOCK,
         "usage": _OPS_BLOCK_USAGE,
-        "title_i18n": {"en": "Experiment operations", "ru": OPS_FORM_BLOCK},
+        "title_i18n": {"en": "Research tasks", "ru": OPS_FORM_BLOCK},
         "usage_i18n": {"en": _OPS_BLOCK_USAGE_EN, "ru": _OPS_BLOCK_USAGE},
         "fields": ops_fields,
     })
@@ -177,7 +194,8 @@ def render_frame_summary(frame: ResearchFrame) -> str:
     if frame.operations:
         lines.append(f"✓ **{OPS_FORM_BLOCK}**: {len(frame.operations)} слот(ов)")
         for op in frame.operations:
-            lines.append(f"    - {op.operation_id}: {op.statement}")
+            lines.append(f"    - {_task_label(op.operation_id)['ru']}: "
+                         f"{op.statement}")
     return "\n".join(lines)
 
 

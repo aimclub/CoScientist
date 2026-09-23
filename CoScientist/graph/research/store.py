@@ -711,8 +711,19 @@ def _fold_plan(raw_nodes: Dict[str, Dict[str, Any]],
         if kind in _ARTIFACT_FOLD_TYPES:
             # Whatever it was derived from carries it; a product of the study as
             # a whole (a report nobody linked) belongs to the outcome.
-            place(nid, [v for t, v in out.get(nid, []) if t == "derived_from"],
-                  "attachment", OUTCOME_ID)
+            #
+            # Except the one artifact that exists before there is an outcome:
+            # the техническое задание, written from the confirmed frame. It is
+            # about the setting, so it belongs on the setting's card — and it
+            # is the only way a reader can open the document at all, since the
+            # panel makes a link out of an attachment and inert text out of an
+            # attribute.
+            hosts = [v for t, v in out.get(nid, []) if t == "derived_from"]
+            fallback = OUTCOME_ID
+            if kind == "Spec" and all(types.get(v) == "ResearchQuestion"
+                                      for v in hosts):
+                hosts, fallback = [], FRAME_ID
+            place(nid, hosts, "attachment", fallback)
         elif kind == "Tool":
             hosts = [u for t, u in inc.get(nid, []) if t == "uses"]
             for t, u in inc.get(nid, []):

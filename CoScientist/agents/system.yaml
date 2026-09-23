@@ -69,7 +69,10 @@ defaults:
 # The manager driver (CoScientist.main) executes: pre… → root → post…
 # ─────────────────────────────────────────────────────────────────────────────
 pipeline:
-  pre: [ContextInitAgent]         # draft + confirm + seed the research frame
+  # ContextInit drafts, confirms and seeds the research frame; TZSpec writes it
+  # out as a техническое задание by GOST 19.201-78 and hands the operator the
+  # Word file. Order matters: the second reads what the first confirmed.
+  pre: [ContextInitAgent, TZSpecAgent]
   post: [ResultAggregatorAgent]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -227,6 +230,32 @@ agents:
       # still runs next and reads the already-expanded text. Reversed, a
       # `[[link1]]` inside a frame field would never be expanded.
       after_model: [expand_link_refs, sanitize_json_output]
+
+  TZSpecAgent:
+    # tz_spec_session = SessionAgent that issues the техническое задание from the
+    # frame ContextInitAgent confirmed. The sections are assembled from the frame
+    # deterministically (CoScientist/context_init/tz.py); this agent only writes
+    # the prose of the sections that already have content, and cannot fill an
+    # empty one — an invented customer or deadline would read as an obligation
+    # in a document that goes to people.
+    #
+    # No review of its own: the frame WAS the review, and a second approval
+    # window at the start of every run costs more than it gives. Revise the
+    # frame and the document is issued again.
+    class: custom:tz_spec_session
+    enabled: ${context_init.enabled}
+    description: >-
+      агент технического задания — излагает подтверждённую рамку исследования
+      как ТЗ по ГОСТ 19.201-78, сохраняет документ в Word и прикрепляет его к
+      карточке «Постановка» в графе исследования.
+    reasoning: off
+    prompt: tz_spec
+    output_key: tz_prose
+    output_schema: tz_prose
+    hitl: false
+    callbacks:
+      before_agent: [stage_tz_draft]
+      after_model: [sanitize_json_output]
 
   ResultAggregatorAgent:
     class: llm
