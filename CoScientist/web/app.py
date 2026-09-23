@@ -1412,6 +1412,26 @@ def create_app() -> FastAPI:
             headers={"Cache-Control": "no-store"},
         )
 
+    @app.get("/stats", response_class=HTMLResponse)
+    async def stats_page():
+        """The paper database statistics, as the paper-analysis server reports them."""
+        return HTMLResponse(
+            (WEB_DIR / "templates" / "stats.html").read_text(encoding="utf-8"),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/paper-statistics")
+    async def paper_statistics_api():
+        """Call get_papers_database_statistics on the paper-analysis MCP server.
+
+        The tool answers from memory, so this is quick and the page can poll it.
+        """
+        from CoScientist.tools.paper_statistics_client import fetch_paper_statistics
+
+        payload = await fetch_paper_statistics()
+        status_code = {"not_configured": 503, "unavailable": 502}.get(payload["status"], 200)
+        return JSONResponse(payload, status_code=status_code, headers={"Cache-Control": "no-store"})
+
     def graph_payload(user_id: str, session_id: str, view: str,
                       turn: str | None = None):
         """Return one session's graph: research, execution, or execution

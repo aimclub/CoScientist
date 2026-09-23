@@ -24,6 +24,7 @@
       'agent.ToolsViewer.desc': { en: 'Tools Viewer', ru: 'Просмотр инструментов' },
       'agent.KnowledgeGraph.desc': { en: 'Knowledge Graph', ru: 'Граф знаний' },
       'agent.MCPBuilder.desc': { en: 'MCP Builder', ru: 'Сборщик MCP' },
+      'agent.PaperStatistics.desc': { en: 'Paper Statistics', ru: 'Статистика статей' },
       'agent.CoderSandbox.desc': { en: 'CoderSandbox', ru: 'Песочница кода' },
       'agent.__settings__.desc': { en: 'Settings', ru: 'Настройки' },
 

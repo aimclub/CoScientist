@@ -8,6 +8,7 @@
       // The knowledge memory is gone; this graph is the research record.
       { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Research Graph", id: "graph-link", href: "/graph" },
       { name: "SessionTrace", icon: "schedule", desc: "Session Trace", id: "trace-link", href: "/trace" },
+      { name: "PaperStatistics", icon: "query_stats", desc: "Paper Statistics", href: "/stats" },
       { name: "MCPBuilder", icon: "build", desc: "MCP Builder", href: "/alembic/" },
       { name: "CoderSandbox", icon: "terminal", desc: "CoderSandbox", id: "coder-sandbox-link", href: "http://localhost:8884/" },
       { name: "__settings__", icon: "settings", desc: "Settings" },
@@ -62,6 +63,8 @@
         window.open(scoped, '_blank');
       } else if (name === "MCPBuilder") {
         window.open('/alembic/', '_blank');
+      } else if (name === "PaperStatistics") {
+        window.open('/stats', '_blank');
       } else if (name === "CoderSandbox") {
         const link = document.getElementById('coder-sandbox-link');
         const url = (link && link.href) ? link.href : (activeSandboxWatchUrl || getBaseSandboxUrl());
