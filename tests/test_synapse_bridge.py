@@ -83,6 +83,53 @@ def test_capture_falls_back_to_run_key(monkeypatch):
     assert m.run_id == "orchestrator__ctx-none"
 
 
+def test_capture_uses_propagated_run_id_for_remote_child(monkeypatch):
+    from CoScientist.checkpoints import capture, synapse, trace_context
+    from CoScientist.checkpoints.store import LocalZipStore
+
+    synapse.clear_runs()
+    synapse.register_run(
+        "root-context",
+        "run-PLATFORM-CHILD",
+        "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+    )
+    monkeypatch.setattr(trace_context, "_proof_secret", lambda: b"demo-secret")
+    with trace_context.scope_for_request("root-context", {}):
+        headers = trace_context.outbound_carrier()
+    with trace_context.scope_for_request("unregistered-child", headers):
+        manifest = asyncio.run(
+            capture.capture_checkpoint(
+                session=_FakeSession("unregistered-child"),
+                label="T1_after_literature_review",
+                store=LocalZipStore(tempfile.mkdtemp()),
+            )
+        )
+    assert manifest is not None
+    assert manifest.run_id == "run-PLATFORM-CHILD"
+
+
+def test_capture_does_not_trust_unsigned_remote_run_id(monkeypatch):
+    from CoScientist.checkpoints import capture, synapse, trace_context
+    from CoScientist.checkpoints.store import LocalZipStore
+
+    synapse.clear_runs()
+    monkeypatch.setattr(trace_context, "_proof_secret", lambda: b"demo-secret")
+    headers = {
+        "traceparent": "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        "baggage": "run_id=known-platform-run",
+    }
+    with trace_context.scope_for_request("unregistered-child", headers):
+        manifest = asyncio.run(
+            capture.capture_checkpoint(
+                session=_FakeSession("unregistered-child"),
+                label="T1_after_literature_review",
+                store=LocalZipStore(tempfile.mkdtemp()),
+            )
+        )
+    assert manifest is not None
+    assert manifest.run_id == "orchestrator__unregistered-child"
+
+
 # ── Task 4: outbound snapshot-ready callback ─────────────────────────────────
 
 def test_notify_posts_point(monkeypatch):
