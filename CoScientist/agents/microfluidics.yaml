@@ -21,6 +21,10 @@
 #   │    └─ RouteSelectionAgent -> operator-selected active route
 #   ├─ ModuleB_Design (sequential)            stages 3–5
 #   │    └─ MolDesignAgent → EconomicsAgent (route already selected in A)
+#   ├─ ModuleC_Campaign (sequential)          rig campaign of the flow-synthesis
+#   │    └─ CampaignAgent                     condition-optimization block (A2A);
+#   │                                         same inputs as C, result ->
+#   │                                         state["optimization"]
 #   ├─ ModuleC_Experiment (sequential)        external experimental subsystem
 #   │    └─ OptimizerAgent                   one A2A task owns planning, CFD,
 #   │                                       equipment and the optimization loop
@@ -75,6 +79,7 @@ agents:
     subordinates:
       - ModuleA_TZLiterature
       - ModuleB_Design
+      - ModuleC_Campaign
       - ModuleC_Experiment
       - ReportAgent
 
@@ -425,6 +430,40 @@ agents:
       after_tool: [collect_economics_result]
       # Costing → research graph Evidence (computational, per route).
       after_agent: [record_economics_evidence]
+
+  # ── Module C0 — rig campaign through A2A (before the optimization) ────────
+  # The flow-synthesis condition-optimization block
+  # (agent card: https://mcp2.rzhevskyrobotics.com/.well-known/agent-card.json,
+  # endpoint CAMPAIGN_A2A_URL). It takes exactly the optimization hand-off;
+  # its campaign_result is normalized into state["optimization"]
+  # (current / history / has_blockers) for ModuleC_Experiment and the report.
+  ModuleC_Campaign:
+    class: sequential
+    description: >-
+      ставит кампанию оптимизации условий проточного синтеза на установке через
+      внешний A2A-блок и сохраняет её результат (лучшие параметры, рецептура,
+      флаги).
+    routing: >-
+      run after module B, before ModuleC_Experiment, with the same hand-off
+      (ТЗ, routes, economic ranking). The external block runs the campaign on
+      the rig; its result is kept as given.
+    children:
+      - CampaignAgent
+
+  CampaignAgent:
+    class: custom:campaign_session
+    title: Кампания на установке
+    description: >-
+      сопровождает одну задачу внешнего блока оптимизации условий проточного
+      синтеза: передаёт входные данные, уточнения и подтверждения, получает
+      статусы и результат кампании.
+    reasoning: medium
+    prompt: microfluidics_campaign
+    tools: [campaign_a2a, sleep]
+    hitl: true
+    # Narrative is separate from the normalized result the tools write to
+    # state["optimization"] (and the raw task to campaign_a2a_task).
+    output_key: campaign_summary
 
   # ── Module C — external experimental subsystem through A2A ────────────────
   ModuleC_Experiment:

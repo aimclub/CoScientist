@@ -1144,8 +1144,8 @@ def _wire_tool_activity(runtime: WebRuntime) -> None:
         call_id = event.get("call_id")
         full_fields = {
             field: event.pop(key_name)
-            for field, key_name in (("args", "args_full"), ("result", "result_full"), ("error", "error_full"))
-            if key_name in event
+            for field in ("args", "result", "error", "effective_args", "state_inputs")
+            if (key_name := f"{field}_full") in event
         }
         if not call_id or not full_fields:
             return

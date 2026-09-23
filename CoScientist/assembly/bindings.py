@@ -1067,6 +1067,13 @@ def _optimization_a2a():
     return [optimization_start, optimization_get_status, optimization_provide_input, optimization_approve]
 
 
+def _campaign_a2a():
+    from CoScientist.microfluidics.a2a_optimization.campaign import (
+        campaign_start, campaign_get_status, campaign_provide_input, campaign_approve,
+    )
+    return [campaign_start, campaign_get_status, campaign_provide_input, campaign_approve]
+
+
 def _operator_screening_override():
     from CoScientist.microfluidics.operator_override import operator_authorize_screening_override
     return [operator_authorize_screening_override]
@@ -1095,6 +1102,33 @@ REGISTRY.register_tool(ToolEntry(
             name="optimization_approve",
             signature="optimization_approve()",
             purpose="Approve the external plan at input_required/approval within the authorized work order. May start remote equipment. Unavailable in planning-only mode.",
+        ),
+    ),
+))
+
+REGISTRY.register_tool(ToolEntry(
+    key="campaign_a2a",
+    factory=_campaign_a2a,
+    docs=(
+        ToolDoc(
+            name="campaign_start",
+            signature="campaign_start()",
+            purpose="Start the rig campaign of the flow-synthesis condition-optimization block with the validated TZ, routes and cost ranking (the same hand-off as optimization_start). Reuses the existing task even after completion.",
+        ),
+        ToolDoc(
+            name="campaign_get_status",
+            signature="campaign_get_status()",
+            purpose="Poll the same campaign task; its campaign_result is normalized into state optimization (current/history/has_blockers). input_required is a request for clarification or approval, not completion.",
+        ),
+        ToolDoc(
+            name="campaign_provide_input",
+            signature="campaign_provide_input(details)",
+            purpose="Reply to waiting_input with known facts or user clarification in the same campaign task. Never invent parameters.",
+        ),
+        ToolDoc(
+            name="campaign_approve",
+            signature="campaign_approve()",
+            purpose="Approve the campaign plan at input_required/approval after the operator agrees. May start the physical rig.",
         ),
     ),
 ))
@@ -2103,7 +2137,10 @@ def _register_classes() -> None:
     )
     from CoScientist.hitl.session_agent import SessionAgent
     from CoScientist.microfluidics.tz_agent import TZSessionAgent
-    from CoScientist.microfluidics.a2a_optimization.session_agent import OptimizationSessionAgent
+    from CoScientist.microfluidics.a2a_optimization.session_agent import (
+        CampaignSessionAgent,
+        OptimizationSessionAgent,
+    )
     from CoScientist.microfluidics.route_selection import RouteSelectionSessionAgent
     from CoScientist.context_init.agent import ContextInitSessionAgent
     from CoScientist.experiments.review import ExperimentReviewSessionAgent
@@ -2115,6 +2152,7 @@ def _register_classes() -> None:
     # Microfluidics ТЗ stage: the review loop shows the RENDERED ТЗ document.
     REGISTRY.register_agent_class("tz_session", TZSessionAgent)
     REGISTRY.register_agent_class("optimization_session", OptimizationSessionAgent)
+    REGISTRY.register_agent_class("campaign_session", CampaignSessionAgent)
     REGISTRY.register_agent_class("route_selection_session", RouteSelectionSessionAgent)
     # Context-init pre-stage: the review shows a STRUCTURED FORM (research frame)
     # and seeds the confirmed frame into the research graph.

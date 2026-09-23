@@ -18,13 +18,16 @@ able to break a run: every dispatch is guarded.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 import re
+import sys
 from datetime import datetime
 from typing import Any, Awaitable, Callable, Optional
 
 from google.adk.plugins.base_plugin import BasePlugin
+from google.adk.sessions.state import State
 
 from CoScientist.graph.session_scope import SessionKey, session_key
 
@@ -175,6 +178,158 @@ def _parent_agent_name(tool_context: Any, author: str) -> Optional[str]:
         return None
 
 
+def _inside_run_of(tool: Any) -> bool:
+    """Whether the caller is (somewhere below) ``tool.run_async``.
+
+    Separates the tool's own state reads from those of the before/after-tool
+    callbacks, which see the same ``ToolContext`` but are not the tool's
+    inputs (a Work Order guard, the link registry…).
+    """
+    frame = sys._getframe(2)
+    while frame is not None:
+        if frame.f_code.co_name == "run_async" and frame.f_locals.get("self") is tool:
+            return True
+        frame = frame.f_back
+    return False
+
+
+class _RecordingState(State):
+    """The call's own ``State``, noting which keys the tool reads.
+
+    Shares the value/delta dicts of the state it replaces, so reads and writes
+    behave exactly as before. A key the tool wrote before reading it is its own
+    output, not an input, and is not recorded.
+    """
+
+    def __init__(self, base: State, tool: Any) -> None:
+        super().__init__(
+            value=base._value, delta=base._delta, schema=getattr(base, "_schema", None),
+        )
+        self._tool = tool
+        self.reads: dict[str, Any] = {}
+        self._written: set[str] = set()
+
+    def _note(self, key: str, value: Any) -> None:
+        if key in self.reads or key in self._written or not _inside_run_of(self._tool):
+            return
+        try:
+            # A snapshot: the tool may go on to mutate what it read.
+            self.reads[key] = copy.deepcopy(value)
+        except Exception:  # noqa: BLE001 - an uncopyable value is still worth showing
+            self.reads[key] = value
+
+    def __getitem__(self, key: str) -> Any:
+        value = super().__getitem__(key)
+        self._note(key, value)
+        return value
+
+    def get(self, key: str, default: Any = None) -> Any:
+        if key not in self:
+            self._note(key, None)
+            return default
+        return self[key]
+
+    def __setitem__(self, key: str, value: Any) -> None:
+        self._written.add(key)
+        super().__setitem__(key, value)
+
+    def update(self, delta: dict[str, Any]) -> None:
+        self._written.update(delta)
+        super().update(delta)
+
+
+class _CallCapture:
+    """What a call's closing record needs from its opening: the arguments as
+    the model wrote them and the recording state installed for the tool."""
+
+    def __init__(self, args: Any, original: Any, recording: Optional[_RecordingState]):
+        self.args = args
+        self.original = original
+        self.recording = recording
+
+
+_CAPTURE_ATTR = "_coscientist_tool_capture"
+
+
+def _start_capture(tool: Any, tool_args: Any, tool_context: Any) -> None:
+    try:
+        args = copy.deepcopy(tool_args)
+    except Exception:  # noqa: BLE001
+        args = None
+    original = getattr(tool_context, "_state", None)
+    recording = None
+    if isinstance(original, State) and not isinstance(original, _RecordingState):
+        try:
+            recording = _RecordingState(original, tool)
+            tool_context._state = recording
+        except Exception as exc:  # noqa: BLE001 - observing must not break a call
+            logger.debug("Could not record state reads for %s: %s", getattr(tool, "name", "?"), exc)
+            recording = None
+    try:
+        setattr(tool_context, _CAPTURE_ATTR, _CallCapture(args, original, recording))
+    except Exception:  # noqa: BLE001
+        pass
+
+
+# Names that mark a secret, matched against every key of a captured value.
+_SECRET_KEY_RE = re.compile(
+    r"pass(word|wd)?|secret|token|api[_-]?key|credential|auth|cookie|session[_-]?key|private[_-]?key",
+    re.I,
+)
+_REDACTED = "***"
+
+
+def _redact(value: Any, depth: int = 0) -> Any:
+    """``value`` with secret-looking entries masked, for state and callback-set
+    arguments: neither is written by the model, so either may hold a key the
+    model itself never saw (ADK keeps OAuth credentials in the state)."""
+    if depth > 20:
+        return value
+    if hasattr(value, "model_dump") and type(value).__name__ == "AuthCredential":
+        return _REDACTED
+    if isinstance(value, dict):
+        return {
+            k: _REDACTED if isinstance(k, str) and _SECRET_KEY_RE.search(k) and v not in (None, "")
+            else _redact(v, depth + 1)
+            for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_redact(v, depth + 1) for v in value]
+    return value
+
+
+def _value_fields(field: str, value: Any) -> dict:
+    preview, full, truncated = _preview_and_full(_redact(value))
+    fields = {field: preview, f"{field}_truncated": truncated}
+    if truncated:
+        fields[f"{field}_full"] = full
+    return fields
+
+
+def _finish_capture(tool_args: Any, tool_context: Any) -> dict:
+    """Payload fields describing the call's complete inputs.
+
+    ``effective_args`` — the arguments the tool actually ran with, sent only
+    when a before-tool callback rewrote the model's ones; ``state_inputs`` —
+    the session-state keys the tool itself read, with the values it saw.
+    """
+    capture = getattr(tool_context, _CAPTURE_ATTR, None)
+    if not isinstance(capture, _CallCapture):
+        return {}
+    try:
+        delattr(tool_context, _CAPTURE_ATTR)
+    except Exception:  # noqa: BLE001
+        pass
+    if capture.recording is not None and getattr(tool_context, "_state", None) is capture.recording:
+        tool_context._state = capture.original
+    fields: dict = {}
+    if capture.args is not None and tool_args != capture.args:
+        fields.update(_value_fields("effective_args", tool_args))
+    if capture.recording is not None and capture.recording.reads:
+        fields.update(_value_fields("state_inputs", capture.recording.reads))
+    return fields
+
+
 async def report_activity(context: Any, payload: dict) -> None:
     """Send one record to the sink on behalf of ``context``'s session.
 
@@ -278,6 +433,8 @@ class ToolActivityPlugin(BasePlugin):
         return None
 
     async def before_tool_callback(self, *, tool, tool_args, tool_context) -> None:
+        if _sink is not None:
+            _start_capture(tool, tool_args, tool_context)
         preview, full, truncated = _preview_and_full(tool_args)
         author = _agent_name(tool_context)
         target = _delegation_target(tool, tool_args)
@@ -322,6 +479,7 @@ class ToolActivityPlugin(BasePlugin):
         }
         if truncated:
             payload["result_full"] = full
+        payload.update(_finish_capture(tool_args, tool_context))
         await self._dispatch(tool_context, payload)
         return None
 
@@ -341,5 +499,6 @@ class ToolActivityPlugin(BasePlugin):
         }
         if truncated:
             payload["error_full"] = full
+        payload.update(_finish_capture(tool_args, tool_context))
         await self._dispatch(tool_context, payload)
         return None

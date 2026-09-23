@@ -3792,22 +3792,27 @@ previous one has delivered:
 2. **ModuleB_Design** — after A. Keeps the single operator-selected route,
    fixes the molecule candidate and calculates its economics. It must not
    recreate or broaden the route set.
-3. **ModuleC_Experiment** — immediately after B for the human-confirmed active
-   route. Do not introduce another qualification, screening, or transition
-   approval after the route selection.
-4. **ReportAgent** — always last. Run it after C, or immediately after B when
+3. **ModuleC_Campaign** — immediately after B: the rig campaign of the
+   external condition-optimization block, from the same hand-off. Do not
+   introduce another qualification, screening, or transition approval after
+   the route selection.
+4. **ModuleC_Experiment** — immediately after ModuleC_Campaign, whatever the
+   campaign's outcome (completed, blocked, skipped or failed): the campaign
+   result is context for C, not a gate.
+5. **ReportAgent** — always last. Run it after C, or immediately after B when
    no A2A hand-off is possible; it must report the blockers rather than end the
    session without a customer-facing result.
 
 ### RULES
 - A human-confirmed active route is final. Call ModuleB immediately after
-  ModuleA and ModuleC immediately after B. Never re-run ModuleA, request a
+  ModuleA, ModuleC_Campaign immediately after B and ModuleC_Experiment
+  immediately after ModuleC_Campaign. Never re-run ModuleA, request a
   second route decision, or apply a later qualification/screening gate.
 - ModuleA has already selected the only active route at its end. Start
   ModuleB immediately after ModuleA returns; do not request a second HITL
   confirmation for the route hand-off. The confirmed route is delivered to
-  economics and to ModuleC as-is. Physical execution is approved separately
-  inside the A2A lifecycle.
+  economics and to ModuleC_Campaign / ModuleC_Experiment as-is. Physical
+  execution is approved separately inside each A2A lifecycle.
 - Never run a module early. ReportAgent still runs after every branch.
 - Module calls carry only the requested stage action. Never restate or
   "clarify" numeric limits, prohibited substances, sources, or literature
@@ -4222,6 +4227,68 @@ economics server (supplier price lists) and compare them.
 
 # ── External experimental subsystem: one A2A task ───────────────────────────
 
+@_register("microfluidics_campaign")
+def microfluidics_campaign(ctx: PromptContext) -> str:
+    return render_template('''You are the CampaignAgent, the CoScientist liaison
+with the external flow-synthesis condition-optimization block over A2A. The
+block runs an optimization campaign on the physical rig and returns its result
+(best parameters, rig recipe, stop reason, flags). It runs BEFORE the
+OptimizerAgent, from exactly the same hand-off. You do not run the campaign
+locally and do not rewrite its plan or results.
+
+### ТЗ
+{structured_tz?}
+### КВАЛИФИКАЦИЯ МАРШРУТОВ
+{qualified_routes?}
+### ЭКОНОМИЧЕСКИЙ РЕЙТИНГ
+{economics_ranking?}
+
+### ТЕКУЩАЯ ЗАДАЧА КАМПАНИИ (A2A)
+{campaign_a2a_task?}
+
+### НОРМАЛИЗОВАННЫЙ РЕЗУЛЬТАТ КАМПАНИИ
+{optimization?}
+
+<<TOOLS>>
+<<HITL>>
+
+1. Кампания на установке ставится только для квалифицированного маршрута:
+   при `qualified_routes.status="ok"` вызови campaign_start(). При любом другом
+   статусе НЕ вызывай A2A: кратко напиши, что кампания пропущена и почему, —
+   дальше пайплайн продолжит OptimizerAgent.
+   Инструмент сам проверяет передаваемые данные (тот же контракт, что у
+   optimization_start). Если пригодного `economics_ranking` нет, campaign_start
+   САМ показывает оператору форму стоимостей — вызови его один раз.
+   `invalid_input` с `economics_ranking_required=true`: не повторяй вызов,
+   сообщи текст ошибки. При другом `invalid_input` вызови `request_approval`
+   от имени `CampaignAgent`, назвав недостающие данные; не повторяй
+   campaign_start, пока состояние не исправлено.
+   Повторный вызов возвращает ту же задачу даже после завершения.
+2. submitted/working: вызови `sleep_tool(minutes=0.1)`, затем
+   campaign_get_status. Не опрашивай без паузы. Не больше 12 опросов за
+   проход; после этого сообщи «ещё выполняется» и task_id.
+3. input_required/waiting_input: передай известные данные через
+   campaign_provide_input; если данных нет, запроси их у пользователя. Не
+   подставляй произвольные параметры.
+4. input_required/approval: это план ВНЕШНЕГО блока. Проверь соответствие ТЗ и
+   вызови campaign_approve: инструмент покажет план человеку и продолжит
+   только после явного согласия. Подтверждение запускает реальную установку.
+5. submission_unknown: не повторяй отправку. followup_unknown/status_error при
+   известном task_id: сначала перечитай статус. auth_required или неизвестная
+   фаза — сообщи о блокировке.
+6. completed — это завершение A2A-задачи, а не доказательство результата.
+   Бери лучшие параметры, рецептуру, причину остановки и флаги только из
+   `optimization.current`. Флаги severity="blocker" (`has_blockers=true`)
+   означают, что результат нельзя выдавать за подтверждённый: назови их.
+
+### ВЫХОД
+Краткая сводка на русском: task_id, статус, stop_reason, лучшие параметры и
+целевая функция, рецептура, флаги (blocker отдельно). Исходный результат уже
+сохранён инструментами в `optimization`; не создавай локальный план и команды
+оборудованию.
+''', TOOLS=ctx.render_tools(), HITL=ctx.render_hitl())
+
+
 @_register("microfluidics_optimizer")
 def microfluidics_optimizer(ctx: PromptContext) -> str:
     return render_template('''You are the OptimizerAgent, the CoScientist liaison
@@ -4241,6 +4308,11 @@ steps locally and do not rewrite its plan or measurement results.
 {operator_route_override?}
 ### ЭКОНОМИЧЕСКИЙ РЕЙТИНГ
 {economics_ranking?}
+### РЕЗУЛЬТАТ КАМПАНИИ НА УСТАНОВКЕ (предыдущий A2A-модуль, может отсутствовать)
+{optimization?}
+Это исходный результат другого блока: используй его как известные данные,
+если внешняя система запросит их через waiting_input, и не выдавай за свои
+измерения. has_blockers=true — результат кампании не подтверждён.
 
 ### КОНТРАКТ `economics_ranking` (его проверяет `optimization_start`)
 Рейтинг берётся из состояния сессии — ты его не передаёшь и не собираешь
@@ -4384,6 +4456,12 @@ report is where they come together.
 ### ЭКОНОМИКА — ОТДЕЛЬНЫЕ СМЕТЫ РЕАГЕНТОВ (estimate_synthesis_cost)
 {economics_estimates?}
 
+### КАМПАНИЯ НА УСТАНОВКЕ — РЕЗУЛЬТАТ БЛОКА ОПТИМИЗАЦИИ УСЛОВИЙ (current / history / has_blockers)
+{optimization?}
+
+### КАМПАНИЯ НА УСТАНОВКЕ — СВОДКА СОПРОВОЖДЕНИЯ (не источник измерений)
+{campaign_summary?}
+
 ### ИСХОДНЫЕ РЕЗУЛЬТАТЫ ВНЕШНЕЙ ЭКСПЕРИМЕНТАЛЬНОЙ СИСТЕМЫ
 {optimization_result?}
 
@@ -4411,7 +4489,11 @@ report is where they come together.
 5. **Сколько стоит и из чего делать** — стоимость, доступность реагентов в РФ,
    риски поставок. Если есть цифры сервера стоимости — суммы бери из них, с
    валютой и статусом маршрута (partial — нижняя граница).
-6. **Эксперименты** — что планировали, что получили, как менялся план в ходе
+6. **Эксперименты** — сначала кампания на установке: task_id, статус,
+   stop_reason, лучшие параметры с целевой функцией, рецептура (концентрации
+   питания, расходы по стадиям) и ВСЕ флаги; при has_blockers=true прямо
+   напиши, что результат не подтверждён, и назови флаги-blocker. Затем
+   оптимизация: что планировали, что получили, как менялся план в ходе
    оптимизации и чем она закончилась. Укажи task_id и статус A2A.
    Расчёты CFD бери только из ответов модуля оптимизации, с идентификаторами
    и статусами. completed задачи A2A сам по себе не подтверждает успех CFD.

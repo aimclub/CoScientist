@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -22,6 +22,13 @@ class A2ARequestError(RuntimeError):
 class A2AClient:
     base_url: str
     timeout: float = 300.0
+    # JSON-RPC endpoint relative to base_url ("" = base_url itself), the
+    # method names of the server's protocol version, and extra HTTP headers
+    # (e.g. ``A2A-Version`` for a v1.0 server).
+    rpc_path: str = ""
+    send_method: str = "message/send"
+    get_method: str = "tasks/get"
+    headers: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.base_url = self.base_url.rstrip("/") + "/"
@@ -47,7 +54,7 @@ class A2AClient:
         if task_id:
             message["taskId"] = task_id
         return self.rpc(
-            method="message/send",
+            method=self.send_method,
             params={
                 "message": message,
                 "metadata": {
@@ -60,7 +67,7 @@ class A2AClient:
 
     def get_task(self, task_id: str) -> dict[str, Any]:
         return self.rpc(
-            method="tasks/get",
+            method=self.get_method,
             params={"id": task_id},
             request_id=f"status-{uuid.uuid4().hex}",
         )
@@ -69,7 +76,7 @@ class A2AClient:
         self, *, method: str, params: dict[str, Any], request_id: str
     ) -> dict[str, Any]:
         return self._request(
-            "",
+            self.rpc_path,
             {
                 "jsonrpc": "2.0",
                 "id": request_id,
@@ -85,7 +92,7 @@ class A2AClient:
         request = Request(
             self.base_url + path,
             data=payload,
-            headers={"Content-Type": "application/json"} if payload else {},
+            headers={**self.headers, **({"Content-Type": "application/json"} if payload else {})},
             method="POST" if payload else "GET",
         )
         try:

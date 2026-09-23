@@ -17,8 +17,8 @@ def test_microfluidics_delegates_experiments_as_one_external_stage():
 
     assert [s["agent"] for s in stages] == [
         "TZSpecAgent", "TZQueryGenAgent", "LiteratureOrchestrator",
-        "LiteratureSynthesisAgent", "EvidenceVerifierAgent", "MolDesignAgent", "SynthRouteAgent",
-        "EconomicsAgent", "OptimizerAgent", "ReportAgent",
+        "LiteratureSynthesisAgent", "EvidenceVerifierAgent", "RouteSelectionAgent",
+        "MolDesignAgent", "EconomicsAgent", "CampaignAgent", "OptimizerAgent", "ReportAgent",
     ]
     assert stages[0]["title"] == "Техническое задание"
     # Everything working inside a stage counts as that stage.

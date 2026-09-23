@@ -26,6 +26,8 @@
        │    └─ LiteratureOrchestrator→ делегирует LIT-задачи ResearchAgent
        ├─ ModuleB_Design (sequential)            стадии 3–5
        │    └─ MolDesignAgent → SynthRouteAgent → EconomicsAgent
+       ├─ ModuleC_Campaign (sequential)          кампания на установке (A2A)
+       │    └─ CampaignAgent    → блок оптимизации условий → state["optimization"]
        ├─ ModuleC_Experiment (sequential)        внешняя экспериментальная подсистема
        │    └─ OptimizerAgent   → одна A2A-задача: план, CFD, установка, оптимизация
        └─ ReportAgent (llm)                      стадия 11 → final_report
@@ -189,6 +191,36 @@ Order и проверку шагов при включённом HITL. Нача�
 статус существующей задачи. Агент ограничен инструкцией на 12 опросов за проход,
 после чего сообщает, что задача ещё выполняется. При продолжении пользовательского
 диалога используется та же задача. Фонового опроса после завершения прохода нет.
+
+### A2A: кампания на установке перед оптимизацией
+
+Модуль `ModuleC_Campaign` (`CampaignAgent`,
+`CoScientist/microfluidics/a2a_optimization/campaign.py`) идёт после
+`ModuleB_Design` и перед `ModuleC_Experiment`. Он передаёт внешнему «Блоку
+оптимизации условий проточного синтеза» тот же вход, что и
+`optimization_start` (`contracts.prepare_inputs`), и ведёт задачу тем же
+жизненным циклом: `campaign_start`, `campaign_get_status`,
+`campaign_provide_input`, `campaign_approve` (общий код — `adapter.Channel`).
+Кампания ставится только при `qualified_routes.status="ok"`; при любом исходе
+пайплайн продолжается в `ModuleC_Experiment`.
+
+Адрес — JSON-RPC endpoint из agent card (`url`), только из переменной
+окружения `CAMPAIGN_A2A_URL` (например, `https://mcp2.rzhevskyrobotics.com/a2a`).
+Без неё `campaign_start` ничего не отправляет и возвращает `not_configured`. Карточка использует формат A2A v1.0,
+поэтому по умолчанию методы `SendMessage` / `GetTask` и заголовок
+`A2A-Version: 1.0`; переопределяются `CAMPAIGN_A2A_SEND_METHOD`,
+`CAMPAIGN_A2A_GET_METHOD`, `CAMPAIGN_A2A_VERSION` (пустое значение убирает
+заголовок).
+
+`campaign_result` ищется в частях сообщения статуса и artifacts задачи
+(`data` или JSON в `text`; как есть, под ключом `campaign_result` или уже в
+форме `optimization.current`) и записывается в `state["optimization"]`:
+`current` (идентификаторы, `route_id`, `a2a_state`, `status`, `stop_reason`,
+`best`, `recipe`, `flags`, `received_at`, `raw` — исходный результат целиком),
+`history` (те же записи без `raw`) и `has_blockers` (есть флаг
+`severity="blocker"`). Сырые ответы задачи — в `campaign_a2a_task` /
+`campaign_a2a_runs`. `OptimizerAgent` и `ReportAgent` видят `optimization` как
+контекст; во внешнюю систему оптимизации он не отправляется.
 
 ### Результаты без пересказа и потери данных
 

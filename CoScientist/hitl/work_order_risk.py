@@ -87,6 +87,11 @@ TOOL_TIERS: dict[str, Tier] = {
     "optimization_get_status": Tier.READ,
     "optimization_provide_input": Tier.SIDE_EFFECT,
     "optimization_approve": Tier.SIDE_EFFECT,
+    # The rig campaign block that runs before optimization — the same risk.
+    "campaign_start": Tier.SIDE_EFFECT,
+    "campaign_get_status": Tier.READ,
+    "campaign_provide_input": Tier.SIDE_EFFECT,
+    "campaign_approve": Tier.SIDE_EFFECT,
     # Legacy CFD tools remain registered for other profiles, not microfluidics.
     "cfd_list_reactors": Tier.READ,
     "cfd_get_experiment_result": Tier.READ,

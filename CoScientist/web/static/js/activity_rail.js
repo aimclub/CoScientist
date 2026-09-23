@@ -175,6 +175,8 @@
       MolDesignAgent: 'biotech',
       SynthRouteAgent: 'account_tree',
       EconomicsAgent: 'payments',
+      ModuleC_Campaign: 'precision_manufacturing',
+      CampaignAgent: 'precision_manufacturing',
       ModuleC_Experiment: 'science',
       OptimizerAgent: 'tune',
       ReportAgent: 'description',
@@ -415,6 +417,10 @@
         name: tool, response: response, callId: data.call_id,
         truncated: truncated, failed: failed, timestamp: data.timestamp,
         agentInstance: data.agent_instance,
+        // Inputs the model did not write itself: its arguments as rewritten
+        // by before-tool callbacks, and the state keys the tool read.
+        effectiveArgs: data.effective_args, effectiveArgsTruncated: !!data.effective_args_truncated,
+        stateInputs: data.state_inputs, stateInputsTruncated: !!data.state_inputs_truncated,
       });
       if (!quiet) {
         addTelemetry((failed ? 'TOOL_ERROR :: ' : 'TOOL_RESULT :: ') + author

@@ -130,6 +130,8 @@
     MolDesignAgent: { ru: 'Молекулярный дизайн', en: 'Molecular design' },
     SynthRouteAgent: { ru: 'Маршруты синтеза', en: 'Synthesis routes' },
     EconomicsAgent: { ru: 'Экономика маршрутов', en: 'Route economics' },
+    ModuleC_Campaign: { ru: 'Кампания на установке', en: 'Rig campaign' },
+    CampaignAgent: { ru: 'Кампания на установке', en: 'Rig campaign' },
     ModuleC_Experiment: { ru: 'Эксперименты и оптимизация', en: 'Experiments & optimization' },
     OptimizerAgent: { ru: 'Оптимизация экспериментов', en: 'Experiment optimization' },
     ReportAgent: { ru: 'Итоговый отчёт', en: 'Final report' },

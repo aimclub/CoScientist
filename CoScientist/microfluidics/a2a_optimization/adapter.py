@@ -10,7 +10,8 @@ import hashlib
 import json
 import os
 import uuid
-from typing import Any
+from dataclasses import dataclass
+from typing import Any, Callable
 
 from google.adk.tools import ToolContext
 
@@ -31,11 +32,7 @@ def _client() -> A2AClient:
     return A2AClient(url, timeout=30.0)
 
 
-def _save(context: ToolContext, record: dict) -> dict:
-    context.state[ACTIVE_KEY] = record
-    history = dict(context.state.get(HISTORY_KEY) or {})
-    history[record["experiment_id"]] = record
-    context.state[HISTORY_KEY] = history
+def _publish_result(context: ToolContext, record: dict) -> None:
     # Separate service data from the LLM's narrative. Preserve every response,
     # including earlier plan/artifact snapshots and partial results on failure.
     context.state[RESULT_KEY] = {
@@ -44,6 +41,37 @@ def _save(context: ToolContext, record: dict) -> dict:
             "task", "responses", "error", "error_response",
         )
     }
+
+
+@dataclass(frozen=True)
+class Channel:
+    """One external A2A system: the agent that tends it and its state keys.
+
+    ``client`` and ``publish`` are looked up at call time, so tests can patch
+    the module-level ``_client``. ``publish`` writes the channel's view of the
+    service result next to the task record.
+    """
+    agent_name: str
+    active_key: str
+    history_key: str
+    invalid_key: str
+    client: Callable[[], A2AClient]
+    publish: Callable[[ToolContext, dict], None]
+
+
+OPTIMIZATION = Channel(
+    agent_name="OptimizerAgent", active_key=ACTIVE_KEY, history_key=HISTORY_KEY,
+    invalid_key=RESULT_KEY, client=lambda: _client(),
+    publish=lambda context, record: _publish_result(context, record),
+)
+
+
+def _save(context: ToolContext, record: dict, channel: Channel = OPTIMIZATION) -> dict:
+    context.state[channel.active_key] = record
+    history = dict(context.state.get(channel.history_key) or {})
+    history[record["experiment_id"]] = record
+    context.state[channel.history_key] = history
+    channel.publish(context, record)
     return record
 
 
@@ -56,7 +84,8 @@ def _parts(message: Any) -> list:
     return parts
 
 
-def _receive(context: ToolContext, record: dict, response: dict) -> dict:
+def _receive(context: ToolContext, record: dict, response: dict,
+             channel: Channel = OPTIMIZATION) -> dict:
     try:
         if not isinstance(response, dict) or response.get("error"):
             raise ValueError("A2A error or invalid response")
@@ -98,7 +127,7 @@ def _receive(context: ToolContext, record: dict, response: dict) -> dict:
         "task": task, "response": response,
         "responses": [*record.get("responses", []), response],
         "error": None, "error_response": None,
-    })
+    }, channel)
 
 
 def _completed_steps(record: dict) -> int:
@@ -109,11 +138,11 @@ def _completed_steps(record: dict) -> int:
                  and isinstance(part["data"].get("completed_steps"), int)), 0)
 
 
-def _failure(context, record, state, exc):
+def _failure(context, record, state, exc, channel: Channel = OPTIMIZATION):
     return _save(context, {
         **record, "state": state, "error": str(exc),
         "error_response": getattr(exc, "response", None),
-    })
+    }, channel)
 
 
 def _operator_reachable(tool_context: ToolContext) -> bool:
@@ -159,14 +188,16 @@ async def _inputs_with_operator_ranking(
         return None, {**failure, "error": str(retry_exc), "operator_available": True}
 
 
-async def optimization_start(tool_context: ToolContext, planning_only: bool = False) -> dict[str, Any]:
-    """Delegate the complete experiment/optimization workflow to one A2A task.
+async def start_task(
+    tool_context: ToolContext, channel: Channel, *, instruction: str,
+    id_prefix: str, planning_only: bool = False,
+) -> dict[str, Any]:
+    """Validate the shared hand-off and send it as one new A2A task.
 
-    planning_only is for explicitly requested planning and smoke tests. Repeated
-    calls reuse the same task, including completed tasks; never rerun hardware
-    automatically. A different investigation requires a new CoScientist session.
+    A channel owns one task per session: once a task is recorded, repeated
+    calls return it instead of sending again.
     """
-    previous = tool_context.state.get(ACTIVE_KEY)
+    previous = tool_context.state.get(channel.active_key)
     if previous:
         return previous
     try:
@@ -176,19 +207,37 @@ async def optimization_start(tool_context: ToolContext, planning_only: bool = Fa
         # in the tool, instead of the model improvising a ranking it cannot store.
         inputs, result = await _inputs_with_operator_ranking(tool_context, exc)
         if inputs is None:
-            tool_context.state[RESULT_KEY] = result
+            tool_context.state[channel.invalid_key] = result
             return result
     except (ValueError, TypeError) as exc:
         result = {"state": "invalid_input", "error": str(exc)}
-        tool_context.state[RESULT_KEY] = result
+        tool_context.state[channel.invalid_key] = result
         return result
     suffix = uuid.uuid4().hex
     record = {
-        "experiment_id": f"optimization-{suffix}", "context_id": f"ctx-{suffix}",
+        "experiment_id": f"{id_prefix}-{suffix}", "context_id": f"ctx-{suffix}",
         "message_id": f"msg-{suffix}", "state": "submitting",
         "planning_only": planning_only, "inputs": inputs, "responses": [],
     }
-    _save(tool_context, record)
+    _save(tool_context, record, channel)
+    text = instruction + "\n\n" + json.dumps(inputs, ensure_ascii=False, allow_nan=False)
+    try:
+        response = await asyncio.to_thread(
+            channel.client().send_message, text=text, experiment_id=record["experiment_id"],
+            context_id=record["context_id"], message_id=record["message_id"],
+        )
+        return _receive(tool_context, record, response, channel)
+    except (A2ARequestError, OSError, ValueError) as exc:
+        return _failure(tool_context, record, "submission_unknown", exc, channel)
+
+
+async def optimization_start(tool_context: ToolContext, planning_only: bool = False) -> dict[str, Any]:
+    """Delegate the complete experiment/optimization workflow to one A2A task.
+
+    planning_only is for explicitly requested planning and smoke tests. Repeated
+    calls reuse the same task, including completed tasks; never rerun hardware
+    automatically. A different investigation requires a new CoScientist session.
+    """
     instruction = (
         "Ты — внешняя система оптимизации и выполнения экспериментов. "
         "Получаешь ТЗ (tz: исходный запрос и заданные требования), выбранные "
@@ -216,49 +265,48 @@ async def optimization_start(tool_context: ToolContext, planning_only: bool = Fa
         )
     else:
         instruction += "Выполни задачу в пределах заданных требований и ограничений."
-    text = instruction + "\n\n" + json.dumps(inputs, ensure_ascii=False, allow_nan=False)
-    try:
-        response = await asyncio.to_thread(
-            _client().send_message, text=text, experiment_id=record["experiment_id"],
-            context_id=record["context_id"], message_id=record["message_id"],
-        )
-        return _receive(tool_context, record, response)
-    except (A2ARequestError, OSError, ValueError) as exc:
-        return _failure(tool_context, record, "submission_unknown", exc)
+    return await start_task(tool_context, OPTIMIZATION, instruction=instruction,
+                            id_prefix="optimization", planning_only=planning_only)
 
 
-async def optimization_get_status(tool_context: ToolContext) -> dict[str, Any]:
-    """Poll the existing task; no resubmission, including after message timeouts."""
-    record = tool_context.state.get(ACTIVE_KEY)
+async def get_task_status(tool_context: ToolContext, channel: Channel) -> dict[str, Any]:
+    """Poll the channel's task; never resubmit, including after message timeouts."""
+    record = tool_context.state.get(channel.active_key)
     if not record or not record.get("task_id"):
         return {"state": "error", "error": "No known task id; do not resubmit an uncertain task"}
     if record["state"] in TERMINAL:
         return record
     try:
-        response = await asyncio.to_thread(_client().get_task, record["task_id"])
-        return _receive(tool_context, record, response)
+        response = await asyncio.to_thread(channel.client().get_task, record["task_id"])
+        return _receive(tool_context, record, response, channel)
     except (A2ARequestError, OSError, ValueError) as exc:
-        return _failure(tool_context, record, "status_error", exc)
+        return _failure(tool_context, record, "status_error", exc, channel)
 
 
-async def _continue(context: ToolContext, record: dict, text: str) -> dict:
+async def optimization_get_status(tool_context: ToolContext) -> dict[str, Any]:
+    """Poll the existing task; no resubmission, including after message timeouts."""
+    return await get_task_status(tool_context, OPTIMIZATION)
+
+
+async def _continue(context: ToolContext, record: dict, text: str,
+                    channel: Channel = OPTIMIZATION) -> dict:
     message_id = f"msg-{uuid.uuid4().hex}"
     record = {**record, "state": "sending_input", "last_message_id": message_id,
               "sent_messages": [*record.get("sent_messages", []), {"message_id": message_id, "text": text}]}
-    _save(context, record)  # Blocks duplicate confirmations during an in-flight send.
+    _save(context, record, channel)  # Blocks duplicate confirmations during an in-flight send.
     try:
         response = await asyncio.to_thread(
-            _client().send_message, text=text, experiment_id=record["experiment_id"],
+            channel.client().send_message, text=text, experiment_id=record["experiment_id"],
             context_id=record["context_id"], message_id=message_id, task_id=record["task_id"],
         )
-        return _receive(context, record, response)
+        return _receive(context, record, response, channel)
     except (A2ARequestError, OSError, ValueError) as exc:
-        return _failure(context, record, "followup_unknown", exc)
+        return _failure(context, record, "followup_unknown", exc, channel)
 
 
-async def optimization_provide_input(details: str, tool_context: ToolContext) -> dict[str, Any]:
-    """Supply known/user-provided missing data to the same waiting_input task."""
-    record = tool_context.state.get(ACTIVE_KEY) or {}
+async def provide_task_input(details: str, tool_context: ToolContext, channel: Channel) -> dict[str, Any]:
+    """Supply known/user-provided missing data to the channel's waiting_input task."""
+    record = tool_context.state.get(channel.active_key) or {}
     if not record.get("task_id") or record.get("state") != "input_required" or record.get("phase") != "waiting_input":
         return {"state": "error", "error": "Task is not waiting for missing data"}
     if not details.strip():
@@ -266,16 +314,23 @@ async def optimization_provide_input(details: str, tool_context: ToolContext) ->
     text = details.strip()
     if record.get("planning_only"):
         text += "\nРежим только планирования сохраняется. Не запускай CFD и оборудование."
-    return await _continue(tool_context, record, text)
+    return await _continue(tool_context, record, text, channel)
 
 
-async def optimization_approve(tool_context: ToolContext) -> dict[str, Any]:
-    """Approve the external system's current plan within the authorized work order.
+async def optimization_provide_input(details: str, tool_context: ToolContext) -> dict[str, Any]:
+    """Supply known/user-provided missing data to the same waiting_input task."""
+    return await provide_task_input(details, tool_context, OPTIMIZATION)
+
+
+async def approve_task_plan(
+    tool_context: ToolContext, channel: Channel, *, operator_message: str, trigger: str,
+) -> dict[str, Any]:
+    """Approve the channel's current external plan after the operator agrees.
 
     May start physical equipment remotely. Only valid for input_required/approval;
-    planning-only tasks cannot be approved through this adapter.
+    planning-only tasks cannot be approved.
     """
-    record = tool_context.state.get(ACTIVE_KEY) or {}
+    record = tool_context.state.get(channel.active_key) or {}
     if record.get("planning_only"):
         return {"state": "error", "error": "Planning-only task cannot execute"}
     if not record.get("task_id") or record.get("state") != "input_required" or record.get("phase") != "approval":
@@ -302,19 +357,16 @@ async def optimization_approve(tool_context: ToolContext) -> dict[str, Any]:
 
         user_id, session_id = session_key(tool_context)
         decision = await hitl_handler.handle_request(HITLRequest(
-            agent_name="OptimizerAgent",
+            agent_name=channel.agent_name,
             action_type=HITLAction.APPROVE,
-            message=(
-                "Внешняя A2A-система подготовила план, подтверждение может запустить "
-                "CFD и физическое оборудование. Разрешить выполнение этого плана?"
-            ),
+            message=operator_message,
             context={
                 "output": plan,
                 "task_id": record.get("task_id"),
                 "_session": {"user_id": user_id, "session_id": session_id},
             },
             invoked_via="tool",
-            trigger="optimization_plan_approval",
+            trigger=trigger,
         ))
         if not decision.approved:
             return _save(tool_context, {
@@ -322,10 +374,26 @@ async def optimization_approve(tool_context: ToolContext) -> dict[str, Any]:
                 "state": "rejected",
                 "phase": "operator_rejected",
                 "error": decision.instructions or decision.free_input or "План отклонён оператором.",
-            })
+            }, channel)
     record = {**record, "approved_plans": [*approvals, fingerprint], "approved_at_step": steps}
     # The literal token the remote agent executes on, as sent by the vendor's
     # own test_reactor_experiment_a2a.py. Any prose — including the Russian
     # sentence of A2A-TESTING.md §7 — is taken for a clarification, so the
     # remote rebuilds the plan and asks for approval again, forever.
-    return await _continue(tool_context, record, "Approve")
+    return await _continue(tool_context, record, "Approve", channel)
+
+
+async def optimization_approve(tool_context: ToolContext) -> dict[str, Any]:
+    """Approve the external system's current plan within the authorized work order.
+
+    May start physical equipment remotely. Only valid for input_required/approval;
+    planning-only tasks cannot be approved through this adapter.
+    """
+    return await approve_task_plan(
+        tool_context, OPTIMIZATION,
+        operator_message=(
+            "Внешняя A2A-система подготовила план, подтверждение может запустить "
+            "CFD и физическое оборудование. Разрешить выполнение этого плана?"
+        ),
+        trigger="optimization_plan_approval",
+    )

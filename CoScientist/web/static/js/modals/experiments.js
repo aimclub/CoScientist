@@ -271,6 +271,9 @@
         targetAgent: target,
         result: null,
         resultTruncated: false,
+        // Extra input blocks known once the call closes, keyed by the field
+        // the server stores their full value under: {value, truncated}.
+        inputs: {},
         status: 'running',
         startedAt: at,
         endedAt: null,
@@ -337,6 +340,13 @@
       rec.status = tr.failed ? 'error' : 'success';
       rec.result = tr.response;
       rec.resultTruncated = !!tr.truncated;
+      rec.inputs = {};
+      if (tvHasValue(tr.effectiveArgs)) {
+        rec.inputs.effective_args = { value: tr.effectiveArgs, truncated: !!tr.effectiveArgsTruncated };
+      }
+      if (tvHasValue(tr.stateInputs)) {
+        rec.inputs.state_inputs = { value: tr.stateInputs, truncated: !!tr.stateInputsTruncated };
+      }
       rec.endedAt = tr.timestamp ? new Date(tr.timestamp) : new Date();
       trimExperimentLog();
       renderExperimentFeed();
@@ -539,6 +549,20 @@
       renderExperimentFeed();
     }
 
+    // A block's value and truncation flag by its server field name:
+    // args, result/error, or one of the extra `rec.inputs` blocks.
+    function tvFieldValue(rec, field) {
+      if (field === 'args') return rec.args;
+      if (field === 'result' || field === 'error') return rec.result;
+      return rec.inputs[field] ? rec.inputs[field].value : null;
+    }
+
+    function tvFieldTruncated(rec, field) {
+      if (field === 'args') return rec.argsTruncated;
+      if (field === 'result' || field === 'error') return rec.resultTruncated;
+      return !!(rec.inputs[field] && rec.inputs[field].truncated);
+    }
+
     // Replaces a server-truncated value on the record with the full one.
     async function tvFetchFullValue(rec, field) {
       const data = await apiJson(sessionApi('/tool-activity/' + encodeURIComponent(rec.callId)));
@@ -546,9 +570,11 @@
       if (field === 'args') {
         rec.args = full;
         rec.argsTruncated = false;
-      } else {
+      } else if (field === 'result' || field === 'error') {
         rec.result = field === 'error' ? { error: full } : full;
         rec.resultTruncated = false;
+      } else {
+        rec.inputs[field] = { value: full, truncated: false };
       }
     }
 
@@ -615,13 +641,12 @@
       };
       btn.disabled = true;
       try {
-        const truncated = field === 'args' ? rec.argsTruncated : rec.resultTruncated;
-        if (truncated && rec.callId) {
+        if (tvFieldTruncated(rec, field) && rec.callId) {
           await tvFetchFullValue(rec, field);
           const el = document.getElementById(`tv-${rec.uid}-${field}`);
-          if (el) el.innerHTML = tvRenderAny(field === 'args' ? rec.args : rec.result);
+          if (el) el.innerHTML = tvRenderAny(tvFieldValue(rec, field));
         }
-        await tvWriteClipboard(tvValueText(field === 'args' ? rec.args : rec.result));
+        await tvWriteClipboard(tvValueText(tvFieldValue(rec, field)));
         flash('check');
       } catch {
         flash('error');
@@ -643,14 +668,14 @@
       if (!el) return;
       const rec = toolCallsById.get(btn.dataset.uid);
       const field = btn.dataset.field;
-      const truncated = rec && (field === 'args' ? rec.argsTruncated : rec.resultTruncated);
+      const truncated = rec && tvFieldTruncated(rec, field);
 
       if (rec && rec.callId && truncated && !el.classList.contains('tv-expanded')) {
         btn.disabled = true;
         btn.textContent = t('common.loading');
         try {
           await tvFetchFullValue(rec, field);
-          el.innerHTML = tvRenderAny(field === 'args' ? rec.args : rec.result);
+          el.innerHTML = tvRenderAny(tvFieldValue(rec, field));
         } catch (err) {
           btn.disabled = false;
           btn.textContent = t('experiments.retry', { error: (err.message || t('experiments.loadFailed')) });
@@ -692,7 +717,7 @@
       dropped.forEach(rec => {
         toolCallsById.delete(rec.uid);
         tvOpenCards.delete(rec.uid);
-        ['args', 'result', 'error'].forEach(field => tvExpandedBlocks.delete(`tv-${rec.uid}-${field}`));
+        ['args', 'result', 'error', 'effective_args', 'state_inputs'].forEach(field => tvExpandedBlocks.delete(`tv-${rec.uid}-${field}`));
         const node = agentNodes.get(rec.authorKey);
         if (node) {
           node.calls = node.calls.filter(call => call !== rec);
@@ -761,10 +786,11 @@
     }
 
     // One labelled args/output block inside an unfolded card. `field` is also
-    // the key the server stores the untruncated value under (args/result/error).
+    // the key the server stores the untruncated value under (args, result,
+    // error, effective_args, state_inputs).
     function tvValueBlock(rec, field, label, value, emptyText) {
       const blockId = `tv-${rec.uid}-${field}`;
-      const truncated = field === 'args' ? rec.argsTruncated : rec.resultTruncated;
+      const truncated = tvFieldTruncated(rec, field);
       const needsFetch = truncated && !!rec.callId;
       const expandedCls = tvExpandedBlocks.has(blockId) ? ' tv-expanded' : '';
       return `
@@ -792,6 +818,13 @@
         rec, 'args', t('experiments.args'), rec.args,
         rec.argsUnknown ? t('experiments.callNotRecorded') : t('experiments.noArgs'),
       );
+      // What the tool ran on beyond the model's own arguments.
+      const extra = [
+        ['effective_args', t('experiments.effectiveArgs')],
+        ['state_inputs', t('experiments.stateInputs')],
+      ].filter(([field]) => rec.inputs[field])
+        .map(([field, label]) => tvValueBlock(rec, field, label, rec.inputs[field].value, t('experiments.noValue')))
+        .join('');
       const output = rec.status === 'running'
         ? `<div>
              <div class="text-[9px] font-bold text-outline-variant uppercase tracking-widest mb-1">${t('experiments.output')}</div>
@@ -806,7 +839,7 @@
           rec.result,
           t('experiments.emptyValue'),
         );
-      return `<div class="px-2.5 pb-2.5 pt-2 space-y-2 border-t border-outline-variant/10">${args}${output}</div>`;
+      return `<div class="px-2.5 pb-2.5 pt-2 space-y-2 border-t border-outline-variant/10">${args}${extra}${output}</div>`;
     }
 
     // One tool call: status, name, argument gist and duration on a single
@@ -827,6 +860,7 @@
             <span class="material-symbols-outlined text-[14px] ${st.tone} shrink-0${running ? ' tv-spin' : ''}">${icon}</span>
             <span class="text-[11px] font-bold font-mono text-on-surface shrink-0">${escHtml(rec.name)}</span>
             ${rec.isDelegation ? '<span class="shrink-0 text-[8px] font-bold uppercase tracking-wider text-primary/70">delegates</span>' : ''}
+            ${rec.inputs.state_inputs ? `<span class="shrink-0 text-[8px] font-bold uppercase tracking-wider text-tertiary/80" title="${t('experiments.stateBadgeTitle')}">${t('experiments.stateBadge')}</span>` : ''}
             <span class="flex-1 min-w-0 truncate text-[10px] font-mono text-outline-variant/70">${escHtml(summary)}</span>
             <span class="shrink-0 text-[9px] font-mono ${st.tone}">${running ? 'running…' : tvDuration(rec)}</span>
             <span class="shrink-0 text-[9px] font-mono text-outline-variant/70">${meta}</span>
