@@ -60,7 +60,7 @@ def get_multi_agent_tracer():
             url_override=url_override or None,
             project_name=project_name,
             use_local=False,
-            #install_mcp=False,
+            install_mcp=False,
             #automatic_approvals=True,
         )
     except Exception as e:  # pragma: no cover - best-effort tracing setup
