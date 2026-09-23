@@ -65,7 +65,6 @@ agents:
   # ── Shared agents: the module's methods laid over main's wiring ────────────
   HypothesesAgent:
     include_contents: none
-    reasoning: high 
     callbacks:
       # bootstrap must precede inject_research_context, so a fresh graph is
       # seeded before {research_context?} is rendered.
