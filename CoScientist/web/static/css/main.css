@@ -3,6 +3,11 @@
        keep working (see tailwind.config in index.html). `html.dark` is the
        default; `html.light` is set by the Interface → Theme switch. The
        light palette is built on the brand cyan #00D9E5 and navy #031629. */
+    :root {
+      /* UI font; Interface → Font overrides it inline (appearance.js). */
+      --font-ui: 'Source Sans 3', sans-serif;
+    }
+
     :root,
     html.dark {
       color-scheme: dark;
@@ -37,45 +42,99 @@
          and a multiplier that softens black drop shadows on light surfaces. */
       --c-hairline: 66 70 86;
       --c-shimmer: 255 255 255;
+      --c-shadow: 0 0 0;
+      --c-scrim: 0 0 0;
       --shadow-k: 1;
     }
 
+    /* Light theme, tuned against glare: no surface is pure white, the page
+       itself is a cool grey-blue, and the
+       layers step down in small increments so cards separate by tone and a
+       soft shadow rather than by a white-on-grey jump. Text is a softened
+       brand navy (~13:1 instead of ~19:1), muted text stays >= 4.5:1 on
+       every surface, and the brand cyan is toned down one step for fills so
+       large buttons and switches do not glow. Surfaces and text are the
+       midpoint (DEFAULT_LIGHT_DIM) of the brightness ramp in appearance.js,
+       which takes over from here when the slider moves. */
     html.light {
       color-scheme: light;
-      --c-primary: 0 217 229;            /* #00D9E5 */
-      --c-primary-text: 0 128 140;       /* same hue, readable on white */
+      --c-primary: 0 200 212;            /* #00C8D4, brand #00D9E5 minus the neon */
+      --c-primary-text: 0 97 108;
       --c-on-primary: 3 22 41;           /* #031629 */
-      --c-primary-container: 204 247 250;
+      --c-primary-container: 186 227 231;
       --c-on-primary-container: 3 22 41;
-      --c-secondary: 22 136 70;
-      --c-secondary-container: 34 197 94;
-      --c-tertiary: 168 118 0;
-      --c-error: 192 28 28;
+      --c-secondary: 14 100 52;
+      --c-secondary-container: 34 170 90;
+      --c-tertiary: 115 79 0;
+      --c-error: 160 29 29;
       --c-on-error: 255 255 255;
-      --c-error-container: 255 218 214;
+      --c-error-container: 236 206 203;
       --c-on-error-container: 65 0 2;
-      --c-background: 243 246 249;
-      --c-surface: 243 246 249;
-      --c-surface-dim: 232 237 242;
-      --c-surface-bright: 255 255 255;
-      --c-surface-container-lowest: 255 255 255;
-      --c-surface-container-low: 249 251 252;
-      --c-surface-container: 238 242 246;
-      --c-surface-container-high: 230 235 241;
-      --c-surface-container-highest: 219 226 234;
-      --c-surface-variant: 219 226 234;
-      --c-on-surface: 3 22 41;           /* #031629 */
-      --c-on-background: 3 22 41;
-      --c-on-surface-variant: 51 65 85;
-      --c-outline: 71 85 105;
-      --c-outline-variant: 100 116 139;
-      --c-hairline: 203 213 225;
-      --c-shimmer: 0 128 140;
-      --shadow-k: 0.25;
+      --c-background: 217 222 229;
+      --c-surface: 217 222 229;
+      --c-surface-dim: 202 209 217;
+      --c-surface-bright: 230 234 239;
+      --c-surface-container-lowest: 230 234 239;
+      --c-surface-container-low: 223 228 234;
+      --c-surface-container: 211 217 224;
+      --c-surface-container-high: 204 211 219;
+      --c-surface-container-highest: 193 201 211;
+      --c-surface-variant: 193 201 211;
+      --c-on-surface: 16 32 51;
+      --c-on-background: 16 32 51;
+      --c-on-surface-variant: 53 68 88;
+      --c-outline: 52 65 84;
+      --c-outline-variant: 67 82 102;
+      --c-hairline: 183 192 204;
+      --c-shimmer: 0 97 108;
+      --c-shadow: 20 37 58;              /* navy-tinted, not black */
+      --c-scrim: 20 37 58;
+      --shadow-k: 0.3;
     }
 
+    /* Elevation in the light theme: Tailwind's stock shadows are black and
+       sized for dark pages; here they become short, navy-tinted and faint.
+       `html.light` outranks the utility's single-class selector. */
+    html.light .shadow-sm {
+      --tw-shadow: 0 1px 2px rgb(var(--c-shadow) / 0.06);
+    }
+
+    html.light .shadow-lg {
+      --tw-shadow: 0 1px 2px rgb(var(--c-shadow) / 0.05), 0 6px 16px -6px rgb(var(--c-shadow) / 0.12);
+    }
+
+    html.light .shadow-xl,
+    html.light .shadow-2xl {
+      --tw-shadow: 0 2px 4px rgb(var(--c-shadow) / 0.05), 0 16px 40px -12px rgb(var(--c-shadow) / 0.2);
+    }
+
+    /* A custom accent (Interface → Accent colour): the glows written as
+       literal cyan in markup follow it. Before the light rule below, which
+       has the same specificity and replaces glows altogether. */
+    html[data-accent] [class*="rgba(0,218,243"] {
+      --tw-shadow: 0 0 14px rgb(var(--c-primary) / 0.35);
+    }
+
+    /* Cyan glows are a dark-theme device; on a light page they read as a
+       smudge. Swap them for the same faint elevation as a card. */
+    html.light [class*="rgba(0,218,243"] {
+      --tw-shadow: 0 1px 2px rgb(var(--c-shadow) / 0.08);
+    }
+
+    /* Modal scrims: a light navy veil instead of 60-70% black. */
+    html.light .bg-black\/60,
+    html.light .bg-black\/70 {
+      background-color: rgb(var(--c-scrim) / 0.32);
+    }
+
+    html.light ::selection {
+      background-color: rgb(var(--c-primary) / 0.3);
+      color: rgb(var(--c-on-surface));
+    }
+
+
     body {
-      font-family: 'Source Sans 3', sans-serif;
+      font-family: var(--font-ui);
       -webkit-font-smoothing: antialiased;
       -moz-osx-font-smoothing: grayscale;
     }
@@ -174,7 +233,7 @@
     .font-mono.uppercase,
     .font-mono[class*="tracking-"],
     .si-activity-header {
-      font-family: 'Source Sans 3', sans-serif !important;
+      font-family: var(--font-ui) !important;
     }
 
     .font-mono.uppercase {
@@ -553,7 +612,7 @@
 
     .roadmap-card:hover {
       border-color: rgb(var(--c-primary) / 0.35);
-      box-shadow: 0 4px 20px -2px rgb(0 0 0 / calc(0.4 * var(--shadow-k)));
+      box-shadow: 0 4px 20px -2px rgb(var(--c-shadow) / calc(0.4 * var(--shadow-k)));
     }
 
     .roadmap-card.highlighted {
@@ -563,7 +622,7 @@
 
     .roadmap-card.editing {
       border-color: rgb(var(--c-primary) / 0.45) !important;
-      box-shadow: 0 8px 30px -4px rgb(var(--c-primary) / 0.15), 0 4px 16px rgb(0 0 0 / calc(0.6 * var(--shadow-k))) !important;
+      box-shadow: 0 8px 30px -4px rgb(var(--c-primary) / 0.15), 0 4px 16px rgb(var(--c-shadow) / calc(0.6 * var(--shadow-k))) !important;
       background: rgb(var(--c-surface-container) / 0.98) !important;
     }
 
@@ -641,7 +700,7 @@
 
     /* ── Activity Rail HUD Styles ────────────────────────────────────────── */
     #activity-rail {
-      box-shadow: inset 0 1px 0 0 rgb(var(--c-primary) / 0.14), 0 10px 24px -6px rgb(0 0 0 / calc(0.6 * var(--shadow-k)));
+      box-shadow: inset 0 1px 0 0 rgb(var(--c-primary) / 0.14), 0 10px 24px -6px rgb(var(--c-shadow) / calc(0.6 * var(--shadow-k)));
     }
 
     /* Micro-scrollbars for activity rail horizontal scrolling */
