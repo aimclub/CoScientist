@@ -326,7 +326,7 @@ def _subordinate_instance(
 ) -> BaseAgent:
     if remote_subagents and sub.a2a:
         from google.adk.agents.remote_a2a_agent import RemoteA2aAgent
-        from CoScientist.a2a.config import AGENT_CARD_URLS
+        from CoScientist.a2a.server import make_agent_card
 
         kwargs = {}
         from CoScientist.config import get_settings
@@ -338,7 +338,7 @@ def _subordinate_instance(
 
         return RemoteA2aAgent(
             name=sub.name,
-            agent_card=AGENT_CARD_URLS[sub.a2a.key],
+            agent_card=make_agent_card(sub),
             description=sub.description,
             **kwargs,
         )
