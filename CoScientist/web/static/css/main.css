@@ -725,6 +725,17 @@
       margin: 0.5em 0;
     }
 
+    /* Justified prose in chat and the report viewer. Hyphenation (driven by
+       <html lang>, set from the UI language) keeps word gaps even in the
+       narrow side panel. Headings, tables and code stay left-aligned. */
+    .md-body p,
+    .md-body li,
+    .md-body blockquote {
+      text-align: justify;
+      hyphens: auto;
+      -webkit-hyphens: auto;
+    }
+
     .md-body ul,
     .md-body ol {
       margin: 0.5em 0;
