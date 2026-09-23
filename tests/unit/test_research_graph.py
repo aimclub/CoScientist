@@ -478,7 +478,10 @@ def test_reviving_a_hypothesis_needs_a_free_slot(store, monkeypatch):
     refused = store.commit(source="OrchestratorAgent",
                            status_updates=[{"id": "H2", "status": "formulated"}])
     assert not refused.ok
-    assert "holds 1 of 1" in refused.errors[0], refused.errors
+    # The occupancy, not the sentence around it: the refusal has to tell the
+    # agent how full the run is, and pinning the prose makes rewording it a
+    # test failure instead of a rewording.
+    assert "1 of 1" in refused.errors[0], refused.errors
 
     # Closing one and opening another in the SAME commit is not an excess —
     # and it is a swap whichever order the two updates are written in. The
@@ -517,6 +520,40 @@ def test_every_door_into_verification_costs_a_slot(store, monkeypatch):
                            status_updates=[{"id": "H1", "status": "under_verification"}])
     assert not refused.ok, refused.warnings
     assert len(store._active_hypotheses()) == 1
+
+
+def test_one_hypothesis_closed_twice_frees_one_slot_not_two(store, monkeypatch):
+    """A node has one outcome however many times a payload names it.
+
+    `from` is read from the graph for every update, so two verdicts on the same
+    hypothesis both saw it busy and both were counted as freeing a slot. The
+    tally went negative and bought room that does not exist: under a ceiling of
+    one, two hypotheses went active — ``ok=True``, no error, no warning. The
+    apply loop lands only the last of the two, so only the last may be counted.
+
+    Reached through `enforce_permissions=False`, which is the door the
+    experiment module commits through.
+    """
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 1)
+    _init(store)
+    store.commit(source="HypothesesAgent",
+                 nodes=[{"type": "Hypothesis", "ref": "a",
+                         "attrs": {"formulation": "the branch being closed"}}])
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "under_verification"}])
+
+    result = store.commit(
+        source="ExperimentModule", enforce_permissions=False,
+        status_updates=[{"id": "H1", "status": "refuted"},
+                        {"id": "H1", "status": "inconclusive"}],
+        nodes=[{"type": "Hypothesis", "ref": "x",
+                "attrs": {"formulation": "first new idea"}},
+               {"type": "Hypothesis", "ref": "y",
+                "attrs": {"formulation": "second new idea"}}])
+
+    assert result.ok, result.errors
+    assert len(store._active_hypotheses()) == 1, (
+        "one branch closed, so one slot — not one per verdict written")
 
 
 def test_a_commit_that_frees_a_slot_may_fill_it_with_a_new_hypothesis(store, monkeypatch):

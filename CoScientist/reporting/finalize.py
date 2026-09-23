@@ -290,17 +290,17 @@ def _build_manifest(
 
 
 def _extract_references(state: Dict[str, Any]) -> List[str]:
-    """Best-effort structured references from session state.
+    """Structured references from session state.
 
-    TODO(bibliography): paper-research currently stores results as free text
-    (``search_results``), so there is no reliable citation metadata to build a
-    real ``references.bib`` from. When paper-research is changed to retain raw
-    paper/citation records in state (e.g. a ``references`` list of dicts), read
-    them here. Until then this returns whatever plain-string references are
-    already present and otherwise nothing.
+    An explicit ``references`` list wins: something took the trouble to write
+    it. Failing that, the papers the run actually looked up — title, year and
+    DOI per record, kept by ``capture_paper_downloads``. This is the metadata
+    the long-standing TODO here was waiting for: paper research used to keep its
+    results as free text (``search_results``), so there was nothing to build a
+    bibliography from.
     """
     refs = state.get("references")
-    if isinstance(refs, list):
+    if isinstance(refs, list) and refs:
         out: List[str] = []
         for r in refs:
             if isinstance(r, str):
@@ -308,7 +308,12 @@ def _extract_references(state: Dict[str, Any]) -> List[str]:
             elif isinstance(r, dict):
                 out.append(r.get("citation") or r.get("title") or json.dumps(r))
         return out
-    return []
+    try:
+        from CoScientist.reporting.paper_library import references
+
+        return references(state)
+    except Exception:  # noqa: BLE001 — a bibliography must not sink a report
+        return []
 
 
 __all__ = ["finalize_report", "RunResult"]

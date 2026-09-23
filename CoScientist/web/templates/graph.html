@@ -106,6 +106,7 @@
     #detail .prov:hover { border-color: var(--accent); background: #1a1f28; }
     #detail .prov .tool { font-weight: 700; color: var(--accent); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13.5px; }
     #detail .prov .jump { float: right; color: var(--accent); font-size: 11.5px; opacity: .65; }
+    #detail .prov.dim { opacity: .55; }
     #detail .prov .res { color: var(--ink2); font-size: 13px; margin-top: 5px; line-height: 1.5;
       white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; }
     #detail .empty { color: var(--ink3); font-style: italic; }
@@ -174,6 +175,11 @@
     .art:last-child { border-bottom: 0; }
     .art .ic { flex: none; }
     .art .uri { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; overflow-wrap: anywhere; color: var(--ink); }
+    /* A DOI or URL in a field row is an anchor too, and `.uri` was only ever
+       styled inside `.art` — so the one link a reader most wants to press
+       rendered as unstyled browser default. */
+    #detail .kv .uri { color: var(--accent); overflow-wrap: anywhere; text-decoration: none; }
+    #detail .kv .uri:hover { text-decoration: underline; }
     .art a.uri { color: var(--accent); text-decoration: none; } .art a.uri:hover { text-decoration: underline; }
     .art .by { color: var(--ink3); font-size: 12.5px; white-space: nowrap; margin-left: auto; }
     #detail .note { color: var(--ink3); font-size: 13px; font-style: italic; margin: 2px 0 0; }
@@ -1860,6 +1866,7 @@
       body += attachmentsBlock(n.attachments, t('graph.attach.title'));
       body += linksBlock(n.id);
       body += provBlock(n.provenance);
+      body += contributorsBlock(n.contributors);
       if (!body) body = `<div class="empty">${esc(t('graph.detail.empty'))}</div>`;
       const head = `<div class="dhead"><span class="close" onclick="closeDetail()">✕</span>`
         + `<h3>${R_ICON[n.kind]||"•"} ${esc(rTypeName(n))}${n.index ? " " + n.index : ""}</h3>`
@@ -1931,6 +1938,29 @@
           + (p.exec_id ? `<span class="jump">${esc(t('graph.detail.execLog'))}</span>` : "")
           + (p.result ? `<div class="res">${esc(p.result)}</div>` : "") + `</div>`;
       }).join("");
+    }
+    // Who took part, and on what basis we say so.
+    //
+    // The difference is load-bearing. A PLANNED assignee is who the plan named;
+    // nothing observed that they did the work, and until now that was the only
+    // thing recorded about a plan step. Everything else here — wrote it, moved
+    // it, delegated it, took it under a work order, ran it — is something the
+    // system watched happen. Drawing the two alike is exactly how a reader ends
+    // up certain that the wrong agent did something, so the planned ones sit
+    // last, dimmed, and say so in words.
+    function contributorsBlock(list){
+      if (!Array.isArray(list) || !list.length) return "";
+      return `<div class="k">${esc(t('graph.contrib.title'))} <span class="chars">${list.length}</span></div>`
+        + list.map(c => {
+            const basis = esc(t('graph.basis.' + c.basis, c.basis || ""));
+            const jump = c.exec_id
+              ? ` onclick="jumpToExecution('${esc(String(c.exec_id))}')" title="${esc(t('graph.detail.openInLog'))}"`
+              : "";
+            const mark = c.observed ? "●" : "○";
+            return `<div class="prov${c.observed ? "" : " dim"}"${jump}>`
+              + `<span class="tool">${mark} ${esc(c.agent || "")}</span>`
+              + `<span class="jump">${basis}</span></div>`;
+          }).join("");
     }
     function focusNode(id){
       if (!nodeData[id]) return;
@@ -2058,13 +2088,33 @@
     // records an argument literally called `content`, and `graph.field.content`
     // means "Finding". Translating unconditionally captioned the file body it
     // was about to write as «Результат», next to the real result block.
+    // A DOI is an address, not prose. The panel printed `10.1021/acs.jafc.2c05393`
+    // as escaped text, so the one thing a reader wants to do with it — open the
+    // paper — took a copy-paste out of the page. Linkified only where `fields`
+    // is on, i.e. the research card: the execution log's rows are raw tool
+    // arguments and must stay literal.
+    const DOI_RE = /^(?:doi:\s*|https?:\/\/(?:dx\.)?doi\.org\/)?(10\.\d{4,9}\/[^\s"<>]+)$/i;
+    const URL_RE = /^https?:\/\/[^\s"<>]+$/;
+    function anchor(href, label){
+      return `<a class="uri" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`;
+    }
+    function scalarValue(text, fields){
+      if (!fields) return esc(text);
+      const trimmed = String(text).trim();
+      // Not encodeURIComponent: a DOI's slash is part of the identifier, and
+      // escaping it produces a doi.org link that resolves to nothing.
+      const doi = trimmed.match(DOI_RE);
+      if (doi) return anchor("https://doi.org/" + doi[1], trimmed);
+      if (URL_RE.test(trimmed)) return anchor(trimmed, trimmed);
+      return esc(text);
+    }
     function kvRows(obj, depth, fields){
       return `<div class="kv">` + Object.entries(obj).map(([k, v]) => {
         const key = `<span class="key">${esc(fields ? fieldLabel(k) : k)}</span>`;
         if (!isScalar(v)) {
           if (Array.isArray(v) && v.every(x => isScalar(x) && String(x).length <= 40))
             return `<div class="row">${key}<span class="val">`
-              + v.map(x => `<span class="pill">${esc(x)}</span>`).join("") + `</span></div>`;
+              + v.map(x => `<span class="pill">${scalarValue(x, fields)}</span>`).join("") + `</span></div>`;
           const count = Array.isArray(v) ? t('graph.count.item', { count: v.length })
                                          : t('graph.count.field', { count: Object.keys(v).length });
           return `<div class="row">${key}<span class="val dim">${count}</span>`
@@ -2072,14 +2122,14 @@
         }
         const text = String(v);
         const long = text.length > 90 || text.includes("\n");
-        return `<div class="row">${key}<span class="val${long ? " block" : ""}">${esc(text)}</span></div>`;
+        return `<div class="row">${key}<span class="val${long ? " block" : ""}">${scalarValue(text, fields)}</span></div>`;
       }).join("") + `</div>`;
     }
     function nestedValue(v, depth, fields){
       if (depth > 4) return `<pre>${esc(JSON.stringify(v, null, 2))}</pre>`;
       if (Array.isArray(v))
         return `<ol class="items">` + v.map(x =>
-          `<li>${isScalar(x) ? esc(x) : nestedValue(x, depth, fields)}</li>`).join("") + `</ol>`;
+          `<li>${isScalar(x) ? scalarValue(x, fields) : nestedValue(x, depth, fields)}</li>`).join("") + `</ol>`;
       return kvRows(v, depth, fields);
     }
     // A titled block: labelled rows for a mapping, a list for a list, the text

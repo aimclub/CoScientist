@@ -428,7 +428,7 @@ agents:
       before_agent: [before_get_task, inject_research_context, user_links]
       before_model: [inject_uploaded_papers, redact_link_urls]
       before_tool: [WebSearchLimiter, resolve_link_refs]
-      after_tool: [log_research_tool_calls, register_tool_result_links]
+      after_tool: [log_research_tool_calls, capture_paper_downloads, register_tool_result_links]
       after_model: [expand_link_refs, guard_unknown_tools]
     # Every agent asks before acting on a decision; inert until HITL__ENABLED.
     hitl: true

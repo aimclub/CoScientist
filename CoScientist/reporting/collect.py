@@ -48,6 +48,11 @@ _SOURCE_EXTS = (".doc", ".docx")
 # Key markers of bulk source material. The papers server uploads every PDF it
 # finds under one prefix; those are inputs to the run, not results of it.
 _SOURCE_KEY_MARKERS = ("papers_search_results",)
+# Never a deliverable, however it was captured. The marker above catches the
+# papers server's own upload prefix; this catches the same PDF once the session
+# has mirrored a copy of its own, which is content-addressed and has no prefix
+# left to match on.
+_SOURCE_KINDS = frozenset({"paper"})
 _MAX_TABLE_ROWS = 15
 
 # Workspace scan guards: dependency/VCS/cache dirs that carry bundled example
@@ -157,10 +162,13 @@ def _kind_from_name(name: str) -> str:
 def _is_source_material(art: Dict[str, Any], url: str) -> bool:
     """Ingest material a search or parse step pulled in, not a run output.
 
-    Matches on the extension (source documents) and on the key or URL (the
-    bulk prefix a search server uploads under). A PDF the run itself produced
-    matches neither and lands in Files like any other deliverable.
+    Matches on what the file was filed as, on the extension (source documents)
+    and on the key or URL (the bulk prefix a search server uploads under). A PDF
+    the run itself produced matches none of the three and lands in Files like
+    any other deliverable.
     """
+    if str(art.get("source_kind") or "") in _SOURCE_KINDS:
+        return True
     if _looks_like(url, _SOURCE_EXTS):
         return True
     key = str(art.get("s3_key") or "")
@@ -396,6 +404,14 @@ def collect_artifacts(
             if source_url:
                 mirrored_by_url[source_url] = artifact_id
             mirrored_ids.add(artifact_id)
+            # Registered above, copied below — and a source is registered but
+            # not copied. The URL pass has always had this check; this one never
+            # did, because until papers were mirrored deliberately nothing that
+            # reached the session store was ingest material. Claiming it here
+            # (rather than skipping the record outright) is what stops the URL
+            # pass from fetching the same paper again by its publisher link.
+            if _is_source_material(record, str(source_url or record.get("filename") or "")):
+                continue
             local = session_files.resolve_path(scope, artifact_id)
             if local is None:
                 continue
