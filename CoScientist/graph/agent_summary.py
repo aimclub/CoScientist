@@ -122,6 +122,23 @@ def model_name() -> Tuple[Optional[str], Optional[str]]:
     return s.main_model, s.main_url
 
 
+def _routable(model: str, base: Optional[str]) -> str:
+    """The model name as litellm needs it.
+
+    ``summary_url`` names its model the way the endpoint does
+    (``google/gemini-2.0-flash-lite-001``), without the provider prefix
+    litellm routes by, so litellm refuses it. When litellm cannot tell the
+    provider from the name and there is a base URL, the endpoint is an
+    OpenAI-compatible one and the call goes through as ``openai/<model>``.
+    """
+    import litellm
+    try:
+        litellm.get_llm_provider(model)
+        return model
+    except Exception:  # noqa: BLE001 — "provider not provided" is the case we handle
+        return f"openai/{model}" if base else model
+
+
 async def _complete(system: str, user: str) -> Tuple[str, str]:
     import litellm
     from CoScientist.config import get_settings
@@ -129,12 +146,29 @@ async def _complete(system: str, user: str) -> Tuple[str, str]:
     model, base = model_name()
     if not model:
         raise RuntimeError("no model configured: set LLM__AGENT_SUMMARY_MODEL or LLM__MAIN_MODEL")
-    resp = await litellm.acompletion(
-        model=model, api_base=base, api_key=s.openai_api_key,
-        messages=[{"role": "system", "content": system},
-                  {"role": "user", "content": user}],
-        temperature=0, timeout=s.request_timeout, max_tokens=_MAX_TOKENS,
-    )
+    # The small model is a preference, not a requirement: a name the endpoint
+    # no longer serves (models get retired under a config that still names
+    # them) falls back to the main model rather than leaving the panel empty.
+    attempts = [(model, base)]
+    if s.main_model and s.main_model != model:
+        attempts.append((s.main_model, s.main_url))
+    resp, used = None, model
+    for i, (candidate, candidate_base) in enumerate(attempts):
+        try:
+            resp = await litellm.acompletion(
+                model=_routable(candidate, candidate_base), api_base=candidate_base,
+                api_key=s.openai_api_key,
+                messages=[{"role": "system", "content": system},
+                          {"role": "user", "content": user}],
+                temperature=0, timeout=s.request_timeout, max_tokens=_MAX_TOKENS,
+            )
+            used = candidate
+            break
+        except Exception as exc:  # noqa: BLE001
+            unknown = isinstance(exc, (litellm.NotFoundError, litellm.BadRequestError))
+            if not unknown or i == len(attempts) - 1:
+                raise
+    model = used
     try:
         from CoScientist.logging.metrics import record_completion
         record_completion(resp, model=model, agent="AgentSummary")
