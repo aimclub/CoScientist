@@ -474,6 +474,13 @@ def _apply_frontend_settings(frontend: dict) -> None:
         if 1 <= val <= 5:
             web.max_active_hypotheses = val
 
+    # Settings → Agents: per-agent on/off, reasoning and model over system.yaml.
+    # Read when the next session's agent tree is assembled.
+    agents = frontend.get("agents")
+    if isinstance(agents, dict):
+        from CoScientist.web.agent_settings import apply_agent_settings
+        apply_agent_settings(agents)
+
     coder = frontend.get("coderAgent", {})
     if "sandboxUrl" in coder:
         web.sandbox_url = coder["sandboxUrl"]
@@ -511,6 +518,7 @@ def _settings_payload() -> dict:
 def _current_settings() -> dict:
     """The frontend ``appSettings`` shape, read back off the config singleton."""
     from CoScientist.config import get_settings
+    from CoScientist.web.agent_settings import current_agent_settings
     settings = get_settings()
     web = settings.web
     return {
@@ -570,6 +578,7 @@ def _current_settings() -> dict:
             "workspaceId": web.coder_workspace_id or "",
             "mode": web.coder_mode,
         },
+        "agents": current_agent_settings(),
     }
 
 
@@ -2468,6 +2477,12 @@ def create_app() -> FastAPI:
         return JSONResponse({"status": "success", **_settings_payload()})
 
     # --- Agent info ---
+    @app.get("/api/agents/catalog")
+    async def get_agents_catalog():
+        """Every agent of the profile with its declared values, for Settings → Agents."""
+        from CoScientist.web.agent_settings import agents_catalog
+        return JSONResponse(_json_safe(agents_catalog()))
+
     @app.get("/api/agents")
     async def get_agents():
         """Return list of registered agents and system hierarchy."""

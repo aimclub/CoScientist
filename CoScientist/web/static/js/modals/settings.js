@@ -17,6 +17,9 @@
       'Chutes', 'Cerebras', 'SambaNova', 'Nebius', 'Mistral',
     ];
 
+    // The `reasoning:` vocabulary of system.yaml, in the order the modal offers it.
+    const REASONING_LEVELS = ['off', 'minimal', 'low', 'medium', 'high'];
+
     // In "orchestrator plans" mode the PlannerAgent is not built at all, so its
     // own switches have nothing to act on.
     function plannerInactive(d) {
@@ -38,7 +41,7 @@
                   { value: 'orchestrator_planner', icon: 'alt_route' },
                 ],
               },
-              { id: 'contextInit', path: 'general.contextInitEnabled', type: 'toggle', scope: 'session', env: 'RESEARCH_FRAME' },
+              { id: 'contextInit', path: 'general.contextInitEnabled', type: 'toggle', scope: 'session', env: 'RESEARCH_FRAME', envAliases: ['CONTEXT_INIT__ENABLED'] },
               { id: 'maxHypotheses', path: 'hypothesesAgent.maxActiveHypotheses', type: 'number', min: 1, max: 5, scope: 'session', env: 'HYPOTHESES__MAX_ACTIVE' },
               // The agent is attached when a session's tree is built; off also
               // takes the medical route out of running experiments, hence the
@@ -72,6 +75,27 @@
         ],
       },
       {
+        // Per-agent switches over system.yaml; the list is drawn from
+        // /api/agents/catalog, the values live in appSettings.agents.
+        id: 'agents', icon: 'smart_toy',
+        groups: [
+          {
+            fields: [
+              {
+                id: 'defaultReasoning', path: 'agents.defaultReasoning', type: 'select', scope: 'session',
+                options: ['', ...REASONING_LEVELS], env: 'AGENTS__DEFAULT_REASONING',
+              },
+            ],
+          },
+          {
+            heading: 'agentList',
+            fields: [
+              { id: 'agentOverrides', path: 'agents.overrides', type: 'agents', scope: 'session', env: 'AGENTS__OVERRIDES' },
+            ],
+          },
+        ],
+      },
+      {
         id: 'interface', icon: 'palette',
         groups: [{
           fields: [
@@ -95,7 +119,7 @@
             fields: [
               { id: 'hitl', path: 'general.hitlEnabled', type: 'toggle', scope: 'session', env: 'HITL__ENABLED' },
               // -1 = no deadline, wait for the human; N > 0 = approved after N seconds.
-              { id: 'hitlTimeout', path: 'general.hitlAutoApproveTimeout', type: 'timeout', fallback: 300, scope: 'instant', parent: 'hitl', env: 'HITL_AUTO_APPROVE_TIMEOUT' },
+              { id: 'hitlTimeout', path: 'general.hitlAutoApproveTimeout', type: 'timeout', fallback: 300, scope: 'instant', parent: 'hitl', env: 'HITL_AUTO_APPROVE_TIMEOUT', envAliases: ['HITL__AUTO_APPROVE_TIMEOUT', 'HITL_TIMEOUT_SECONDS'] },
               { id: 'workOrder', path: 'general.workOrderEnabled', type: 'toggle', scope: 'session', parent: 'hitl', env: 'WORK_ORDER__ENABLED' },
               { id: 'workOrderVeto', path: 'general.workOrderVetoSeconds', type: 'timeout', fallback: 60, scope: 'instant', parent: 'workOrder', env: 'WORK_ORDER__VETO_SECONDS' },
             ],
@@ -180,8 +204,8 @@
         id: 'models', icon: 'memory',
         groups: [{
           fields: [
-            { id: 'providerSort', path: 'general.openrouterProviderSort', type: 'segmented', options: ['default', 'price', 'latency', 'throughput'], scope: 'session', env: 'OPENROUTER_PROVIDER_SORT' },
-            { id: 'providerOrder', path: 'general.openrouterProviderOrder', type: 'chips', suggestions: OPENROUTER_POPULAR_PROVIDERS, scope: 'session', env: 'OPENROUTER_PROVIDER_ORDER' },
+            { id: 'providerSort', path: 'general.openrouterProviderSort', type: 'segmented', options: ['default', 'price', 'latency', 'throughput'], scope: 'session', env: 'OPENROUTER_PROVIDER_SORT', envAliases: ['LLM__OPENROUTER_PROVIDER_SORT'] },
+            { id: 'providerOrder', path: 'general.openrouterProviderOrder', type: 'chips', suggestions: OPENROUTER_POPULAR_PROVIDERS, scope: 'session', env: 'OPENROUTER_PROVIDER_ORDER', envAliases: ['LLM__OPENROUTER_PROVIDER_ORDER'] },
             { id: 'maxRetries', path: 'general.maxRetries', type: 'number', min: 0, max: 10, scope: 'instant', advanced: true, env: 'LLM_MAX_RETRIES' },
           ],
         }],
@@ -192,7 +216,7 @@
           {
             fields: [
               { id: 'knowledgeGraph', path: 'general.knowledgeGraphEnabled', type: 'toggle', scope: 'session', env: 'GRAPH__ENABLED' },
-              { id: 'researchGraph', path: 'general.researchGraphEnabled', type: 'toggle', scope: 'session' },
+              { id: 'researchGraph', path: 'general.researchGraphEnabled', type: 'toggle', scope: 'session', env: 'RESEARCH_GRAPH__ENABLED' },
             ],
           },
           { heading: 'danger', fields: [{ id: 'dangerZone', type: 'danger' }] },
@@ -203,9 +227,13 @@
         groups: [
           {
             fields: [
-              { id: 'defaultUsername', path: 'general.coscientistUsername', type: 'text', placeholderKey: 'settings.f.defaultUsername.placeholder', scope: 'reload', env: 'COSCIENTIST_USERNAME' },
+              { id: 'defaultUsername', path: 'general.coscientistUsername', type: 'text', placeholderKey: 'settings.f.defaultUsername.placeholder', scope: 'reload', env: 'COSCIENTIST_USERNAME', envAliases: ['DEFAULT_USERNAME'] },
               { id: 'opik', path: 'general.opikEnabled', type: 'toggle', scope: 'session', env: 'OPIK__ENABLED' },
             ],
+          },
+          {
+            heading: 'transfer',
+            fields: [{ id: 'envTransfer', type: 'envTransfer' }],
           },
           {
             heading: 'envOnly',
@@ -222,7 +250,7 @@
       section.groups.flatMap(group => group.fields.map(field => ({ ...field, section: section.id }))));
     const SETTINGS_FIELD_BY_ID = Object.fromEntries(SETTINGS_FIELDS.map(f => [f.id, f]));
     // Fields whose value is sent on Save (read-only .env values are not).
-    const EDITABLE_TYPES = new Set(['toggle', 'number', 'text', 'cards', 'segmented', 'chips', 'timeout']);
+    const EDITABLE_TYPES = new Set(['toggle', 'number', 'text', 'cards', 'segmented', 'chips', 'timeout', 'select', 'agents']);
     const TIMEOUT_MAX_SECONDS = 86400;
     // Seconds last typed into a timeout field, restored when "wait" is switched back to auto.
     const settingsLastTimeout = {};
@@ -277,6 +305,8 @@
       if (field.type === 'timeout') {
         return typeof value === 'number' && value > 0 ? tf('settings.timeout.after', { n: value }) : t('settings.timeout.wait');
       }
+      if (field.type === 'select') return t(`settings.reasoning.${value || 'inherit'}`);
+      if (field.type === 'agents') return tf('settings.agents.changed', { n: Object.keys(value || {}).length });
       if (value === '' || value == null) return t('settings.value.empty');
       if (field.type === 'cards' || field.type === 'segmented') {
         return t(`settings.f.${field.id}.opt.${value}`, String(value));
@@ -379,6 +409,7 @@
       applyLanguage();
       renderSettings();
 
+      loadAgentsCatalog();
       await loadSettings();
       settingsSaved = cloneSettings(appSettings);
       settingsDraft = cloneSettings(appSettings);
@@ -544,7 +575,7 @@
       const disabled = !!inactive;
       const label = escHtml(t(`settings.f.${field.id}.label`));
       const desc = i18n[`settings.f.${field.id}.desc`] ? t(`settings.f.${field.id}.desc`) : '';
-      const wide = field.type === 'cards' || field.type === 'chips';
+      const wide = ['cards', 'chips', 'agents', 'envTransfer'].includes(field.type);
       // scopeHintKey: a field whose effect does not fit its scope's stock hint.
       const scopeHint = field.scope ? `${t(`settings.scope.${field.scope}`)} — ${t(field.scopeHintKey || `settings.scope.${field.scope}.hint`)}` : '';
       const scope = field.scope ? `
@@ -735,6 +766,18 @@
                   ${escHtml(id === 'system' ? t('settings.f.font.system') : font.name)}${id === DEFAULT_FONT ? ` · ${escHtml(t('settings.f.font.default'))}` : ''}
                 </option>`).join('')}
             </select>`;
+        case 'select':
+          return `
+            <select id="sf-${field.id}" data-field="${field.id}" ${dis} class="${inputCls} min-w-[11rem]">
+              ${field.options.map(opt => `
+                <option value="${escHtml(opt)}" ${value === opt ? 'selected' : ''}>${escHtml(opt
+                  ? t(`settings.reasoning.${opt}`)
+                  : tf('settings.agents.inheritWith', { value: t(`settings.reasoning.${(agentsCatalog && agentsCatalog.defaults.reasoning) || 'inherit'}`) }))}</option>`).join('')}
+            </select>`;
+        case 'agents':
+          return renderAgentsControl();
+        case 'envTransfer':
+          return renderEnvTransfer();
         case 'env':
           return `
             <div class="text-right">
@@ -880,6 +923,10 @@
             else deleteGraphData(settingsDanger.pending);
             break;
           case 'danger-final': deleteGraphData('memory'); break;
+          case 'agent-reset': resetAgentOverride(btn.dataset.agent); break;
+          case 'env-export': exportSettingsEnv(); break;
+          case 'env-import': body.querySelector('[data-env-import]')?.click(); break;
+          case 'env-report-close': envImportReport = null; renderSettings(); break;
         }
       });
 
@@ -892,8 +939,16 @@
         // The colour picker previews on `input`; redraw once it is closed.
         if (e.target.dataset.appearance === 'accent') { setAccent(e.target.value); renderSettings(); return; }
         if (e.target.dataset.appearance === 'font') { setFont(e.target.value); return; }
-        const field = SETTINGS_FIELD_BY_ID[e.target.dataset.field];
-        if (field && field.type === 'toggle') updateSettingDraft(field, e.target.checked, true);
+        const el = e.target;
+        if (el.dataset.agentEnabled) { setAgentOverride(el.dataset.agentEnabled, 'enabled', el.checked); return; }
+        if (el.dataset.agentReasoning) { setAgentOverride(el.dataset.agentReasoning, 'reasoning', el.value); return; }
+        if (el.dataset.agentModel) { setAgentOverride(el.dataset.agentModel, 'model', el.value.trim()); return; }
+        if (el.hasAttribute('data-agents-internal')) { agentsShowInternal = el.checked; renderAgentsList(); return; }
+        if (el.hasAttribute('data-env-import')) { importSettingsEnv(el.files && el.files[0]); el.value = ''; return; }
+        const field = SETTINGS_FIELD_BY_ID[el.dataset.field];
+        if (field && field.type === 'toggle') updateSettingDraft(field, el.checked, true);
+        // Re-rendered: the agent rows name the inherited level next to their own.
+        if (field && field.type === 'select') updateSettingDraft(field, el.value, true);
       });
 
       body.addEventListener('input', (e) => {
@@ -904,6 +959,7 @@
           el.parentElement.querySelector('[data-light-dim-value]').textContent = `${el.value}%`;
           return;
         }
+        if (el.hasAttribute('data-agents-filter')) { agentsFilter = el.value; renderAgentsList(); return; }
         const field = SETTINGS_FIELD_BY_ID[el.dataset.field];
         if (!field) return;
         if (field.type === 'number' || field.type === 'timeout') updateSettingDraft(field, parseSettingNumber(el.value), false);
@@ -930,6 +986,480 @@
         const field = SETTINGS_FIELD_BY_ID[e.target.dataset.chips];
         if (field && e.target.value.trim()) addProviderChip(field, e.target);
       });
+    }
+
+    // ── agents ──────────────────────────────────────────────────────────────
+    // The catalog is what system.yaml declares (GET /api/agents/catalog); the
+    // draft holds only what the operator changed on top of it. A value equal
+    // to the declared one is dropped, so the stored map stays the diff.
+    let agentsCatalog = null;
+    let agentsCatalogError = '';
+    let agentsFilter = '';
+    let agentsShowInternal = false;
+
+    async function loadAgentsCatalog() {
+      try {
+        const resp = await fetch('/api/agents/catalog');
+        if (!resp.ok) throw new Error(await fetchErrorMessage(resp));
+        agentsCatalog = await resp.json();
+        agentsCatalogError = '';
+      } catch (e) {
+        agentsCatalogError = e.message || String(e);
+      }
+      renderSettings();
+    }
+
+    function agentOverrides() {
+      return (settingsDraft && settingsDraft.agents && settingsDraft.agents.overrides) || {};
+    }
+
+    function catalogAgent(name) {
+      return agentsCatalog ? agentsCatalog.agents.find(a => a.name === name) : null;
+    }
+
+    // Sorted keys and no empty entries, so "changed" compares by content.
+    function normalizeOverrides(map) {
+      const out = {};
+      Object.keys(map).sort().forEach(name => {
+        const entry = {};
+        ['enabled', 'reasoning', 'model'].forEach(key => {
+          const value = map[name] ? map[name][key] : undefined;
+          if (value !== undefined && value !== null && value !== '') entry[key] = value;
+        });
+        if (Object.keys(entry).length) out[name] = entry;
+      });
+      return out;
+    }
+
+    function setAgentOverride(name, key, value) {
+      const agent = catalogAgent(name);
+      const map = cloneSettings(agentOverrides());
+      map[name] = { ...(map[name] || {}) };
+      // Equal to the declared value is not an override: drop it.
+      const declared = agent ? agent[key] : undefined;
+      if (value === '' || value == null || value === declared) delete map[name][key];
+      else map[name][key] = value;
+      updateSettingDraft(SETTINGS_FIELD_BY_ID.agentOverrides, normalizeOverrides(map), false);
+      renderAgentsList();
+    }
+
+    function resetAgentOverride(name) {
+      const map = cloneSettings(agentOverrides());
+      delete map[name];
+      updateSettingDraft(SETTINGS_FIELD_BY_ID.agentOverrides, normalizeOverrides(map), false);
+      renderAgentsList();
+    }
+
+    function effectiveEnabled(agent) {
+      const override = agentOverrides()[agent.name];
+      return override && typeof override.enabled === 'boolean' && !agent.lock ? override.enabled : agent.enabled;
+    }
+
+    // Agents that stop being called when `name` is off: its subordinates (and
+    // theirs) that no other enabled agent reaches.
+    function agentsCutOffBy(name) {
+      if (!agentsCatalog) return [];
+      const byName = Object.fromEntries(agentsCatalog.agents.map(a => [a.name, a]));
+      const reachable = new Set();
+      const walk = n => {
+        if (reachable.has(n) || n === name || !byName[n] || !effectiveEnabled(byName[n])) return;
+        reachable.add(n);
+        byName[n].subordinates.forEach(walk);
+      };
+      agentsCatalog.agents.filter(a => a.root || a.stage).forEach(a => walk(a.name));
+      const lost = [];
+      const collect = n => (byName[n] ? byName[n].subordinates : []).forEach(child => {
+        if (reachable.has(child) || lost.includes(child) || !byName[child] || byName[child].internal) return;
+        lost.push(child);
+        collect(child);
+      });
+      collect(name);
+      return lost;
+    }
+
+    function renderAgentsControl() {
+      if (!agentsCatalog) {
+        return `<p class="text-[12px] ${agentsCatalogError ? 'text-error' : 'text-outline-variant'}">${escHtml(agentsCatalogError
+          ? tf('settings.agents.loadFailed', { error: agentsCatalogError })
+          : t('settings.agents.loading'))}</p>`;
+      }
+      const internalCount = agentsCatalog.agents.filter(a => a.internal).length;
+      return `
+        <div class="space-y-3">
+          <div class="flex flex-wrap items-center gap-3">
+            <input type="search" data-agents-filter value="${escHtml(agentsFilter)}" autocomplete="off" spellcheck="false"
+              placeholder="${escHtml(t('settings.agents.filter'))}" aria-label="${escHtml(t('settings.agents.filter'))}"
+              class="bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs rounded-md px-3 py-2 w-64 focus:ring-1 focus:ring-primary/40 focus:border-primary/40" />
+            <label class="flex items-center gap-2 text-[11px] text-on-surface-variant cursor-pointer select-none">
+              <input type="checkbox" data-agents-internal ${agentsShowInternal ? 'checked' : ''}
+                class="rounded border-outline-variant/40 bg-surface-container-high text-primary focus:ring-primary/40" />
+              ${escHtml(tf('settings.agents.showInternal', { n: internalCount }))}
+            </label>
+            <span class="flex-1"></span>
+            <span data-agents-changed class="text-[11px] text-outline-variant tabular-nums">${escHtml(agentsChangedText())}</span>
+          </div>
+          <datalist id="settings-agent-models">
+            ${Object.entries(agentsCatalog.models).map(([alias, model]) => `<option value="${escHtml(alias)}">${escHtml(model || '')}</option>`).join('')}
+          </datalist>
+          <div id="settings-agents-list" class="rounded-lg border border-outline-variant/15 divide-y divide-outline-variant/10">${renderAgentRows()}</div>
+        </div>`;
+    }
+
+    function agentsChangedText() {
+      const n = Object.keys(agentOverrides()).length;
+      return n ? tf('settings.agents.changed', { n }) : '';
+    }
+
+    // Redraws the rows only, so the filter box keeps focus while typing.
+    function renderAgentsList() {
+      const list = document.getElementById('settings-agents-list');
+      if (list) list.innerHTML = renderAgentRows();
+      const changed = document.querySelector('[data-agents-changed]');
+      if (changed) changed.textContent = agentsChangedText();
+    }
+
+    function renderAgentRows() {
+      const query = agentsFilter.trim().toLowerCase();
+      const rows = agentsCatalog.agents.filter(agent => {
+        if (agent.internal && !agentsShowInternal) return false;
+        return !query || `${agent.name} ${agent.description}`.toLowerCase().includes(query);
+      });
+      if (!rows.length) {
+        return `<p class="px-4 py-6 text-center text-[12px] text-outline-variant">${escHtml(t('settings.agents.none'))}</p>`;
+      }
+      return rows.map(renderAgentRow).join('');
+    }
+
+    function renderAgentRow(agent) {
+      const override = agentOverrides()[agent.name] || {};
+      const changed = Object.keys(override).length > 0;
+      const enabled = effectiveEnabled(agent);
+      const locked = !!agent.lock;
+      const id = `sf-agent-${agent.name}`;
+      const badge = (text, tone) =>
+        `<span class="px-1.5 rounded border text-[10px] ${tone || 'text-outline-variant border-outline-variant/25'}">${escHtml(text)}</span>`;
+      const badges = [
+        agent.root ? badge(t('settings.agents.badge.root'), 'text-primary border-primary/30') : '',
+        agent.stage ? badge(t(`settings.agents.badge.${agent.stage}`)) : '',
+        agent.internal ? badge(t('settings.agents.badge.internal')) : '',
+      ].join('');
+      const calledBy = agent.parents.length
+        ? `<span class="text-[10px] text-outline-variant">${escHtml(tf('settings.agents.calledBy', { names: agent.parents.join(', ') }))}</span>` : '';
+
+      const notes = [];
+      if (locked) {
+        notes.push(`<span class="material-symbols-outlined text-sm" aria-hidden="true">lock</span>${escHtml(t(`settings.agents.lock.${agent.lock}`))}`
+          + (agent.lock === 'startMode'
+            ? ` <button type="button" data-action="section" data-section="research" class="underline hover:text-on-surface">${escHtml(t('settings.goto'))}</button>`
+            : ''));
+      } else if (agent.enabledRef) {
+        notes.push(escHtml(tf('settings.agents.enabledRef', { ref: agent.enabledRef })));
+      }
+      if (!enabled && !locked) {
+        const lost = agentsCutOffBy(agent.name);
+        if (lost.length) notes.push(escHtml(tf('settings.agents.cascade', { names: lost.join(', ') })));
+      }
+
+      const reasoningValue = override.reasoning || '';
+      const inherited = agent.reasoning
+        || getSettingPath(settingsDraft, 'agents.defaultReasoning') || agentsCatalog.defaults.reasoning;
+      const modelValue = override.model || '';
+      const resolved = agentsCatalog.models[modelValue || agent.model];
+      // Two columns, label over control: reasoning, then the model with the
+      // litellm string an alias resolves to under it.
+      const modelControls = !agent.hasModel ? '' : `
+        <div class="mt-2.5 pl-[52px] grid grid-cols-1 sm:grid-cols-2 gap-3 ${enabled ? '' : 'opacity-50'}">
+          <label class="flex flex-col gap-1 min-w-0 text-[10px] text-outline-variant">
+            ${escHtml(t('settings.agents.reasoning'))}
+            <select data-agent-reasoning="${escHtml(agent.name)}"
+              class="w-full bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs rounded-md pl-2.5 pr-8 py-1.5 focus:ring-1 focus:ring-primary/40">
+              <option value="">${escHtml(tf('settings.agents.inheritWith', { value: t(`settings.reasoning.${inherited || 'inherit'}`) }))}</option>
+              ${REASONING_LEVELS.map(level => `<option value="${level}" ${reasoningValue === level ? 'selected' : ''}>${escHtml(t(`settings.reasoning.${level}`))}</option>`).join('')}
+            </select>
+          </label>
+          <label class="flex flex-col gap-1 min-w-0 text-[10px] text-outline-variant">
+            ${escHtml(t('settings.agents.model'))}
+            <input type="text" list="settings-agent-models" data-agent-model="${escHtml(agent.name)}" value="${escHtml(modelValue)}"
+              autocomplete="off" spellcheck="false" placeholder="${escHtml(tf('settings.agents.modelPlaceholder', { model: agent.model }))}"
+              class="w-full bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-2.5 py-1.5 focus:ring-1 focus:ring-primary/40" />
+            ${resolved ? `<span class="font-mono truncate" title="${escHtml(resolved)}" translate="no">→ ${escHtml(resolved)}</span>` : ''}
+          </label>
+        </div>`;
+
+      return `
+        <div data-agent-row="${escHtml(agent.name)}" class="px-4 py-3 border-l-2 ${changed ? 'border-l-primary bg-primary/[0.03]' : 'border-l-transparent'}">
+          <div class="flex items-start gap-3">
+            <label class="relative inline-flex items-center shrink-0 mt-0.5 ${locked ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}">
+              <input id="${escHtml(id)}" type="checkbox" data-agent-enabled="${escHtml(agent.name)}" class="sr-only peer"
+                ${enabled ? 'checked' : ''} ${locked ? 'disabled' : ''}
+                aria-label="${escHtml(tf('settings.agents.toggle', { name: agent.name }))}" />
+              <span class="w-10 h-6 rounded-full bg-surface-variant border border-outline-variant/30 peer-checked:bg-primary peer-checked:border-primary transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-primary/50"></span>
+              <span class="absolute left-1 top-1 w-4 h-4 rounded-full bg-on-surface-variant peer-checked:bg-on-primary peer-checked:translate-x-4 transition-transform"></span>
+            </label>
+            <div class="min-w-0 flex-1 ${enabled ? '' : 'opacity-70'}">
+              <div class="flex items-center gap-2 flex-wrap">
+                <label for="${escHtml(id)}" class="font-mono text-[12px] text-on-surface" translate="no">${escHtml(agent.name)}</label>
+                ${badges}${calledBy}
+              </div>
+              ${agent.description ? `<p class="text-[11px] text-on-surface-variant/80 mt-0.5 leading-snug line-clamp-2" title="${escHtml(agent.description)}">${escHtml(agent.description)}</p>` : ''}
+              ${notes.map(note => `<p class="text-[11px] text-tertiary/90 mt-1 flex items-center gap-1 flex-wrap">${note}</p>`).join('')}
+            </div>
+            ${changed ? `
+              <button type="button" data-action="agent-reset" data-agent="${escHtml(agent.name)}" title="${escHtml(t('settings.agents.resetHint'))}"
+                class="shrink-0 flex items-center gap-1 px-2 py-1 rounded-md text-[11px] text-on-surface-variant hover:text-on-surface hover:bg-surface-container-high transition-colors">
+                <span class="material-symbols-outlined text-sm" aria-hidden="true">undo</span>${escHtml(t('settings.agents.reset'))}
+              </button>` : ''}
+          </div>
+          ${modelControls}
+        </div>`;
+    }
+
+    // ── export / import (.env) ──────────────────────────────────────────────
+    // The fields that carry an `env` name are the file's vocabulary. Export
+    // writes what the form shows (unsaved changes included); import fills the
+    // form and stops there, so every change is visible before Save.
+    let envImportReport = null;
+
+    function transferFields() {
+      return SETTINGS_FIELDS.filter(f => f.path && f.env);
+    }
+
+    function envFieldIndex() {
+      const index = {};
+      transferFields().forEach(f => [f.env, ...(f.envAliases || [])].forEach(name => { index[name] = f; }));
+      return index;
+    }
+
+    function envQuote(value) {
+      const text = String(value);
+      if (/^[A-Za-z0-9_.:\/@+,=-]*$/.test(text)) return text;
+      return `"${text.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n')}"`;
+    }
+
+    function envSerialize(field, value) {
+      // Single quotes: python-dotenv takes the JSON literally.
+      if (field.type === 'agents') return `'${JSON.stringify(normalizeOverrides(value || {}))}'`;
+      if (typeof value === 'boolean') return value ? 'true' : 'false';
+      if (value == null) return '';
+      return envQuote(value);
+    }
+
+    function buildEnvExport() {
+      const lines = [
+        t('settings.transfer.header1'),
+        tf('settings.transfer.header2', { date: new Date().toLocaleString(currentLang === 'ru' ? 'ru-RU' : 'en-GB') }),
+        t('settings.transfer.header3'),
+      ];
+      SETTINGS_SECTIONS.forEach(section => {
+        const fields = transferFields().filter(f => f.section === section.id);
+        if (!fields.length) return;
+        lines.push('', `# ${t(`settings.section.${section.id}`)}`);
+        fields.forEach(f => {
+          lines.push(`# ${t(`settings.f.${f.id}.label`)}`);
+          lines.push(`${f.env}=${envSerialize(f, getSettingPath(settingsDraft, f.path))}`);
+        });
+      });
+      return lines.join('\n') + '\n';
+    }
+
+    function exportSettingsEnv() {
+      if (!settingsDraft) return;
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[-:]/g, '').replace('T', '-');
+      const name = `coscientist-settings-${stamp}.env`;
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(new Blob([buildEnvExport()], { type: 'text/plain;charset=utf-8' }));
+      link.download = name;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+      settingsStatus = { key: 'settings.transfer.exported', vars: { name }, kind: 'success' };
+      decorateSettings();
+    }
+
+    // KEY=value lines the way python-dotenv reads them: an optional `export `,
+    // single quotes literal, double quotes with backslash escapes, `#` comments.
+    function parseEnvText(text) {
+      const entries = [];
+      String(text).split(/\r?\n/).forEach(line => {
+        const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$/.exec(line);
+        if (!m) return;
+        const raw = m[2];
+        let value;
+        if (raw.startsWith("'")) {
+          const end = raw.indexOf("'", 1);
+          value = end > 0 ? raw.slice(1, end) : raw.slice(1);
+        } else if (raw.startsWith('"')) {
+          value = '';
+          for (let i = 1; i < raw.length; i++) {
+            const ch = raw[i];
+            if (ch === '\\' && i + 1 < raw.length) {
+              const next = raw[++i];
+              value += next === 'n' ? '\n' : next;
+            } else if (ch === '"') {
+              break;
+            } else {
+              value += ch;
+            }
+          }
+        } else {
+          value = raw.replace(/\s+#.*$/, '').trim();
+        }
+        entries.push([m[1], value]);
+      });
+      return entries;
+    }
+
+    function envValueFor(field, raw) {
+      const text = String(raw).trim();
+      switch (field.type) {
+        case 'toggle':
+          if (/^(true|1|yes|on)$/i.test(text)) return { value: true };
+          if (/^(false|0|no|off)$/i.test(text)) return { value: false };
+          return { error: t('settings.transfer.err.bool') };
+        case 'number':
+        case 'timeout': {
+          const num = Number(text);
+          if (text === '' || Number.isNaN(num)) return { error: t('settings.transfer.err.number') };
+          return { value: field.type === 'timeout' ? Math.trunc(num) : num };
+        }
+        case 'segmented':
+        case 'cards': {
+          const options = field.options.map(o => (typeof o === 'object' ? o.value : o));
+          const match = options.find(o => o.toLowerCase() === text.toLowerCase());
+          return match ? { value: match } : { error: tf('settings.transfer.err.option', { options: options.join(', ') }) };
+        }
+        case 'select': {
+          const match = field.options.find(o => o === text.toLowerCase());
+          return match !== undefined
+            ? { value: match }
+            : { error: tf('settings.transfer.err.option', { options: field.options.filter(Boolean).join(', ') }) };
+        }
+        case 'agents':
+          return envAgentsValue(text);
+        default:
+          return { value: text };
+      }
+    }
+
+    // AGENTS__OVERRIDES: a JSON object; unknown agents and levels are reported,
+    // not stored, so a file from another profile cannot slip them through.
+    function envAgentsValue(text) {
+      let parsed = null;
+      try { parsed = JSON.parse(text || '{}'); } catch (_) { /* reported below */ }
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return { error: t('settings.transfer.err.json') };
+      const clean = {};
+      const warnings = [];
+      Object.entries(parsed).forEach(([name, entry]) => {
+        if (agentsCatalog && !catalogAgent(name)) {
+          warnings.push(tf('settings.transfer.err.unknownAgent', { name }));
+          return;
+        }
+        if (!entry || typeof entry !== 'object') return;
+        const out = {};
+        if (typeof entry.enabled === 'boolean') out.enabled = entry.enabled;
+        if (entry.reasoning != null && entry.reasoning !== '') {
+          const level = String(entry.reasoning).toLowerCase();
+          if (REASONING_LEVELS.includes(level)) out.reasoning = level;
+          else warnings.push(`${name}: ${tf('settings.transfer.err.option', { options: REASONING_LEVELS.join(', ') })}`);
+        }
+        if (entry.model) out.model = String(entry.model).trim();
+        clean[name] = out;
+      });
+      return { value: normalizeOverrides(clean), warnings };
+    }
+
+    async function importSettingsEnv(file) {
+      if (!file || !settingsDraft) return;
+      let text;
+      try {
+        text = await file.text();
+      } catch (e) {
+        envImportReport = { readError: e.message || String(e) };
+        renderSettings();
+        return;
+      }
+      const index = envFieldIndex();
+      const report = { file: file.name, applied: [], skipped: [], unknown: [], errors: [] };
+      parseEnvText(text).forEach(([name, raw]) => {
+        // The one per-agent knob that predates the Agents section.
+        if (name === 'HYPOTHESES__REASONING') {
+          const level = String(raw).trim().toLowerCase();
+          if (!REASONING_LEVELS.includes(level)) {
+            report.errors.push({ name, message: tf('settings.transfer.err.option', { options: REASONING_LEVELS.join(', ') }) });
+            return;
+          }
+          const map = cloneSettings(agentOverrides());
+          map.HypothesesAgent = { ...(map.HypothesesAgent || {}), reasoning: level };
+          setSettingPath(settingsDraft, 'agents.overrides', normalizeOverrides(map));
+          report.applied.push(name);
+          return;
+        }
+        const field = index[name];
+        if (!field) { report.unknown.push(name); return; }
+        if (!EDITABLE_TYPES.has(field.type)) { report.skipped.push(name); return; }
+        const result = envValueFor(field, raw);
+        if (result.error) { report.errors.push({ name, message: result.error }); return; }
+        (result.warnings || []).forEach(message => report.errors.push({ name, message }));
+        setSettingPath(settingsDraft, field.path, result.value);
+        report.applied.push(name);
+      });
+      envImportReport = report;
+      settingsStatus = report.applied.length
+        ? { key: 'settings.transfer.imported', vars: { n: report.applied.length }, kind: 'primary' }
+        : null;
+      renderSettings();
+    }
+
+    function renderEnvReport(report) {
+      const lines = [];
+      if (report.readError) {
+        lines.push(`<p class="text-error">${escHtml(tf('settings.transfer.report.readFailed', { error: report.readError }))}</p>`);
+      } else {
+        if (!report.applied.length && !report.errors.length) {
+          lines.push(`<p>${escHtml(t('settings.transfer.report.nothing'))}</p>`);
+        }
+        if (report.applied.length) {
+          lines.push(`<p class="text-on-surface">${escHtml(tf('settings.transfer.report.applied', { n: report.applied.length }))}</p>`);
+        }
+        if (report.errors.length) {
+          lines.push(`<p class="text-error">${escHtml(t('settings.transfer.report.errors'))}</p>`
+            + `<ul class="list-disc pl-5 text-error">${report.errors.map(e =>
+              `<li><code class="font-mono" translate="no">${escHtml(e.name)}</code>: ${escHtml(e.message)}</li>`).join('')}</ul>`);
+        }
+        if (report.skipped.length) {
+          lines.push(`<p>${escHtml(tf('settings.transfer.report.skipped', { names: report.skipped.join(', ') }))}</p>`);
+        }
+        if (report.unknown.length) {
+          lines.push(`<p>${escHtml(tf('settings.transfer.report.unknown', { names: report.unknown.join(', ') }))}</p>`);
+        }
+      }
+      return `
+        <div class="mt-3 p-3 rounded-md border border-outline-variant/20 bg-surface-container-high/40 text-[11px] text-on-surface-variant space-y-1.5" role="status" aria-live="polite">
+          <div class="flex items-start justify-between gap-3">
+            <p class="font-semibold text-on-surface">${escHtml(report.file ? tf('settings.transfer.report.title', { file: report.file }) : t('settings.transfer.import'))}</p>
+            <button type="button" data-action="env-report-close" aria-label="${escHtml(t('settings.close'))}"
+              class="material-symbols-outlined text-base text-outline-variant hover:text-on-surface">close</button>
+          </div>
+          ${lines.join('')}
+        </div>`;
+    }
+
+    function renderEnvTransfer() {
+      const btn = 'inline-flex items-center gap-1.5 px-3 py-2 rounded-md text-[11px] font-semibold border border-outline-variant/25 text-on-surface hover:bg-surface-container-high transition-colors';
+      return `
+        <div>
+          <div class="flex flex-wrap gap-2">
+            <button type="button" data-action="env-export" class="${btn}">
+              <span class="material-symbols-outlined text-sm" aria-hidden="true">download</span>${escHtml(t('settings.transfer.export'))}
+            </button>
+            <button type="button" data-action="env-import" class="${btn}">
+              <span class="material-symbols-outlined text-sm" aria-hidden="true">upload</span>${escHtml(t('settings.transfer.import'))}
+            </button>
+            <input type="file" data-env-import accept=".env,.txt,text/plain" class="hidden" />
+          </div>
+          ${envImportReport ? renderEnvReport(envImportReport) : ''}
+        </div>`;
     }
 
     // ── saving ──────────────────────────────────────────────────────────────

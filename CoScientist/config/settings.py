@@ -564,6 +564,38 @@ class CriticSettings(BaseModel):
 
 
 # =========================
+# AGENTS (per-agent overrides of system.yaml)
+# =========================
+class AgentOverride(BaseModel):
+    """What the operator changed about one agent, over its system.yaml entry.
+
+    Every field is optional: None means "as declared in the YAML". Read when a
+    session's agent tree is assembled (schema.AgentConfig and the assembler),
+    so a change reaches the next session, not the running one.
+    """
+
+    enabled: Optional[bool] = None
+    # Same vocabulary as `reasoning:` in system.yaml: "off", or
+    # "minimal" | "low" | "medium" | "high".
+    reasoning: Optional[str] = None
+    # "main" | "coder" | "nir" | a literal litellm model string.
+    model: Optional[str] = None
+
+
+class AgentsSettings(BaseModel):
+    """Per-agent overrides set from the web UI's Agents section.
+
+    Environment: ``AGENTS__OVERRIDES`` holds the whole map as JSON, e.g.
+    ``{"MedicalAgent": {"enabled": false}, "ResearchAgent": {"reasoning": "low"}}``,
+    and ``AGENTS__DEFAULT_REASONING`` replaces `defaults.reasoning` of the
+    profile for every agent that declares none of its own.
+    """
+
+    default_reasoning: Optional[str] = None
+    overrides: dict[str, AgentOverride] = Field(default_factory=dict)
+
+
+# =========================
 # MAIN SETTINGS
 # =========================
 class Settings(BaseSettings):
@@ -589,6 +621,7 @@ class Settings(BaseSettings):
     research_graph: ResearchGraphSettings = ResearchGraphSettings()
     experiments: ExperimentsSettings = ExperimentsSettings()
     critic: CriticSettings = CriticSettings()
+    agents: AgentsSettings = AgentsSettings()
 
     model_config = SettingsConfigDict(
         env_file=".env",          

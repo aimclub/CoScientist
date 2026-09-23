@@ -253,6 +253,118 @@ const i18n = {
   },
   'settings.status.saveFailed': { en: 'Could not save: {error}', ru: 'Не удалось сохранить: {error}' },
 
+  // Settings → Agents
+  'settings.section.agents': { en: 'Agents', ru: 'Агенты' },
+  'settings.section.agents.desc': {
+    en: 'Which agents take part, how deeply each one reasons and on which model. Changes apply to new sessions.',
+    ru: 'Какие агенты участвуют в работе, насколько глубоко каждый рассуждает и на какой модели. Изменения применяются к новым сессиям.'
+  },
+  'settings.f.defaultReasoning.label': { en: 'Default reasoning', ru: 'Ризонинг по умолчанию' },
+  'settings.f.defaultReasoning.desc': {
+    en: 'How much the model thinks before answering, for agents whose profile sets no level of their own. Higher is more careful, slower and more expensive.',
+    ru: 'Сколько модель думает перед ответом у агентов, для которых в профиле не задан свой уровень. Чем выше, тем тщательнее, но медленнее и дороже.'
+  },
+  'settings.group.agentList': { en: 'Agents of the profile', ru: 'Агенты профиля' },
+  'settings.group.agentList.desc': {
+    en: 'A disabled agent is not built and disappears from the prompts of the agents that call it.',
+    ru: 'Выключенный агент не собирается и пропадает из промптов тех агентов, которые его вызывают.'
+  },
+  'settings.f.agentOverrides.label': { en: 'Agent settings', ru: 'Настройки агентов' },
+  'settings.f.agentOverrides.desc': {
+    en: 'The switch turns an agent on or off. Reasoning and model replace the values from system.yaml; empty means as declared there.',
+    ru: 'Переключатель включает или выключает агента. Ризонинг и модель заменяют значения из system.yaml; пустое поле означает «как там указано».'
+  },
+  'settings.reasoning.inherit': { en: 'As in the profile', ru: 'Как в профиле' },
+  'settings.reasoning.off': { en: 'Off', ru: 'Выключен' },
+  'settings.reasoning.minimal': { en: 'Minimal', ru: 'Минимальный' },
+  'settings.reasoning.low': { en: 'Low', ru: 'Низкий' },
+  'settings.reasoning.medium': { en: 'Medium', ru: 'Средний' },
+  'settings.reasoning.high': { en: 'High', ru: 'Высокий' },
+  'settings.agents.inheritWith': { en: 'As in the profile ({value})', ru: 'Как в профиле ({value})' },
+  'settings.agents.filter': { en: 'Find an agent…', ru: 'Найти агента…' },
+  'settings.agents.showInternal': { en: 'Internal agents ({n})', ru: 'Служебные агенты ({n})' },
+  'settings.agents.changed': { en: 'Changed: {n}', ru: 'Изменено агентов: {n}' },
+  'settings.agents.none': { en: 'No agent matches the filter.', ru: 'Ни один агент не подходит под фильтр.' },
+  'settings.agents.loading': { en: 'Loading agents…', ru: 'Загрузка списка агентов…' },
+  'settings.agents.loadFailed': { en: 'Could not load the agents: {error}', ru: 'Не удалось загрузить список агентов: {error}' },
+  'settings.agents.toggle': { en: 'Agent {name} is on', ru: 'Агент {name} включён' },
+  'settings.agents.badge.root': { en: 'root', ru: 'корневой' },
+  'settings.agents.badge.pre': { en: 'before the orchestrator', ru: 'до оркестратора' },
+  'settings.agents.badge.post': { en: 'after the orchestrator', ru: 'после оркестратора' },
+  'settings.agents.badge.internal': { en: 'internal', ru: 'служебный' },
+  'settings.agents.calledBy': { en: 'called by {names}', ru: 'вызывает {names}' },
+  'settings.agents.lock.root': {
+    en: 'The root agent: a run has no other entry point.',
+    ru: 'Корневой агент: без него запуск невозможен.'
+  },
+  'settings.agents.lock.internal': {
+    en: 'An internal stage: it runs as part of its parent and is not switched separately.',
+    ru: 'Служебный этап: работает в составе родителя и отдельно не отключается.'
+  },
+  'settings.agents.lock.startMode': {
+    en: 'Whether this agent runs is decided by the start mode.',
+    ru: 'Участие этого агента определяет режим запуска.'
+  },
+  'settings.agents.enabledRef': {
+    en: 'Without an override it follows the setting {ref}.',
+    ru: 'Без переопределения следует настройке {ref}.'
+  },
+  'settings.agents.cascade': {
+    en: 'These stop being called as well: {names}.',
+    ru: 'Вместе с ним перестанут вызываться: {names}.'
+  },
+  'settings.agents.reasoning': { en: 'Reasoning', ru: 'Ризонинг' },
+  'settings.agents.model': { en: 'Model', ru: 'Модель' },
+  'settings.agents.modelPlaceholder': { en: 'as in the profile: {model}', ru: 'как в профиле: {model}' },
+  'settings.agents.reset': { en: 'Reset', ru: 'Сбросить' },
+  'settings.agents.resetHint': {
+    en: 'Back to the values from system.yaml. Saved only after you press Save.',
+    ru: 'Вернуть значения из system.yaml. Сохранится только после нажатия «Сохранить».'
+  },
+
+  // Settings → System → export / import
+  'settings.group.transfer': { en: 'Move settings', ru: 'Перенос настроек' },
+  'settings.group.transfer.desc': {
+    en: 'The interface settings as .env lines: put them in the server’s .env or load them into another instance.',
+    ru: 'Настройки интерфейса в виде строк .env: их можно положить в .env сервера или загрузить в другой экземпляр.'
+  },
+  'settings.f.envTransfer.label': { en: 'Export and import', ru: 'Экспорт и импорт' },
+  'settings.f.envTransfer.desc': {
+    en: 'The file holds the values shown in the form, unsaved changes included. API keys and passwords are never exported. Import fills the form: check the changes, then press Save.',
+    ru: 'В файл попадают значения формы, включая несохранённые. Ключи API и пароли не экспортируются. Импорт заполняет форму: проверьте изменения и нажмите «Сохранить».'
+  },
+  'settings.transfer.export': { en: 'Export .env', ru: 'Экспорт .env' },
+  'settings.transfer.import': { en: 'Import .env…', ru: 'Импорт .env…' },
+  'settings.transfer.header1': { en: '# CoScientist web interface settings', ru: '# Настройки веб-интерфейса CoScientist' },
+  'settings.transfer.header2': { en: '# Exported: {date}', ru: '# Экспорт: {date}' },
+  'settings.transfer.header3': { en: '# API keys and passwords are not included.', ru: '# Ключи API и пароли сюда не входят.' },
+  'settings.transfer.exported': { en: 'Saved {name}.', ru: 'Файл {name} сохранён.' },
+  'settings.transfer.imported': {
+    en: 'Imported {n} value(s) into the form. Check them and press Save.',
+    ru: 'В форму загружено значений: {n}. Проверьте и нажмите «Сохранить».'
+  },
+  'settings.transfer.report.title': { en: 'Import from {file}', ru: 'Импорт из {file}' },
+  'settings.transfer.report.applied': { en: 'Filled in the form: {n}.', ru: 'Заполнено в форме: {n}.' },
+  'settings.transfer.report.errors': { en: 'Not applied:', ru: 'Не применено:' },
+  'settings.transfer.report.skipped': {
+    en: 'Set in the server’s .env only, skipped: {names}.',
+    ru: 'Задаются только в .env сервера, пропущены: {names}.'
+  },
+  'settings.transfer.report.unknown': {
+    en: 'Not interface settings, skipped: {names}.',
+    ru: 'Не относятся к настройкам интерфейса, пропущены: {names}.'
+  },
+  'settings.transfer.report.nothing': {
+    en: 'The file has no values the interface can change.',
+    ru: 'В файле нет значений, которые меняет интерфейс.'
+  },
+  'settings.transfer.report.readFailed': { en: 'Could not read the file: {error}', ru: 'Не удалось прочитать файл: {error}' },
+  'settings.transfer.err.bool': { en: 'expected true or false', ru: 'ожидается true или false' },
+  'settings.transfer.err.number': { en: 'expected a number', ru: 'ожидается число' },
+  'settings.transfer.err.option': { en: 'allowed values: {options}', ru: 'допустимые значения: {options}' },
+  'settings.transfer.err.json': { en: 'expected a JSON object', ru: 'ожидается JSON-объект' },
+  'settings.transfer.err.unknownAgent': { en: 'no agent {name} in this profile', ru: 'в этом профиле нет агента {name}' },
+
   // Sections
   'settings.section.interface': { en: 'Interface', ru: 'Интерфейс' },
   'settings.section.interface.desc': { en: 'How the web interface looks and behaves.', ru: 'Как выглядит и ведёт себя веб-интерфейс.' },

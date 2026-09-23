@@ -51,6 +51,8 @@ from CoScientist.assembly.schema import (
     PIPELINE_ROOT_NAME,
     AgentConfig,
     SystemConfig,
+    agent_override,
+    default_reasoning_override,
     get_config,
     load_config,
 )
@@ -110,13 +112,20 @@ class AgentSystem:
 def _resolve_model(cfg: AgentConfig, system: SystemConfig):
     from CoScientist.agents.common import make_coder_llm, make_llm
 
-    ref = cfg.model or system.defaults.model
+    # The operator's model for this agent (web UI → Agents) wins over the YAML.
+    override = agent_override(cfg.name)
+    override_model = (override.model or "").strip() if override is not None else ""
+    ref = override_model or cfg.model or system.defaults.model
     deadline_s = cfg.llm_timeout
-    # An agent that says nothing about reasoning inherits `defaults.reasoning`;
-    # an unset default sends no reasoning kwargs at all. Resolved, not read raw:
-    # the declaration may be a "${settings.path}" reference.
+    # An agent that says nothing about reasoning inherits `defaults.reasoning`
+    # (or the operator's system-wide replacement for it); an unset default
+    # sends no reasoning kwargs at all. Resolved, not read raw: the
+    # declaration may be a "${settings.path}" reference or an override.
     declared = cfg.resolved_reasoning()
-    reasoning = declared if declared is not None else system.defaults.reasoning
+    default = default_reasoning_override()
+    if default is None:
+        default = system.defaults.reasoning
+    reasoning = declared if declared is not None else default
     if ref == "main":
         return make_llm(deadline_s=deadline_s, reasoning=reasoning)
     if ref == "coder":

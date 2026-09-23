@@ -109,6 +109,48 @@ REASONING_EFFORTS = ("minimal", "low", "medium", "high")
 REASONING_OFF = ("off", "none", "disabled")
 
 
+def normalize_reasoning(value: Any) -> Optional[Union[bool, str]]:
+    """A literal reasoning value in the ``reasoning:`` vocabulary, or None.
+
+    None for anything the vocabulary does not accept (including "" and a
+    "${settings.path}" reference), so a caller can treat it as "unset".
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in REASONING_OFF or normalized in REASONING_EFFORTS:
+        return normalized
+    return None
+
+
+# Agents whose presence the start mode decides (agents.build_for_mode patches
+# their `enabled`/`root`): an operator override of `enabled` must not fight it.
+MODE_CONTROLLED_AGENTS = frozenset({"PlanningPipelineAgent", "InitAgent", "PlannerAgent"})
+
+
+def agent_override(name: Optional[str]):
+    """The operator's override for one agent (settings.agents.overrides), or None."""
+    if not name:
+        return None
+    try:
+        return get_settings().agents.overrides.get(name)
+    except Exception:  # noqa: BLE001 — a settings object without the block
+        return None
+
+
+def default_reasoning_override() -> Optional[Union[bool, str]]:
+    """settings.agents.default_reasoning, normalized; None leaves the profile's."""
+    try:
+        raw = get_settings().agents.default_reasoning
+    except Exception:  # noqa: BLE001
+        return None
+    value = normalize_reasoning(raw)
+    if raw not in (None, "") and value is None:
+        _log.warning("AGENTS__DEFAULT_REASONING=%r is not one of %s or %s; ignored",
+                     raw, REASONING_OFF, REASONING_EFFORTS)
+    return value
+
+
 def _validate_reasoning(value: Any) -> Any:
     """A ``reasoning:`` declaration: unset, a bool, an effort/off keyword, or a
     "${settings.path}" reference resolved at assembly time.
@@ -258,11 +300,28 @@ class AgentConfig(BaseModel):
             raise ValueError("work_order needs class: llm and hitl: true")
         return self
 
-    def is_enabled(self) -> bool:
+    def enabled_overridable(self) -> bool:
+        """Whether the operator may switch this agent on or off from the UI.
+
+        Not the root (the run has no other entry point), not plumbing
+        (`internal`: a composite's stage, invisible to the operator), and not
+        an agent the start mode attaches or removes on its own.
+        """
+        return not (self.root or self.internal or self.name in MODE_CONTROLLED_AGENTS)
+
+    def declared_enabled(self) -> bool:
+        """``enabled`` as system.yaml (and the settings it references) says."""
         return _resolve_setting_ref(self.enabled)
 
+    def is_enabled(self) -> bool:
+        override = agent_override(self.name)
+        if override is not None and override.enabled is not None and self.enabled_overridable():
+            return bool(override.enabled)
+        return self.declared_enabled()
+
     def resolved_reasoning(self) -> Optional[Union[bool, str]]:
-        """``reasoning`` with a "${settings.path}" reference read off settings.
+        """The operator's override, else ``reasoning`` with a "${settings.path}"
+        reference read off settings.
 
         A reference that resolves to something `reasoning:` does not accept is
         treated as UNSET, with a warning: an agent then inherits
@@ -270,6 +329,17 @@ class AgentConfig(BaseModel):
         whole system down over one mistyped environment variable, and this dial
         is an optimisation, not a correctness switch.
         """
+        override = agent_override(self.name)
+        if override is not None and override.reasoning not in (None, ""):
+            value = normalize_reasoning(override.reasoning)
+            if value is not None:
+                return value
+            _log.warning("reasoning override %r for %s is not one of %s or %s; ignored",
+                         override.reasoning, self.name, REASONING_OFF, REASONING_EFFORTS)
+        return self.declared_reasoning()
+
+    def declared_reasoning(self) -> Optional[Union[bool, str]]:
+        """``reasoning`` as system.yaml declares it, references resolved."""
         value = self.reasoning
         if not _is_setting_ref(value):
             return value

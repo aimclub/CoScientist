@@ -102,6 +102,12 @@ const appSettings = {
     resultReviewTimeoutS: 300,
     routeFedot: false,                 // FEDOT.MAS route; applies to the next session
   },
+  // Settings → Agents: the operator's changes over system.yaml, applied when
+  // the next session's agent tree is built. Only what differs is stored.
+  agents: {
+    defaultReasoning: '',              // AGENTS__DEFAULT_REASONING; '' = as the profile declares
+    overrides: {},                     // AGENTS__OVERRIDES; { AgentName: { enabled?, reasoning?, model? } }
+  },
 };
 
 function escHtml(s) {
