@@ -177,6 +177,55 @@
     .art a.uri { color: var(--accent); text-decoration: none; } .art a.uri:hover { text-decoration: underline; }
     .art .by { color: var(--ink3); font-size: 12.5px; white-space: nowrap; margin-left: auto; }
     #detail .note { color: var(--ink3); font-size: 13px; font-style: italic; margin: 2px 0 0; }
+    /* the on-request summary: a button until asked, then the model's lines */
+    /* Two tabs in the head: the summary alone, or everything recorded. */
+    .tabs { display: flex; gap: 6px; margin-top: 14px; }
+    .tab { padding: 7px 16px; border-radius: 9px; font-size: 14.5px; font-weight: 600; color: var(--ink2);
+      cursor: pointer; border: 1px solid transparent; user-select: none; }
+    .tab:hover { color: var(--ink); }
+    .tab.on { background: var(--surface2); color: var(--ink); border-color: var(--line); }
+    /* The summary reads as a document, the way a markdown renderer shows it:
+       no box, generous leading, real headings, lists and code. */
+    .sumbox { margin: 4px 0 18px; }
+    .sumbox .ask { padding: 26px 8px 10px; text-align: center; }
+    .sumbtn { display: inline-flex; align-items: center; gap: 9px; background: var(--surface2);
+      color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 12px 20px;
+      font: inherit; font-size: 16px; font-weight: 600; cursor: pointer; }
+    .sumbtn:hover { border-color: var(--accent); color: var(--accent); }
+    .sumbtn[disabled] { opacity: .6; cursor: progress; }
+    .sumbox .hint { color: var(--ink3); font-size: 13.5px; margin-top: 12px; line-height: 1.5; }
+    .mdoc { font-size: 17px; line-height: 1.7; color: var(--ink); overflow-wrap: anywhere; padding: 6px 2px 0; }
+    .mdoc > :first-child { margin-top: 0; } .mdoc > :last-child { margin-bottom: 0; }
+    .mdoc h1, .mdoc h2, .mdoc h3, .mdoc h4 { color: var(--ink); font-weight: 700; line-height: 1.3;
+      margin: 22px 0 8px; }
+    .mdoc h1 { font-size: 21px; } .mdoc h2 { font-size: 19px; } .mdoc h3 { font-size: 17.5px; }
+    .mdoc h4 { font-size: 16.5px; color: var(--ink2); text-transform: uppercase; letter-spacing: .3px; }
+    .mdoc p { margin: 10px 0; }
+    .mdoc ul, .mdoc ol { margin: 8px 0; padding-left: 26px; }
+    .mdoc li { margin: 5px 0; } .mdoc li::marker { color: var(--ink3); }
+    .mdoc strong { color: #fff; }
+    .mdoc code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 15px; background: var(--surface2);
+      border: 1px solid var(--line); padding: 1px 6px; border-radius: 5px; }
+    .mdoc pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px;
+      margin: 10px 0; overflow-x: auto; font-size: 14.5px; line-height: 1.5; max-height: none; }
+    .mdoc pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+    .mdoc blockquote { margin: 10px 0; padding: 2px 0 2px 14px; border-left: 3px solid var(--accent); color: var(--ink2); }
+    .mdoc hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
+    .mdoc a { color: var(--accent); } .mdoc img { max-width: 100%; border-radius: 6px; }
+    .mdoc table { border-collapse: collapse; font-size: 15px; margin: 10px 0; }
+    .mdoc th, .mdoc td { border: 1px solid var(--line); padding: 5px 10px; }
+    .mdoc th { background: var(--surface2); }
+    .sumbox .meta { display: flex; gap: 14px; align-items: baseline; color: var(--ink3); font-size: 13px;
+      margin-top: 18px; padding-top: 10px; border-top: 1px solid var(--line); }
+    .sumbox .meta a { color: var(--accent); cursor: pointer; text-decoration: none; }
+    .sumbox .meta a:hover { text-decoration: underline; }
+    .sumbox .err { color: var(--crit); font-size: 15px; margin: 12px 0 6px; line-height: 1.5; }
+    .sumbox .stale { color: var(--warn); }
+    /* pictures: any image the agent produced or linked is shown, not named */
+    .pic { display: block; margin: 8px 0 4px; }
+    .pic img { max-width: 100%; max-height: 60vh; border-radius: 8px; border: 1px solid var(--line);
+      background: #fff; cursor: zoom-in; display: block; }
+    .art { flex-wrap: wrap; } .art .pic { flex-basis: 100%; }
   </style>
 </head>
 <body>
@@ -2087,7 +2136,20 @@
       const key = "graph.kind." + n.kind;
       return t(key, KIND_WORD[n.kind] || n.kind || "");
     };
-    function headOf(n, title){
+    // Which of the two tabs an agent's panel opens on; remembered per browser.
+    const TAB_KEY = "graph.panelTab";
+    let panelTab = "report";
+    try { panelTab = localStorage.getItem(TAB_KEY) === "more" ? "more" : "report"; } catch (e) {}
+    function setPanelTab(tab){
+      panelTab = tab === "more" ? "more" : "report";
+      try { localStorage.setItem(TAB_KEY, panelTab); } catch (e) {}
+      if (selectedId && nodeData[selectedId]) showDetail(nodeData[selectedId]);
+    }
+    function tabsHtml(){
+      const tab = (id, label) => `<span class="tab${panelTab === id ? " on" : ""}" onclick="setPanelTab('${id}')">${esc(label)}</span>`;
+      return `<div class="tabs">${tab("report", t('graph.tab.report'))}${tab("more", t('graph.tab.more'))}</div>`;
+    }
+    function headOf(n, title, tabs){
       const c = statusColor(n), at = clockOf(n), dur = secsOf(n);
       const sub = [kindWord(n),
                    n.runs > 1 ? t('graph.detail.runOf', { run: n.run, runs: n.runs }) : "",
@@ -2095,7 +2157,7 @@
       return `<div class="dhead"><span class="close" onclick="closeDetail()">✕</span>`
         + `<h3>${esc(title)}</h3><div class="sub">${esc(sub)}</div>`
         + (n.status ? `<span class="badge" style="background:${rgba(c,.18)};color:${c};border:1px solid ${c}">${esc(n.status)}</span>` : "")
-        + `</div>`;
+        + (tabs || "") + `</div>`;
     }
     function callRow(c){
       const when = [clockOf(c), secsOf(c)].filter(Boolean).join(" · ");
@@ -2124,12 +2186,7 @@
     function reportBlock(title, text, full){
       if (!text) return "";
       const raw = String(text);
-      let html;
-      if (window.marked && window.DOMPurify) {
-        try { html = DOMPurify.sanitize(marked.parse(raw), { ADD_ATTR: ["target"] })
-                .replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" '); }
-        catch (e) { html = null; }
-      }
+      const html = markdown(raw);
       const size = raw.length > 900 ? ` <span class="chars">${esc(t('graph.chars', { count: raw.length.toLocaleString() }))}</span>` : "";
       // A quoted answer sits in a 52vh box beside the rest of the card. A
       // write-up IS the card, and boxing a document inside a panel that already
@@ -2139,22 +2196,135 @@
         + (html ? `<div class="${cls}">${html}</div>` : `<pre>${esc(raw)}</pre>`)
         + truncationNote(raw, false);
     }
-    // What the agent left behind: files its tools wrote and links its report names.
+    // ── files and pictures ───────────────────────────────────────────────────
+    // An s3:// reference is not something a browser can open; the server's
+    // artifact endpoint redirects to a fresh signed URL for it, so every such
+    // reference becomes a link there. Anything that looks like a picture is
+    // shown, not just named.
+    const S3_RE = /s3:\/\/([^\/\s"'<>()\[\]]+)\/([^\s"'<>()\[\]]+)/g;
+    function artifactHref(uri){
+      const m = String(uri).match(/^s3:\/\/([^\/]+)\/(.+)$/);
+      if (!m) return String(uri);
+      return "/api/artifact/" + encodeURIComponent(m[1]) + "/"
+        + m[2].split("/").map(encodeURIComponent).join("/");
+    }
+    const isImage = uri => /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(String(uri).split(/[?#]/)[0]);
+    function picture(href, alt){
+      return `<a class="pic" href="${esc(href)}" target="_blank" rel="noopener noreferrer">`
+        + `<img src="${esc(href)}" alt="${esc(alt || "")}" loading="lazy"></a>`;
+    }
+    // Rendered markdown, with s3:// references turned into links, s3:// image
+    // and link targets rewritten, and a preview under every picture link.
+    function enrich(html){
+      const box = document.createElement("div");
+      box.innerHTML = html;
+      const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+      const texts = [];
+      for (let n = walker.nextNode(); n; n = walker.nextNode())
+        if (S3_RE.test(n.nodeValue) && !n.parentNode.closest("a, code, pre")) texts.push(n);
+      S3_RE.lastIndex = 0;
+      for (const n of texts) {
+        const span = document.createElement("span");
+        span.innerHTML = esc(n.nodeValue).replace(S3_RE, m =>
+          `<a href="${esc(artifactHref(m))}" data-uri="${esc(m)}" target="_blank" rel="noopener noreferrer">${esc(m)}</a>`);
+        n.replaceWith(...span.childNodes);
+      }
+      box.querySelectorAll("code").forEach(c => {
+        const m = c.textContent.trim().match(/^s3:\/\/[^\s]+$/);
+        if (m && !c.closest("a, pre")) {
+          const a = document.createElement("a");
+          a.href = artifactHref(m[0]); a.dataset.uri = m[0]; a.target = "_blank"; a.rel = "noopener noreferrer";
+          c.replaceWith(a); a.appendChild(c);
+        }
+      });
+      box.querySelectorAll("img[src^='s3://']").forEach(img => { img.src = artifactHref(img.getAttribute("src")); });
+      box.querySelectorAll("a[href^='s3://']").forEach(a => {
+        a.dataset.uri = a.getAttribute("href"); a.href = artifactHref(a.getAttribute("href")); });
+      box.querySelectorAll("a").forEach(a => {
+        a.target = "_blank"; a.rel = "noopener noreferrer";
+        const href = a.getAttribute("href") || "";
+        // The picture test looks at the reference the agent wrote, not only
+        // at the address it was rewritten to.
+        if ((isImage(href) || isImage(a.dataset.uri || "")) && !a.querySelector("img") && !a.closest(".pic")) {
+          const wrap = document.createElement("span");
+          wrap.innerHTML = picture(href, a.textContent);
+          a.after(wrap.firstChild);
+        }
+      });
+      return box.innerHTML;
+    }
+    function markdown(text){
+      if (!(window.marked && window.DOMPurify)) return null;
+      try { return enrich(DOMPurify.sanitize(marked.parse(String(text)), { ADD_ATTR: ["target"] })); }
+      catch (e) { return null; }
+    }
+    // What the agent left behind: files its tools wrote and links its report
+    // names. Every one is a link; pictures are shown.
     function artifactsBlock(list){
       if (!Array.isArray(list) || !list.length) return "";
       return `<div class="k">${t('graph.detail.artifacts')} <span class="chars">${list.length}</span></div>` + list.map(a => {
-        const file = a.kind === "file";
-        // `uri` is the durable reference and stays what the reader sees; `href`
-        // is where the anchor goes. A file used to have no href at all and was
-        // drawn as plain text — an s3:// key the browser could not follow even
-        // though /api/artifact/ was already there to serve it.
-        const name = a.href
-          ? `<a class="uri" href="${esc(a.href)}" target="_blank" rel="noopener noreferrer">${esc(a.uri)}</a>`
-          : `<span class="uri">${esc(a.uri)}</span>`;
-        return `<div class="art"><span class="ic">${file ? "📦" : "🔗"}</span>${name}`
-          + (a.tool ? `<span class="by">${esc(a.tool)}</span>` : "") + `</div>`;
+        // `uri` is the durable reference and stays what the reader sees; the
+        // anchor goes to the server's href when the projection minted one,
+        // else through /api/artifact/ for an s3:// key. Pictures are shown.
+        const file = a.kind === "file", href = a.href || artifactHref(a.uri), img = isImage(a.uri);
+        return `<div class="art"><span class="ic">${img ? "🖼" : file ? "📦" : "🔗"}</span>`
+          + `<a class="uri" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(a.uri)}</a>`
+          + (a.tool ? `<span class="by">${esc(a.tool)}</span>` : "")
+          + (img ? picture(href, a.uri) : "") + `</div>`;
       }).join("");
     }
+    // ── the on-request summary ───────────────────────────────────────────────
+    // A button until the reader asks; then a small model reads the agent's
+    // trace and writes a few lines. Kept per node across redraws, so a live
+    // poll does not take the summary away or ask the model again.
+    const summaries = {};   // node id -> { loading } | { text, model, cached, stamp } | { error, stamp }
+    // What the summary was written from; when it changes, the summary is old.
+    const stampOf = n => [n.status, (n.calls || []).length, String(n.output || "").length,
+                          String(n.input || "").length].join("|");
+    const isRunning = n => n.status === "running";
+    function summaryBlock(n){
+      const st = summaries[n.id];
+      const again = `<a onclick="requestSummary('${esc(n.id)}', true)">↻ ${esc(t('graph.summary.again'))}</a>`;
+      let inner;
+      if (!st) {
+        // Written on its own once the agent is done; while it runs, the trace
+        // is still growing and a summary of it would be out of date at once.
+        if (isRunning(n)) inner = `<div class="ask"><div class="hint">${esc(t('graph.summary.waiting'))}</div>`
+          + `<div class="meta" style="justify-content:center;border:0"><a onclick="requestSummary('${esc(n.id)}')">${esc(t('graph.summary.now'))}</a></div></div>`;
+        else { setTimeout(() => requestSummary(n.id), 0);
+               inner = `<div class="ask"><button class="sumbtn" disabled>⏳ ${esc(t('graph.summary.loading'))}</button></div>`; }
+      }
+      else if (st.loading) inner = `<div class="ask"><button class="sumbtn" disabled>⏳ ${esc(t('graph.summary.loading'))}</button></div>`;
+      else if (st.error) inner = `<div class="err">${esc(t('graph.summary.failed', { error: st.error }))}</div><div class="meta">${again}</div>`;
+      else {
+        const html = markdown(st.text);
+        const stale = st.stamp !== stampOf(n) ? `<span class="stale">${esc(t('graph.summary.stale'))}</span>` : "";
+        inner = (html ? `<div class="mdoc">${html}</div>` : `<pre>${esc(st.text)}</pre>`)
+          + `<div class="meta">${stale}${st.model ? `<span>${esc(t('graph.summary.by', { model: st.model }))}</span>` : ""}${again}</div>`;
+      }
+      return `<div class="sumbox">${inner}</div>`;
+    }
+    async function requestSummary(nodeId, again){
+      const n = nodeData[nodeId];
+      if (!n || (summaries[nodeId] && summaries[nodeId].loading)) return;
+      summaries[nodeId] = { loading: true };
+      if (selectedId === nodeId) showDetail(n);
+      const q = new URLSearchParams(location.search);
+      const url = `/api/users/${encodeURIComponent(q.get("user_id") || "")}/sessions/${encodeURIComponent(q.get("session_id") || "")}/graph/agent_summary`;
+      try {
+        const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ node_id: nodeId, turn: document.getElementById("turn").value || null,
+                                 lang: (typeof currentLang === "string" ? currentLang : "ru"), again: !!again }) });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.detail || data.error || ("HTTP " + r.status));
+        summaries[nodeId] = { text: String(data.summary || ""), model: data.model || "", cached: !!data.cached,
+                              stamp: stampOf(nodeData[nodeId] || n) };
+      } catch (e) {
+        summaries[nodeId] = { error: String(e.message || e), stamp: stampOf(nodeData[nodeId] || n) };
+      }
+      if (selectedId === nodeId && nodeData[nodeId]) showDetail(nodeData[nodeId]);
+    }
+
     // An agent opens on its task and its report, then what it produced, then
     // the tool calls it made, folded, in the order they ran. A request opens
     // on the prompt, an answer on the answer, and a call nobody owns on itself.
@@ -2167,7 +2337,11 @@
       let body;
       if (n.kind === "goal") body = readable(t('graph.detail.whatAsked'), n.label);
       else if (n.kind === "result") body = reportBlock(t('graph.detail.answer'), n.output || n.label);
-      else if (isAgent) {
+      else if (isAgent && panelTab === "report") {
+        // The summary alone: what a reader came for. Everything recorded is
+        // one tab away.
+        body = summaryBlock(n);
+      } else if (isAgent) {
         const where = n.io_source === "delegation" ? t('graph.detail.ioDelegation')
           : n.io_source === "request" ? t('graph.detail.ioRequest') : "";
         body = reportBlock(t('graph.detail.report'), n.output)
@@ -2185,7 +2359,7 @@
                          + `<div class="attr">${esc(n.verdict)}</div>` : "")
           + readable(t('graph.detail.note'), n.output);
       } else body = readable(t('graph.detail.arguments'), n.input) + readable(t('graph.detail.result'), n.output);
-      if (isAgent) {
+      if (isAgent && panelTab === "more") {
         // Older snapshots recorded nothing on the agent itself; say so, or
         // the panel opening on the call list reads as a missing section.
         if (!body) body = `<div class="k">${t('graph.detail.taskReport')}</div><div class="empty">${t('graph.detail.notRecorded')}</div>`;
@@ -2197,7 +2371,7 @@
           : `<div class="k">${t('graph.detail.toolCalls')}</div><div class="empty">${t('graph.detail.noneRecorded')}</div>`;
       }
       if (!body) body = `<div class="empty">${t('graph.detail.empty')}</div>`;
-      paint(n, headOf(n, title) + `<div class="dbody">${body}</div>`);
+      paint(n, headOf(n, title, isAgent ? tabsHtml() : "") + `<div class="dbody">${body}</div>`);
     }
     function closeDetail(){ selectedId=null; lastDetailStamp=null; paintedId=null;
       focusCallId=null; focusPending=false;

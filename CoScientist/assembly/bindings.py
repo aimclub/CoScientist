@@ -230,13 +230,33 @@ REGISTRY.register_tool(ToolEntry(
             signature="explore_scientific_database(task)",
             purpose=(
                 "RAG over the internal scientific-literature corpus "
-                "(deployed paper-analysis MCP)."
+                "(deployed paper-analysis MCP). Returns an answer with supporting "
+                "excerpts, not a list of papers - use find_papers_in_db for that."
             ),
         ),
         ToolDoc(
             name="explore_chemistry_database",
             signature="explore_chemistry_database(task)",
             purpose="RAG search over an internal scientific literature database.",
+        ),
+        ToolDoc(
+            name="find_papers_in_db",
+            signature="find_papers_in_db(task)",
+            purpose=(
+                "Finds the papers in the internal scientific literature database "
+                "that are relevant to a topic. Returns a list of papers (title, "
+                "domain, field, relevance scores), not an answer."
+            ),
+        ),
+        ToolDoc(
+            name="get_papers_database_statistics",
+            signature="get_papers_database_statistics()",
+            purpose=(
+                "Reports what the internal scientific literature database "
+                "holds: the number of unique papers and their share per "
+                "research domain and field. Reads metadata only - it cannot "
+                "answer questions about what the papers say."
+            ),
         ),
         ToolDoc(
             name="explore_my_papers",

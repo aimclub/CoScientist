@@ -1974,6 +1974,26 @@ def create_app() -> FastAPI:
             headers={"Cache-Control": "no-store"},
         )
 
+    @app.get("/stats", response_class=HTMLResponse)
+    async def stats_page():
+        """The paper database statistics, as the paper-analysis server reports them."""
+        return HTMLResponse(
+            (WEB_DIR / "templates" / "stats.html").read_text(encoding="utf-8"),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/paper-statistics")
+    async def paper_statistics_api():
+        """Call get_papers_database_statistics on the paper-analysis MCP server.
+
+        The tool answers from memory, so this is quick and the page can poll it.
+        """
+        from CoScientist.tools.paper_statistics_client import fetch_paper_statistics
+
+        payload = await fetch_paper_statistics()
+        status_code = {"not_configured": 503, "unavailable": 502}.get(payload["status"], 200)
+        return JSONResponse(payload, status_code=status_code, headers={"Cache-Control": "no-store"})
+
     def graph_payload(user_id: str, session_id: str, view: str,
                       turn: str | None = None):
         """Return one session's graph: research, execution, or execution
@@ -2038,6 +2058,34 @@ def create_app() -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse(payload)
+
+    @app.post("/api/users/{user_id}/sessions/{session_id}/graph/agent_summary")
+    async def api_agent_summary(user_id: str, session_id: str, request: Request):
+        """A few lines from a small model on what one agent did in one request.
+
+        Body: ``{"node_id", "turn", "lang"}``. Only on request — the button in
+        the execution log's panel — and remembered per trace, so a click on an
+        agent that has not changed since is free.
+        """
+        body = await request.json() if await request.body() else {}
+        node_id, turn = body.get("node_id"), body.get("turn") or None
+        if not node_id:
+            raise HTTPException(status_code=422, detail="node_id is required")
+        try:
+            tree = graph_payload(user_id, session_id, "execution", turn)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        node = next((n for n in tree.get("nodes", []) if n.get("id") == node_id), None)
+        if node is None or node.get("kind") not in ("agent", "agent_call"):
+            raise HTTPException(status_code=404, detail=f"agent {node_id!r} is not in this request")
+        from CoScientist.graph.agent_summary import summarize
+        try:
+            result = await summarize(node, lang=str(body.get("lang") or "ru"),
+                                     scope=f"{user_id}/{session_id}",
+                                     force=bool(body.get("again")))
+        except Exception as exc:  # noqa: BLE001 — the model is an outside service
+            raise HTTPException(status_code=502, detail=f"summary failed: {exc}") from exc
+        return JSONResponse(result)
 
     @app.get("/api/users/{user_id}/sessions/{session_id}/graph.svg")
     async def api_session_graph_svg(user_id: str, session_id: str):
