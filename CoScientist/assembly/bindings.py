@@ -440,9 +440,9 @@ _RESEARCH_COMMIT_DOC = ToolDoc(
              "transaction (validated + applied all-or-nothing). You may only "
              "write types/edges/status changes your role allows."),
     usage=(
-        'create a node: {"type": "Evidence", "attrs": {...}, "status"?: "...", "ref"?: "e1"}',
+        'create a node: {"type": "Evidence", "attrs": {...}, "status"?: "...", "ref"?: "e_new"}',
         'enrich an existing node: {"id": "EB1", "attrs": {...}} (no "type")',
-        'edge: {"type": "supports", "from": "E4", "to": "H2"} — use "#e1" to point at a node created in this call',
+        'edge: {"type": "supports", "from": "E4", "to": "H2"} — use "#e_new" to point at a node created in this call',
         'status change: {"id": "H2", "status": "under_verification", "reason"?: "..."}',
         "on ok=false, read errors, fix the payload, and call it again (nothing was saved).",
     ),

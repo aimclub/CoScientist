@@ -551,7 +551,7 @@ def publish_plan_detail_to_graph(store: Any,
                                     "reason": f"правка плана эксперимента "
                                               f"№{plan.get('revision') or '?'}"})
                 continue
-            ref = f"xt{index}"
+            ref = f"xt_{index}"
             ref_to_task[ref] = task_id
             nodes.append({"type": "ExperimentTask", "ref": ref,
                           "status": status, "attrs": attrs})
@@ -694,7 +694,7 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
                 nodes.append({"id": existing_vm, "attrs": attrs})
                 vm_ref = existing_vm
             else:
-                ref = f"vm{index}"
+                ref = f"vm_{index}"
                 ref_to_task[ref] = task_id
                 nodes.append({"type": "VerificationMethod", "ref": ref, "attrs": attrs})
                 vm_ref = f"#{ref}"
@@ -709,7 +709,7 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
                 elif key in tool_refs:
                     target = f"#{tool_refs[key]}"
                 else:
-                    tool_ref = f"tool{len(tool_refs)}"
+                    tool_ref = f"tool_{len(tool_refs)}"
                     tool_refs[key] = tool_ref
                     ref_to_tool[tool_ref] = key
                     nodes.append({
@@ -918,7 +918,7 @@ def publish_result_to_graph(
             )
             nodes.append({
                 "type": "Evidence",
-                "ref": "e0",
+                "ref": "e_0",
                 "attrs": {
                     "subtype": "computational",
                     "content": _clean(task_result.get("summary")) or f"Task {task_id}: {status}",
@@ -928,15 +928,15 @@ def publish_result_to_graph(
                     "result_id": str(task_result.get("result_id") or ""),
                 },
             })
-            edges.append({"type": "produces", "from": vm_id, "to": "#e0"})
+            edges.append({"type": "produces", "from": vm_id, "to": "#e_0"})
             for hid in _task_hypothesis_ids((task or {}).get("design") or {}):
                 if graph_nodes.get(hid, {}).get("type") == "Hypothesis":
-                    edges.append({"type": "relates_to", "from": "#e0", "to": hid})
+                    edges.append({"type": "relates_to", "from": "#e_0", "to": hid})
             for i, artifact in enumerate(artifacts[:_MAX_GENERATED_DATA]):
                 location = _artifact_location(artifact)
                 if not location:
                     continue
-                ref = f"gd{i}"
+                ref = f"gd_{i}"
                 nodes.append({
                     "type": "GeneratedData",
                     "ref": ref,
@@ -945,7 +945,7 @@ def publish_result_to_graph(
                         "path": location,
                     },
                 })
-                edges.append({"type": "derived_from", "from": f"#{ref}", "to": "#e0"})
+                edges.append({"type": "derived_from", "from": f"#{ref}", "to": "#e_0"})
         status_updates = []
         current_vm_status = _graph_nodes(store).get(vm_id, {}).get("status")
         if current_vm_status in ("planned", "running") and current_vm_status != final:

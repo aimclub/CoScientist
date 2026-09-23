@@ -263,16 +263,16 @@ def hypotheses(ctx: PromptContext) -> str:
         research_example = '''\n\nExample research_commit call:
 research_commit(
     nodes=[
-        {"type": "Hypothesis", "ref": "h1", "attrs": {"formulation": "...", "status": "formulated", "priority": "high", "selected": "true"}},
-        {"type": "Hypothesis", "ref": "h2", "attrs": {"formulation": "...", "status": "postponed", "priority": "medium"}},
-        {"type": "VerificationMethod", "ref": "vm1", "attrs": {"method_type": "computational", "description": "..."}},
-        {"type": "ConfirmationCriteria", "ref": "cc1", "attrs": {"threshold": "..."}}
+        {"type": "Hypothesis", "ref": "h_new", "attrs": {"formulation": "...", "status": "formulated", "priority": "high", "selected": "true"}},
+        {"type": "Hypothesis", "ref": "h_alt", "attrs": {"formulation": "...", "status": "postponed", "priority": "medium"}},
+        {"type": "VerificationMethod", "ref": "vm_new", "attrs": {"method_type": "computational", "description": "..."}},
+        {"type": "ConfirmationCriteria", "ref": "cc_new", "attrs": {"threshold": "..."}}
     ],
     edges=[
-        {"type": "motivates", "from": "Q1", "to": "#h1"},
-        {"type": "motivates", "from": "Q1", "to": "#h2"},
-        {"type": "tested_by", "from": "#h1", "to": "#vm1"},
-        {"type": "evaluated_by", "from": "#vm1", "to": "#cc1"}
+        {"type": "motivates", "from": "Q1", "to": "#h_new"},
+        {"type": "motivates", "from": "Q1", "to": "#h_alt"},
+        {"type": "tested_by", "from": "#h_new", "to": "#vm_new"},
+        {"type": "evaluated_by", "from": "#vm_new", "to": "#cc_new"}
     ]
 )
 ALWAYS pass `nodes` and `edges` as explicit named arguments (lists of dictionaries) in your `research_commit` tool call.'''

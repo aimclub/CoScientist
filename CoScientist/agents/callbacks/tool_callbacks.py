@@ -1084,6 +1084,143 @@ def _task_key(task: Dict[str, Any]) -> str:
     return " ".join(str(task.get("title") or "").split()).lower()[:120]
 
 
+def _live_plan_steps(graph: Any) -> Dict[str, Dict[str, Any]]:
+    """What the graph already holds as plan steps, in the order it holds them."""
+    out: Dict[str, Dict[str, Any]] = {}
+    try:
+        nodes = graph.full().get("nodes") or []
+    except Exception:  # noqa: BLE001 — a mirror must never break its caller
+        return out
+    for n in nodes:
+        if n.get("type") != "PlanStep":
+            continue
+        attrs = n.get("attrs") or {}
+        out[str(n.get("id"))] = {
+            "status": n.get("status"),
+            "key": " ".join(str(attrs.get("title") or "").split()).lower()[:120],
+            "plan_task_id": str(attrs.get("plan_task_id") or "").strip(),
+            "assignee": str(attrs.get("assignee") or "").strip(),
+            "words": _step_words(attrs.get("title"), attrs.get("description")),
+            "attrs": attrs,
+        }
+    return out
+
+
+#: Words too common in a plan to tell two steps apart.
+_STOP = frozenset((
+    "и", "или", "для", "на", "по", "с", "со", "в", "во", "из", "не", "от", "до",
+    "при", "как", "что", "это", "все", "the", "and", "for", "with", "of", "to",
+    "a", "an", "in", "on", "шаг", "этап", "задача", "провести", "выполнить",
+    "сделать", "получить", "оценить",
+))
+
+
+def _step_words(*parts: Any) -> set:
+    said = " ".join(str(p or "") for p in parts).lower()
+    return {w for w in re.findall(r"[\w\-]{4,}", said) if w not in _STOP}
+
+
+def _overlap(a: set, b: set) -> float:
+    """Jaccard, because neither side is the reference — a reworded step may be
+    longer or shorter than the one it replaces."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+#: How much of the wording a reworded step has to keep to still be the same
+#: step. Low on purpose: the planner may rewrite a title wholesale and keep
+#: only the instrument or the measurement in it, and the plan's own id and the
+#: assignee have already had to agree before this is consulted at all.
+_REWORD_FLOOR = 0.15
+
+
+def _match_steps(tasks: List[Dict[str, Any]], live: Dict[str, Dict[str, Any]],
+                 memo: Dict[str, str]) -> Dict[int, str]:
+    """Which PlanStep node each task in the CURRENT plan belongs to.
+
+    Three passes, most certain first. Every pass claims a step exclusively, so
+    two tasks can never be mirrored onto one node.
+
+    1. what this session already mirrored, by title (the memo);
+    2. a step in the graph whose title is word-for-word the task's;
+    3. a step standing in the plan's own slot — same `plan_task_id`, same
+       assignee — whose wording the task still partly keeps.
+
+    Pass 3 is the one the live run needed. Ids are positional (``create_plan``
+    hands out ``TASK-1…n`` after ordering), which is why they are not trusted
+    alone: the assignee and the surviving words have to agree as well, and if
+    they do not the task falls through to being created, which is what happened
+    before. The cost of a wrong match is a retitled card; the cost of no match
+    is a duplicate step and an orphan beside it.
+    """
+    claimed: set = set()
+    matched: Dict[int, str] = {}
+
+    for i, task in enumerate(tasks):
+        step = memo.get(_task_key(task))
+        if step and step not in claimed:
+            matched[i] = step
+            claimed.add(step)
+
+    by_key: Dict[str, str] = {}
+    for sid, data in live.items():
+        if data["key"]:
+            by_key.setdefault(data["key"], sid)
+    for i, task in enumerate(tasks):
+        if i in matched:
+            continue
+        step = by_key.get(_task_key(task))
+        if step and step not in claimed:
+            matched[i] = step
+            claimed.add(step)
+
+    for i, task in enumerate(tasks):
+        if i in matched:
+            continue
+        tid = str(task.get("id") or "").strip()
+        if not tid:
+            continue
+        words = _step_words(task.get("title"), task.get("description"))
+        who = str(task.get("assignee") or "").strip()
+        for sid, data in live.items():
+            if sid in claimed or data["plan_task_id"] != tid:
+                continue
+            if who and data["assignee"] and who != data["assignee"]:
+                continue
+            # Nothing to compare (a step recorded without a title) leaves the
+            # id and the assignee as the whole of the evidence.
+            if words and data["words"] and _overlap(words, data["words"]) < _REWORD_FLOOR:
+                continue
+            matched[i] = sid
+            claimed.add(sid)
+            break
+    return matched
+
+
+def _step_attrs_differ(live: Dict[str, Dict[str, Any]], step_id: str,
+                       task: Dict[str, Any]) -> bool:
+    """Whether the card would read differently now than it does in the graph.
+
+    Over `_card_attrs`, so a description the planner DELETED counts as a
+    difference — compared over `_step_attrs`, which drops empty values, an
+    emptied field was invisible and stayed on the card.
+
+    `plan_task_id` is not compared and not rewritten. It is positional —
+    `create_plan` hands out TASK-1…n afresh after ordering — and the methods
+    that realise a step carry the id the step had when they were written.
+    Following the plan's renumbering would leave the step holding an id that
+    belongs, on those methods, to a different step, and `_realises_edges` would
+    then draw the link onto the wrong card.
+    """
+    data = live.get(step_id)
+    if data is None:
+        return False
+    stored = data["attrs"]
+    return any(str(stored.get(k) or "") != str(v or "")
+               for k, v in _card_attrs(task).items())
+
+
 #: Node types that can be what a plan step turned into.
 _REALISING_TYPES = ("VerificationMethod", "Hypothesis", "Evidence", "Conclusion")
 
@@ -1095,6 +1232,40 @@ _STEP_STATUS = {"todo": "todo", "in_progress": "in_progress", "done": "done",
 
 def _step_status(task: Dict[str, Any]) -> str:
     return _STEP_STATUS.get(str(task.get("status") or "").strip().lower(), "todo")
+
+
+def _may_move(current: Any, want: str) -> bool:
+    """Whether the graph would accept this step moving there.
+
+    A commit is all-or-nothing, so one impossible status change costs the
+    retitles, the new steps and the retirements sent with it. `create_plan`
+    re-issues EVERY task as TODO when a plan is revised, which asks a finished
+    step to go back to «не начат»; PlanStep has no such transition, and the
+    whole mirror fell silent for the rest of the run.
+    """
+    cur = str(current or "").strip()
+    if not cur or cur == want:
+        return False
+    try:
+        from CoScientist.graph.research import schema
+        allowed = schema.STATUS_TRANSITIONS.get("PlanStep") or ()
+    except Exception:  # noqa: BLE001 — a mirror must never break its caller
+        return True
+    return (cur, want) in {tuple(p) for p in allowed}
+
+
+def _card_attrs(task: Dict[str, Any]) -> Dict[str, Any]:
+    """Every field of the card, including the ones the plan has emptied.
+
+    `_step_attrs` drops empty values, which is right when a step is created and
+    wrong when it is rewritten: a description the planner deleted would stay on
+    the card forever, and `_step_attrs_differ` would not even see the deletion.
+    `plan_task_id` is deliberately NOT here — see `_step_attrs_differ`.
+    """
+    full = {k: task.get(k, "") or "" for k in
+            ("title", "description", "assignee", "notes")}
+    full["tools"] = ", ".join(str(t) for t in (task.get("tools") or []) if t)
+    return full
 
 
 def _step_attrs(task: Dict[str, Any]) -> Dict[str, Any]:
@@ -1222,18 +1393,35 @@ def sync_plan_to_research_graph(tasks: Iterable[Dict[str, Any]], graph: Any,
     # step whose every task is done still reads "not started".
     from_tasks = _status_from_tasks(graph)
 
-    creates, keys, updates = [], [], []
+    live_steps = _live_plan_steps(graph)
+    matched = _match_steps(tasks, live_steps, seen)
+    # Rebuilt, not added to: a memo that keeps the title a retitle superseded
+    # goes on asserting a wording the plan no longer uses, and the next plan to
+    # contain that wording takes the step away from the task whose slot it is.
+    seen = {}
+
+    creates, keys, updates, retitles = [], [], [], []
     for i, task in enumerate(tasks):
         key = _task_key(task)
         if not key:
             continue
-        if key in seen:
-            step = seen[key]
+        step = matched.get(i)
+        if step:
+            seen[key] = step
+            # A step the planner reworded is the same step: its history, the
+            # work already hung under it and the links into it all belong to
+            # the work, not to the sentence describing it. Rewriting the card
+            # is what the operator asked for; a second card beside the first is
+            # what they got, because the mirror recognised a step only by its
+            # title. On session_d3ce3a45bdb24272b28efd3f976ec16b two reworded
+            # steps made a six-step plan into an eight-step column.
+            if _step_attrs_differ(live_steps, step, task):
+                retitles.append({"id": step, "attrs": _card_attrs(task)})
             tracked = _step_status(task)
             want = tracked
             if tracked != "blocked":
                 want = _furthest(tracked, from_tasks.get(step)) or tracked
-            if live.get(step) not in (None, want):
+            if live.get(step) not in (None, want) and _may_move(live.get(step), want):
                 reason = ("план перевёл шаг в состояние «" + _RU_STEP.get(want, want) + "»"
                           if want == tracked else
                           "задачи эксперимента под этим шагом " + _RU_STEP.get(want, want))
@@ -1243,19 +1431,45 @@ def sync_plan_to_research_graph(tasks: Iterable[Dict[str, Any]], graph: Any,
                 # behind would make the two views of one step disagree.
                 _mark_step(state, task, want)
             continue
-        keys.append(key)
-        creates.append({"type": "PlanStep", "ref": f"ps{i}",
+        keys.append((f"ps_{i}", key))
+        creates.append({"type": "PlanStep", "ref": f"ps_{i}",
                         "status": _step_status(task), "attrs": _step_attrs(task)})
 
+    # A step the revised plan no longer contains, and that nobody ever started,
+    # is not part of the study any more. Left at `todo` it reads as work still
+    # ahead. Only `todo`: a step that ran, or finished, happened — the plan
+    # changing afterwards does not unhappen it.
+    #
+    # And only against a plan there is. This runs on every orchestrator turn,
+    # where the task list can be empty for reasons that have nothing to do with
+    # the plan — a restarted process reading an existing graph, a mirror called
+    # before the tracker is populated — and "no tasks" would then retire the
+    # whole column. An empty list is no news about the plan; the `realises`
+    # links below are what that call is for.
+    for sid, data in (live_steps.items() if tasks else ()):
+        if sid in matched.values() or data["status"] != "todo":
+            continue
+        if not _may_move(data["status"], "blocked"):
+            continue
+        updates.append({"id": sid, "status": "blocked",
+                        "reason": "шаг убран при пересмотре плана"})
+
     result = None
-    if creates or updates:
-        result = graph.commit(source=_PLAN_SOURCE, nodes=creates,
+    if creates or updates or retitles:
+        result = graph.commit(source=_PLAN_SOURCE, nodes=creates + retitles,
                               status_updates=updates, partial_edges=True)
         if not result.ok:
             logger.warning("plan -> research graph refused: %s", result.errors[:3])
             return result
-        for key, echo in zip(keys, result.committed.get("nodes", [])):
-            seen[key] = echo.get("id")
+        # By ref, not by position: the same commit now carries the retitles as
+        # attrs-merges, and the store may answer a create with a node it
+        # already held, so the echo list is no longer one entry per new step in
+        # the order they were sent.
+        by_ref = {e.get("ref"): e.get("id")
+                  for e in result.committed.get("nodes", []) if e.get("ref")}
+        for ref, key in keys:
+            if nid := by_ref.get(ref):
+                seen[key] = nid
         try:
             state[_VM_BY_TASK_KEY] = {"gen": gen, "ids": seen}
         except Exception:  # noqa: BLE001
