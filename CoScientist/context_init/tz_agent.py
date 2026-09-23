@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -29,9 +30,11 @@ from pydantic import BaseModel, Field
 from CoScientist.context_init.agent import coerce_frame
 from CoScientist.context_init.models import ResearchFrame
 from CoScientist.context_init.tz import (
-    NOT_SET,
     TechnicalSpec,
     apply_prose,
+    apply_tasks,
+    apply_topic,
+    prose_request,
     spec_from_frame,
 )
 from CoScientist.context_init.tz_docx import render_tz_markdown, write_tz_files
@@ -58,14 +61,32 @@ _ROUTE = "/api/tz-document"
 class TZProseSection(BaseModel):
     """Переписанный текст одного раздела."""
 
-    number: str = Field(description="Номер раздела, напр. «1» или «8»")
+    number: str = Field(description="Номер раздела, напр. «1», «4.4» или «8»")
     text: str = Field(description="Связный текст раздела на русском")
 
 
-class TZProse(BaseModel):
-    """Что модель возвращает: только проза, только для заполненных разделов."""
+class TZProseTask(BaseModel):
+    """Переписанная формулировка одной задачи исследования."""
 
+    number: int = Field(description="Номер задачи, как он дан в черновике")
+    text: str = Field(
+        description="Формулировка отглагольным существительным, напр. "
+                    "«Сбор литературных данных о метаболитах»")
+
+
+class TZProse(BaseModel):
+    """Что модель возвращает: формулировки, и ничего кроме них.
+
+    Ни одного поля, в которое можно было бы вписать новый факт: тема, тексты
+    разделов и формулировки задач — всё это переложение того, что уже собрано
+    из подтверждённой рамки.
+    """
+
+    topic: str = Field(
+        default="",
+        description="Наименование темы — только если заказчик его не задал")
     sections: List[TZProseSection] = Field(default_factory=list)
+    tasks: List[TZProseTask] = Field(default_factory=list)
 
 
 def _link(name: str) -> str:
@@ -76,6 +97,44 @@ def _link(name: str) -> str:
 
 def tz_is_issued(state: Dict[str, Any]) -> bool:
     return bool(state.get(TZ_COMPLETED_STATE_KEY))
+
+
+def _as_dict(prose: Any) -> Dict[str, Any]:
+    """Ответ модели словарём, чем бы он ни пришёл.
+
+    Приходит он по-разному. Разобранный `output_key` появляется в состоянии
+    ТОЛЬКО после того, как Runner применит state_delta финального события, а
+    документ собирается раньше — до того, как это событие вообще отдано.
+    Поэтому запасной источник — собственный текст события, а это JSON-строка.
+    Разница между «модель промолчала» и «мы не сумели прочитать её ответ»
+    видна только в готовом документе, когда исправлять поздно, поэтому
+    нечитаемый ответ пишется в лог, а не проглатывается.
+    """
+    if isinstance(prose, dict):
+        return prose
+    if isinstance(prose, str):
+        said = prose.strip()
+        if not said:
+            return {}
+        try:
+            parsed = json.loads(said)
+        except ValueError:
+            logger.warning("ТЗ: ответ модели не разобран как JSON (%d симв.)",
+                           len(said))
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    dump = getattr(prose, "model_dump", None)
+    if callable(dump):
+        try:
+            said = dump()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("ТЗ: ответ модели не развернулся в словарь (%s)", exc)
+            return {}
+        return said if isinstance(said, dict) else {}
+    if prose is not None:
+        logger.warning("ТЗ: ответ модели пришёл как %s — переформулировать "
+                       "разделы нечем", type(prose).__name__)
+    return {}
 
 
 def build_spec(state: Dict[str, Any], prose: Any = None) -> Optional[TechnicalSpec]:
@@ -89,11 +148,19 @@ def build_spec(state: Dict[str, Any], prose: Any = None) -> Optional[TechnicalSp
         logger.warning("ТЗ не собрано: рамка не разобрана (%s)", exc)
         return None
     spec = spec_from_frame(frame, str(frame.original_request or ""))
-    rows = (prose or {}).get("sections") if isinstance(prose, dict) else None
-    if rows:
-        said = {str(r.get("number") or ""): str(r.get("text") or "")
-                for r in rows if isinstance(r, dict)}
-        spec = apply_prose(spec, said)
+
+    said = _as_dict(prose)
+    sections = said.get("sections")
+    if isinstance(sections, list):
+        spec = apply_prose(spec, {
+            str(r.get("number") or ""): str(r.get("text") or "")
+            for r in sections if isinstance(r, dict)})
+    tasks = said.get("tasks")
+    if isinstance(tasks, list):
+        spec = apply_tasks(spec, {
+            r.get("number"): str(r.get("text") or "")
+            for r in tasks if isinstance(r, dict)})
+    spec = apply_topic(spec, str(said.get("topic") or ""))
     return spec
 
 
@@ -167,7 +234,14 @@ class TZSpecSessionAgent(SessionAgent):
 
     def _post_final_events(self, ctx: InvocationContext, output_text):
         state = ctx.session.state
-        spec = build_spec(state, state.get(self.output_key) if self.output_key else None)
+        # Состояние СНАЧАЛА, текст события — запасным: разобранный `output_key`
+        # ADK кладёт в state_delta финального события, а Runner применит его
+        # только когда это событие до него дойдёт. Мы находимся раньше — внутри
+        # `_emit_final`, до `yield`, — и в первом прогоне сессии в состоянии
+        # ещё пусто. Без запасного источника документ выпускался бы ровно тем,
+        # чем он был до переформулирования: раскладкой запроса по разделам.
+        said = (state.get(self.output_key) if self.output_key else None) or output_text
+        spec = build_spec(state, said)
         if spec is None:
             return
         try:
@@ -175,8 +249,10 @@ class TZSpecSessionAgent(SessionAgent):
         except Exception as exc:  # noqa: BLE001
             logger.warning("ТЗ: граф недоступен (%s)", exc)
             store = None
-        docx_name, md_name = (publish_spec(spec, store) if store is not None
-                              else (None, None))
+        # Даже без графа: файл, который некуда прикрепить, всё равно нужен —
+        # ссылка на него уходит в ленту, а `publish_spec` переживает store=None
+        # сам, записав файлы и пожаловавшись в лог на неприкреплённый узел.
+        docx_name, md_name = publish_spec(spec, store)
         if not (docx_name or md_name):
             return
         logger.info("ТЗ выпущено: %s", docx_name or md_name)
@@ -214,22 +290,14 @@ def stage_tz_draft(callback_context) -> None:
 
     A prompt is rendered once, when the agent tree is built; the draft differs
     per session, so it travels through session state and ADK's own `{tz_draft?}`
-    substitution. Only the sections that HAVE text are offered — there is
-    nothing to rewrite in «Не задано», and offering it invites the model to fill
-    it in.
+    substitution. What goes in is decided by `tz.prose_request`: everything that
+    HAS content, and nothing that hasn't — there is nothing to rewrite in «Не
+    задано», and offering it invites the model to fill it in.
     """
     try:
         state = callback_context.state
         spec = build_spec(state)
-        if spec is None:
-            state["tz_draft"] = ""
-            return
-        parts = []
-        for section in spec.sections:
-            body = (section.body or "").strip()
-            if body and body != NOT_SET and not section.rows:
-                parts.append(f"{section.number}. {section.title}\n{body}")
-        state["tz_draft"] = "\n\n".join(parts)
+        state["tz_draft"] = "" if spec is None else prose_request(spec)
     except Exception as exc:  # noqa: BLE001 — a missing draft costs prose, not the run
         logger.warning("ТЗ: черновик для модели не собран (%s)", exc)
         try:

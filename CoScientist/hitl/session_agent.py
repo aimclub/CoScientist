@@ -189,7 +189,13 @@ class SessionAgent(LlmAgent):
         """
         extras = list(self._post_final_events(ctx, output_text))
         if extras and final_event.content and final_event.content.parts:
-            final_event.content.parts[0].text = ""
+            # Каждую текстовую часть, а не первую: у рассуждающей модели первой
+            # идёт мысль (её и так не показывают), а ответ — второй. Погасив
+            # только нулевую, мы стёрли бы невидимое и оставили в ленте сырой
+            # JSON рядом с объявлением о документе.
+            for part in final_event.content.parts:
+                if getattr(part, "text", None):
+                    part.text = ""
         yield final_event
         for extra in extras:
             yield extra

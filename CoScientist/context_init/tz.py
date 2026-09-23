@@ -21,10 +21,19 @@
 «Не задано», а не правдоподобный текст. Связную прозу дописывает отдельный
 проход модели (`tz_prose`), и ему на вход идут уже собранные значения — он
 может переформулировать, но не может ввести факт, которого в рамке нет.
+
+Переформулировать — не косметика, а половина работы. Рамку заполняют по
+неформальному запросу («автоматизируй составление профиля», «собери данные»),
+и та же речь, разложенная по разделам, документом не становится: ТЗ пишется
+безлично и отглагольными существительными («требуется разработать», «сбор и
+систематизация данных»), потому что по нему принимают работу. Поэтому модели
+отдаётся ВСЁ, у чего есть содержание, — разделы, подразделы, формулировки задач
+и само наименование темы, — а неизменным остаётся ровно то, что документ
+утверждает сам: номера, заголовки, таблицы значений и оговорка о п. 1.4.
 """
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
@@ -63,6 +72,12 @@ SUBSECTION_TITLES: Tuple[Tuple[str, str], ...] = (
     ("4.6", "Специальные требования"),
 )
 
+#: Подраздел, в котором лежат задачи исследования. Их формулировки модель
+#: переписывает отдельно от прозы: это строки таблицы, и в документе они должны
+#: читаться отглагольными существительными («Сбор литературных данных»), а не
+#: повелительным наклонением из запроса («Собери литературные данные»).
+TASKS_NUMBER = "4.1"
+
 
 class TZSection(BaseModel):
     """Один раздел ТЗ: номер, заголовок, текст и вложенные подразделы."""
@@ -74,16 +89,26 @@ class TZSection(BaseModel):
         default_factory=list,
         description="Табличная часть: (что, значение). Пусто — таблицы нет.")
     subsections: List["TZSection"] = Field(default_factory=list)
+    fixed: bool = Field(
+        default=False,
+        description="Текст раздела задан документом и модели не отдаётся.")
 
     def is_empty(self) -> bool:
         return (not self.rows and not self.subsections
                 and self.body.strip() in ("", NOT_SET))
+
+    def has_content(self) -> bool:
+        """Есть ли в разделе что переформулировать — свой текст или таблица."""
+        return bool(self.rows) or self.body.strip() not in ("", NOT_SET)
 
 
 class TechnicalSpec(BaseModel):
     """Техническое задание целиком — то, из чего рендерятся .docx и .md."""
 
     topic: str = Field(default="", description="Наименование темы")
+    topic_confirmed: bool = Field(
+        default=False,
+        description="Тему назвал заказчик — модель её не переписывает.")
     customer: str = Field(default="", description="Заказчик")
     basis: str = Field(default="", description="Основание для работы")
     original_request: str = Field(
@@ -95,6 +120,25 @@ class TechnicalSpec(BaseModel):
             if s.number == number:
                 return s
         return None
+
+    def parts(self) -> List[TZSection]:
+        """Разделы и подразделы одним списком, в порядке документа."""
+        out: List[TZSection] = []
+        for s in self.sections:
+            out.append(s)
+            out.extend(s.subsections)
+        return out
+
+    def part(self, number: str) -> Optional[TZSection]:
+        """Раздел или подраздел по номеру: `part("4.1")` находит подраздел."""
+        for p in self.parts():
+            if p.number == number:
+                return p
+        return None
+
+    def rewritable(self) -> List[TZSection]:
+        """То, что отдаётся модели на переформулирование."""
+        return [p for p in self.parts() if p.has_content() and not p.fixed]
 
     def unfilled(self) -> List[str]:
         """Номера разделов, которым рамка ничего не дала.
@@ -179,6 +223,18 @@ _COST_LABELS = {
 }
 
 
+def _short(text: str, limit: int = 160) -> str:
+    """Первая фраза длинного текста — целыми словами.
+
+    Наименование темы печатается на титуле, и обрыв посреди слова («предскажу
+    LD50 для мыш») выдаёт документ, собранный машиной, сильнее всего прочего.
+    """
+    said = " ".join((text or "").split())
+    if len(said) <= limit:
+        return said
+    return said[:limit].rsplit(" ", 1)[0].rstrip(" ,.;:—–-") + "…"
+
+
 def spec_from_frame(frame: ResearchFrame,
                     original_request: str = "") -> TechnicalSpec:
     """Собрать ТЗ из подтверждённой рамки. Ничего не выдумывает."""
@@ -210,7 +266,7 @@ def spec_from_frame(frame: ResearchFrame,
 
     tasks = [(t.operation_id, t.statement) for t in frame.operations if t.statement]
     work = TZSection(
-        number="4.1", title=SUBSECTION_TITLES[0][1],
+        number=TASKS_NUMBER, title=SUBSECTION_TITLES[0][1],
         body=(q.get("decomposition") or "").strip() or NOT_SET,
         rows=[(f"Задача {i}", statement) for i, (_id, statement)
               in enumerate(tasks, 1)],
@@ -230,6 +286,10 @@ def spec_from_frame(frame: ResearchFrame,
         TZSection(number="3", title=SECTION_TITLES[2][1], body=purpose),
         TZSection(
             number="4", title=SECTION_TITLES[3][1],
+            # Оговорка о соответствии стандарту — утверждение самого документа,
+            # а не пересказ рамки. Модели не отдаётся: переписанная, она
+            # перестанет означать то, что означает.
+            fixed=True,
             body=("Раздел «Требования к программе или программному изделию» "
                   "ГОСТ 19.201-78, применённый к исследованию. Подразделы "
                   "2.4.6-2.4.8 стандарта (маркировка, упаковка, "
@@ -274,8 +334,14 @@ def spec_from_frame(frame: ResearchFrame,
         ),
     ]
 
+    named = (basis.get("topic_name") or "").strip()
     return TechnicalSpec(
-        topic=basis.get("topic_name") or q.get("formulation", "")[:200] or NOT_SET,
+        # Тему, названную заказчиком, берём дословно. Если её не называли,
+        # ставим обрезанную формулировку вопроса — временно: наименование темы
+        # предложит модель, а до неё лучше короткая фраза, чем 200 символов
+        # чужой речи, оборванных посреди слова.
+        topic=named or _short(q.get("formulation", "")) or NOT_SET,
+        topic_confirmed=bool(named),
         customer=basis.get("customer") or NOT_SET,
         basis=basis.get("basis_document") or NOT_SET,
         original_request=(original_request or "").strip(),
@@ -285,35 +351,103 @@ def spec_from_frame(frame: ResearchFrame,
 
 # ── проза от модели ─────────────────────────────────────────────────────────
 
-def prose_request(spec: TechnicalSpec) -> Dict[str, Any]:
-    """Что отдать модели, чтобы она дописала связный текст.
+def prose_request(spec: TechnicalSpec) -> str:
+    """Черновик для модели: всё, что она вправе переформулировать, и не более.
 
-    Отдаются уже собранные значения, а не рамка: модель переформулирует то, что
-    есть, и ей нечего добавить от себя. Разделы с таблицами не отдаются вовсе —
-    там переписывать нечего, а перечисление, пересказанное прозой, теряет числа.
+    Отдаётся уже собранное ТЗ, а не рамка: модель видит ровно те факты, которые
+    попадут в документ, и добавить ей нечего. Таблицы показываются, но помечены
+    как неизменяемые — прозой они вводятся, а не пересказываются: перечисление,
+    пересказанное словами, теряет числа.
     """
-    return {
-        "тема": spec.topic,
-        "исходный_запрос": spec.original_request[:2000],
-        "разделы": [
-            {"номер": s.number, "заголовок": s.title, "текст": s.body}
-            for s in spec.sections if s.body and s.body != NOT_SET and not s.rows
-        ],
-    }
+    lines: List[str] = []
+    if spec.topic_confirmed:
+        lines.append(f"НАИМЕНОВАНИЕ ТЕМЫ (задано заказчиком, не меняй): {spec.topic}")
+    else:
+        lines.append("НАИМЕНОВАНИЕ ТЕМЫ: заказчиком не задано — предложи его "
+                     "сам, в поле topic.")
+    if spec.original_request:
+        lines += [
+            "",
+            "ИСХОДНЫЙ ЗАПРОС ЗАКАЗЧИКА. Это неформальная речь: в документ в "
+            "таком виде она не попадает, но других сведений о работе нет, и "
+            "содержание разделов берётся отсюда.",
+            spec.original_request[:3000],
+        ]
+
+    tasks = spec.part(TASKS_NUMBER)
+    if tasks and tasks.rows:
+        lines += ["", "ЗАДАЧИ ИССЛЕДОВАНИЯ — перепиши формулировку каждой "
+                      "(поле tasks), сохранив номер и предмет:"]
+        lines += [f"  {i}. {statement}"
+                  for i, (_key, statement) in enumerate(tasks.rows, 1)]
+
+    for part in spec.rewritable():
+        lines += ["", f"РАЗДЕЛ {part.number}. {part.title}"]
+        body = part.body.strip()
+        if body and body != NOT_SET:
+            lines.append(body)
+        if part.rows and part is tasks:
+            # Задачи уже перечислены выше отдельным списком: продублировать их
+            # здесь — значит позвать переписать их дважды и по-разному. Но и
+            # промолчать нельзя: раздел с одним заголовком читается пустым, а
+            # пустое модель заполняет выдумкой.
+            lines.append("Содержание раздела — перечисленные выше задачи "
+                         "исследования; текстом их обобщают, а не перечисляют.")
+        elif part.rows:
+            lines.append("Таблица раздела — печатается как есть; в тексте на "
+                         "неё ссылаются, значения не переписывают:")
+            lines += [f"  — {key}: {value}" for key, value in part.rows]
+    return "\n".join(lines)
 
 
 def apply_prose(spec: TechnicalSpec, prose: Dict[str, str]) -> TechnicalSpec:
     """Наложить переписанные абзацы на собранное ТЗ.
 
-    Раздел принимает новый текст, только если он у него уже был: модель может
-    улучшить формулировку, но не заполнить пустой раздел — иначе «Не задано»
-    превратится в правдоподобный вымысел, а именно от этого документ и
-    защищаем.
+    Раздел принимает текст, только если ему есть что переформулировать — свой
+    текст или таблица. Пустой раздел модель не заполняет ни при каких
+    обстоятельствах: «Не задано» — это вопрос оператору, а правдоподобный абзац
+    на его месте читается как обязательство, которого никто не брал.
     """
-    for section in spec.sections:
-        said = str(prose.get(section.number) or "").strip()
-        if said and section.body and section.body != NOT_SET:
-            section.body = said
+    allowed = {p.number: p for p in spec.rewritable()}
+    for number, said in (prose or {}).items():
+        part = allowed.get(str(number))
+        text = str(said or "").strip()
+        if part is not None and text:
+            part.body = text
+    return spec
+
+
+def apply_tasks(spec: TechnicalSpec, tasks: Dict[int, str]) -> TechnicalSpec:
+    """Заменить формулировки задач исследования на переписанные.
+
+    По номеру, а не по порядку присланного: модель может вернуть их не все и не
+    подряд, и задача, сместившаяся на строку, — это уже другая задача. Номер,
+    которого в документе нет, игнорируется; пустая формулировка оставляет
+    прежнюю.
+    """
+    section = spec.part(TASKS_NUMBER)
+    if section is None:
+        return spec
+    for number, said in (tasks or {}).items():
+        try:
+            index = int(number) - 1
+        except (TypeError, ValueError):
+            continue
+        text = str(said or "").strip()
+        if text and 0 <= index < len(section.rows):
+            section.rows[index] = (section.rows[index][0], text)
+    return spec
+
+
+def apply_topic(spec: TechnicalSpec, topic: str) -> TechnicalSpec:
+    """Поставить наименование темы, предложенное моделью.
+
+    Только если заказчик темы не называл: названная — это его формулировка, и
+    переписывать её документ не вправе.
+    """
+    said = _short(str(topic or "").strip(), 200)
+    if said and not spec.topic_confirmed:
+        spec.topic = said
     return spec
 
 
@@ -321,9 +455,12 @@ __all__ = [
     "NOT_SET",
     "SECTION_TITLES",
     "SUBSECTION_TITLES",
+    "TASKS_NUMBER",
     "TZSection",
     "TechnicalSpec",
     "apply_prose",
+    "apply_tasks",
+    "apply_topic",
     "prose_request",
     "spec_from_frame",
 ]
