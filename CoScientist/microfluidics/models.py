@@ -164,8 +164,7 @@ class SourceRecord(BaseModel):
     source_id: str = Field(min_length=1)
     title: str = ""
     url: str = ""
-    doi: str = ""
-    external_id: str = Field(default="", description="Patent/standard identifier when no DOI exists")
+    external_id: str = Field(default="", description="Patent/standard identifier")
     source_type: Literal["paper", "patent", "standard", "web", "other"] = "other"
     full_text_available: bool = False
     content_hash: str = Field(
@@ -183,7 +182,7 @@ class Analogue(BaseModel):
     compound_class: str = Field(default="", description="Химический класс")
     properties: List[NamedValue] = Field(default_factory=list)
     relevance: str = Field(default="", description="Чем аналог полезен для ТЗ")
-    sources: List[str] = Field(default_factory=list, description="Ссылки / DOI")
+    sources: List[str] = Field(default_factory=list, description="Ссылки")
 
 
 class RouteStep(BaseModel):
@@ -257,7 +256,7 @@ class LiteratureAnalysis(BaseModel):
     target_molecule: TargetMolecule = Field(default_factory=TargetMolecule)
     source_records: List[SourceRecord] = Field(
         default_factory=list,
-        description="Реальные URL/DOI/патенты, на которые ссылаются EvidenceRef",
+        description="Реальные URL/патенты, на которые ссылаются EvidenceRef",
     )
     analogues: List[Analogue] = Field(default_factory=list)
     synthesis_routes: List[LiteratureRoute] = Field(default_factory=list)
@@ -512,7 +511,7 @@ class SynthesisRoute(BaseModel):
     )
     flow_suitability: str = Field(default="")
     bottlenecks: List[str] = Field(default_factory=list)
-    sources: List[str] = Field(default_factory=list, description="Ссылки / DOI")
+    sources: List[str] = Field(default_factory=list, description="Ссылки")
     evidence: List[EvidenceRef] = Field(default_factory=list)
     product_purity_percent: Optional[float] = Field(
         default=None, ge=0, le=100,

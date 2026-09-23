@@ -117,7 +117,7 @@ _RESEARCH_EXAMPLES = {
     # `planned` and its own evidence floated unattached beside it.
     "ResearchAgent": (
         'research_commit(nodes=[{"type":"Evidence","ref":"e","attrs":'
-        '{"subtype":"literature","content":"…","source_ref":"DOI…"}}], '
+        '{"subtype":"literature","content":"…","source_ref":"URL…"}}], '
         'edges=[{"type":"produces","from":"VM1","to":"#e"}, '
         '{"type":"supports","from":"#e","to":"H2"}], '
         'status_updates=[{"id":"VM1","status":"done"}])   '
@@ -639,7 +639,7 @@ RULES
   `explore_scientific_database(task=…)` (or `explore_chemistry_database` if
   that is the name in your tool list). For OpenAlex use `search_papers(keywords=…)`.
 - For every reported numeric condition, yield, purity, price, or performance
-  value, include the real DOI/URL/patent/standard identifier and a locator
+  value, include the real URL/patent/standard identifier and a locator
   (page, section, table, figure, or patent paragraph). A task label such as
   LIT-02 is not a source. If the full text and locator were not inspected,
   mark the claim unverified instead of presenting it as established.
@@ -773,7 +773,7 @@ RULES
   * Precise numeric conditions: temperature, residence time / reaction time, pressures, solvent ratios, catalyst loading
   * Reaction yields, conversions, purities
   * Suitability for flow / microfluidic synthesis: homogeneous vs heterogeneous phases, kinetics, precipitation/clogging risks
-  * Real DOI/URL/patent/title and exact locators (page, section, table, figure, scheme, paragraph)
+  * Real URL/patent/title and exact locators (page, section, table, figure, scheme, paragraph)
 - Stop once sufficient evidence is obtained
 - Clearly communicate uncertainty or conflicting findings
 - Never hallucinate papers, repositories, or citations — report genuine facts from the text
@@ -3520,7 +3520,7 @@ LIT-08: {literature_finding_LIT_08?}
 
 ### ЧТО ЗАПОЛНИТЬ
 - source_records: registry of every real source used. Each item has a stable
-  source_id, title, URL and/or DOI/external_id (patent or standard), source_type, whether full text was inspected,
+  source_id, title, URL and/or external_id (patent or standard), source_type, whether full text was inspected,
   and content_hash for the exact inspected version. LIT-xx is never source_id.
   At this synthesis stage set verified_by and verification_tool to empty strings
   and every evidence.verification_status to unverified: only the independent
@@ -3559,7 +3559,7 @@ LIT-08: {literature_finding_LIT_08?}
 ### ПРАВИЛА
 - Бери только то, что есть в результатах выше. Ничего не придумывай: нет
   значения — не заполняй поле, а отметь это в gaps.
-- Числа — с единицами, как в источнике. Источники — URL/DOI/патент/стандарт из
+- Числа — с единицами, как в источнике. Источники — URL/патент/стандарт из
   результатов; LIT-xx обозначает задачу поиска и источником не считается.
 - Пустые результаты по задаче — это пробел (gaps), а не повод выдумать данные.
 
@@ -3599,7 +3599,7 @@ _static("microfluidics_evidence_verifier", '''
 Ты — узкий верификатор критичных числовых литературных claims. Не добавляй
 новых маршрутов или фактов и НЕ выполняй повторный широкий поиск литературы.
 Проверяй только числовые условия операций и выходы стадий, которые уже есть в
-черновике. Для каждого такого claim используй URL/DOI/идентификатор источника,
+черновике. Для каждого такого claim используй URL/идентификатор источника,
 указанный в черновике, и сверь его с полным текстом.
 
 ### ЧЕРНОВОЙ СТРУКТУРИРОВАННЫЙ АНАЛИЗ
@@ -3607,7 +3607,7 @@ _static("microfluidics_evidence_verifier", '''
 
 ### ПРАВИЛА
 - Не ищи новые источники и не расширяй список маршрутов. `papers_search` можно
-  использовать только чтобы получить полный текст уже указанного DOI/источника.
+  использовать только чтобы получить полный текст уже указанного источника.
 - Для числового условия или выхода обязательно используй инструмент
   чтения/анализа полного текста; одного поискового snippet недостаточно.
 - verified ставь только если полный текст подтверждает именно это число/условие,

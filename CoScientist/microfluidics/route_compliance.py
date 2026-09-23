@@ -137,7 +137,7 @@ def _verified_evidence(refs: Iterable[EvidenceRef], records: dict[str, SourceRec
             and record.full_text_available
             and bool(record.content_hash.strip())
             and record.verified_by == "evidence_verifier"
-            and bool(record.url.strip() or record.doi.strip() or record.external_id.strip())
+            and bool(record.url.strip() or record.external_id.strip())
         ):
             verified.append(ref.source_id)
     return sorted(set(verified))

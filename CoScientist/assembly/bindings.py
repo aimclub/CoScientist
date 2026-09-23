@@ -1699,6 +1699,11 @@ def _per_tool_call_limiter():
     return PerToolCallLimiter(max_calls=2).limit_tool_calls
 
 
+def _evidence_verifier_tool_limiter():
+    from CoScientist.agents.callbacks.tool_callbacks import PerToolCallLimiter
+    return PerToolCallLimiter(max_calls=10).limit_tool_calls
+
+
 def _paper_search_guard():
     from CoScientist.agents.callbacks.tool_callbacks import PaperSearchGuard
     return PaperSearchGuard().guard_paper_search
@@ -1954,6 +1959,7 @@ _cb("TavilySearchLimiter", "before_tool", factory=lambda ctx: _tavily_search_lim
 # Microfluidics ResearchAgent budget: two calls per concrete tool and per
 # delegated agent branch, so parallel LIT-* tasks never share a counter.
 _cb("PerToolCallLimiter", "before_tool", factory=lambda ctx: _per_tool_call_limiter())
+_cb("EvidenceVerifierToolLimiter", "before_tool", factory=lambda ctx: _evidence_verifier_tool_limiter())
 # Clamp OpenAlex result sets before the request reaches the remote papers MCP.
 _cb("PaperSearchGuard", "before_tool", factory=lambda ctx: _paper_search_guard())
 # Forbid ResearchAgent from calling explore_my_papers (reserved for PaperRetriever).

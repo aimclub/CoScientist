@@ -82,7 +82,7 @@ def _sources(item: Dict[str, Any], records: Dict[str, Dict[str, Any]]) -> str:
         if isinstance(e, dict):
             rec = records.get(str(e.get("source_id") or ""))
             if rec:
-                seen.append(rec.get("doi") or rec.get("url") or rec.get("external_id")
+                seen.append(rec.get("url") or rec.get("external_id")
                             or rec.get("title") or rec["source_id"])
     seen.extend(str(s) for s in (item.get("sources") or []))
     return "; ".join(dict.fromkeys(s for s in seen if s))
@@ -140,9 +140,9 @@ def render_literature_markdown(analysis: Any, literature_report: Any = None,
     # ── sources ──
     lines.append("### Таблица 1. Источники")
     lines.append(_table(
-        ["ID", "Тип", "Название", "DOI / URL / №", "Полный текст", "Проверен"],
+        ["ID", "Тип", "Название", "URL / №", "Полный текст", "Проверен"],
         [[sid, r.get("source_type"), r.get("title"),
-          r.get("doi") or r.get("url") or r.get("external_id"),
+          r.get("url") or r.get("external_id"),
           "да" if r.get("full_text_available") else "нет",
           r.get("verified_by") or "—"] for sid, r in records.items()],
     ))

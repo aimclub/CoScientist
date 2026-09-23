@@ -12,7 +12,6 @@ from CoScientist.microfluidics.models import LiteratureAnalysis
 
 TRACE_KEY = "_evidence_verifier_trace"
 _URL = re.compile(r"https?://[^\s\"'<>]+", re.I)
-_DOI = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.I)
 _PATENT = re.compile(r"\b(?:WO|EP|US|RU)\s*[-/]?\s*\d{5,}[A-Z]\d?\b", re.I)
 _STANDARD = re.compile(r"\b(?:ASTM|ISO|EN|GOST|ГОСТ)\s+[A-ZА-Я0-9][A-ZА-Я0-9.:-]*", re.I)
 _FULL_TEXT_TOOL = re.compile(r"(?:extract|explore|analy[sz]|read|full.?text)", re.I)
@@ -28,7 +27,6 @@ def _serialized(value: Any) -> str:
 
 def _identifiers(text: str) -> set[str]:
     found = {item.rstrip(".,);]") for item in _URL.findall(text)}
-    found.update(item.rstrip(".,);]").casefold() for item in _DOI.findall(text))
     found.update(" ".join(item.split()).casefold() for item in _PATENT.findall(text))
     found.update(" ".join(item.split()).casefold() for item in _STANDARD.findall(text))
     return found
@@ -99,8 +97,6 @@ def authenticate_analysis(analysis: Any, trace: Any) -> LiteratureAnalysis:
     authenticated: dict[str, dict] = {}
     for source in model.source_records:
         candidates = {source.url.rstrip(".,);]").casefold()} if source.url else set()
-        if source.doi:
-            candidates.add(source.doi.casefold().removeprefix("https://doi.org/"))
         if source.external_id:
             candidates.add(" ".join(source.external_id.split()).casefold())
         match = next((entry for entry in entries if candidates.intersection({

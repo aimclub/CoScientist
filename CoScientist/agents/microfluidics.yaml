@@ -315,7 +315,8 @@ agents:
     output_schema: literature_analysis
     callbacks:
       before_agent: [begin_evidence_verification]
-      before_tool: [WebSearchLimiter]
+      # Up to 10 calls per tool: verification needs several full-text lookups.
+      before_tool: [EvidenceVerifierToolLimiter]
       after_tool: [capture_evidence_verification]
       after_model: [sanitize_json_output]
       after_agent: [authenticate_evidence_verification, pin_target_molecule,

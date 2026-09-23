@@ -55,7 +55,6 @@ _QUERY_ID = re.compile(r"\bLIT-\d+\b", re.IGNORECASE)
 _EMPTY = {"", "-", "—", "не задано", "не задан", "не задана", "нет данных"}
 _YES = ("да", "yes", "true")
 _URL = re.compile(r"https?://[^\s<>\]\[)]+", re.IGNORECASE)
-_DOI = re.compile(r"\b10\.\d{4,9}/[-._;()/:A-Z0-9]+", re.IGNORECASE)
 
 
 # ── Target molecule ──────────────────────────────────────────────────────────
@@ -209,17 +208,14 @@ def _result_text(value: Any) -> str:
 def _sources_from_text(text: str) -> list[SourceRecord]:
     """Extract only resolvable identifiers; verification remains false."""
     identifiers = list(dict.fromkeys(
-        [item.rstrip(".,;)") for item in _DOI.findall(text)]
-        + [item.rstrip(".,;)") for item in _URL.findall(text)]
+        item.rstrip(".,;)") for item in _URL.findall(text)
     ))[:8]
     records: list[SourceRecord] = []
     for index, identifier in enumerate(identifiers, 1):
-        is_doi = bool(_DOI.fullmatch(identifier))
         records.append(SourceRecord(
             source_id=f"src-{index:02d}",
-            doi=identifier if is_doi else "",
-            url=f"https://doi.org/{identifier}" if is_doi else identifier,
-            source_type="paper" if is_doi else "web",
+            url=identifier,
+            source_type="web",
         ))
     return records
 
@@ -246,12 +242,12 @@ def _assemble_selected_literature(callback_context: CallbackContext) -> None:
 
     source_records: list[SourceRecord] = []
     facts: list[LiteratureFact] = []
-    seen_sources: set[tuple[str, str]] = set()
+    seen_sources: set[str] = set()
     for finding in selected:
         text = _result_text(finding.get("result"))
         sources = _sources_from_text(text)
         for source in sources:
-            identity = (source.doi, source.url)
+            identity = source.url
             if identity in seen_sources:
                 continue
             seen_sources.add(identity)
@@ -260,7 +256,7 @@ def _assemble_selected_literature(callback_context: CallbackContext) -> None:
         facts.append(LiteratureFact(
             statement=text[:12000] or "Результат исследования не содержит текста.",
             query_id=str(finding.get("query_id") or ""),
-            sources=[source.doi or source.url for source in sources],
+            sources=[source.url for source in sources],
         ))
 
     gaps = list(selection.warnings)

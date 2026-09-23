@@ -296,7 +296,7 @@ def _sources_of(item: Dict[str, Any], records: Dict[str, Dict[str, Any]]) -> Lis
         if isinstance(ev, dict):
             src = records.get(str(ev.get("source_id") or ""))
             if src:
-                out.append(src.get("doi") or src.get("url") or src.get("title") or src["source_id"])
+                out.append(src.get("url") or src.get("title") or src["source_id"])
     out.extend(str(s) for s in (item.get("sources") or []))
     return list(dict.fromkeys(s for s in out if s))[:8]
 
@@ -335,7 +335,7 @@ def record_literature_evidence(callback_context: CallbackContext) -> None:
                     "name": "Корпус литературных источников",
                     "base_type": "literature",
                     "volume": f"{len(records)} источников",
-                    "sources": [(r.get("doi") or r.get("url") or r.get("title") or sid)
+                    "sources": [(r.get("url") or r.get("title") or sid)
                                 for sid, r in list(records.items())[:20]],
                     "verified_by": sorted({r.get("verified_by") for r in records.values()
                                            if r.get("verified_by")}),
