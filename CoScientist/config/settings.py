@@ -44,6 +44,13 @@ class LLMSettings(BaseModel):
     # main_model when unset, which is exactly today's behaviour.
     nir_model: Optional[str] = None
 
+    # A small, cheap model for the "view summary" button on an agent in the
+    # execution log: it reads one agent's trace and writes a few lines on what
+    # was done, with which tools, and what came out. Called only on request,
+    # so a weak model is the right one. Falls back to the model half of
+    # `summary_url` ("base;model"), then to main_model. LLM__AGENT_SUMMARY_MODEL.
+    agent_summary_model: Optional[str] = None
+
     # Seconds to wait for a single completion before giving up. Without this a
     # provider that accepts the connection and then goes quiet never raises, so
     # the agent waits forever and the run looks frozen with nothing in the log.
