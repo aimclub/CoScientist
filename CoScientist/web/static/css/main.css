@@ -149,6 +149,40 @@
       margin-left: 0;
     }
 
+    /* Collapsible right panel: it sits in the flex row, so it shrinks to zero
+       width and pulls back over the 2rem gap while sliding out; the chat grows
+       into the freed space. Children keep their full width and are clipped, so
+       the content does not reflow mid-animation. */
+    #right-panel {
+      overflow-x: hidden;
+      transition: width .25s ease, margin-left .25s ease, opacity .25s ease,
+                  transform .25s ease, visibility 0s linear 0s;
+    }
+
+    #right-panel > * {
+      min-width: 20rem;
+    }
+
+    body.right-collapsed #right-panel {
+      width: 0;
+      margin-left: -2rem;
+      opacity: 0;
+      transform: translateX(2rem);
+      visibility: hidden;
+      transition: width .25s ease, margin-left .25s ease, opacity .25s ease,
+                  transform .25s ease, visibility 0s linear .25s;
+    }
+
+    /* Start mode "planner": until the plan is approved there is no Usage &
+       Cost card; afterwards the plan tracker sits above it. */
+    body.plan-gated #usage-panel {
+      display: none;
+    }
+
+    body.plan-first #plan-tracker {
+      order: -1;
+    }
+
     /* Chat composer: wraps text and grows with the content up to a ceiling. */
     #chat-input {
       resize: none;

@@ -134,6 +134,10 @@
         <span
           class="material-symbols-outlined cursor-pointer hover:text-primary transition-colors">delete_sweep</span>
       </button>
+      <button type="button" id="right-panel-toggle" onclick="toggleRightPanel()" title="Show/hide right panel"
+        class="text-outline-variant hover:text-primary transition-colors flex items-center">
+        <span id="right-panel-toggle-icon" class="material-symbols-outlined">right_panel_close</span>
+      </button>
     </div>
   </header>
 
@@ -316,7 +320,7 @@
     </section>
 
     <!-- Right Sidebar: status panels, then the plan tracker sized to its content -->
-    <aside class="w-80 shrink-0 flex flex-col gap-4 min-h-0 overflow-y-auto no-scrollbar pb-8">
+    <aside id="right-panel" class="w-80 shrink-0 flex flex-col gap-4 min-h-0 overflow-y-auto no-scrollbar pb-8">
       <!-- Top panels are capped and scroll on their own, so a long usage list
            doesn't push the plan tracker below the fold. -->
       <div class="shrink-0 max-h-[50vh] flex flex-col gap-4 overflow-y-auto no-scrollbar">
@@ -337,7 +341,7 @@
       </div>
 
       <!-- Usage & Cost — what this session has spent, by agent -->
-      <div class="bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/10 overflow-hidden">
+      <div id="usage-panel" class="bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/10 overflow-hidden">
         <div class="flex items-baseline justify-between mb-2">
           <h4 data-i18n="usage.header" class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">
             Usage &amp; Cost</h4>

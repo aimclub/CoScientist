@@ -22,6 +22,7 @@ const NICK_STORAGE_KEY = 'coscientist.nickname';
 const BOOT_STORAGE_KEY = 'coscientist.server_boot_id';
 let serverBootId = null;
 const SIDE_NAV_KEY = 'coscientist.side_nav';
+const RIGHT_PANEL_KEY = 'coscientist.right_panel';
 const LANG_STORAGE_KEY = 'coscientist.lang';
 const SHOW_INTERNAL_KEY = 'coscientist.show_internal';
 
