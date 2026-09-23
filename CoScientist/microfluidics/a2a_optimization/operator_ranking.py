@@ -255,7 +255,7 @@ async def request_operator_ranking(tool_context: Any, route_ids: list[str], erro
     problem = error
     for _ in range(MAX_ATTEMPTS):
         response = await hitl_handler.handle_request(HITLRequest(
-            agent_name="OptimizerAgent",
+            agent_name="ReactorAgent",
             action_type=HITLAction.EDIT,
             message="Нет пригодного экономического рейтинга маршрутов. Укажите стоимости, чтобы запустить эксперимент.",
             context={

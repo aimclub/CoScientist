@@ -26,10 +26,10 @@
        │    └─ LiteratureOrchestrator→ делегирует LIT-задачи ResearchAgent
        ├─ ModuleB_Design (sequential)            стадии 3–5
        │    └─ MolDesignAgent → SynthRouteAgent → EconomicsAgent
-       ├─ ModuleC_Campaign (sequential)          кампания на установке (A2A)
-       │    └─ CampaignAgent    → блок оптимизации условий → state["optimization"]
-       ├─ ModuleC_Experiment (sequential)        внешняя экспериментальная подсистема
-       │    └─ OptimizerAgent   → одна A2A-задача: план, CFD, установка, оптимизация
+       ├─ ModuleC_Optimization (sequential)          кампания на установке (A2A)
+       │    └─ OptimizationAgent    → блок оптимизации условий → state["optimization"]
+       ├─ ModuleC_Reactor (sequential)        внешняя экспериментальная подсистема
+       │    └─ ReactorAgent   → одна A2A-задача: план, CFD, установка, оптимизация
        └─ ReportAgent (llm)                      стадия 11 → final_report
 ```
 
@@ -138,7 +138,7 @@
 | Внешняя система → CoScientist | Исходная A2A-задача: status.message, artifacts, history; сохранены все ответы опроса |
 | Литература + экспериментальная система → отчёт | `literature_analysis`, `optimization_result`, `optimization_a2a_runs`; `optimization_summary` — только пояснение агента |
 
-Модуль C содержит только `OptimizerAgent`. Внешняя система сама передаёт
+Модуль C содержит только `ReactorAgent`. Внешняя система сама передаёт
 планы оборудованию, вызывает CFD через MCP, получает выполненные опыты и
 оценивает последнюю итерацию. Локальные `ExpPlannerAgent`, `EquipmentAgent`
 и `ExperimentLoop` удалены из профиля: они дублировали бы внешнюю систему.
@@ -194,15 +194,15 @@ Order и проверку шагов при включённом HITL. Нача�
 
 ### A2A: кампания на установке перед оптимизацией
 
-Модуль `ModuleC_Campaign` (`CampaignAgent`,
+Модуль `ModuleC_Optimization` (`OptimizationAgent`,
 `CoScientist/microfluidics/a2a_optimization/campaign.py`) идёт после
-`ModuleB_Design` и перед `ModuleC_Experiment`. Он передаёт внешнему «Блоку
+`ModuleB_Design` и перед `ModuleC_Reactor`. Он передаёт внешнему «Блоку
 оптимизации условий проточного синтеза» тот же вход, что и
 `optimization_start` (`contracts.prepare_inputs`), и ведёт задачу тем же
 жизненным циклом: `campaign_start`, `campaign_get_status`,
 `campaign_provide_input`, `campaign_approve` (общий код — `adapter.Channel`).
 Кампания ставится только при `qualified_routes.status="ok"`; при любом исходе
-пайплайн продолжается в `ModuleC_Experiment`.
+пайплайн продолжается в `ModuleC_Reactor`.
 
 Адрес — JSON-RPC endpoint из agent card (`url`), только из переменной
 окружения `CAMPAIGN_A2A_URL` (например, `https://mcp2.rzhevskyrobotics.com/a2a`).
@@ -219,7 +219,7 @@ Order и проверку шагов при включённом HITL. Нача�
 `best`, `recipe`, `flags`, `received_at`, `raw` — исходный результат целиком),
 `history` (те же записи без `raw`) и `has_blockers` (есть флаг
 `severity="blocker"`). Сырые ответы задачи — в `campaign_a2a_task` /
-`campaign_a2a_runs`. `OptimizerAgent` и `ReportAgent` видят `optimization` как
+`campaign_a2a_runs`. `ReactorAgent` и `ReportAgent` видят `optimization` как
 контекст; во внешнюю систему оптимизации он не отправляется.
 
 ### Результаты без пересказа и потери данных

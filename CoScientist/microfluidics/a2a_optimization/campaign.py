@@ -1,6 +1,6 @@
 """The flow-synthesis condition-optimization block: a campaign on the rig over A2A.
 
-It runs before the OptimizerAgent's A2A task, from exactly the same hand-off
+It runs before the ReactorAgent's A2A task, from exactly the same hand-off
 (``contracts.prepare_inputs``), with the same lifecycle (one task per session,
 poll, clarify, approve). The difference is what is kept: the raw
 ``campaign_result`` the service returns is normalized into
@@ -138,7 +138,7 @@ def _publish(context: ToolContext, record: dict) -> None:
 
 
 CAMPAIGN = Channel(
-    agent_name="CampaignAgent", active_key=ACTIVE_KEY, history_key=HISTORY_KEY,
+    agent_name="OptimizationAgent", active_key=ACTIVE_KEY, history_key=HISTORY_KEY,
     invalid_key=INPUT_ERROR_KEY, client=lambda: _client(),
     publish=lambda context, record: _publish(context, record),
 )

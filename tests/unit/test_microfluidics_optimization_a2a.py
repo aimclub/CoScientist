@@ -355,10 +355,10 @@ def test_sessions_isolated(client):
 
 def test_graph_delegates_entire_experimental_subsystem():
     agents = yaml.safe_load((ROOT / "CoScientist/agents/microfluidics.yaml").read_text())["agents"]
-    assert agents["ModuleC_Experiment"]["children"] == ["OptimizerAgent"]
+    assert agents["ModuleC_Reactor"]["children"] == ["ReactorAgent"]
     assert not {"ExperimentLoop", "EquipmentAgent", "ExpPlannerAgent"}.intersection(agents)
-    assert agents["OptimizerAgent"]["output_key"] == "optimization_summary"
-    assert agents["OptimizerAgent"]["work_order_step_review"]
+    assert agents["ReactorAgent"]["output_key"] == "optimization_summary"
+    assert agents["ReactorAgent"]["work_order_step_review"]
     for agent in agents.values():
         assert not {"cfd_mcp", "cfd_mcp_stub", "rig_mcp_stub", "microfluidics", "finish_optimization"}.intersection(agent.get("tools", []))
 

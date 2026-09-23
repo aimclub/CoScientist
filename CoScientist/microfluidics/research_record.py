@@ -625,7 +625,7 @@ def record_economics_evidence(callback_context: CallbackContext) -> None:
 # ── stage 6–10: external optimisation / experiment → Evidence + GeneratedData ─
 
 def record_experiment_evidence(callback_context: CallbackContext) -> None:
-    """After OptimizerAgent: the external optimisation module's result (and the
+    """After ReactorAgent: the external optimisation module's result (and the
     CFD runs it reported) become experimental Evidence + GeneratedData, marking
     the route VerificationMethods done."""
     state = callback_context.state
@@ -672,11 +672,11 @@ def record_experiment_evidence(callback_context: CallbackContext) -> None:
             edges.append({"type": "produces", "from": vm, "to": "#ex0"})
             if tool:
                 edges.append({"type": "uses", "from": vm, "to": tool})
-        ids = _write(graph, "OptimizerAgent", nodes, edges)
+        ids = _write(graph, "ReactorAgent", nodes, edges)
         rec["experiment_evidence"] = [v for k, v in ids.items() if k.startswith("ex")]
         done = status.lower() in ("completed", "done", "success", "succeeded", "finished")
         for vm in (rec.get("routes") or {}).values():
-            _advance(graph, "OptimizerAgent", vm, *(("running", "done") if done else ("running",)))
+            _advance(graph, "ReactorAgent", vm, *(("running", "done") if done else ("running",)))
         _save_record(state, rec)
         logger.info("research_record: experiment evidence recorded (status=%s)", status)
     except Exception as exc:  # noqa: BLE001

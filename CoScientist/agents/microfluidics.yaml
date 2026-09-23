@@ -21,13 +21,13 @@
 #   │    └─ RouteSelectionAgent -> operator-selected active route
 #   ├─ ModuleB_Design (sequential)            stages 3–5
 #   │    └─ MolDesignAgent → EconomicsAgent (route already selected in A)
-#   ├─ ModuleC_Campaign (sequential)          rig campaign of the flow-synthesis
-#   │    └─ CampaignAgent                     condition-optimization block (A2A);
+#   ├─ ModuleC_Optimization (sequential)      rig campaign of the flow-synthesis
+#   │    └─ OptimizationAgent                 condition-optimization block (A2A);
 #   │                                         same inputs as C, result ->
 #   │                                         state["optimization"]
-#   ├─ ModuleC_Experiment (sequential)        external experimental subsystem
-#   │    └─ OptimizerAgent                   one A2A task owns planning, CFD,
-#   │                                       equipment and the optimization loop
+#   ├─ ModuleC_Reactor (sequential)           external experimental subsystem
+#   │    └─ ReactorAgent                      one A2A task owns planning, CFD,
+#   │                                         equipment and the reactor runs
 #   └─ ReportAgent (llm)                      stage 11
 #
 # Optimization, CFD and equipment are owned by the external A2A system.
@@ -79,8 +79,8 @@ agents:
     subordinates:
       - ModuleA_TZLiterature
       - ModuleB_Design
-      - ModuleC_Campaign
-      - ModuleC_Experiment
+      - ModuleC_Optimization
+      - ModuleC_Reactor
       - ReportAgent
 
   # ── Module A — stages 1–2: ТЗ + literature (was the whole profile) ─────────
@@ -163,7 +163,7 @@ agents:
 
   TZQueryGenAgent:
     class: custom:session
-    title: Поисковые запросы
+    title: Составление поисковых запросов
     reasoning: low
     description: >-
       генератор поисковых задач — из структурированного ТЗ формирует 4–6
@@ -329,7 +329,7 @@ agents:
 
   RouteSelectionAgent:
     class: custom:route_selection_session
-    title: Выбор маршрута
+    title: Выбор маршрута синтеза
     description: >-
       формирует выбор единственного активного маршрута из найденных, сохраняет
       обоснование и передаёт результат следующему модулю без отдельного HITL.
@@ -357,7 +357,7 @@ agents:
 
   MolDesignAgent:
     class: llm
-    title: Молекулярный дизайн
+    title: Подбор молекулы
     description: >-
       молекулярный дизайн — предлагает молекулы-кандидаты (SMILES + свойства)
       под требования ТЗ, опираясь на аналоги из литературы.
@@ -406,7 +406,7 @@ agents:
   # Economics feeds the optimization module and the final report.
   EconomicsAgent:
     class: llm
-    title: Экономика маршрутов
+    title: Расчёт стоимости
     description: >-
       экономика маршрутов — стоимость за кг, доступность реагентов в РФ, риски
       поставок.
@@ -436,23 +436,23 @@ agents:
   # (agent card: https://mcp2.rzhevskyrobotics.com/.well-known/agent-card.json,
   # endpoint CAMPAIGN_A2A_URL). It takes exactly the optimization hand-off;
   # its campaign_result is normalized into state["optimization"]
-  # (current / history / has_blockers) for ModuleC_Experiment and the report.
-  ModuleC_Campaign:
+  # (current / history / has_blockers) for ModuleC_Reactor and the report.
+  ModuleC_Optimization:
     class: sequential
     description: >-
       ставит кампанию оптимизации условий проточного синтеза на установке через
       внешний A2A-блок и сохраняет её результат (лучшие параметры, рецептура,
       флаги).
     routing: >-
-      run after module B, before ModuleC_Experiment, with the same hand-off
+      run after module B, before ModuleC_Reactor, with the same hand-off
       (ТЗ, routes, economic ranking). The external block runs the campaign on
       the rig; its result is kept as given.
     children:
-      - CampaignAgent
+      - OptimizationAgent
 
-  CampaignAgent:
+  OptimizationAgent:
     class: custom:campaign_session
-    title: Кампания на установке
+    title: Оптимизация условий синтеза
     description: >-
       сопровождает одну задачу внешнего блока оптимизации условий проточного
       синтеза: передаёт входные данные, уточнения и подтверждения, получает
@@ -466,7 +466,7 @@ agents:
     output_key: campaign_summary
 
   # ── Module C — external experimental subsystem through A2A ────────────────
-  ModuleC_Experiment:
+  ModuleC_Reactor:
     class: sequential
     description: >-
       передаёт ТЗ, литературу, маршруты и экономический рейтинг во внешнюю
@@ -475,11 +475,11 @@ agents:
       run after module B with a valid economic ranking. The external system
       owns the entire experiment loop; pass its original results to the report.
     children:
-      - OptimizerAgent
+      - ReactorAgent
 
-  OptimizerAgent:
+  ReactorAgent:
     class: custom:optimization_session
-    title: Внешняя оптимизация и эксперименты
+    title: Эксперименты на реакторе
     description: >-
       сопровождает одну задачу внешней A2A-системы: передаёт входные данные,
       уточнения и подтверждения, получает статусы и результаты экспериментов.

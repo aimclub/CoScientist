@@ -3792,11 +3792,11 @@ previous one has delivered:
 2. **ModuleB_Design** — after A. Keeps the single operator-selected route,
    fixes the molecule candidate and calculates its economics. It must not
    recreate or broaden the route set.
-3. **ModuleC_Campaign** — immediately after B: the rig campaign of the
+3. **ModuleC_Optimization** — immediately after B: the rig campaign of the
    external condition-optimization block, from the same hand-off. Do not
    introduce another qualification, screening, or transition approval after
    the route selection.
-4. **ModuleC_Experiment** — immediately after ModuleC_Campaign, whatever the
+4. **ModuleC_Reactor** — immediately after ModuleC_Optimization, whatever the
    campaign's outcome (completed, blocked, skipped or failed): the campaign
    result is context for C, not a gate.
 5. **ReportAgent** — always last. Run it after C, or immediately after B when
@@ -3805,13 +3805,13 @@ previous one has delivered:
 
 ### RULES
 - A human-confirmed active route is final. Call ModuleB immediately after
-  ModuleA, ModuleC_Campaign immediately after B and ModuleC_Experiment
-  immediately after ModuleC_Campaign. Never re-run ModuleA, request a
+  ModuleA, ModuleC_Optimization immediately after B and ModuleC_Reactor
+  immediately after ModuleC_Optimization. Never re-run ModuleA, request a
   second route decision, or apply a later qualification/screening gate.
 - ModuleA has already selected the only active route at its end. Start
   ModuleB immediately after ModuleA returns; do not request a second HITL
   confirmation for the route hand-off. The confirmed route is delivered to
-  economics and to ModuleC_Campaign / ModuleC_Experiment as-is. Physical
+  economics and to ModuleC_Optimization / ModuleC_Reactor as-is. Physical
   execution is approved separately inside each A2A lifecycle.
 - Never run a module early. ReportAgent still runs after every branch.
 - Module calls carry only the requested stage action. Never restate or
@@ -4229,11 +4229,11 @@ economics server (supplier price lists) and compare them.
 
 @_register("microfluidics_campaign")
 def microfluidics_campaign(ctx: PromptContext) -> str:
-    return render_template('''You are the CampaignAgent, the CoScientist liaison
+    return render_template('''You are the OptimizationAgent, the CoScientist liaison
 with the external flow-synthesis condition-optimization block over A2A. The
 block runs an optimization campaign on the physical rig and returns its result
 (best parameters, rig recipe, stop reason, flags). It runs BEFORE the
-OptimizerAgent, from exactly the same hand-off. You do not run the campaign
+ReactorAgent, from exactly the same hand-off. You do not run the campaign
 locally and do not rewrite its plan or results.
 
 ### ТЗ
@@ -4255,13 +4255,13 @@ locally and do not rewrite its plan or results.
 1. Кампания на установке ставится только для квалифицированного маршрута:
    при `qualified_routes.status="ok"` вызови campaign_start(). При любом другом
    статусе НЕ вызывай A2A: кратко напиши, что кампания пропущена и почему, —
-   дальше пайплайн продолжит OptimizerAgent.
+   дальше пайплайн продолжит ReactorAgent.
    Инструмент сам проверяет передаваемые данные (тот же контракт, что у
    optimization_start). Если пригодного `economics_ranking` нет, campaign_start
    САМ показывает оператору форму стоимостей — вызови его один раз.
    `invalid_input` с `economics_ranking_required=true`: не повторяй вызов,
    сообщи текст ошибки. При другом `invalid_input` вызови `request_approval`
-   от имени `CampaignAgent`, назвав недостающие данные; не повторяй
+   от имени `OptimizationAgent`, назвав недостающие данные; не повторяй
    campaign_start, пока состояние не исправлено.
    Повторный вызов возвращает ту же задачу даже после завершения.
 2. submitted/working: вызови `sleep_tool(minutes=0.1)`, затем
@@ -4291,7 +4291,7 @@ locally and do not rewrite its plan or results.
 
 @_register("microfluidics_optimizer")
 def microfluidics_optimizer(ctx: PromptContext) -> str:
-    return render_template('''You are the OptimizerAgent, the CoScientist liaison
+    return render_template('''You are the ReactorAgent, the CoScientist liaison
 with the external experimental system over A2A. That system owns planning,
 CFD, equipment execution and the optimization loop. You do not perform those
 steps locally and do not rewrite its plan or measurement results.
@@ -4367,7 +4367,7 @@ steps locally and do not rewrite its plan or measurement results.
    отказался от формы, дал непригодные значения или человек недоступен: не
    повторяй вызов, кратко сообщи текст ошибки и что нужно для запуска.
    При другом `invalid_input` не завершай сессию: прочитай текст ошибки и
-   вызови `request_approval` от имени `OptimizerAgent`, назвав человеку
+   вызови `request_approval` от имени `ReactorAgent`, назвав человеку
    конкретные недостающие данные; не повторяй `optimization_start`, пока
    состояние не исправлено.
    Повторный вызов возвращает ту же задачу даже после завершения.

@@ -113,27 +113,27 @@
   const GENERIC_RULE = [/search|query|lookup|find|browse/, 'web_search'];
 
   // Agent roles, as a user would name them. Anything missing falls back to the
-  // Agent roles, as a user would name them. Anything missing falls back to the
-  // bare class name with the "Agent" suffix stripped.
+  // "агент-" + the bare class name with the "Agent" suffix stripped.
   const AGENTS = {
     // Microfluidics profile: keep the stable runtime ids, but show the role
     // a researcher actually needs to understand.
-    RootOrchestrator: { ru: 'Координатор микрофлюидики', en: 'Microfluidics coordinator' },
-    ModuleA_TZLiterature: { ru: 'ТЗ и литература', en: 'Specification & literature' },
-    TZAgent: { ru: 'Подготовка ТЗ', en: 'Specification preparation' },
+    RootOrchestrator: { ru: 'Руководитель исследования', en: 'Research lead' },
+    ModuleA_TZLiterature: { ru: 'Постановка задачи и литература', en: 'Specification & literature' },
+    TZAgent: { ru: 'Подготовка технического задания', en: 'Specification preparation' },
     TZSpecAgent: { ru: 'Техническое задание', en: 'Technical specification' },
-    TZQueryGenAgent: { ru: 'Поисковые запросы', en: 'Literature queries' },
-    LiteratureOrchestrator: { ru: 'Координатор анализа литературы', en: 'Literature analysis coordinator' },
-    LiteratureSynthesisAgent: { ru: 'Итоги литературного анализа', en: 'Literature synthesis' },
-    EvidenceVerifierAgent: { ru: 'Проверка источников', en: 'Evidence verification' },
-    ModuleB_Design: { ru: 'Проектирование молекул', en: 'Molecule design' },
-    MolDesignAgent: { ru: 'Молекулярный дизайн', en: 'Molecular design' },
+    TZQueryGenAgent: { ru: 'Составление поисковых запросов', en: 'Literature queries' },
+    LiteratureOrchestrator: { ru: 'Анализ литературы', en: 'Literature analysis' },
+    LiteratureSynthesisAgent: { ru: 'Итоги литературного анализа', en: 'Literature summary' },
+    EvidenceVerifierAgent: { ru: 'Проверка источников', en: 'Source verification' },
+    RouteSelectionAgent: { ru: 'Выбор маршрута синтеза', en: 'Route selection' },
+    ModuleB_Design: { ru: 'Молекула и экономика', en: 'Molecule & economics' },
+    MolDesignAgent: { ru: 'Подбор молекулы', en: 'Molecule selection' },
     SynthRouteAgent: { ru: 'Маршруты синтеза', en: 'Synthesis routes' },
-    EconomicsAgent: { ru: 'Экономика маршрутов', en: 'Route economics' },
-    ModuleC_Campaign: { ru: 'Кампания на установке', en: 'Rig campaign' },
-    CampaignAgent: { ru: 'Кампания на установке', en: 'Rig campaign' },
-    ModuleC_Experiment: { ru: 'Эксперименты и оптимизация', en: 'Experiments & optimization' },
-    OptimizerAgent: { ru: 'Оптимизация экспериментов', en: 'Experiment optimization' },
+    EconomicsAgent: { ru: 'Расчёт стоимости', en: 'Cost estimate' },
+    ModuleC_Optimization: { ru: 'Оптимизация условий синтеза', en: 'Synthesis condition optimization' },
+    OptimizationAgent: { ru: 'Оптимизация условий синтеза', en: 'Synthesis condition optimization' },
+    ModuleC_Reactor: { ru: 'Эксперименты на реакторе', en: 'Reactor experiments' },
+    ReactorAgent: { ru: 'Эксперименты на реакторе', en: 'Reactor experiments' },
     ReportAgent: { ru: 'Итоговый отчёт', en: 'Final report' },
     OrchestratorAgent: { ru: 'агент-координатор', en: 'orchestrator agent' },
     PlannerAgent: { ru: 'агент-планировщик', en: 'planner agent' },
@@ -333,13 +333,19 @@
     return entry[lang] || entry.en || entry.ru || fallback || '';
   }
 
+  /** Agents are always named in Russian, whatever the interface language.
+   *  Workers built at run time are named after the one that spawns them
+   *  (TZSpecAgent_task_fill → TZSpecAgent) and take its name. */
   function agentLabel(name, capitalize = false) {
     if (!name) return '';
-    const known = AGENTS[name];
-    let label = known ? pick(known, name) : '';
+    let candidate = String(name);
+    while (!AGENTS[candidate] && candidate.lastIndexOf('_') > 0) {
+      candidate = candidate.slice(0, candidate.lastIndexOf('_'));
+    }
+    const known = AGENTS[candidate];
+    let label = known ? (known.ru || known.en || '') : '';
     if (!label) {
-      const bare = String(name).replace(/Agent$/, '');
-      label = (lang === 'ru') ? ('агент-' + bare.toLowerCase()) : (bare + ' agent');
+      label = 'агент-' + String(name).replace(/Agent$/, '').toLowerCase();
     }
     if (capitalize && label) {
       return label.charAt(0).toUpperCase() + label.slice(1);

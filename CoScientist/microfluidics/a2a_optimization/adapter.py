@@ -60,7 +60,7 @@ class Channel:
 
 
 OPTIMIZATION = Channel(
-    agent_name="OptimizerAgent", active_key=ACTIVE_KEY, history_key=HISTORY_KEY,
+    agent_name="ReactorAgent", active_key=ACTIVE_KEY, history_key=HISTORY_KEY,
     invalid_key=RESULT_KEY, client=lambda: _client(),
     publish=lambda context, record: _publish_result(context, record),
 )

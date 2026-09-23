@@ -204,8 +204,8 @@ def test_campaign_module_runs_before_optimization():
 
     agents = yaml.safe_load((ROOT / "CoScientist/agents/microfluidics.yaml").read_text())["agents"]
     modules = agents["RootOrchestrator"]["subordinates"]
-    assert modules.index("ModuleC_Campaign") + 1 == modules.index("ModuleC_Experiment")
-    assert agents["ModuleC_Campaign"]["children"] == ["CampaignAgent"]
+    assert modules.index("ModuleC_Optimization") + 1 == modules.index("ModuleC_Reactor")
+    assert agents["ModuleC_Optimization"]["children"] == ["OptimizationAgent"]
     entry = REGISTRY.tool("campaign_a2a")
     assert {tool.__name__ for tool in entry.factory()} == {doc.name for doc in entry.resolved_docs()}
     for name in ("campaign_start", "campaign_provide_input", "campaign_approve"):

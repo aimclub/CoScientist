@@ -33,7 +33,7 @@ def test_optimizer_has_websearch_and_human_recovery() -> None:
     config = yaml.safe_load(
         (ROOT / "CoScientist" / "agents" / "microfluidics.yaml").read_text()
     )
-    optimizer = config["agents"]["OptimizerAgent"]
+    optimizer = config["agents"]["ReactorAgent"]
 
     assert "websearch" in optimizer["tools"]
     assert optimizer["hitl"] is True

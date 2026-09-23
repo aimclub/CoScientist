@@ -175,10 +175,10 @@
       MolDesignAgent: 'biotech',
       SynthRouteAgent: 'account_tree',
       EconomicsAgent: 'payments',
-      ModuleC_Campaign: 'precision_manufacturing',
-      CampaignAgent: 'precision_manufacturing',
-      ModuleC_Experiment: 'science',
-      OptimizerAgent: 'tune',
+      ModuleC_Optimization: 'precision_manufacturing',
+      OptimizationAgent: 'precision_manufacturing',
+      ModuleC_Reactor: 'science',
+      ReactorAgent: 'tune',
       ReportAgent: 'description',
     };
 

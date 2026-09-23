@@ -1,6 +1,6 @@
-"""The economics → experiment hand-off (ModuleB_Design → ModuleC_Experiment).
+"""The economics → experiment hand-off (ModuleB_Design → ModuleC_Reactor).
 
-Regression for the run where OptimizerAgent got
+Regression for the run where ReactorAgent got
 ``optimization_start → invalid_input: economics_ranking: nonempty object
 required`` and then looped: the operator answered "fill every value with 1",
 but nothing could store that answer. The chain under test:
@@ -394,7 +394,7 @@ def test_the_failing_run_now_starts_after_the_operator_fills_ones(client, operat
     assert result["state"] == "submitted"
     assert len(operator.requests) == 1
     request = operator.requests[0]
-    assert request.agent_name == "OptimizerAgent" and request.form["kind"] == "economics_ranking"
+    assert request.agent_name == "ReactorAgent" and request.form["kind"] == "economics_ranking"
     assert "at least one costed route" in request.form["intro"]
     assert state["economics_ranking"]["source"] == "operator"
     sent = sent_inputs(client)

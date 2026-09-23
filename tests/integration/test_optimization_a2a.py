@@ -1,4 +1,4 @@
-"""Opt-in live test of the SAME adapter used by OptimizerAgent.
+"""Opt-in live test of the SAME adapter used by ReactorAgent.
 
 Requires RUN_OPTIMIZATION_A2A_TEST=1 and OPTIMIZATION_A2A_INPUT=/path/input.json.
 Input: a JSON object with structured_tz, literature_analysis, synthesis_routes,

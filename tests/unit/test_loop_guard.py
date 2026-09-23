@@ -57,5 +57,5 @@ def test_tavily_fallback_budget_is_independent_per_agent():
     assert call("ResearchAgent") is None
     assert call("ResearchAgent") is not None
     assert call("EconomicsAgent") is None
-    assert call("OptimizerAgent") is None
+    assert call("ReactorAgent") is None
     assert call("EconomicsAgent", "search_by_structure") is None

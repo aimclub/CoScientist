@@ -1988,7 +1988,7 @@ _cb("hitl_before_tool", "before_tool", factory=lambda ctx: _hitl_before_tool())
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
 _cb("count_research_searches", "after_tool", factory=lambda ctx: _count_research_searches())
 _cb("reset_research_searches", "before_agent", factory=lambda ctx: _reset_research_searches())
-# A separate per-agent quota for EconomicsAgent / OptimizerAgent Tavily fallback.
+# A separate per-agent quota for EconomicsAgent / ReactorAgent Tavily fallback.
 _cb("TavilySearchLimiter", "before_tool", factory=lambda ctx: _tavily_search_limiter())
 # Microfluidics ResearchAgent budget: two calls per concrete tool and per
 # delegated agent branch, so parallel LIT-* tasks never share a counter.
