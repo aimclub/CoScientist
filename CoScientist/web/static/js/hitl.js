@@ -380,6 +380,10 @@ function sendHitlResponse(payload) {
   if (ws && ws.readyState === 1) {
     ws.send(JSON.stringify(payload));
   }
+  const request = hitlCards.get(payload.request_id || '');
+  if (payload.action === 'approve' && request && request.agent_name === 'PlannerAgent') {
+    releasePlanGate();
+  }
   if (window.StatusIndicator) {
     StatusIndicator.feed({ type: 'hitl_response', request_id: payload.request_id });
   }

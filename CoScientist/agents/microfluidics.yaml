@@ -112,6 +112,7 @@ agents:
   OrchestratorAgent:
     class: llm
     include_contents: none
+    reasoning: low
     description: >-
       Microfluidics CoScientist Orchestrator — executes the roadmap by
       delegating literature tasks to ResearchAgent and composes the final

@@ -78,7 +78,7 @@
         const el = document.getElementById(targetId);
         if (!el) return;
         if (a.name === name) {
-          el.className = "flex items-center gap-3 py-3 px-4 bg-[#272a31] rounded-lg transition-all duration-200 border-l-2 border-[#00daf3] cursor-pointer";
+          el.className = "flex items-center gap-3 py-3 px-4 bg-surface-container-high rounded-lg transition-all duration-200 border-l-2 border-primary cursor-pointer";
           const icon = el.querySelector('.material-symbols-outlined');
           if (icon) icon.className = "material-symbols-outlined text-primary text-lg animate-pulse";
           const label = el.querySelector('[data-i18n]');
@@ -542,11 +542,11 @@
             : selected
               ? 'ring-1 ring-primary/60 border-primary bg-surface-container-high/95 text-on-surface rail-chip-selected'
               : fresh
-                ? 'border-outline-variant/25 bg-[#161a23] text-on-surface hover:border-primary/40 hover:bg-[#1b202c]'
-                : 'border-outline-variant/10 bg-[#12151c]/60 text-outline-variant/70 hover:text-on-surface hover:border-outline-variant/30';
+                ? 'border-outline-variant/25 bg-surface-container-low text-on-surface hover:border-primary/40 hover:bg-surface-container'
+                : 'border-outline-variant/10 bg-surface-container-lowest/60 text-outline-variant/70 hover:text-on-surface hover:border-outline-variant/30';
 
           const beacon = busy
-            ? `<span class="relative flex h-2 w-2 mr-0.5 shrink-0"><span class="rail-ping-anim absolute inline-flex h-full w-full rounded-full bg-[#00daf3] opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-[#00daf3]"></span></span>`
+            ? `<span class="relative flex h-2 w-2 mr-0.5 shrink-0"><span class="rail-ping-anim absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span></span>`
             : '';
 
           const pulse = busy ? ' animate-pulse text-primary' : (selected ? ' text-primary' : '');
@@ -592,10 +592,10 @@
           toolsBox.innerHTML = tools.map(tool => {
             const running = selectedFresh && tool.calls > tool.done;
             const tone = tool.errors
-              ? 'border-error/50 bg-error/15 text-[#ffb4ab] hover:border-error/70'
+              ? 'border-error/50 bg-error/15 text-error hover:border-error/70'
               : running
                 ? 'border-primary/60 bg-primary/15 text-primary shadow-[0_0_12px_rgba(0,218,243,0.25)]'
-                : 'border-secondary/35 bg-secondary/10 text-[#40e56c] hover:border-secondary/60 hover:bg-secondary/15';
+                : 'border-secondary/35 bg-secondary/10 text-secondary hover:border-secondary/60 hover:bg-secondary/15';
 
             const iconClass = running
               ? 'text-primary animate-spin'
@@ -673,13 +673,20 @@
       return width;
     }
 
-    function applySideRailState() {
-      const collapsed = localStorage.getItem(SIDE_RAIL_KEY) === 'off';
+    // Collapse the rail WITHOUT recording a preference. The plan gate below
+    // closes the column while the planner is still drafting, and the reader's
+    // own choice has to survive that: persisting here would make a run in
+    // planner mode silently turn the rail off for good.
+    function showSideRail(collapsed) {
       document.body.classList.toggle('rail-collapsed', collapsed);
       const icon = document.getElementById('side-rail-toggle-icon');
       const button = document.getElementById('side-rail-toggle');
       if (icon) icon.textContent = collapsed ? 'right_panel_open' : 'right_panel_close';
       if (button) button.title = t(collapsed ? 'rail.show' : 'rail.hide');
+    }
+
+    function applySideRailState() {
+      showSideRail(localStorage.getItem(SIDE_RAIL_KEY) === 'off');
     }
 
     function toggleSideRail() {
@@ -723,3 +730,60 @@
         || RAIL_DEFAULT, false));
     }
 
+    // =========================================================================
+    // Layout — plan gate (start mode "planner")
+    // =========================================================================
+    // While the planner is still drafting, the right panel stays closed and
+    // Usage & Cost is left out. Once the plan is approved the panel opens with
+    // the plan on top and usage below it. planApproved is per session: set from
+    // the snapshot's history, then live by the approval (or by any non-planner
+    // agent starting, which covers runs with HITL off). Starts unapproved so a
+    // page load in planner mode does not flash the panel before the snapshot.
+    let planApproved = false;
+
+    function planGateActive() {
+      return appSettings.general.startMode === 'planner' && !planApproved;
+    }
+
+    function refreshPlanGate() {
+      const wasGated = document.body.classList.contains('plan-gated');
+      const gated = planGateActive();
+      document.body.classList.toggle('plan-gated', gated);
+      document.body.classList.toggle('plan-first', appSettings.general.startMode === 'planner');
+      if (gated) showSideRail(true);
+      else if (wasGated) applySideRailState();
+    }
+
+    // The session was (re)loaded: approved if its history already shows the
+    // planner's plan accepted or the work carried on past the planner.
+    function resetPlanGate(messages) {
+      const plannerRequests = new Set();
+      planApproved = (messages || []).some(message => {
+        if (message.type === 'hitl_request' && message.agent_name === 'PlannerAgent') {
+          plannerRequests.add(message.request_id);
+        } else if (message.type === 'hitl_response' || message.type === 'hitl_timeout') {
+          return plannerRequests.has(message.request_id)
+            && (message.type === 'hitl_timeout' ? !message.paused : message.action === 'approve');
+        } else if (message.type === 'agent_event' || message.type === 'agent_output') {
+          return isPostPlanAgent(message.author || message.agent);
+        }
+        return false;
+      });
+      refreshPlanGate();
+    }
+
+    function isPostPlanAgent(name) {
+      return !!name && name !== 'user' && !PLAN_AGENTS.includes(name);
+    }
+
+    // The plan was accepted in this session: open the panel for the user.
+    function releasePlanGate() {
+      if (planApproved) return;
+      planApproved = true;
+      const wasGated = document.body.classList.contains('plan-gated');
+      refreshPlanGate();
+      if (wasGated) {
+        localStorage.setItem(SIDE_RAIL_KEY, 'on');
+        applySideRailState();
+      }
+    }

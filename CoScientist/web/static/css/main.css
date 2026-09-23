@@ -1,3 +1,79 @@
+    /* ── Themes ──────────────────────────────────────────────────────────
+       Colour tokens as bare RGB channels so Tailwind's `/opacity` modifiers
+       keep working (see tailwind.config in index.html). `html.dark` is the
+       default; `html.light` is set by the Interface → Theme switch. The
+       light palette is built on the brand cyan #00D9E5 and navy #031629. */
+    :root,
+    html.dark {
+      color-scheme: dark;
+      --c-primary: 0 218 243;
+      --c-primary-text: 0 218 243;
+      --c-on-primary: 0 54 61;
+      --c-primary-container: 0 126 140;
+      --c-on-primary-container: 233 251 255;
+      --c-secondary: 64 229 108;
+      --c-secondary-container: 2 201 83;
+      --c-tertiary: 234 196 0;
+      --c-error: 255 180 171;
+      --c-on-error: 105 0 5;
+      --c-error-container: 147 0 10;
+      --c-on-error-container: 255 218 214;
+      --c-background: 16 19 25;
+      --c-surface: 16 19 25;
+      --c-surface-dim: 16 19 25;
+      --c-surface-bright: 54 57 64;
+      --c-surface-container-lowest: 11 14 20;
+      --c-surface-container-low: 25 28 34;
+      --c-surface-container: 29 32 38;
+      --c-surface-container-high: 39 42 49;
+      --c-surface-container-highest: 50 53 60;
+      --c-surface-variant: 50 53 60;
+      --c-on-surface: 225 226 235;
+      --c-on-background: 225 226 235;
+      --c-on-surface-variant: 194 198 216;
+      --c-outline: 203 213 225;
+      --c-outline-variant: 148 163 184;
+      /* Not Tailwind tokens: card hairlines, the status shimmer highlight,
+         and a multiplier that softens black drop shadows on light surfaces. */
+      --c-hairline: 66 70 86;
+      --c-shimmer: 255 255 255;
+      --shadow-k: 1;
+    }
+
+    html.light {
+      color-scheme: light;
+      --c-primary: 0 217 229;            /* #00D9E5 */
+      --c-primary-text: 0 128 140;       /* same hue, readable on white */
+      --c-on-primary: 3 22 41;           /* #031629 */
+      --c-primary-container: 204 247 250;
+      --c-on-primary-container: 3 22 41;
+      --c-secondary: 22 136 70;
+      --c-secondary-container: 34 197 94;
+      --c-tertiary: 168 118 0;
+      --c-error: 192 28 28;
+      --c-on-error: 255 255 255;
+      --c-error-container: 255 218 214;
+      --c-on-error-container: 65 0 2;
+      --c-background: 243 246 249;
+      --c-surface: 243 246 249;
+      --c-surface-dim: 232 237 242;
+      --c-surface-bright: 255 255 255;
+      --c-surface-container-lowest: 255 255 255;
+      --c-surface-container-low: 249 251 252;
+      --c-surface-container: 238 242 246;
+      --c-surface-container-high: 230 235 241;
+      --c-surface-container-highest: 219 226 234;
+      --c-surface-variant: 219 226 234;
+      --c-on-surface: 3 22 41;           /* #031629 */
+      --c-on-background: 3 22 41;
+      --c-on-surface-variant: 51 65 85;
+      --c-outline: 71 85 105;
+      --c-outline-variant: 100 116 139;
+      --c-hairline: 203 213 225;
+      --c-shimmer: 0 128 140;
+      --shadow-k: 0.25;
+    }
+
     body {
       font-family: 'Source Sans 3', sans-serif;
       -webkit-font-smoothing: antialiased;
@@ -133,11 +209,11 @@
     .line-through-dim {
       text-decoration: line-through;
       text-decoration-color: #64748b;
-      color: #94a3b8;
+      color: rgb(var(--c-outline-variant));
     }
 
     .topology-grid {
-      background-image: radial-gradient(rgba(0, 218, 243, 0.05) 1px, transparent 1px);
+      background-image: radial-gradient(rgb(var(--c-primary) / 0.05) 1px, transparent 1px);
       background-size: 24px 24px;
     }
 
@@ -231,6 +307,16 @@
       user-select: none;
     }
 
+    /* Start mode "planner": until the plan is approved there is no Usage &
+       Cost card; afterwards the plan tracker sits above it. */
+    body.plan-gated #usage-panel {
+      display: none;
+    }
+
+    body.plan-first #plan-tracker {
+      order: -1;
+    }
+
     /* Chat composer: wraps text and grows with the content up to a ceiling. */
     #chat-input {
       resize: none;
@@ -275,7 +361,7 @@
        right below it), so it is pinned to the `on-surface` token — which is
        what every animated phase renders in. */
     .si-shimmer {
-      background: linear-gradient(100deg, #e1e2eb 0%, #e1e2eb 40%, #ffffff 50%, #e1e2eb 60%, #e1e2eb 100%);
+      background: linear-gradient(100deg, rgb(var(--c-on-surface)) 0%, rgb(var(--c-on-surface)) 40%, rgb(var(--c-shimmer)) 50%, rgb(var(--c-on-surface)) 60%, rgb(var(--c-on-surface)) 100%);
       background-size: 220% 100%;
       -webkit-background-clip: text;
       background-clip: text;
@@ -334,7 +420,7 @@
 
       .si-shimmer {
         background: none;
-        color: #e1e2eb
+        color: rgb(var(--c-on-surface))
       }
     }
 
@@ -347,12 +433,12 @@
     }
 
     .tv-key {
-      color: #00daf3;
+      color: rgb(var(--c-primary-text));
       font-weight: 600;
     }
 
     .tv-bullet {
-      color: #94a3b8;
+      color: rgb(var(--c-outline-variant));
       margin-right: 6px;
     }
 
@@ -363,12 +449,12 @@
     }
 
     .tv-scalar {
-      color: #40e56c;
+      color: rgb(var(--c-secondary));
     }
 
     .tv-null,
     .tv-empty {
-      color: #94a3b8;
+      color: rgb(var(--c-outline-variant));
       font-style: italic;
     }
 
@@ -400,7 +486,7 @@
       right: 0;
       bottom: 0;
       height: 2.25rem;
-      background: linear-gradient(to bottom, transparent, rgba(11, 14, 20, .92));
+      background: linear-gradient(to bottom, transparent, rgb(var(--c-surface-container-lowest) / .92));
       pointer-events: none;
     }
 
@@ -504,7 +590,7 @@
 
     .md-body pre {
       background: rgba(140, 144, 161, 0.1);
-      border: 1px solid rgba(66, 70, 86, 0.4);
+      border: 1px solid rgb(var(--c-hairline) / 0.4);
       border-radius: 8px;
       padding: 0.75em 1em;
       overflow-x: auto;
@@ -520,12 +606,12 @@
       border-left: 2px solid rgba(140, 144, 161, 0.4);
       padding-left: 0.75em;
       margin: 0.5em 0;
-      color: #c2c6d8;
+      color: rgb(var(--c-on-surface-variant));
     }
 
     .md-body hr {
       border: none;
-      border-top: 1px solid rgba(66, 70, 86, 0.4);
+      border-top: 1px solid rgb(var(--c-hairline) / 0.4);
       margin: 0.75em 0;
     }
 
@@ -537,7 +623,7 @@
 
     .md-body th,
     .md-body td {
-      border: 1px solid rgba(66, 70, 86, 0.4);
+      border: 1px solid rgb(var(--c-hairline) / 0.4);
       padding: 0.3em 0.6em;
       text-align: left;
     }
@@ -548,19 +634,19 @@
     }
 
     .roadmap-card:hover {
-      border-color: rgba(0, 218, 243, 0.35);
-      box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.4);
+      border-color: rgb(var(--c-primary) / 0.35);
+      box-shadow: 0 4px 20px -2px rgb(0 0 0 / calc(0.4 * var(--shadow-k)));
     }
 
     .roadmap-card.highlighted {
       animation: roadmap-glow 2s ease-in-out;
-      border-color: #00daf3 !important;
+      border-color: rgb(var(--c-primary)) !important;
     }
 
     .roadmap-card.editing {
-      border-color: rgba(0, 218, 243, 0.45) !important;
-      box-shadow: 0 8px 30px -4px rgba(0, 218, 243, 0.15), 0 4px 16px rgba(0, 0, 0, 0.6) !important;
-      background: rgba(29, 32, 38, 0.98) !important;
+      border-color: rgb(var(--c-primary) / 0.45) !important;
+      box-shadow: 0 8px 30px -4px rgb(var(--c-primary) / 0.15), 0 4px 16px rgb(0 0 0 / calc(0.6 * var(--shadow-k))) !important;
+      background: rgb(var(--c-surface-container) / 0.98) !important;
     }
 
     .roadmap-card.editing select {
@@ -574,10 +660,10 @@
 
     @keyframes roadmap-glow {
       0%, 100% {
-        box-shadow: 0 0 0 0 rgba(0, 218, 243, 0);
+        box-shadow: 0 0 0 0 rgb(var(--c-primary) / 0);
       }
       30%, 70% {
-        box-shadow: 0 0 25px 4px rgba(0, 218, 243, 0.45);
+        box-shadow: 0 0 25px 4px rgb(var(--c-primary) / 0.45);
       }
     }
 
@@ -599,7 +685,7 @@
       right: 0;
       bottom: 0;
       height: 2rem;
-      background: linear-gradient(to bottom, transparent, rgba(16, 19, 25, 0.95));
+      background: linear-gradient(to bottom, transparent, rgb(var(--c-background) / 0.95));
       pointer-events: none;
     }
 
@@ -607,21 +693,21 @@
     .si-mini-progress {
       height: 3px;
       border-radius: 2px;
-      background: rgba(66, 70, 86, 0.3);
+      background: rgb(var(--c-hairline) / 0.3);
       overflow: hidden;
     }
 
     .si-mini-progress-fill {
       height: 100%;
-      background: linear-gradient(90deg, #00daf3, #40e56c);
+      background: linear-gradient(90deg, rgb(var(--c-primary)), rgb(var(--c-secondary)));
       transition: width 0.4s ease;
     }
 
     /* ── Accessibility & Contrast Enhancements ─────────────────────────────
        Ensure all secondary, muted, and placeholder elements meet WCAG AA
-       contrast (>= 4.5:1) against dark backgrounds (#101319 / #191c22). */
+       contrast (>= 4.5:1) against the page backgrounds of either theme. */
     .text-\[\#424656\] {
-      color: #94a3b8 !important;
+      color: rgb(var(--c-outline-variant)) !important;
     }
 
     .bg-\[\#424656\] {
@@ -631,13 +717,13 @@
     /* Improved contrast for form input placeholders */
     input::placeholder,
     textarea::placeholder {
-      color: #94a3b8 !important;
+      color: rgb(var(--c-outline-variant)) !important;
       opacity: 0.75 !important;
     }
 
     /* ── Activity Rail HUD Styles ────────────────────────────────────────── */
     #activity-rail {
-      box-shadow: inset 0 1px 0 0 rgba(0, 218, 243, 0.14), 0 10px 24px -6px rgba(0, 0, 0, 0.6);
+      box-shadow: inset 0 1px 0 0 rgb(var(--c-primary) / 0.14), 0 10px 24px -6px rgb(0 0 0 / calc(0.6 * var(--shadow-k)));
     }
 
     /* Micro-scrollbars for activity rail horizontal scrolling */
@@ -648,19 +734,19 @@
 
     #activity-agents::-webkit-scrollbar-track,
     #activity-tools::-webkit-scrollbar-track {
-      background: rgba(22, 26, 35, 0.5);
+      background: rgb(var(--c-surface-container-low) / 0.5);
       border-radius: 9999px;
     }
 
     #activity-agents::-webkit-scrollbar-thumb,
     #activity-tools::-webkit-scrollbar-thumb {
-      background: rgba(148, 163, 184, 0.2);
+      background: rgb(var(--c-outline-variant) / 0.2);
       border-radius: 9999px;
     }
 
     #activity-agents:hover::-webkit-scrollbar-thumb,
     #activity-tools:hover::-webkit-scrollbar-thumb {
-      background: rgba(0, 218, 243, 0.5);
+      background: rgb(var(--c-primary) / 0.5);
     }
 
     /* Plan tracker: a visible thin scrollbar, since a long plan must be scrolled */
@@ -669,25 +755,25 @@
     }
 
     #plan-tracker-list::-webkit-scrollbar-thumb {
-      background: rgba(148, 163, 184, 0.25);
+      background: rgb(var(--c-outline-variant) / 0.25);
       border-radius: 9999px;
     }
 
     #plan-tracker-list:hover::-webkit-scrollbar-thumb {
-      background: rgba(0, 218, 243, 0.5);
+      background: rgb(var(--c-primary) / 0.5);
     }
 
     #plan-tracker-list {
       scrollbar-width: thin;
-      scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
+      scrollbar-color: rgb(var(--c-outline-variant) / 0.25) transparent;
     }
 
     .rail-chip-busy {
-      box-shadow: 0 0 16px -2px rgba(0, 218, 243, 0.35), inset 0 0 8px rgba(0, 218, 243, 0.08);
+      box-shadow: 0 0 16px -2px rgb(var(--c-primary) / 0.35), inset 0 0 8px rgb(var(--c-primary) / 0.08);
     }
 
     .rail-chip-selected {
-      box-shadow: 0 0 12px -2px rgba(0, 218, 243, 0.3);
+      box-shadow: 0 0 12px -2px rgb(var(--c-primary) / 0.3);
     }
 
     /* Radar ping dot for active computation */
