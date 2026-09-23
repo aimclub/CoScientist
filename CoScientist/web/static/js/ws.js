@@ -18,11 +18,7 @@
       socket.onopen = () => {
         const connEntry = i18n['nav.connected'];
         document.getElementById('conn-status').textContent = (connEntry && connEntry[currentLang]) || 'Connected';
-        document.getElementById('conn-status').className = 'text-[8px] text-secondary uppercase font-bold tracking-widest';
-        document.getElementById('live-dot').className = 'w-2 h-2 bg-secondary rounded-full animate-pulse';
-        const badgeEntry = i18n['chat.online'];
-        document.getElementById('active-badge').textContent = (badgeEntry && badgeEntry[currentLang]) || 'Online';
-        document.getElementById('active-badge').className = 'text-[10px] bg-surface-container-highest px-3 py-1 rounded text-primary border border-primary/20 uppercase font-bold tracking-widest';
+        document.getElementById('conn-dot').className = 'w-1.5 h-1.5 rounded-full bg-secondary shrink-0';
         document.getElementById('telemetry-live').innerHTML = '<span class="w-1 h-1 bg-secondary rounded-full"></span> ' + t('telemetry.live');
         document.getElementById('telemetry-live').className = 'text-[8px] font-bold text-secondary animate-pulse font-mono tracking-tighter uppercase flex items-center gap-1';
         addTelemetry('CONNECTED to backend');
@@ -34,11 +30,7 @@
         StatusIndicator.setConnected(false);
         const connEntry = i18n['nav.disconnected'];
         document.getElementById('conn-status').textContent = (connEntry && connEntry[currentLang]) || 'Disconnected';
-        document.getElementById('conn-status').className = 'text-[8px] text-error uppercase font-bold tracking-widest';
-        document.getElementById('live-dot').className = 'w-2 h-2 bg-outline-variant/60 rounded-full';
-        const badgeEntry = i18n['chat.offline'];
-        document.getElementById('active-badge').textContent = (badgeEntry && badgeEntry[currentLang]) || 'Offline';
-        document.getElementById('active-badge').className = 'text-[10px] bg-surface-container-highest px-3 py-1 rounded text-outline-variant border border-outline-variant/20 uppercase font-bold tracking-widest';
+        document.getElementById('conn-dot').className = 'w-1.5 h-1.5 rounded-full bg-error shrink-0';
         if (intentionalDisconnect || !activeUser || !activeSession
           || activeUser.id !== userId || activeSession.id !== sessionId) return;
         if (event.code === 4404) {

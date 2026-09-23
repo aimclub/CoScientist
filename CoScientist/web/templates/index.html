@@ -69,176 +69,187 @@
 
 <body class="bg-background text-on-surface overflow-hidden">
 
-  <!-- SideNavBar -->
+  <!-- SideNavBar: brand, the session being viewed, where to go, who is here. -->
   <aside id="side-nav"
-    class="w-64 h-full fixed left-0 top-0 border-r border-outline-variant/10 bg-surface-container-low flex flex-col h-screen py-6 font-headline tracking-tight z-50">
-    <div class="px-6 mb-8">
-      <h1 class="text-xl font-bold tracking-widest text-primary uppercase">CoScientist</h1>
-      <p class="text-[10px] text-outline-variant tracking-widest mt-1" id="version-label">MAS v1.0.0</p>
+    class="w-64 h-full fixed left-0 top-0 border-r border-outline-variant/10 bg-surface-container-lowest flex flex-col h-screen pt-4 pb-3 font-body z-50">
+    <div class="px-5 mb-4 flex items-center gap-2.5">
+      <span class="w-7 h-7 rounded-md bg-primary text-on-primary flex items-center justify-center text-[14px] font-semibold"
+        aria-hidden="true">C</span>
+      <h1 class="text-[16px] font-semibold text-on-surface">CoScientist</h1>
+      <span class="text-[10px] text-outline-variant tabular-nums" id="version-label">MAS v1.0.0</span>
     </div>
-    <div class="px-6 mb-4">
-      <h3 data-i18n="nav.agents" class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Agents
-      </h3>
+
+    <!-- The session: picked here, acted on through the menu beside it. -->
+    <div class="px-3 mb-3">
+      <label for="session-select" data-i18n="nav.sessionPicker" class="sr-only">Session</label>
+      <div class="flex items-center gap-1">
+        <select id="session-select" onchange="onSessionSelected(this.value)"
+          class="flex-1 min-w-0 truncate bg-surface-container-low text-on-surface border border-outline-variant/15 rounded-md text-[12px] py-1.5 pl-2.5 pr-8 focus:ring-0 focus:border-primary/50"></select>
+        <div class="relative shrink-0">
+          <button type="button" id="session-menu-btn" onclick="toggleSessionMenu()" aria-haspopup="menu"
+            aria-expanded="false" aria-controls="session-menu" data-i18n-aria="nav.sessionMenu"
+            data-i18n-title="nav.sessionMenu" aria-label="Session actions" title="Session actions"
+            class="w-8 h-8 rounded-md flex items-center justify-center text-outline-variant hover:text-on-surface hover:bg-surface-container transition-colors">
+            <span class="material-symbols-outlined text-[18px]" aria-hidden="true">more_horiz</span>
+          </button>
+          <div id="session-menu" role="menu"
+            class="hidden absolute left-0 top-full mt-1 w-60 z-[60] bg-surface-container border border-outline-variant/20 rounded-lg shadow-xl py-1 text-[12px]">
+            <button type="button" role="menuitem" onclick="runSessionMenu(createNewSession)" class="session-menu-item">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">add</span><span data-i18n="nav.sessionNew">New session</span></button>
+            <button type="button" role="menuitem" onclick="runSessionMenu(renameCurrentSession)" class="session-menu-item">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">edit</span><span data-i18n="nav.sessionRename">Rename…</span></button>
+            <div class="my-1 border-t border-outline-variant/15" role="separator"></div>
+            <button type="button" role="menuitem" onclick="runSessionMenu(saveCurrentSession)" class="session-menu-item">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">save</span><span data-i18n="nav.sessionSave">Save to disk</span></button>
+            <button type="button" role="menuitem" onclick="runSessionMenu(openSavedSessionsModal)" class="session-menu-item">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">restore</span><span data-i18n="nav.sessionRestore">Restore saved…</span></button>
+            <div class="my-1 border-t border-outline-variant/15" role="separator"></div>
+            <button type="button" role="menuitem" onclick="runSessionMenu(exportCurrentSession)" class="session-menu-item">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">download</span><span data-i18n="nav.sessionExport">Export (.zip)</span></button>
+            <button type="button" role="menuitem" onclick="runSessionMenu(triggerImportSession)" class="session-menu-item">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">upload</span><span data-i18n="nav.sessionImport">Import…</span></button>
+          </div>
+        </div>
+        <input type="file" id="import-session-input" accept=".cossession.zip,.zip" class="hidden"
+          onchange="handleImportFile(this)">
+      </div>
     </div>
-    <nav id="agent-nav" class="flex-1 space-y-1 px-3 overflow-y-auto no-scrollbar">
+
+    <nav id="agent-nav" class="flex-1 px-2 overflow-y-auto no-scrollbar">
       <!-- Populated by JS -->
     </nav>
-    <div class="px-4 mt-auto space-y-4">
-      <div class="space-y-2 pt-4 border-t border-outline-variant/10">
-        <div class="flex items-center justify-between">
-          <label data-i18n="nav.user"
-            class="text-[8px] text-outline-variant uppercase font-bold tracking-widest">User</label>
-          <button onclick="openIdentityModal()" title="Register user" class="text-primary hover:brightness-125"><span
-              class="material-symbols-outlined text-sm">person_add</span></button>
-        </div>
-        <select id="user-select" onchange="onUserSelected(this.value)"
-          class="w-full bg-surface-container-high border-outline-variant/20 rounded text-[10px] text-on-surface py-1.5"></select>
-        <div class="flex items-center justify-between">
-          <label data-i18n="nav.session"
-            class="text-[8px] text-outline-variant uppercase font-bold tracking-widest">Session</label>
-          <div class="flex gap-2">
-            <button onclick="renameCurrentSession()" title="Rename session"
-              class="text-outline-variant hover:text-primary"><span
-                class="material-symbols-outlined text-sm">edit</span></button>
-            <button onclick="saveCurrentSession()" title="Save session to disk"
-              class="text-outline-variant hover:text-primary"><span
-                class="material-symbols-outlined text-sm">save</span></button>
-            <button onclick="exportCurrentSession()" title="Export session (.zip)"
-              class="text-outline-variant hover:text-primary"><span
-                class="material-symbols-outlined text-sm">download</span></button>
-            <button onclick="triggerImportSession()" title="Import session"
-              class="text-outline-variant hover:text-primary"><span
-                class="material-symbols-outlined text-sm">upload</span></button>
-            <button onclick="openSavedSessionsModal()" title="Restore saved session"
-              class="text-outline-variant hover:text-primary"><span
-                class="material-symbols-outlined text-sm">restore</span></button>
-            <button onclick="createNewSession()" title="New session" class="text-primary hover:brightness-125"><span
-                class="material-symbols-outlined text-sm">add_circle</span></button>
-          </div>
-          <input type="file" id="import-session-input" accept=".cossession.zip,.zip" class="hidden"
-            onchange="handleImportFile(this)">
-        </div>
-        <select id="session-select" onchange="onSessionSelected(this.value)"
-          class="w-full bg-surface-container-high border-outline-variant/20 rounded text-[10px] text-on-surface py-1.5"></select>
-      </div>
-      <div class="flex items-center gap-3 pt-4 border-t border-outline-variant/10">
-        <div class="w-8 h-8 rounded bg-surface-container-high flex items-center justify-center">
-          <span class="material-symbols-outlined text-primary text-sm">science</span>
-        </div>
-        <div>
-          <p id="active-nickname" class="text-[10px] font-bold text-on-surface">No user selected
-          </p>
-          <p id="conn-status" class="text-[8px] text-error uppercase font-bold tracking-widest">Disconnected</p>
-        </div>
-      </div>
+
+    <div class="px-3 pt-3 mt-2 border-t border-outline-variant/10 flex items-center gap-1">
+      <button type="button" onclick="openIdentityModal()" data-i18n-title="nav.switchUser" title="Switch or add a user"
+        class="flex-1 min-w-0 flex items-center gap-2.5 px-2 py-1.5 rounded-md text-left hover:bg-surface-container transition-colors">
+        <span id="active-avatar"
+          class="w-8 h-8 rounded-full bg-surface-container-highest text-on-surface flex items-center justify-center text-[13px] font-semibold shrink-0"
+          aria-hidden="true">?</span>
+        <span class="min-w-0">
+          <span id="active-nickname" class="block text-[13px] font-medium text-on-surface truncate">No user selected</span>
+          <span class="flex items-center gap-1.5 text-[10px] text-outline-variant">
+            <span id="conn-dot" class="w-1.5 h-1.5 rounded-full bg-error shrink-0" aria-hidden="true"></span>
+            <span id="conn-status">Disconnected</span>
+          </span>
+        </span>
+      </button>
+      <button type="button" onclick="openSettings()" data-i18n-aria="nav.settings" data-i18n-title="nav.settings"
+        aria-label="Settings" title="Settings"
+        class="w-9 h-9 rounded-md flex items-center justify-center text-outline-variant hover:text-on-surface hover:bg-surface-container transition-colors shrink-0">
+        <span class="material-symbols-outlined text-[20px]" aria-hidden="true">settings</span>
+      </button>
     </div>
   </aside>
 
-  <!-- TopNavBar -->
+  <!-- TopNavBar: where you are, what the run is doing, the view toggles. -->
   <header id="top-nav"
-    class="flex items-center justify-between px-8 py-4 ml-64 w-[calc(100%-16rem)] top-0 sticky z-50 bg-background/70 backdrop-blur-xl border-b border-outline-variant/15 shadow-[0_24px_48px_-12px_rgba(0,218,243,0.08)]">
-    <div class="flex items-center gap-8">
-      <button type="button" id="side-nav-toggle" onclick="toggleSideNav()" title="Show/hide sidebar"
-        class="text-outline-variant hover:text-primary transition-colors flex items-center">
-        <span id="side-nav-toggle-icon" class="material-symbols-outlined">left_panel_open</span>
-      </button>
-      <div data-i18n="nav.orchestrator" class="font-black text-primary font-headline tracking-tighter">ORCHESTRATOR
-      </div>
-      <div
-        class="hidden md:flex items-center gap-6 font-headline text-[10px] uppercase tracking-widest font-bold">
-        <span id="status-badge" class="text-outline-variant">Status: Idle</span>
-        <span id="event-count" class="text-outline-variant">Events: 0</span>
-      </div>
+    class="flex items-center gap-4 px-5 h-14 ml-64 w-[calc(100%-16rem)] top-0 sticky z-50 bg-background border-b border-outline-variant/10">
+    <button type="button" id="side-nav-toggle" onclick="toggleSideNav()" data-i18n-aria="nav.toggleSidebar"
+      aria-label="Show or hide the sidebar" title="Show/hide sidebar"
+      class="w-8 h-8 -ml-1.5 rounded-md text-outline-variant hover:text-on-surface hover:bg-surface-container transition-colors flex items-center justify-center shrink-0">
+      <span id="side-nav-toggle-icon" class="material-symbols-outlined text-[20px]" aria-hidden="true">left_panel_open</span>
+    </button>
+    <div class="flex items-center gap-2 min-w-0 text-[15px]">
+      <span data-i18n="nav.orchestrator" class="text-on-surface-variant shrink-0">Orchestrator</span>
+      <span class="hidden flex items-center gap-2 min-w-0">
+        <span class="text-outline-variant/60" aria-hidden="true">/</span>
+        <span id="session-title" class="font-medium text-on-surface truncate max-w-[40rem]"></span>
+      </span>
     </div>
-    <div class="flex items-center gap-4 text-outline-variant">
-      <button type="button" id="side-rail-toggle" onclick="toggleSideRail()" title="Hide the plan column"
-        class="text-outline-variant hover:text-primary transition-colors flex items-center">
-        <span id="side-rail-toggle-icon" class="material-symbols-outlined">right_panel_close</span>
+    <span id="status-badge" class="status-pill bg-surface-container-high text-on-surface-variant" role="status"
+      aria-live="polite"><span class="status-pill-dot" aria-hidden="true"></span>No active run</span>
+    <span class="flex-1"></span>
+    <div class="hidden lg:flex items-center gap-4 text-[11px] text-outline-variant whitespace-nowrap tabular-nums">
+      <span id="topbar-step" class="hidden"></span>
+      <span id="topbar-elapsed" class="hidden"></span>
+      <span id="event-count"></span>
+    </div>
+    <div class="flex items-center gap-0.5 shrink-0">
+      <button type="button" id="activity-toggle" onclick="toggleActivityRail()" data-i18n-aria="rail.toggle"
+        data-i18n-title="rail.toggle" aria-label="Show/hide agent activity" title="Show/hide agent activity"
+        class="w-8 h-8 rounded-md text-outline-variant hover:text-on-surface hover:bg-surface-container transition-colors flex items-center justify-center">
+        <span class="material-symbols-outlined text-[20px]" aria-hidden="true">groups</span>
       </button>
-      <button onclick="clearChat()" title="Clear current view (history is preserved)">
-        <span
-          class="material-symbols-outlined cursor-pointer hover:text-primary transition-colors">delete_sweep</span>
+      <button type="button" onclick="clearChat()" data-i18n-aria="topbar.clear" data-i18n-title="topbar.clear"
+        aria-label="Clear the view" title="Clear current view (history is preserved)"
+        class="w-8 h-8 rounded-md text-outline-variant hover:text-on-surface hover:bg-surface-container transition-colors flex items-center justify-center">
+        <span class="material-symbols-outlined text-[20px]" aria-hidden="true">delete_sweep</span>
+      </button>
+      <button type="button" id="side-rail-toggle" onclick="toggleSideRail()" title="Hide the plan column"
+        class="w-8 h-8 rounded-md text-outline-variant hover:text-on-surface hover:bg-surface-container transition-colors flex items-center justify-center">
+        <span id="side-rail-toggle-icon" class="material-symbols-outlined text-[20px]" aria-hidden="true">right_panel_close</span>
       </button>
     </div>
   </header>
 
   <!-- Main Content -->
-  <main id="main-content" class="ml-64 p-8 flex gap-8 h-[calc(100vh-72px)] overflow-hidden">
+  <main id="main-content" class="ml-64 flex h-[calc(100vh-56px)] overflow-hidden">
 
     <!-- Central Chat Area -->
-    <section
-      class="flex-1 min-w-0 flex flex-col bg-surface-container-low rounded-xl relative border border-outline-variant/10 shadow-inner">
-      <div class="p-4 border-b border-outline-variant/10 flex justify-between items-center bg-surface-container-low/50">
-        <div class="flex items-center gap-3">
-          <span id="live-dot" class="w-2 h-2 bg-outline-variant/60 rounded-full"></span>
-          <h2 data-i18n="chat.missionControl"
-            class="font-headline text-xs font-bold tracking-wider text-on-surface-variant uppercase">Mission Control
-          </h2>
-        </div>
-        <div class="flex items-center gap-3">
-          <button id="activity-toggle" onclick="toggleActivityRail()" title="Show/hide agent activity"
-            class="text-outline-variant hover:text-primary transition-colors">
-            <span class="material-symbols-outlined text-base">timeline</span>
+    <section class="flex-1 min-w-0 flex flex-col relative">
+
+      <!-- Activity Rail: one summary line (how many agents, who is working,
+           what failed); the per-agent chips and tool pills fold under it. -->
+      <div id="activity-rail" class="hidden w-full min-w-0 border-b border-outline-variant/10 px-5 py-2">
+        <div class="flex items-center gap-2 min-w-0 text-[11px] text-on-surface-variant">
+          <button type="button" id="activity-summary-agents" onclick="toggleActivityDetails()" aria-expanded="false"
+            aria-controls="activity-details" class="rail-summary-chip hover:border-outline-variant/40">
+            <span class="material-symbols-outlined text-[16px] text-outline-variant" aria-hidden="true">groups</span>
+            <span id="activity-agents-count" class="tabular-nums">0</span>
+            <span id="activity-agents-label"></span>
+            <span id="activity-details-chevron" class="material-symbols-outlined text-[16px] text-outline-variant transition-transform" aria-hidden="true">expand_more</span>
           </button>
-          <div id="active-badge"
-            class="text-[10px] bg-surface-container-highest px-3 py-1 rounded text-outline-variant border border-outline-variant/20 uppercase font-bold tracking-widest">
-            Offline</div>
-        </div>
-      </div>
-
-      <!-- Activity Rail: Executive Fleet & Tool Execution HUD -->
-      <div id="activity-rail"
-        class="hidden w-full max-w-full min-w-0 border-b border-outline-variant/15 bg-gradient-to-b from-surface/95 via-surface-container-lowest/95 to-surface-container-lowest/95 backdrop-blur-xl px-4 py-2.5 space-y-2 shadow-[inset_0_1px_0_0_rgba(0,218,243,0.12),0_8px_24px_-4px_rgba(0,0,0,0.5)]">
-        
-        <!-- Row 1: Agent Fleet -->
-        <div class="flex items-center gap-2.5 w-full min-w-0">
-          <div class="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md bg-surface-container-low border border-outline-variant/15 shadow-sm">
-            <span class="material-symbols-outlined text-primary text-[14px]">hub</span>
-            <span data-i18n="rail.agents" class="text-[9px] font-bold font-mono tracking-widest uppercase text-on-surface-variant">Agents</span>
-            <span id="activity-agents-count" class="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-primary/15 text-primary border border-primary/25">0</span>
-          </div>
-          
-          <div class="relative flex-1 min-w-0 flex items-center group/rail">
-            <button type="button" id="rail-agents-left" onclick="scrollActivityRail('activity-agents', -240)"
-              class="hidden absolute left-0 z-10 w-6 h-6 rounded-full bg-surface-container-high/95 border border-outline-variant/25 text-on-surface shadow-lg hover:text-primary hover:border-primary/50 transition-all items-center justify-center -ml-1 cursor-pointer">
-              <span class="material-symbols-outlined text-[14px]">chevron_left</span>
-            </button>
-            <div id="activity-agents" class="flex items-center gap-2 overflow-x-auto no-scrollbar flex-1 min-w-0 py-0.5 scroll-smooth"></div>
-            <button type="button" id="rail-agents-right" onclick="scrollActivityRail('activity-agents', 240)"
-              class="hidden absolute right-0 z-10 w-6 h-6 rounded-full bg-surface-container-high/95 border border-outline-variant/25 text-on-surface shadow-lg hover:text-primary hover:border-primary/50 transition-all items-center justify-center -mr-1 cursor-pointer">
-              <span class="material-symbols-outlined text-[14px]">chevron_right</span>
-            </button>
-          </div>
+          <span id="activity-summary-current" class="rail-summary-chip hidden min-w-0"></span>
+          <button type="button" id="activity-summary-errors" onclick="openToolsViewer()"
+            class="rail-summary-chip rail-summary-chip-error hidden min-w-0"></button>
+          <span class="flex-1"></span>
+          <button type="button" onclick="openToolsViewer()" data-i18n="rail.allCalls"
+            class="text-primary hover:underline shrink-0 whitespace-nowrap">All tool calls</button>
         </div>
 
-        <!-- Row 2: Tool Calls -->
-        <div class="flex items-center gap-2.5 w-full min-w-0 pt-1.5 border-t border-outline-variant/10">
-          <div class="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md bg-surface-container-low border border-outline-variant/15 shadow-sm">
-            <span class="material-symbols-outlined text-outline-variant text-[14px]">handyman</span>
-            <span data-i18n="rail.tools" class="text-[9px] font-bold font-mono tracking-widest uppercase text-on-surface-variant">Tools</span>
-            <span id="activity-selected-agent-label" class="text-[10px] font-mono text-primary font-medium truncate max-w-[140px]"></span>
+        <div id="activity-details" class="hidden pt-2 space-y-1.5">
+          <!-- Row 1: Agent Fleet -->
+          <div class="flex items-center gap-2.5 w-full min-w-0">
+            <span data-i18n="rail.agents" class="w-24 shrink-0 text-[10px] text-outline-variant">Agents</span>
+            <div class="relative flex-1 min-w-0 flex items-center group/rail">
+              <button type="button" id="rail-agents-left" onclick="scrollActivityRail('activity-agents', -240)" aria-label="Scroll left"
+                class="hidden absolute left-0 z-10 w-6 h-6 rounded-full bg-surface-container-high border border-outline-variant/25 text-on-surface hover:text-primary transition-colors items-center justify-center -ml-1 cursor-pointer">
+                <span class="material-symbols-outlined text-[14px]" aria-hidden="true">chevron_left</span>
+              </button>
+              <div id="activity-agents" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-1 min-w-0 py-0.5 scroll-smooth"></div>
+              <button type="button" id="rail-agents-right" onclick="scrollActivityRail('activity-agents', 240)" aria-label="Scroll right"
+                class="hidden absolute right-0 z-10 w-6 h-6 rounded-full bg-surface-container-high border border-outline-variant/25 text-on-surface hover:text-primary transition-colors items-center justify-center -mr-1 cursor-pointer">
+                <span class="material-symbols-outlined text-[14px]" aria-hidden="true">chevron_right</span>
+              </button>
+            </div>
           </div>
 
-          <div class="relative flex-1 min-w-0 flex items-center group/rail">
-            <button type="button" id="rail-tools-left" onclick="scrollActivityRail('activity-tools', -240)"
-              class="hidden absolute left-0 z-10 w-6 h-6 rounded-full bg-surface-container-high/95 border border-outline-variant/25 text-on-surface shadow-lg hover:text-primary hover:border-primary/50 transition-all items-center justify-center -ml-1 cursor-pointer">
-              <span class="material-symbols-outlined text-[14px]">chevron_left</span>
-            </button>
-            <div id="activity-tools" class="flex items-center gap-2 overflow-x-auto no-scrollbar flex-1 min-w-0 py-0.5 scroll-smooth"></div>
-            <button type="button" id="rail-tools-right" onclick="scrollActivityRail('activity-tools', 240)"
-              class="hidden absolute right-0 z-10 w-6 h-6 rounded-full bg-surface-container-high/95 border border-outline-variant/25 text-on-surface shadow-lg hover:text-primary hover:border-primary/50 transition-all items-center justify-center -mr-1 cursor-pointer">
-              <span class="material-symbols-outlined text-[14px]">chevron_right</span>
-            </button>
+          <!-- Row 2: Tool Calls of the selected agent -->
+          <div class="flex items-center gap-2.5 w-full min-w-0">
+            <span class="w-24 shrink-0 text-[10px] text-outline-variant truncate">
+              <span data-i18n="rail.tools">Tools</span>
+              <span id="activity-selected-agent-label" class="sr-only"></span>
+            </span>
+            <div class="relative flex-1 min-w-0 flex items-center group/rail">
+              <button type="button" id="rail-tools-left" onclick="scrollActivityRail('activity-tools', -240)" aria-label="Scroll left"
+                class="hidden absolute left-0 z-10 w-6 h-6 rounded-full bg-surface-container-high border border-outline-variant/25 text-on-surface hover:text-primary transition-colors items-center justify-center -ml-1 cursor-pointer">
+                <span class="material-symbols-outlined text-[14px]" aria-hidden="true">chevron_left</span>
+              </button>
+              <div id="activity-tools" class="flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-1 min-w-0 py-0.5 scroll-smooth"></div>
+              <button type="button" id="rail-tools-right" onclick="scrollActivityRail('activity-tools', 240)" aria-label="Scroll right"
+                class="hidden absolute right-0 z-10 w-6 h-6 rounded-full bg-surface-container-high border border-outline-variant/25 text-on-surface hover:text-primary transition-colors items-center justify-center -mr-1 cursor-pointer">
+                <span class="material-symbols-outlined text-[14px]" aria-hidden="true">chevron_right</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
 
       <!-- Chat Feed -->
-      <div id="chat-feed"
-        class="flex-1 overflow-y-auto p-6 space-y-6 no-scrollbar bg-gradient-to-b from-transparent to-surface-container-lowest/20">
-        <div class="flex flex-col items-center justify-center h-full">
-          <span class="material-symbols-outlined text-4xl text-primary/40 mb-3">hub</span>
-          <p data-i18n="chat.sendQuery" class="text-sm text-on-surface-variant font-medium">Send a query to begin
+      <div id="chat-feed" class="flex-1 overflow-y-auto px-6 py-6 space-y-5 no-scrollbar">
+        <div data-feed-empty class="flex flex-col items-center justify-center h-full">
+          <span class="material-symbols-outlined text-4xl text-outline-variant/50 mb-3" aria-hidden="true">forum</span>
+          <p data-i18n="chat.sendQuery" class="text-sm text-on-surface-variant">Send a query to begin
             orchestration</p>
         </div>
       </div>
@@ -249,7 +260,7 @@
       <div id="status-indicator" class="hidden px-6 pt-1 pb-0" role="status" aria-live="polite"></div>
 
       <!-- Chat Input -->
-      <div class="p-6 pt-4 bg-surface-container-lowest/50 backdrop-blur-md border-t border-outline-variant/5">
+      <div class="px-6 pt-3 pb-5">
         <!-- Context attached to this session (dataset archive, …) -->
         <div id="attachment-chips" class="hidden flex flex-wrap items-center gap-2 mb-2"></div>
 
@@ -307,35 +318,44 @@
         </div>
 
         <form id="chat-form"
-          class="flex items-end gap-4 bg-surface-container-high/40 p-2 rounded-lg border border-outline-variant/10 focus-within:border-primary/40 transition-colors">
-          <!-- "+" menu: extra context for the agents, not a chat message -->
-          <div class="relative shrink-0">
-            <button type="button" id="attach-btn" onclick="toggleAttachMenu()" title="Add context"
-              class="p-2 bg-surface-container-highest border border-outline-variant/20 text-on-surface-variant rounded-md hover:text-primary hover:border-primary/40 transition-all flex items-center">
-              <span class="material-symbols-outlined text-sm">add</span>
-            </button>
-            <div id="attach-menu"
-              class="hidden absolute bottom-full left-0 mb-2 w-64 z-30 bg-surface-container border border-outline-variant/20 rounded-lg shadow-2xl overflow-hidden py-1">
-              <button type="button" onclick="openDatasetModal()"
-                class="w-full flex items-center gap-2 px-3 py-2.5 text-left text-[11px] font-medium text-on-surface hover:bg-surface-container-high transition-colors">
-                <span class="material-symbols-outlined text-base text-primary">folder_zip</span>
-                Dataset link (.zip)
+          class="flex flex-col gap-1.5 bg-surface-container-low px-3 pt-2.5 pb-2 rounded-xl border border-outline-variant/20 focus-within:border-primary/50 transition-colors">
+          <label for="chat-input" data-i18n="chat.inputLabel" class="sr-only">Message to the orchestrator</label>
+          <textarea id="chat-input" name="message" rows="2" wrap="soft" spellcheck="false" autocomplete="off"
+            class="bg-transparent border-none focus:ring-0 focus-visible:outline-none text-sm w-full px-1 py-1 text-on-surface no-scrollbar"
+            placeholder="Message the orchestrator…" data-i18n-placeholder="chat.placeholder"></textarea>
+          <div class="flex items-center gap-2">
+            <!-- "+" menu: extra context for the agents, not a chat message -->
+            <div class="relative shrink-0">
+              <button type="button" id="attach-btn" onclick="toggleAttachMenu()" data-i18n-aria="chat.attach"
+                data-i18n-title="chat.attach" aria-label="Add context" title="Add context"
+                class="w-8 h-8 rounded-md text-outline-variant hover:text-on-surface hover:bg-surface-container-high transition-colors flex items-center justify-center">
+                <span class="material-symbols-outlined text-[20px]" aria-hidden="true">attach_file</span>
               </button>
+              <div id="attach-menu"
+                class="hidden absolute bottom-full left-0 mb-2 w-64 z-30 bg-surface-container border border-outline-variant/20 rounded-lg shadow-xl overflow-hidden py-1">
+                <button type="button" onclick="openDatasetModal()"
+                  class="w-full flex items-center gap-2 px-3 py-2.5 text-left text-[12px] text-on-surface hover:bg-surface-container-high transition-colors">
+                  <span class="material-symbols-outlined text-base text-outline-variant" aria-hidden="true">folder_zip</span>
+                  Dataset link (.zip)
+                </button>
+              </div>
             </div>
+            <span class="hidden md:flex items-center gap-1.5 text-[10px] text-outline-variant select-none">
+              <kbd>Enter</kbd><span data-i18n="chat.hintSend">send</span>
+              <span class="w-1"></span>
+              <kbd>Shift</kbd><kbd>Enter</kbd><span data-i18n="chat.hintNewline">new line</span>
+            </span>
+            <span class="flex-1"></span>
+            <button type="button" id="stop-btn" onclick="stopChat()" data-i18n-title="chat.stopTitle" title="Stop agents"
+              class="hidden h-8 px-3 rounded-md border border-outline-variant/25 text-on-surface-variant hover:text-error hover:border-error/40 transition-colors flex items-center gap-1.5 text-[11px]">
+              <span class="w-2.5 h-2.5 rounded-sm bg-current" aria-hidden="true"></span>
+              <span data-i18n="chat.stopShort">Stop</span>
+            </button>
+            <button type="submit" id="send-btn" data-i18n-aria="chat.send" aria-label="Send"
+              class="w-8 h-8 rounded-md bg-primary text-on-primary hover:brightness-110 disabled:bg-surface-container-high disabled:text-outline-variant disabled:cursor-not-allowed transition-colors flex items-center justify-center">
+              <span class="material-symbols-outlined text-[20px]" aria-hidden="true">arrow_upward</span>
+            </button>
           </div>
-          <textarea id="chat-input" rows="3" wrap="soft" spellcheck="false" autocomplete="off"
-            class="bg-transparent border-none focus:ring-0 text-sm flex-1 py-1.5 text-on-surface placeholder:text-outline-variant/50 font-medium no-scrollbar"
-            placeholder="Send system command…  (Enter — send, Shift+Enter — new line)"
-            data-i18n-placeholder="chat.placeholder"></textarea>
-          <button type="button" id="stop-btn" onclick="stopChat()"
-            class="hidden p-2 bg-error/20 text-error border border-error/30 rounded-md hover:bg-error/30 transition-all shadow-md"
-            title="Stop agents">
-            <span class="material-symbols-outlined text-sm">stop_circle</span>
-          </button>
-          <button type="submit" id="send-btn"
-            class="p-2 bg-primary text-on-primary rounded-md hover:brightness-110 transition-all shadow-md">
-            <span class="material-symbols-outlined text-sm">send</span>
-          </button>
         </form>
       </div>
     </section>
@@ -346,7 +366,7 @@
     <!-- Drag to resize the column, double-click to put it back. -->
     <div id="rail-grip" data-i18n-title="rail.resize" title="Drag to resize · double-click to reset"></div>
 
-    <aside id="side-rail" class="shrink-0 flex flex-col gap-3 min-h-0 overflow-y-auto no-scrollbar pb-8">
+    <aside id="side-rail" class="shrink-0 flex flex-col gap-5 min-h-0 overflow-y-auto no-scrollbar border-l border-outline-variant/10 px-4 py-4">
       <!-- Document panel. There is one, deliberately: a message's "Open" button
            puts its document here, and the next message's button replaces it.
            Filled by doc_viewer.js; hidden until something is opened. -->
@@ -379,24 +399,23 @@
            by plan_tracker.js. Starts hidden: it only appears once a plan exists
            (see render() in plan_tracker.js), and sizes to its own content
            rather than stretching to fill the column. -->
-      <div id="plan-tracker"
-        class="hidden shrink-0 flex flex-col bg-surface-container-lowest px-3.5 py-3 rounded-xl border border-outline-variant/10">
+      <section id="plan-tracker" aria-labelledby="plan-tracker-title" class="hidden shrink-0 flex flex-col">
         <div class="flex items-center justify-between gap-2 mb-2">
-          <h4 data-i18n="plan.header" class="text-xs font-bold text-on-surface-variant uppercase tracking-wider">Plan
-          </h4>
-          <div class="flex items-center gap-2">
-            <span id="plan-tracker-count" class="text-xs font-mono font-bold text-primary">0/0</span>
-            <button type="button" onclick="openRoadmapEditor()" data-i18n-title="plan.open" title="Open roadmap"
-              class="text-outline-variant hover:text-primary transition-colors flex items-center">
-              <span class="material-symbols-outlined text-base">open_in_full</span>
+          <h2 id="plan-tracker-title" data-i18n="plan.header" class="text-[13px] font-semibold text-on-surface">Plan</h2>
+          <div class="flex items-center gap-1">
+            <span id="plan-tracker-count" class="text-[11px] text-outline-variant tabular-nums">0/0</span>
+            <button type="button" onclick="openRoadmapEditor()" data-i18n-title="plan.open" data-i18n-aria="plan.open"
+              title="Open roadmap" aria-label="Open roadmap"
+              class="w-7 h-7 rounded-md text-outline-variant hover:text-on-surface hover:bg-surface-container transition-colors flex items-center justify-center">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">open_in_full</span>
             </button>
           </div>
         </div>
         <div class="h-1 w-full rounded-full bg-surface-container-high overflow-hidden mb-2 shrink-0">
-          <div id="plan-tracker-bar" class="h-full bg-secondary transition-all duration-500" style="width:0%"></div>
+          <div id="plan-tracker-bar" class="h-full bg-primary transition-[width] duration-500" style="width:0%"></div>
         </div>
         <ol id="plan-tracker-list" class="relative max-h-[45vh] overflow-y-auto space-y-px -mr-2 pr-1"></ol>
-      </div>
+      </section>
 
       <!-- Telemetry — a few recent lines only; kept compact, hidden by default -->
       <div class="hidden shrink-0 bg-surface-container-lowest px-4 py-3 rounded-xl border border-outline-variant/10 overflow-hidden relative">
@@ -420,27 +439,24 @@
            click away. <details> carries the disclosure semantics itself, so
            the state is keyboard- and screen-reader-correct for free; the JS
            only remembers the choice across reloads. -->
-      <details id="usage-panel"
-        class="group shrink-0 mt-auto bg-surface-container-lowest rounded-xl border border-outline-variant/10 overflow-hidden">
+      <details id="usage-panel" class="group shrink-0 mt-auto pt-4 border-t border-outline-variant/10">
         <summary
-          class="flex items-center gap-2 px-4 py-2.5 cursor-pointer list-none select-none hover:bg-surface-container-low/60 transition-colors">
-          <span
-            class="material-symbols-outlined text-base text-outline-variant transition-transform group-open:rotate-90">chevron_right</span>
-          <h4 data-i18n="usage.header" class="text-xs font-bold text-on-surface-variant uppercase tracking-wider">
-            Usage &amp; Cost</h4>
+          class="flex items-center gap-2 -mx-2 px-2 py-1.5 rounded-md cursor-pointer list-none select-none hover:bg-surface-container transition-colors">
+          <span class="material-symbols-outlined text-[18px] text-outline-variant transition-transform group-open:rotate-90"
+            aria-hidden="true">chevron_right</span>
+          <h2 data-i18n="usage.header" class="text-[13px] font-semibold text-on-surface">Usage &amp; Cost</h2>
           <span class="flex-1"></span>
-          <div id="metrics-duration-wrap" class="flex items-center gap-1 text-xs font-mono text-outline-variant shrink-0"
+          <span id="metrics-duration-wrap" class="flex items-center gap-1.5 text-[11px] text-outline-variant shrink-0"
             data-i18n-title="usage.duration" title="Run duration">
-            <span id="metrics-duration-dot" class="hidden w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span class="material-symbols-outlined text-[13px] text-outline-variant">schedule</span>
-            <span id="metrics-duration" class="font-bold">00:00</span>
-          </div>
-          <span id="metrics-total" class="text-sm font-mono font-bold text-primary shrink-0">$0.0000</span>
+            <span id="metrics-duration-dot" class="hidden w-1.5 h-1.5 rounded-full bg-secondary"></span>
+            <span id="metrics-duration">00:00</span>
+          </span>
+          <span id="metrics-total" class="text-[14px] font-semibold text-on-surface shrink-0">$0.0000</span>
         </summary>
-        <div class="px-4 pb-3 pt-1 border-t border-outline-variant/10">
-          <div id="metrics-summary" class="text-xs font-mono text-outline-variant mb-2">no model calls yet</div>
-          <div id="metrics-agents" class="space-y-1 font-mono text-xs max-h-64 overflow-y-auto no-scrollbar"></div>
-          <div id="metrics-note" class="hidden text-[11px] font-mono text-error/70 mt-2 leading-relaxed"></div>
+        <div class="pt-2">
+          <div id="metrics-summary" class="text-[11px] text-outline-variant mb-3 tabular-nums">no model calls yet</div>
+          <div id="metrics-agents" class="space-y-2.5 text-[11px]"></div>
+          <div id="metrics-note" class="hidden text-[11px] text-error mt-3 leading-relaxed"></div>
         </div>
       </details>
     </aside>

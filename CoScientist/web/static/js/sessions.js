@@ -5,16 +5,84 @@
       const options = knownUsers.map(user =>
         `<option value="${escHtml(user.id)}" ${activeUser && activeUser.id === user.id ? 'selected' : ''}>${escHtml(user.nickname)}</option>`
       ).join('');
-      document.getElementById('user-select').innerHTML = options || `<option value="">${t('identity.noUsers')}</option>`;
       document.getElementById('identity-user-select').innerHTML = options;
       document.getElementById('existing-user-block').classList.toggle('hidden', knownUsers.length === 0);
     }
 
     function populateSessionSelector() {
+      renderSessionTitle();
       document.getElementById('session-select').innerHTML = knownSessions.map(session =>
         `<option value="${escHtml(session.id)}" ${activeSession && activeSession.id === session.id ? 'selected' : ''}>${escHtml(session.title)}</option>`
       ).join('') || `<option value="">${t('identity.noSessions')}</option>`;
     }
+
+    // The session's name in the top bar, after "Orchestrator /": which run
+    // this page is showing, readable without opening the picker.
+    function renderSessionTitle() {
+      const el = document.getElementById('session-title');
+      if (!el) return;
+      const title = activeSession && activeSession.title ? activeSession.title : '';
+      el.textContent = title;
+      el.title = title;
+      el.parentElement.classList.toggle('hidden', !title);
+    }
+
+    // The session menu beside the picker: new, rename, save, restore,
+    // export, import. A menu, not six unlabelled icons in a row.
+    function setSessionMenuOpen(open) {
+      const menu = document.getElementById('session-menu');
+      const button = document.getElementById('session-menu-btn');
+      if (!menu || !button) return;
+      menu.classList.toggle('hidden', !open);
+      button.setAttribute('aria-expanded', String(open));
+      if (open) {
+        const first = menu.querySelector('[role="menuitem"]');
+        if (first) first.focus();
+      }
+    }
+
+    function toggleSessionMenu() {
+      const menu = document.getElementById('session-menu');
+      setSessionMenuOpen(!!menu && menu.classList.contains('hidden'));
+    }
+
+    function runSessionMenu(action) {
+      setSessionMenuOpen(false);
+      action();
+    }
+
+    document.addEventListener('click', event => {
+      if (!event.target.closest('#session-menu, #session-menu-btn')) setSessionMenuOpen(false);
+    });
+
+    document.addEventListener('keydown', event => {
+      const menu = document.getElementById('session-menu');
+      if (!menu || menu.classList.contains('hidden')) return;
+      const items = [...menu.querySelectorAll('[role="menuitem"]')];
+      const index = items.indexOf(document.activeElement);
+      if (event.key === 'Escape') {
+        setSessionMenuOpen(false);
+        document.getElementById('session-menu-btn').focus();
+      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        const step = event.key === 'ArrowDown' ? 1 : -1;
+        items[(index + step + items.length) % items.length].focus();
+      }
+    });
+
+    // The avatar is the nickname's first letter, kept in step with the name
+    // wherever the name is written (sign-in, switch, language change).
+    (function watchNickname() {
+      const name = document.getElementById('active-nickname');
+      const avatar = document.getElementById('active-avatar');
+      if (!name || !avatar) return;
+      const paint = () => {
+        const known = typeof activeUser !== 'undefined' && activeUser && activeUser.nickname;
+        avatar.textContent = known ? activeUser.nickname.trim().charAt(0).toUpperCase() || '?' : '?';
+      };
+      new MutationObserver(paint).observe(name, { childList: true, characterData: true, subtree: true });
+      paint();
+    })();
 
     function openIdentityModal() {
       populateUserSelectors();
@@ -254,6 +322,31 @@
       }
     }
 
+    // The pill in the top bar. The run flag says whether anything is running;
+    // the status line's phase (body[data-run-phase], set by status_indicator)
+    // says whether it is running or stopped on a question for the user, which
+    // is the one state worth a colour of its own.
+    const STATUS_BADGE_TONES = {
+      run: 'bg-primary/10 text-primary',
+      wait: 'bg-tertiary/10 text-tertiary',
+      fail: 'bg-error/10 text-error',
+      idle: 'bg-surface-container-high text-on-surface-variant',
+    };
+
+    function renderStatusBadge() {
+      const el = document.getElementById('status-badge');
+      if (!el) return;
+      const phase = document.body.dataset.runPhase || 'idle';
+      let tone = runActive ? 'run' : 'idle';
+      let key = runActive ? 'topbar.processing' : 'topbar.idle';
+      if (phase === 'waiting' || phase === 'waiting_frame') { tone = 'wait'; key = 'topbar.waiting'; }
+      else if (phase === 'error') { tone = 'fail'; key = 'topbar.failed'; }
+      else if (phase === 'offline') { tone = 'idle'; key = 'topbar.offline'; }
+      el.className = 'status-pill ' + STATUS_BADGE_TONES[tone];
+      el.innerHTML = `<span class="status-pill-dot" aria-hidden="true"></span>${escHtml(t(key))}`;
+    }
+    window.renderStatusBadge = renderStatusBadge;
+
     function applyRunStatus(status, version = null) {
       if (version !== null && version !== undefined) {
         const parsedVersion = Number(version);
@@ -262,8 +355,7 @@
       }
       const processing = status === 'processing';
       runActive = processing;
-      document.getElementById('status-badge').textContent =
-        t(processing ? 'topbar.processing' : 'topbar.idle');
+      renderStatusBadge();
       document.getElementById('send-btn').disabled = processing;
       // The language also drives the report, and the server rejects a mid-run
       // change. Re-render the settings panel so its language radio locks.

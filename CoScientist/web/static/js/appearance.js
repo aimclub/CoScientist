@@ -10,8 +10,9 @@ const ACCENT_KEY = 'cos-accent';
 const FONT_KEY = 'cos-font';
 const LIGHT_DIM_KEY = 'cos-light-dim';
 
-// Presets shown as swatches. `null` accent = the theme's own cyan.
-const ACCENT_PRESETS = ['#3B82F6', '#8B5CF6', '#10B981', '#F59E0B', '#F43F5E'];
+// Presets shown as swatches. `null` accent = the theme's own blue; the first
+// preset is the brand cyan the interface used before.
+const ACCENT_PRESETS = ['#00DAF3', '#8B5CF6', '#10B981', '#F59E0B', '#F43F5E'];
 
 // UI fonts. Source Sans 3 is vendored (works offline); the others are fetched
 // from Google Fonts only once chosen. All of them cover Cyrillic.
@@ -50,9 +51,9 @@ const LIGHT_RAMP = {
   'on-surface-variant': [[64, 80, 102], [42, 55, 74]],
   'outline': [[64, 78, 98], [40, 52, 70]],
   'outline-variant': [[82, 98, 120], [52, 65, 84]],
-  'primary-text': [[0, 112, 124], [0, 82, 92]],
-  'shimmer': [[0, 112, 124], [0, 82, 92]],
-  'primary-container': [[204, 240, 243], [168, 214, 219]],
+  'primary-text': [[30, 88, 196], [22, 66, 150]],
+  'shimmer': [[30, 88, 196], [22, 66, 150]],
+  'primary-container': [[214, 228, 252], [180, 198, 232]],
   'secondary': [[18, 115, 60], [10, 84, 44]],
   'tertiary': [[133, 92, 0], [96, 66, 0]],
   'error': [[180, 35, 35], [140, 22, 22]],

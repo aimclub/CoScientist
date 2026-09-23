@@ -19,10 +19,10 @@
   'use strict';
 
   const STATUS_VIEW = {
-    done: { icon: 'check_circle', iconClass: 'text-secondary', textClass: 'text-on-surface-variant/70', label: 'plan.status.done' },
-    in_progress: { icon: 'autorenew', iconClass: 'text-primary animate-spin', textClass: 'text-on-surface font-semibold', label: 'plan.status.in_progress' },
-    error: { icon: 'error', iconClass: 'text-error', textClass: 'text-error/90', label: 'plan.status.error' },
-    todo: { icon: 'radio_button_unchecked', iconClass: 'text-outline-variant/70', textClass: 'text-on-surface-variant', label: 'plan.status.todo' },
+    done: { icon: 'check_circle', iconClass: 'text-secondary', textClass: 'text-on-surface-variant', label: 'plan.status.done' },
+    in_progress: { icon: 'radio_button_checked', iconClass: 'text-primary', textClass: 'text-on-surface font-medium', label: 'plan.status.in_progress' },
+    error: { icon: 'error', iconClass: 'text-error', textClass: 'text-error', label: 'plan.status.error' },
+    todo: { icon: 'radio_button_unchecked', iconClass: 'text-outline-variant/60', textClass: 'text-outline-variant', label: 'plan.status.todo' },
   };
 
   // The task last scrolled to: the list follows the work only when it moves
@@ -40,6 +40,11 @@
   // opened to show you something else is worse than one that never opens.
   const openTaskIds = new Set();
   const closedTaskIds = new Set();
+  // Finished steps above the running one fold into a single line once there
+  // are more than a few: on step 9 of 11 the eight ticks say less than "8
+  // done" does, and they push the step that matters out of view.
+  const DONE_FOLD_MIN = 4;
+  let showAllDone = false;
 
   // Agents that are the machinery around a step rather than work inside it.
   // The orchestrator delegates every step, so listing it under all of them
@@ -230,12 +235,29 @@
 
     const done = tasks.filter(task => normalize(task.status) === 'done').length;
     const percent = Math.round((done / tasks.length) * 100);
-    document.getElementById('plan-tracker-count').textContent = `${done}/${tasks.length}`;
+    document.getElementById('plan-tracker-count').textContent = t('plan.progress', { done: done, total: tasks.length });
     document.getElementById('plan-tracker-bar').style.width = percent + '%';
 
     const active = tasks.find(task => normalize(task.status) === 'in_progress');
+    renderTopbarStep(tasks, active);
 
-    list.innerHTML = tasks.map((task, idx) => {
+    // The leading run of finished steps, minus the last one (kept visible so
+    // the running step has its predecessor above it).
+    let leadingDone = 0;
+    while (leadingDone < tasks.length && normalize(tasks[leadingDone].status) === 'done') leadingDone++;
+    const foldCount = !showAllDone && leadingDone >= DONE_FOLD_MIN ? leadingDone - 1 : 0;
+    const foldRow = foldCount ? `
+        <li>
+          <button type="button" onclick="togglePlanDone()" aria-expanded="false"
+            class="w-full flex items-center gap-1.5 pl-1 pr-1 py-1.5 rounded-md text-left text-[11px] text-outline-variant hover:text-on-surface hover:bg-surface-container transition-colors">
+            <span class="w-[15px] shrink-0"></span>
+            <span class="material-symbols-outlined text-[15px] shrink-0 text-secondary" aria-hidden="true">done_all</span>
+            <span>${escHtml(t('plan.doneFolded', { n: foldCount }))}</span>
+          </button>
+        </li>` : '';
+
+    list.innerHTML = foldRow + tasks.map((task, idx) => {
+      if (idx < foldCount) return '';
       const state = normalize(task.status);
       const view = STATUS_VIEW[state] || STATUS_VIEW.todo;
       const title = task.title || t('plan.untitled', 'Untitled task');
@@ -246,7 +268,7 @@
       const open = steps.length > 0 && !closedTaskIds.has(taskId)
         && (openTaskIds.has(taskId) || (active && active.id === taskId));
       const tooltip = `${taskId || idx + 1} · ${t(view.label)}\n${title}`;
-      const rowClass = state === 'in_progress' ? 'bg-primary/5 border-primary/60' : 'border-transparent';
+      const rowClass = state === 'in_progress' ? 'bg-surface-container-high' : '';
       const stepsDone = steps.filter(step => step.status === 'done').length;
 
       const disclosure = steps.length
@@ -257,16 +279,16 @@
         : '';
 
       return `
-        <li data-task-id="${escHtml(taskId)}" class="border-l-2 rounded-r ${rowClass}">
+        <li data-task-id="${escHtml(taskId)}" class="rounded-md ${rowClass}"${state === 'in_progress' ? ' aria-current="step"' : ''}>
           <div ${steps.length ? `role="button" tabindex="0" aria-expanded="${open}" onclick="togglePlanStep('${escJs(taskId)}')"
                  onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();togglePlanStep('${escJs(taskId)}')}"
-                 class="cursor-pointer hover:bg-surface-container-high/40 transition-colors"` : 'class=""'}
+                 class="cursor-pointer rounded-md hover:bg-surface-container transition-colors"` : 'class=""'}
             title="${escHtml(tooltip)}">
             <div class="flex items-start gap-1.5 pl-1 pr-1 py-1.5">
               ${disclosure}
               <span class="material-symbols-outlined text-[15px] shrink-0 mt-px ${view.iconClass}">${view.icon}</span>
-              <span class="text-[11px] font-mono text-outline-variant/80 tabular-nums shrink-0 mt-px">${idx + 1}</span>
-              <span class="text-[16px] leading-snug break-words min-w-0 flex-1 ${view.textClass}">${escHtml(title)}</span>
+              <span class="text-[10px] text-outline-variant tabular-nums shrink-0 mt-0.5 w-4 text-right">${idx + 1}</span>
+              <span class="text-[12px] leading-snug break-words min-w-0 flex-1 ${view.textClass}">${escHtml(title)}</span>
               ${counter}
             </div>
           </div>
@@ -282,6 +304,26 @@
     }
   }
 
+  // "Stage 9 of 11" in the top bar: the running step, or the next one to run.
+  function renderTopbarStep(tasks, active) {
+    const el = document.getElementById('topbar-step');
+    if (!el) return;
+    if (!tasks.length) {
+      el.classList.add('hidden');
+      return;
+    }
+    const doneCount = tasks.filter(task => normalize(task.status) === 'done').length;
+    const position = active ? tasks.indexOf(active) + 1 : Math.min(doneCount + 1, tasks.length);
+    el.textContent = t('plan.stageOf', { n: position, total: tasks.length });
+    el.title = active ? (active.title || '') : '';
+    el.classList.remove('hidden');
+  }
+
+  function togglePlanDone() {
+    showAllDone = !showAllDone;
+    render();
+  }
+
   function togglePlanStep(taskId) {
     const row = document.querySelector(`#plan-tracker-list [data-task-id="${CSS.escape(taskId)}"] [aria-expanded]`);
     const isOpen = !!row && row.getAttribute('aria-expanded') === 'true';
@@ -293,5 +335,6 @@
 
   window.PlanTracker = { render: render, feed: feed };
   window.togglePlanStep = togglePlanStep;
+  window.togglePlanDone = togglePlanDone;
   render();
 })();

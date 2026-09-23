@@ -197,11 +197,14 @@
 
   // Colour + iconography per phase, in the page's own Tailwind tokens.
   const TONES = {
-    work: { bar: 'bg-primary', icon: 'text-primary', card: 'border-primary/25 bg-primary/[0.06]', text: 'text-on-surface' },
-    wait: { bar: 'bg-tertiary', icon: 'text-tertiary', card: 'border-tertiary/40 bg-tertiary/[0.08]', text: 'text-on-surface' },
-    done: { bar: 'bg-secondary', icon: 'text-secondary', card: 'border-secondary/30 bg-secondary/[0.06]', text: 'text-on-surface' },
-    fail: { bar: 'bg-error', icon: 'text-error', card: 'border-error/40 bg-error/[0.08]', text: 'text-on-surface' },
-    mute: { bar: 'bg-outline-variant', icon: 'text-outline-variant', card: 'border-outline-variant/25 bg-surface-container-high/40', text: 'text-on-surface-variant' },
+    // One neutral card for every phase; only the rule on its left edge and the
+    // icon take the phase colour. A tinted fill per phase put a yellow or red
+    // slab under the composer that competed with the card it was pointing at.
+    work: { bar: 'bg-primary', icon: 'text-primary', card: 'border-outline-variant/15 bg-surface-container-low', text: 'text-on-surface' },
+    wait: { bar: 'bg-tertiary', icon: 'text-tertiary', card: 'border-outline-variant/15 bg-surface-container-low', text: 'text-on-surface' },
+    done: { bar: 'bg-secondary', icon: 'text-secondary', card: 'border-outline-variant/15 bg-surface-container-low', text: 'text-on-surface' },
+    fail: { bar: 'bg-error', icon: 'text-error', card: 'border-error/30 bg-surface-container-low', text: 'text-on-surface' },
+    mute: { bar: 'bg-outline-variant', icon: 'text-outline-variant', card: 'border-outline-variant/15 bg-surface-container-low', text: 'text-on-surface-variant' },
   };
 
   const PHASE_TONE = {
@@ -1064,6 +1067,12 @@
       st.plan = summarise(st.tasks);
     }
     const current = view();
+    // The top bar's status pill says the same thing in two words; it reads
+    // the phase from here instead of keeping a second reducer of its own.
+    if (document.body && document.body.dataset.runPhase !== current.phase) {
+      document.body.dataset.runPhase = current.phase;
+      if (typeof window.renderStatusBadge === 'function') window.renderStatusBadge();
+    }
     if (current.phase === 'idle') {
       root.classList.add('hidden');
       root.innerHTML = '';
@@ -1137,7 +1146,7 @@
 
           ${planExpanded ? `
           <div class="h-1 bg-surface-container-high rounded-full overflow-hidden">
-            <div class="h-full bg-gradient-to-r from-primary to-secondary transition-all duration-300 rounded-full" style="width: ${planPercent}%;"></div>
+            <div class="h-full bg-primary transition-all duration-300 rounded-full" style="width: ${planPercent}%;"></div>
           </div>
 
           <div class="space-y-1 pt-0.5 max-h-80 overflow-y-auto pr-1">

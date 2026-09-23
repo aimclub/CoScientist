@@ -9,7 +9,10 @@
 
     function appendMsgToFeed(html) {
       const feed = document.getElementById('chat-feed');
-      const placeholder = feed.querySelector('.text-outline-variant.font-medium');
+      // The empty-feed hint is marked by an attribute, not found by its
+      // classes: any card with the same utility classes used to match it and
+      // wipe the feed on the next message.
+      const placeholder = feed.querySelector('[data-feed-empty]');
       if (placeholder) {
         feed.innerHTML = '';
       }
@@ -17,18 +20,17 @@
       scrollChat();
     }
 
+    // A system notice is an event in the run, not a message to read: one
+    // line with its time, in the muted colour, folded when it runs long.
     function addSystemMsg(text, timestamp = null) {
       appendMsgToFeed(`
-    <div class="flex flex-col gap-2 max-w-2xl msg-enter">
-      <div class="flex items-center gap-2">
-        <span class="text-[10px] font-mono text-primary/70 bg-primary/5 px-2 py-0.5 rounded uppercase">${t('chat.system')}</span>
-        <span class="text-[10px] text-outline-variant font-mono">${ts(timestamp)}</span>
-      </div>
-      <div class="bg-surface-container-lowest p-3 rounded-lg border border-outline-variant/10">
-        ${foldable(`<p class="font-mono text-[12px] leading-relaxed text-on-surface-variant whitespace-pre-wrap">${escHtml(text)}</p>`, text, { bg: '#0b0e14' })}
+    <div class="flex items-baseline gap-3 msg-enter">
+      <span class="sr-only">${escHtml(t('chat.system'))}</span>
+      <span class="text-[10px] text-outline-variant tabular-nums shrink-0 w-16">${ts(timestamp)}</span>
+      <div class="min-w-0 flex-1">
+        ${foldable(`<p class="text-[12px] leading-relaxed text-on-surface-variant whitespace-pre-wrap break-words">${escHtml(text)}</p>`, text, { bg: 'rgb(var(--c-background))' })}
       </div>
     </div>`);
-
     }
 
     marked.setOptions({ breaks: true, gfm: true });
@@ -126,7 +128,7 @@
         <div class="flex flex-col gap-1.5 mb-3 pb-3 border-b border-outline-variant/20">
           <span class="self-start text-[10px] font-mono uppercase tracking-widest text-outline-variant bg-outline-variant/10 border border-outline-variant/20 px-1.5 py-0.5 rounded">Thinking</span>
           ${foldable(`<div class="text-on-surface-variant md-body md-body-quiet">${renderMarkdown(thinking)}</div>`,
-            thinking, { bg: '#1d2026' })}
+            thinking, { bg: 'rgb(var(--c-surface-container))' })}
         </div>`;
     }
 
@@ -225,7 +227,7 @@
         linkEl.href = fullUrl;
         linkEl.title = t('chat.sandboxOpenActive', { url: fullUrl });
         if (dotEl) {
-          dotEl.className = 'w-2 h-2 rounded-full bg-secondary animate-pulse';
+          dotEl.className = 'w-2 h-2 rounded-full bg-secondary ml-auto shrink-0';
           dotEl.title = t('chat.sandboxActive', { url: fullUrl });
         }
       } else {
@@ -234,7 +236,7 @@
         linkEl.href = baseUrl;
         linkEl.title = t('chat.sandboxOpen', { url: baseUrl });
         if (dotEl) {
-          dotEl.className = 'w-2 h-2 rounded-full bg-outline-variant/40';
+          dotEl.className = 'w-2 h-2 rounded-full bg-outline-variant/40 ml-auto shrink-0';
           dotEl.title = t('chat.sandboxStandby', { url: baseUrl });
         }
       }
@@ -319,7 +321,7 @@
           ${thinkingBlock(text)}
           ${documentBlock(event)
         || foldable(`<div class="text-on-surface md-body">${renderMarkdown(cleanText)}</div>`,
-          cleanText, { bg: '#1d2026' })}
+          cleanText, { bg: 'rgb(var(--c-surface-container))' })}
         </div>
       </div>
     </div>`);
@@ -349,7 +351,7 @@
           ${thinkingBlock(text)}
           ${documentBlock(event)
         || foldable(`<div class="text-on-surface break-words md-body">${renderMarkdown(body)}</div>`,
-          body, { bg: '#1d2026' })}
+          body, { bg: 'rgb(var(--c-surface-container))' })}
         </div>
       </div>
     </div>`);
@@ -490,9 +492,9 @@
       const feed = document.getElementById('chat-feed');
       if (feed) {
         feed.innerHTML = `
-    <div class="flex flex-col items-center justify-center h-full opacity-50">
-      <span class="material-symbols-outlined text-4xl text-primary/30 mb-3">hub</span>
-      <p data-i18n="chat.sendQuery" class="text-sm text-outline-variant font-medium">Send a query to begin orchestration</p>
+    <div data-feed-empty class="flex flex-col items-center justify-center h-full">
+      <span class="material-symbols-outlined text-4xl text-outline-variant/50 mb-3" aria-hidden="true">forum</span>
+      <p data-i18n="chat.sendQuery" class="text-sm text-on-surface-variant">${escHtml(t('chat.sendQuery'))}</p>
     </div>`;
       }
     }

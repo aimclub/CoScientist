@@ -44,9 +44,32 @@ const i18n = {
   'chat.online': { en: 'Online', ru: 'Онлайн' },
   'chat.offline': { en: 'Offline', ru: 'Офлайн' },
   'chat.sendQuery': { en: 'Send a query to begin orchestration', ru: 'Отправьте запрос для начала работы' },
-  'chat.placeholder': { en: 'Send system command…  (Enter — send, Shift+Enter — new line)', ru: 'Введите запрос… (Enter — отправить, Shift+Enter — новая строка)' },
+  'chat.placeholder': { en: 'Message the orchestrator…', ru: 'Напишите оркестратору…' },
+  'chat.inputLabel': { en: 'Message to the orchestrator', ru: 'Сообщение оркестратору' },
+  'chat.hintSend': { en: 'send', ru: 'отправить' },
+  'chat.hintNewline': { en: 'new line', ru: 'новая строка' },
+  'chat.stopShort': { en: 'Stop', ru: 'Остановить' },
+  'chat.stopTitle': { en: 'Stop the agents', ru: 'Остановить агентов' },
+  'chat.send': { en: 'Send', ru: 'Отправить' },
+  'nav.group.work': { en: 'Work', ru: 'Работа' },
+  'nav.group.observe': { en: 'Observe', ru: 'Наблюдение' },
+  'nav.group.tools': { en: 'Tools', ru: 'Инструменты' },
+  'nav.settings': { en: 'Settings', ru: 'Настройки' },
+  'nav.switchUser': { en: 'Switch or add a user', ru: 'Сменить или добавить пользователя' },
+  'nav.sessionPicker': { en: 'Session', ru: 'Сессия' },
+  'nav.sessionMenu': { en: 'Session actions', ru: 'Действия с сессией' },
+  'nav.sessionNew': { en: 'New session', ru: 'Новая сессия' },
+  'nav.sessionRename': { en: 'Rename…', ru: 'Переименовать…' },
+  'nav.sessionSave': { en: 'Save to disk', ru: 'Сохранить на диск' },
+  'nav.sessionExport': { en: 'Export (.zip)', ru: 'Экспорт (.zip)' },
+  'nav.sessionImport': { en: 'Import…', ru: 'Импорт…' },
+  'nav.sessionRestore': { en: 'Restore saved…', ru: 'Восстановить сохранённую…' },
+  'nav.toggleSidebar': { en: 'Show or hide the sidebar', ru: 'Показать или скрыть боковую панель' },
+  'topbar.clear': { en: 'Clear the view (history is kept)', ru: 'Очистить ленту (история сохранится)' },
   'telemetry.header': { en: 'Telemetry Output', ru: 'Лог телеметрии' },
-  'usage.header': { en: 'Usage & Cost', ru: 'Использование и стоимость' },
+  'usage.header': { en: 'Session spend', ru: 'Расходы сессии' },
+  'usage.showRest': { en: '{n} more agents · {cost}', ru: 'Ещё агентов: {n} · {cost}' },
+  'usage.showFewer': { en: 'Show top 5', ru: 'Показать первые 5' },
   'usage.duration': { en: 'Run duration', ru: 'Время выполнения' },
   'usage.durationRunning': { en: 'Running', ru: 'Выполняется' },
   'usage.durationFinished': { en: 'Completed in', ru: 'Выполнено за' },
@@ -64,6 +87,9 @@ const i18n = {
   'doc.empty': { en: 'No documents yet.', ru: 'Документов пока нет.' },
 
   'plan.header': { en: 'Plan', ru: 'План' },
+  'plan.progress': { en: '{done} of {total}', ru: '{done} из {total}' },
+  'plan.stageOf': { en: 'Stage {n} of {total}', ru: 'Этап {n} из {total}' },
+  'plan.doneFolded': { en: '{n} more steps done', ru: 'Выполнено ещё этапов: {n}' },
   'plan.open': { en: 'Open roadmap', ru: 'Открыть план' },
   'plan.untitled': { en: 'Untitled task', ru: 'Задача без названия' },
   'plan.status.todo': { en: 'Pending', ru: 'Ожидает' },
@@ -107,7 +133,13 @@ const i18n = {
   // ── Activity Rail HUD ──
   'rail.agents': { en: 'Agents', ru: 'Агенты' },
   'rail.tools': { en: 'Tools', ru: 'Инструменты' },
-  'rail.standby': { en: 'Standby — awaiting tool invocation', ru: 'Ожидание вызова инструментов…' },
+  'rail.standby': { en: 'No tool calls yet', ru: 'Инструменты ещё не вызывались' },
+  'rail.allCalls': { en: 'All tool calls', ru: 'Все вызовы инструментов' },
+  'rail.agentOne': { en: 'agent', ru: 'агент' },
+  'rail.agentFew': { en: 'agents', ru: 'агента' },
+  'rail.agentMany': { en: 'agents', ru: 'агентов' },
+  'rail.nowWorking': { en: 'Working now:', ru: 'Сейчас работает' },
+  'rail.toolFailed': { en: '{tool} returned an error', ru: '{tool} вернул ошибку' },
   'rail.noTools': { en: 'No tool calls yet', ru: 'Инструменты ещё не вызывались' },
   'rail.toggle': { en: 'Show/hide agent activity', ru: 'Показать/скрыть активность агентов' },
 
@@ -891,19 +923,28 @@ const i18n = {
   'hitl.block.userQuery': { en: 'User query', ru: 'Запрос пользователя' },
   'hitl.block.output': { en: 'Proposed output', ru: 'Предлагаемый результат' },
   'hitl.reviseEmpty': {
-    en: 'Enter your corrections in the field above, then press Revise.',
-    ru: 'Введите правки в поле выше, затем нажмите «Доработать».'
+    en: 'Type your corrections in the field above first.',
+    ru: 'Сначала напишите правки в поле выше.'
   },
   'hitl.btn.accept': { en: 'Accept', ru: 'Принять' },
+  'hitl.btn.acceptResult': { en: 'Accept result', ru: 'Принять результат' },
+  'hitl.btn.sendRevise': { en: 'Send for revision', ru: 'Отправить на доработку' },
+  'hitl.btn.rejectAsk': { en: 'Reject…', ru: 'Отклонить…' },
+  'hitl.btn.rejectConfirm': { en: 'Click again to reject', ru: 'Нажмите ещё раз, чтобы отклонить' },
+  'hitl.fb.label': { en: 'Corrections for the agent', ru: 'Правки для агента' },
+  'hitl.fb.optional': { en: 'optional', ru: 'необязательно' },
+  'hitl.fb.inputLabel': { en: 'Your answer to the agent', ru: 'Ваш ответ агенту' },
+  'hitl.fb.replyLabel': { en: 'Or write your own answer', ru: 'Или напишите свой ответ' },
+  'hitl.hintSubmit': { en: 'send', ru: 'отправить' },
   'hitl.btn.reject': { en: 'Reject', ru: 'Отклонить' },
   'hitl.btn.revise': { en: 'Revise', ru: 'Доработать' },
   'hitl.btn.reply': { en: 'Reply', ru: 'Ответить' },
   'hitl.btn.send': { en: 'Send', ru: 'Отправить' },
   'hitl.btn.openRoadmap': { en: 'Open Roadmap', ru: 'Открыть план' },
   'hitl.answerInChat': { en: 'Answer in the chat card.', ru: 'Ответьте в карточке в чате.' },
-  'hitl.ph.input': { en: 'Enter instructions for the agent...', ru: 'Введите инструкции для агента...' },
-  'hitl.ph.reply': { en: 'Your answer to the question, then «Reply»', ru: 'Ваш ответ на вопрос — затем «Ответить»' },
-  'hitl.ph.revise': { en: 'Corrections for the agent, then Revise', ru: 'Введите правки для агента, затем нажмите «Доработать»' },
+  'hitl.ph.input': { en: 'For example: use the 2024 data only…', ru: 'Например: используй только данные за 2024 год…' },
+  'hitl.ph.reply': { en: 'Your answer to the question…', ru: 'Ваш ответ на вопрос…' },
+  'hitl.ph.revise': { en: 'For example: add a source to every conclusion…', ru: 'Например: добавь источник к каждому выводу…' },
 
   // ── Keys from feat/report-links-artifacts-i18n (unified language switch,
   //    graph pages, dataset upload, saved sessions, roadmaps) ──
@@ -1110,9 +1151,13 @@ const i18n = {
   'common.errorPrefix': { en: 'Error: {error}', ru: 'Ошибка: {error}' },
 
   // ── Top bar ──
-  'topbar.idle': { en: 'Status: Idle', ru: 'Статус: ожидание' },
-  'topbar.processing': { en: 'Status: Processing', ru: 'Статус: выполняется' },
-  'topbar.events': { en: 'Events: {count}', ru: 'События: {count}' },
+  'topbar.idle': { en: 'No active run', ru: 'Нет активного запуска' },
+  'topbar.processing': { en: 'Running', ru: 'Выполняется' },
+  'topbar.waiting': { en: 'Waiting for your decision', ru: 'Ждёт вашего решения' },
+  'topbar.failed': { en: 'Failed', ru: 'Ошибка' },
+  'topbar.offline': { en: 'No connection', ru: 'Нет связи' },
+  'topbar.events': { en: '{count} events', ru: 'Событий: {count}' },
+  'topbar.elapsed': { en: 'Elapsed', ru: 'Идёт' },
 
   // ── Tooltips (sidebar & header) ──
   'nav.registerUser': { en: 'Register user', ru: 'Зарегистрировать пользователя' },
@@ -1668,6 +1713,12 @@ function applyLanguage(lang) {
     const entry = i18n[key];
     if (entry && entry[currentLang]) el.title = entry[currentLang];
   });
+  // Icon-only buttons: the name a screen reader announces.
+  document.querySelectorAll('[data-i18n-aria]').forEach(el => {
+    const key = el.getAttribute('data-i18n-aria');
+    const entry = i18n[key];
+    if (entry && entry[currentLang]) el.setAttribute('aria-label', entry[currentLang]);
+  });
   if (window.PlanTracker) PlanTracker.render();
   // The rail toggle's tooltip depends on its state, so it is not a plain
   // data-i18n-title the loop above can swap.
@@ -1691,18 +1742,9 @@ function applyLanguage(lang) {
     const entry = i18n[key];
     connStatusEl.textContent = (entry && entry[currentLang]) || (isWsOpen ? 'Connected' : 'Disconnected');
   }
-  const badgeEl = document.getElementById('active-badge');
-  if (badgeEl) {
-    const key = isWsOpen ? 'chat.online' : 'chat.offline';
-    const entry = i18n[key];
-    badgeEl.textContent = (entry && entry[currentLang]) || (isWsOpen ? 'Online' : 'Offline');
-  }
 
   // Dynamic HUD labels JS writes outside the data-i18n pass.
-  const statusBadgeEl = document.getElementById('status-badge');
-  if (statusBadgeEl && typeof runActive !== 'undefined') {
-    statusBadgeEl.textContent = t(runActive ? 'topbar.processing' : 'topbar.idle');
-  }
+  if (typeof renderStatusBadge === 'function') renderStatusBadge();
   if (typeof renderEventCount === 'function') renderEventCount();
   const metricsSummaryEl = document.getElementById('metrics-summary');
   if (metricsSummaryEl && metricsSummaryEl.dataset.empty === '1') {

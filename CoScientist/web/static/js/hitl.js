@@ -117,7 +117,7 @@ function redrawPlanCards() {
     // so a stale entry would resurrect a card the session has already cleared.
     if (!data || !document.querySelector(`[data-hitl-card="${CSS.escape(rid)}"]`)) return;
     const box = document.getElementById('hitl-controls-' + rid);
-    const answered = !!(box && box.querySelector('button[disabled]'));
+    const answered = !!(box && box.dataset.answered === '1');
     renderExperimentPlanReview(!answered, data);
     if (answered) disableHitlControls(rid);
   });
@@ -175,112 +175,176 @@ function showHITL(data, { history = false } = {}) {
   scrollChat();
 }
 
+// Buttons of a review card. Primary is the expected answer, secondary the
+// alternative, and the destructive one is quiet until it is asked for twice.
+const HITL_BTN = 'inline-flex items-center justify-center gap-1.5 h-9 px-4 rounded-md text-[12px] font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed';
+const HITL_BTN_PRIMARY = `${HITL_BTN} bg-primary text-on-primary hover:brightness-110`;
+const HITL_BTN_SECONDARY = `${HITL_BTN} border border-outline-variant/30 text-on-surface hover:bg-surface-container-high`;
+const HITL_BTN_DANGER = `${HITL_BTN} text-error hover:bg-error/10`;
+const HITL_TEXTAREA = 'w-full bg-surface-container-lowest border border-outline-variant/25 rounded-md px-3 py-2 text-[12px] text-on-surface focus:outline-none focus:border-primary/60 transition-colors';
+
+function hitlFeedbackField(rid, labelKey, placeholderKey, optional) {
+  return `
+          <div>
+            <label for="hitl-feedback-${rid}" class="block text-[11px] text-on-surface-variant mb-1.5">${hitlLabel(labelKey)}${optional
+      ? ` <span class="text-outline-variant">(${hitlLabel('hitl.fb.optional')})</span>` : ''}</label>
+            <textarea id="hitl-feedback-${rid}" name="hitl-feedback" rows="2" autocomplete="off"
+              data-i18n-placeholder="${placeholderKey}" placeholder="${escHtml(t(placeholderKey))}"
+              oninput="syncHitlButtons('${escJs(rid)}')" onkeydown="hitlFeedbackKeydown(event, '${escJs(rid)}')"
+              class="${HITL_TEXTAREA}"></textarea>
+          </div>`;
+}
+
+function hitlSubmitHint() {
+  return `<span class="hidden sm:flex items-center gap-1 ml-auto text-[10px] text-outline-variant select-none">`
+    + `<kbd>Ctrl</kbd><kbd>Enter</kbd> ${hitlLabel('hitl.hintSubmit')}</span>`;
+}
+
+// With corrections typed, the answer is "revise"; without, it is "accept".
+// One of the two is live at a time, so neither button quietly means the other.
+function syncHitlButtons(rid) {
+  const field = document.getElementById('hitl-feedback-' + rid);
+  const hasText = !!(field && field.value.trim());
+  const accept = document.getElementById('hitl-accept-' + rid);
+  const revise = document.getElementById('hitl-revise-' + rid);
+  if (accept && !accept.closest('[data-answered]')) accept.disabled = hasText;
+  if (revise && !revise.closest('[data-answered]')) revise.disabled = !hasText;
+}
+
+function hitlFeedbackKeydown(event, rid) {
+  if (event.key !== 'Enter' || !(event.ctrlKey || event.metaKey) || event.isComposing) return;
+  event.preventDefault();
+  const card = document.querySelector(`[data-hitl-card="${CSS.escape(rid)}"]`);
+  const data = hitlCards.get(rid) || {};
+  const field = document.getElementById('hitl-feedback-' + rid);
+  const hasText = !!(field && field.value.trim());
+  if (!card || card.querySelector('[data-answered]')) return;
+  if (data.action_type === 'provide_input') respondHITLInput(rid);
+  else if (hasText) respondHITLEdit(rid);
+  else if (!(data.options && data.options.length)) respondHITL(rid, true);
+}
+
+// Rejecting is not undoable, so the first click only arms the button.
+const hitlRejectTimers = new Map();
+
+function confirmHitlReject(rid) {
+  const button = document.getElementById('hitl-reject-' + rid);
+  if (!button) return;
+  if (button.dataset.armed === '1') {
+    clearTimeout(hitlRejectTimers.get(rid));
+    hitlRejectTimers.delete(rid);
+    respondHITL(rid, false);
+    return;
+  }
+  button.dataset.armed = '1';
+  button.className = `${HITL_BTN} bg-error text-on-error hover:brightness-110`;
+  button.innerHTML = hitlLabel('hitl.btn.rejectConfirm');
+  hitlRejectTimers.set(rid, setTimeout(() => {
+    hitlRejectTimers.delete(rid);
+    if (button.disabled) return;
+    delete button.dataset.armed;
+    button.className = HITL_BTN_DANGER;
+    button.innerHTML = hitlLabel('hitl.btn.rejectAsk');
+  }, 4000));
+}
+
+window.syncHitlButtons = syncHitlButtons;
+window.hitlFeedbackKeydown = hitlFeedbackKeydown;
+window.confirmHitlReject = confirmHitlReject;
+
 function renderHitlCard(live, data) {
+  const rid = data.request_id;
+  const ridJs = escJs(rid || '');
   const messageHtml = hitlDynamic(data, 'message', localizeHitlMessage(data));
   const viaHtml = hitlDynamic(data, 'via', describeHitlVia(data));
-  const agentHtml = `<span class="font-bold text-on-surface">${escHtml(data.agent_name || '—')}</span>`;
+  const agentHtml = data.agent_name
+    ? `<code translate="no" class="font-mono text-on-surface-variant">${escHtml(data.agent_name)}</code> · ` : '';
 
-  let openRoadmapSidebarBtn = '';
-  let openRoadmapChatBtn = '';
-  if (data.agent_name === 'PlannerAgent') {
-    openRoadmapSidebarBtn = `
-      <button onclick="openRoadmapEditor()" class="w-full mt-2 flex items-center justify-center gap-2 bg-surface-variant border border-outline-variant/20 text-on-surface py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] hover:bg-surface-container-high transition-all">
-        <span class="material-symbols-outlined text-sm">map</span> ${hitlLabel('hitl.btn.openRoadmap')}
-      </button>
-    `;
-    openRoadmapChatBtn = `
-      <div class="mt-4">
-        <button onclick="openRoadmapEditor()" class="flex items-center justify-center gap-2 bg-surface-variant border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-wider hover:bg-surface-container-high transition-all">
-          <span class="material-symbols-outlined text-sm">map</span> ${hitlLabel('hitl.btn.openRoadmap')}
-        </button>
-      </div>
-    `;
-  }
+  const openRoadmapChatBtn = data.agent_name !== 'PlannerAgent' ? '' : `
+        <div>
+          <button type="button" onclick="openRoadmapEditor()" class="${HITL_BTN_SECONDARY}">
+            <span class="material-symbols-outlined text-[18px]" aria-hidden="true">map</span> ${hitlLabel('hitl.btn.openRoadmap')}
+          </button>
+        </div>`;
 
   const isProvideInput = data.action_type === 'provide_input';
   const hasOptions = !!(data.options && data.options.length);
 
-  // Show in sidebar. For question windows (options present) or input requests the sidebar is
-  // informational only — answer directly in the chat card.
-  const sidebarButtons = (hasOptions || isProvideInput) ? `
-        <p class="text-[12px] text-on-surface-variant leading-relaxed">${hitlLabel('hitl.answerInChat')}</p>` : `
-        <div class="flex gap-3">
-          <button onclick="respondHITL('${data.request_id}', true)" class="flex-1 flex items-center justify-center gap-2 bg-primary text-on-primary py-3 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-            <span class="material-symbols-outlined text-base">check_circle</span> ${hitlLabel('hitl.btn.accept')}
-          </button>
-          <button onclick="respondHITL('${data.request_id}', false)" class="flex-1 flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error py-3 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] hover:bg-error/10 transition-all">
-            <span class="material-symbols-outlined text-base">close</span> ${hitlLabel('hitl.btn.reject')}
-          </button>
-        </div>`;
-
-  // Also show in chat: the request details + Accept / Revise controls.
+  // The request details: tool arguments are code, an agent's proposed
+  // result is prose and is read as such.
   const detail = hitlDetailBlock(data);
-  // Prose drops the grey fill entirely: white-on-grey is what made this hard
-  // to look at, and an accent rule marks the block just as well without
-  // putting a second surface under the one thing the human has to read.
   const detailBody = !detail ? '' : detail.code
     ? `<pre class="font-mono text-[13px] leading-relaxed text-on-surface whitespace-pre-wrap `
-      + `bg-surface-container-high px-3 py-2.5 rounded-lg border border-outline-variant/20">${escHtml(detail.text)}</pre>`
-    : `<div class="md-body hitl-prose text-on-surface border-l-2 border-primary/40 pl-4 pr-1">`
-      + `${renderMarkdown(detail.text)}</div>`;
+      + `bg-surface-container-lowest px-3 py-2.5 rounded-lg border border-outline-variant/15">${escHtml(detail.text)}</pre>`
+    : `<div class="md-body hitl-prose text-on-surface">${renderMarkdown(detail.text)}</div>`;
   const asDocument = documentBlock(data);
   const outputBlock = !detail && !asDocument ? '' : `
-        <div class="mt-4 pt-4 border-t border-outline-variant/15">
-          <p class="text-[13px] font-bold text-on-surface-variant uppercase tracking-wider mb-2">${hitlLabel(
+        <div>
+          <p class="text-[10px] font-medium text-outline-variant mb-1.5">${hitlLabel(
       detail ? detail.labelKey : 'hitl.block.output')}</p>
-          ${asDocument || foldable(detailBody, detail.text, { bg: '#191c22' })}
+          ${asDocument || foldable(detailBody, detail.text, { bg: 'rgb(var(--c-surface-container-low))' })}
         </div>`;
-  placeHitlCard(data.request_id, `
-    <div class="my-6 relative msg-enter max-w-4xl" data-hitl-card="${escHtml(data.request_id || '')}">
-      <div class="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 blur-2xl opacity-40"></div>
-      <div class="relative bg-surface-container-low p-5 rounded-xl border border-primary/40 shadow-2xl">
-        <div class="flex items-center gap-3 mb-3">
-          <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
-            <span class="material-symbols-outlined text-on-primary text-sm">ads_click</span>
-          </div>
-          <h3 class="font-headline font-bold text-base text-on-surface uppercase tracking-tight">${hitlLabel('hitl.title')}</h3>
-        </div>
-        <p class="text-sm text-on-surface-variant leading-relaxed">${messageHtml}</p>
-        <div class="mt-2 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-[11px]">
-          <span><span class="text-outline-variant">${hitlLabel('hitl.viaLabel')}:</span> <span class="text-primary">${viaHtml}</span></span>
-        </div>
-        ${outputBlock}
-        ${isProvideInput ? `
-        <div id="hitl-controls-${data.request_id}" class="mt-4 pt-4 border-t border-outline-variant/15 flex flex-col gap-2">
-          <textarea id="hitl-feedback-${data.request_id}" rows="2" data-i18n-placeholder="hitl.ph.input" placeholder="${escHtml(t('hitl.ph.input'))}"
-            class="w-full bg-surface-container-high border border-outline-variant/25 rounded-md px-2.5 py-2 text-[13px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
-          <div class="flex">
-            <button onclick="respondHITLInput('${data.request_id}')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-              <span class="material-symbols-outlined text-base">send</span> ${hitlLabel('hitl.btn.send')}
+
+  let controls;
+  if (isProvideInput) {
+    controls = `
+          ${hitlFeedbackField(rid, 'hitl.fb.inputLabel', 'hitl.ph.input', false)}
+          <div class="flex flex-wrap items-center gap-2">
+            <button type="button" onclick="respondHITLInput('${ridJs}')" class="${HITL_BTN_PRIMARY}">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">send</span> ${hitlLabel('hitl.btn.send')}
             </button>
-          </div>
-        </div>` : hasOptions ? `
-        <div id="hitl-controls-${data.request_id}" class="mt-4 pt-4 border-t border-outline-variant/15 flex flex-col gap-2">
-          <textarea id="hitl-feedback-${data.request_id}" rows="2" data-i18n-placeholder="hitl.ph.reply" placeholder="${escHtml(t('hitl.ph.reply'))}"
-            class="w-full bg-surface-container-high border border-outline-variant/25 rounded-md px-2.5 py-2 text-[13px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
+            ${hitlSubmitHint()}
+          </div>`;
+  } else if (hasOptions) {
+    controls = `
           <div class="flex flex-wrap gap-2">
-            <button onclick="respondHITLEdit('${data.request_id}')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-              <span class="material-symbols-outlined text-base">reply</span> ${hitlLabel('hitl.btn.reply')}
-            </button>
             ${data.options.map(o => `
-            <button onclick="respondHITLOption('${data.request_id}', '${escJs(o)}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] hover:bg-surface-container-highest transition-all">${escHtml(o)}</button>`).join('')}
+            <button type="button" onclick="respondHITLOption('${ridJs}', '${escJs(o)}')" class="${HITL_BTN_SECONDARY}">${escHtml(o)}</button>`).join('')}
           </div>
-        </div>` : `
-        <div id="hitl-controls-${data.request_id}" class="mt-4 pt-4 border-t border-outline-variant/15 flex flex-col gap-2">
-          <textarea id="hitl-feedback-${data.request_id}" rows="2" data-i18n-placeholder="hitl.ph.revise" placeholder="${escHtml(t('hitl.ph.revise'))}"
-            class="w-full bg-surface-container-high border border-outline-variant/25 rounded-md px-2.5 py-2 text-[13px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
-          <div class="flex gap-3">
-            <button onclick="respondHITL('${data.request_id}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-              <span class="material-symbols-outlined text-base">check_circle</span> ${hitlLabel('hitl.btn.accept')}
+          ${hitlFeedbackField(rid, 'hitl.fb.replyLabel', 'hitl.ph.reply', false)}
+          <div class="flex flex-wrap items-center gap-2">
+            <button type="button" id="hitl-revise-${rid}" onclick="respondHITLEdit('${ridJs}')" disabled class="${HITL_BTN_PRIMARY}">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">reply</span> ${hitlLabel('hitl.btn.reply')}
             </button>
-            <button onclick="respondHITL('${data.request_id}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] hover:bg-error/10 transition-all">
-              <span class="material-symbols-outlined text-base">close</span> ${hitlLabel('hitl.btn.reject')}
+            ${hitlSubmitHint()}
+          </div>`;
+  } else {
+    controls = `
+          ${hitlFeedbackField(rid, 'hitl.fb.label', 'hitl.ph.revise', true)}
+          <div class="flex flex-wrap items-center gap-2">
+            <button type="button" id="hitl-accept-${rid}" onclick="respondHITL('${ridJs}', true)" class="${HITL_BTN_PRIMARY}">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">check</span> ${hitlLabel('hitl.btn.acceptResult')}
             </button>
+            <button type="button" id="hitl-revise-${rid}" onclick="respondHITLEdit('${ridJs}')" disabled class="${HITL_BTN_SECONDARY}">
+              ${hitlLabel('hitl.btn.sendRevise')}
+            </button>
+            <button type="button" id="hitl-reject-${rid}" onclick="confirmHitlReject('${ridJs}')" class="${HITL_BTN_DANGER}">
+              ${hitlLabel('hitl.btn.rejectAsk')}
+            </button>
+            ${hitlSubmitHint()}
+          </div>`;
+  }
+
+  placeHitlCard(rid, `
+    <section class="my-2 msg-enter" data-hitl-card="${escHtml(rid || '')}" aria-labelledby="hitl-title-${escHtml(rid || '')}">
+      <div class="bg-surface-container-low rounded-xl border border-outline-variant/25">
+        <div class="flex items-start gap-3 px-5 pt-4">
+          <div class="w-8 h-8 rounded-lg bg-tertiary/10 text-tertiary flex items-center justify-center shrink-0" aria-hidden="true">
+            <span class="material-symbols-outlined text-[18px]">front_hand</span>
           </div>
-        </div>`}
-        ${openRoadmapChatBtn}
+          <div class="min-w-0">
+            <h3 id="hitl-title-${escHtml(rid || '')}" class="text-[14px] font-semibold text-on-surface leading-snug break-words">${messageHtml}</h3>
+            <p class="text-[10px] text-outline-variant mt-0.5 break-words">${agentHtml}${viaHtml}</p>
+          </div>
+        </div>
+        <div class="px-5 pb-4 pt-3 sm:pl-16 flex flex-col gap-4">
+          ${outputBlock}
+          <div id="hitl-controls-${rid}" class="flex flex-col gap-3">${controls}
+          </div>
+          ${openRoadmapChatBtn}
+        </div>
       </div>
-    </div>`);
+    </section>`);
 }
 
 function disableHitlControls(requestId) {
@@ -293,6 +357,7 @@ function disableHitlControls(requestId) {
   if (card) card.querySelectorAll('.fold-open').forEach(collapseFold);
   const box = document.getElementById('hitl-controls-' + requestId);
   if (!box) return;
+  box.dataset.answered = '1';
   box.querySelectorAll('button, textarea').forEach(el => {
     el.disabled = true;
     el.classList.add('opacity-40', 'pointer-events-none');
@@ -511,7 +576,7 @@ function renderHitlForm(live, data) {
 
   // Open while the request is live — a form cannot be filled in folded —
   // and folded once it has been answered or replayed from the transcript.
-  const blocksBlock = foldable(blocksHtml, blocksHtml, { bg: '#191c22', open: live });
+  const blocksBlock = foldable(blocksHtml, blocksHtml, { bg: 'rgb(var(--c-surface-container-low))', open: live });
 
   const formTitle = loc(form.title_i18n, form.title || t('hitl.form.title'));
   const formIntro = loc(form.intro_i18n, form.intro || data.message || '');
@@ -521,8 +586,8 @@ function renderHitlForm(live, data) {
         <div id="hitl-controls-${rid}" data-hitl-card="${escHtml(rid || '')}" class="my-6 relative msg-enter max-w-4xl">
           <div class="relative bg-surface-container-low p-5 rounded-xl border border-primary/40 shadow-2xl">
             <div class="flex items-center gap-3 mb-2">
-              <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
-                <span class="material-symbols-outlined text-on-primary text-sm">fact_check</span>
+              <div class="w-8 h-8 rounded-lg bg-tertiary/10 flex items-center justify-center" aria-hidden="true">
+                <span class="material-symbols-outlined text-tertiary text-[18px]">fact_check</span>
               </div>
               <h3 class="font-headline font-bold text-base text-on-surface uppercase tracking-tight">${escHtml(formTitle)}</h3>
             </div>
@@ -704,7 +769,7 @@ function workOrderBody(order, rid, interactive, compact) {
           ${woSection('workOrder.fallback', order.fallback ? `<p>${escHtml(order.fallback)}</p>` : '')}
           <div data-wo-deviations class="mt-2 flex flex-col gap-1"></div>
         </div>`;
-  return foldable(body, JSON.stringify(order), { bg: '#191c22' });
+  return foldable(body, JSON.stringify(order), { bg: 'rgb(var(--c-surface-container-low))' });
 }
 
 function workOrderDiff(ctx) {
@@ -723,8 +788,8 @@ function woHeader(icon, titleKey, tier, agent, revision) {
   const tierCls = WO_TIER_STYLE[tier] || WO_TIER_STYLE.compute;
   return `
         <div class="flex items-center gap-3 flex-wrap">
-          <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
-            <span class="material-symbols-outlined text-on-primary text-sm">${icon}</span>
+          <div class="w-8 h-8 rounded-lg bg-tertiary/10 flex items-center justify-center" aria-hidden="true">
+            <span class="material-symbols-outlined text-tertiary text-[18px]">${icon}</span>
           </div>
           <h3 class="font-headline font-bold text-base text-on-surface uppercase tracking-tight">${hitlLabel(titleKey)}</h3>
           ${tier ? `<span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${tierCls}">${hitlLabel('workOrder.tier.' + tier)}</span>` : ''}
@@ -966,7 +1031,7 @@ function workReportBody(order, report, extra, interactive, compact) {
   const summary = report.fallback
     ? `<p class="text-[10px] text-outline-variant mb-1">${hitlLabel('workReport.finalAnswer')}</p>
        ${foldable(`<div class="md-body hitl-prose text-on-surface border-l-2 border-primary/40 pl-4 pr-1">`
-         + `${renderMarkdown(report.summary || '—')}</div>`, report.summary || '', { bg: '#191c22' })}`
+         + `${renderMarkdown(report.summary || '—')}</div>`, report.summary || '', { bg: 'rgb(var(--c-surface-container-low))' })}`
     : `<p class="text-on-surface">${escHtml(report.summary || '')}</p>`;
   const findingsBlock = woSection('workReport.findings', findings
     ? (interactive ? `<p class="text-[12px] text-on-surface-variant mb-1.5">${hitlLabel('workReport.findingsHint')}</p>` : '')
@@ -999,7 +1064,7 @@ function workReportBody(order, report, extra, interactive, compact) {
           ${woSection('workReport.artifacts', artifacts ? `<div class="flex flex-col gap-1">${artifacts}</div>` : '')}
           ${woSection('workReport.journal', journalHtml)}
         </div>`;
-  return foldable(body, JSON.stringify(report), { bg: '#191c22' });
+  return foldable(body, JSON.stringify(report), { bg: 'rgb(var(--c-surface-container-low))' });
 }
 
 function renderWorkReportCard(live, data) {
@@ -1373,8 +1438,8 @@ function renderExperimentPlanReview(live, data) {
   <div class="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 blur-2xl opacity-40"></div>
   <div class="relative bg-surface-container-low p-5 rounded-xl border border-primary/40 shadow-2xl">
     <div class="flex items-center gap-3 mb-2">
-      <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
-        <span class="material-symbols-outlined text-on-primary text-sm">science</span>
+      <div class="w-8 h-8 rounded-lg bg-tertiary/10 flex items-center justify-center" aria-hidden="true">
+        <span class="material-symbols-outlined text-tertiary text-[18px]">science</span>
       </div>
       <h3 class="font-headline font-bold text-base text-on-surface uppercase tracking-tight">${escHtml(t('plan.title'))}</h3>
     </div>
@@ -1387,7 +1452,7 @@ function renderExperimentPlanReview(live, data) {
       ${plan.plan_id ? planChip('id', plan.plan_id) : ''}
     </div>
     ${planField(t('plan.goal'), planText(plan.goal))}
-    ${documentBlock(data) || foldable(detail, JSON.stringify(plan), { bg: '#191c22' })}
+    ${documentBlock(data) || foldable(detail, JSON.stringify(plan), { bg: 'rgb(var(--c-surface-container-low))' })}
     <!-- Only the answer is disabled once this review is over (timeout, or
          the operator has answered): the plan stays readable and its task
          cards stay foldable, which is the whole point of drawing it. -->

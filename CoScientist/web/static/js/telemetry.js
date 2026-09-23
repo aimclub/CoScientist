@@ -58,6 +58,15 @@
       return String(n);
     }
 
+    const USAGE_TOP_N = 5;
+    let usageShowAll = false;
+    let lastMetrics = null;
+
+    function toggleUsageAll() {
+      usageShowAll = !usageShowAll;
+      if (lastMetrics) renderMetrics(lastMetrics);
+    }
+
     function renderMetrics(data) {
       if (!data) return;
       const totals = data.totals || {};
@@ -75,21 +84,43 @@
       }
       summaryEl.textContent = summary.join(' · ');
 
-      const rows = (data.agents || []).map(agent => {
+      // Most expensive first, a bar for each relative to the top one, and the
+      // long tail folded into one line: the question is "who spent it", which
+      // the first few rows answer.
+      const agents = (data.agents || []).slice()
+        .sort((a, b) => (Number(b.cost_usd) || 0) - (Number(a.cost_usd) || 0));
+      const top = Number(agents.length && agents[0].cost_usd) || 0;
+      const shown = usageShowAll ? agents : agents.slice(0, USAGE_TOP_N);
+      const rows = shown.map(agent => {
+        const cost = Number(agent.cost_usd) || 0;
+        const width = top ? Math.max(2, Math.round((cost / top) * 100)) : 0;
         const box = agent.sandbox;
         const child = box ? `
-          <div class="flex justify-between text-outline-variant/60 pl-3">
-            <span class="truncate">└ sandbox · ${Math.round(box.agent_seconds || 0)}s</span>
-            <span>${fmtUsd(box.total_cost_usd)}</span>
-          </div>` : '';
+            <div class="flex justify-between gap-2 pl-3 text-outline-variant">
+              <span class="truncate">sandbox · ${Math.round(box.agent_seconds || 0)}s</span>
+              <span class="tabular-nums">${fmtUsd(box.total_cost_usd)}</span>
+            </div>` : '';
         return `
           <div>
-            <div class="flex justify-between gap-2">
-              <span class="truncate text-on-surface/80" title="${escHtml(agent.agent)}">${escHtml(agent.agent)}</span>
-              <span class="text-outline-variant whitespace-nowrap">${fmtTokens(agent.llm.total_tokens)} · ${fmtUsd(agent.cost_usd)}</span>
+            <div class="flex items-baseline gap-2">
+              <span class="flex-1 min-w-0 truncate text-on-surface-variant" title="${escHtml(agent.agent)}" translate="no">${escHtml(agent.agent)}</span>
+              <span class="text-outline-variant tabular-nums whitespace-nowrap">${fmtTokens(agent.llm.total_tokens)}</span>
+              <span class="w-16 text-right text-on-surface tabular-nums whitespace-nowrap">${fmtUsd(agent.cost_usd)}</span>
+            </div>
+            <div class="mt-1 h-[3px] rounded-full bg-surface-container-high overflow-hidden" aria-hidden="true">
+              <div class="h-full rounded-full bg-outline-variant/50" style="width:${width}%"></div>
             </div>${child}
           </div>`;
       });
+      const rest = agents.slice(USAGE_TOP_N);
+      if (rest.length) {
+        const restCost = rest.reduce((sum, agent) => sum + (Number(agent.cost_usd) || 0), 0);
+        rows.push(`
+          <button type="button" onclick="toggleUsageAll()" class="text-primary hover:underline">${escHtml(usageShowAll
+            ? t('usage.showFewer')
+            : t('usage.showRest', { n: rest.length, cost: fmtUsd(restCost) }))}</button>`);
+      }
+      lastMetrics = data;
       document.getElementById('metrics-agents').innerHTML =
         rows.join('') || '<div class="text-outline-variant">—</div>';
 
@@ -170,10 +201,7 @@
         if (dot) dot.classList.remove('hidden');
 
         const durEl = document.getElementById('metrics-duration');
-        if (durEl) {
-          durEl.classList.add('text-primary');
-          durEl.classList.remove('text-outline-variant');
-        }
+        if (durEl) durEl.classList.remove('text-outline-variant');
 
         this.tick();
         this.timerId = setInterval(() => this.tick(), 1000);
@@ -192,7 +220,6 @@
         const durEl = document.getElementById('metrics-duration');
         if (durEl) {
           durEl.classList.remove('text-primary');
-          durEl.classList.add('text-on-surface/90');
         }
 
         const elapsedMs = this.startedAt ? Math.max(0, this.finishedAt - this.startedAt) : this.lastElapsedMs;
@@ -211,7 +238,6 @@
         const durEl = document.getElementById('metrics-duration');
         if (durEl) {
           durEl.classList.remove('text-primary');
-          durEl.classList.add('text-on-surface/90');
         }
 
         this.render(this.lastElapsedMs, false);
@@ -239,6 +265,8 @@
           const isRu = typeof currentLang !== 'undefined' && currentLang === 'ru';
           wrap.title = isRu ? 'Время выполнения' : 'Run duration';
         }
+        const topEl = document.getElementById('topbar-elapsed');
+        if (topEl) topEl.classList.add('hidden');
       },
 
       stopInterval() {
@@ -259,6 +287,11 @@
         const durEl = document.getElementById('metrics-duration');
         if (durEl) {
           durEl.textContent = fmtDuration(ms);
+        }
+        const topEl = document.getElementById('topbar-elapsed');
+        if (topEl) {
+          topEl.textContent = `${t('topbar.elapsed')} ${fmtDuration(ms)}`;
+          topEl.classList.toggle('hidden', !running);
         }
         const wrap = document.getElementById('metrics-duration-wrap');
         if (wrap) {
