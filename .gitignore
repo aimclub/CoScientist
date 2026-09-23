@@ -226,3 +226,5 @@ benchmarks/alembic/pre_comparison
 # Exported run folders and stray configs — session data, never source
 *_cossession/
 CoScientist/some.yaml
+stubs/
+reports/
