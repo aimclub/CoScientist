@@ -658,3 +658,19 @@
       applySideNavState();
     }
 
+    // =========================================================================
+    // Layout — collapsible right panel
+    // =========================================================================
+    function applyRightPanelState() {
+      const collapsed = localStorage.getItem(RIGHT_PANEL_KEY) === 'off';
+      document.body.classList.toggle('right-collapsed', collapsed);
+      const icon = document.getElementById('right-panel-toggle-icon');
+      icon.textContent = collapsed ? 'right_panel_open' : 'right_panel_close';
+      document.getElementById('right-panel-toggle').title = collapsed ? 'Show right panel' : 'Hide right panel';
+    }
+
+    function toggleRightPanel() {
+      const collapsed = document.body.classList.contains('right-collapsed');
+      localStorage.setItem(RIGHT_PANEL_KEY, collapsed ? 'on' : 'off');
+      applyRightPanelState();
+    }
