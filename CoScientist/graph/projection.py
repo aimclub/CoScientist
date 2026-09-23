@@ -549,7 +549,7 @@ def _number_stages(nodes: Dict[str, Dict[str, Any]]) -> None:
         node["runs"] = runs[name]
 
 
-_LINK = re.compile(r"(?:s3://|https?://)[^\s\"'<>()\[\]]+")
+_LINK = re.compile(r"(?:s3://|https?://)[^\s\"'`<>()\[\]]+")
 _SERVICE_PATH = re.compile(r"(?i)/mcp/?$")
 _MAX_ARTIFACTS = 40
 
@@ -575,7 +575,7 @@ def _artifacts_of(
     seen, out = set(), []
 
     def add(uri: str, tool: Optional[str]) -> None:
-        uri = uri.rstrip(".,;:")
+        uri = uri.rstrip(".,;:`")          # a link written inside markdown code keeps its backtick
         if not uri or uri in seen or len(out) >= _MAX_ARTIFACTS:
             return
         if not uri.startswith("s3://") and _SERVICE_PATH.search(urlsplit(uri).path):
