@@ -1,7 +1,11 @@
 # Strict local scientific pilot; regular Synapse demo and production profiles
 # retain their existing free-form orchestration.
 extends: synapse_demo
+defaults:
+  reasoning: medium
 agents:
+  HypothesesAgent:
+    reasoning: medium
   OrchestratorAgent:
     callbacks:
       before_agent: [before_get_task, inject_graph_root, inject_research_context, user_links]

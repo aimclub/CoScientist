@@ -18,11 +18,20 @@ def _next_tool(callback_context):
     for event in invocation.session.events:
         if event.invocation_id != invocation.invocation_id:
             continue
-        observed.update(
-            response.name
-            for response in event.get_function_responses()
-            if not (response.response or {}).get("error")
-        )
+        for response in event.get_function_responses():
+            body = response.response
+            if (
+                response.name == "retrieve_tools"
+                and isinstance(body, dict)
+                and body.get("status") in {"error", "failed"}
+            ):
+                raise RuntimeError("Pilot delegation contract: retrieve_tools failed")
+            if (
+                isinstance(body, dict)
+                and not body.get("error")
+                and body.get("status") not in {"error", "failed"}
+            ):
+                observed.add(response.name)
     return next((name for name in _ORDER if name not in observed), None)
 
 

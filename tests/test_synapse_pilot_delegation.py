@@ -125,6 +125,21 @@ def test_pilot_contract_does_not_count_a_failed_agent_response():
     assert request.config.tools[0].function_declarations[0].name == "ResearchAgent"
 
 
+def test_pilot_contract_does_not_count_unavailable_retrieval():
+    request = _request()
+
+    with pytest.raises(RuntimeError, match="retrieve_tools failed"):
+        require_pilot_tool(
+            _context(
+                _event(
+                    "retrieve_tools",
+                    result={"status": "error", "message": "Embedder not initialized"},
+                )
+            ),
+            request,
+        )
+
+
 def test_pilot_profile_wires_contract_without_changing_regular_demo():
     from CoScientist.assembly import build_system
     from CoScientist.assembly.schema import load_config, resolve_config_path
@@ -145,3 +160,15 @@ def test_pilot_profile_wires_contract_without_changing_regular_demo():
     }
     assert require_pilot_tool in orchestrator.canonical_before_model_callbacks
     assert require_pilot_tool_call in orchestrator.canonical_after_model_callbacks
+
+
+def test_pilot_reasoning_matches_gpt_oss_gateway_without_changing_regular_demo():
+    from CoScientist.assembly.schema import load_config, resolve_config_path
+
+    pilot = load_config(resolve_config_path("synapse_pilot"))
+    regular = load_config(resolve_config_path("synapse_demo"))
+
+    assert pilot.defaults.reasoning == "medium"
+    assert pilot.agent("HypothesesAgent").reasoning == "medium"
+    assert regular.defaults.reasoning is False
+    assert regular.agent("HypothesesAgent").reasoning == "high"
