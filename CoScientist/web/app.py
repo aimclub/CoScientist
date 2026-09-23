@@ -14,7 +14,7 @@ from weakref import WeakKeyDictionary
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from CoScientist.agents.callbacks.tool_callbacks import DATASET_URL_STATE_KEY
@@ -72,16 +72,27 @@ WEB_DIR = Path(__file__).parent
 TEMPLATE_PATH = WEB_DIR / "templates" / "index.html"
 APP_NAME = "coscientist_app"
 
-# Spliced into infrastructure/fedot-mas-gui's static/app.js by the /fedot-demo
-# reverse proxy (see fedot_demo_proxy below) — NOT a fork of that file. Runs
-# inside its own IIFE closure (spliced before the closing `})();`), so it can
-# call straight into its already-loaded loadPreset/liveActivate/liveMessage/
+# Baked into CoScientist/web/static/fedot_demo/app.js (a vendored copy of
+# infrastructure/fedot-mas-gui's gui/static/app.js — see that directory's
+# README for how to regenerate it after pulling submodule changes). Used to
+# be spliced into the upstream file at request time by a reverse proxy to a
+# second FEDOT.MAS gui-demo process; vendoring the static files let that
+# process go away, since this page never talks to a backend of its own.
+# Kept here only as the source of truth for that appended block. Runs inside
+# app.js's own IIFE (appended before its closing `})();`), so it can call
+# straight into its already-loaded loadPreset/liveActivate/liveMessage/
 # presetFromConfig instead of re-implementing the graph renderer a second
 # time. Feeds REAL fedot_tool runs (CoScientist/tools/fedot_live.py) into
-# this exact page, instead of the stand's own /api/run flow.
+# this exact page.
 _FEDOT_DEMO_LIVE_BRIDGE = r"""
-/* ───────── CoScientist live bridge (injected by the reverse proxy) ───────── */
+/* ───────── CoScientist live bridge (injected by the reverse proxy) ─────────
+ * Mirrors native liveRun()'s bookkeeping (timer, progress bar, per-agent
+ * input/output details, final-answer extraction) so a real fedot_tool run
+ * looks the same here as a run started from this page's own "Запустить".
+ */
 function _coscientistLiveConnect() {
+  let liveT0 = null, liveTimer = null, liveTotal = 1, liveFinished = 0, liveAgentIO = {};
+
   const es = new EventSource("/api/fedot-live-stream");
   es.onmessage = (e) => {
     let ev;
@@ -92,17 +103,50 @@ function _coscientistLiveConnect() {
       preset.id = "__live__";
       loadPreset(preset);
       showTab("feed");
+      liveTotal = $("graph").querySelectorAll(".node").length || 1;
+      liveFinished = 0;
       return;
     }
-    if (ev.type === "run_start") { resetRun(); return; }
+    if (ev.type === "run_start") {
+      resetRun();
+      liveAgentIO = {};
+      liveT0 = performance.now();
+      clearInterval(liveTimer);
+      liveTimer = setInterval(() => {
+        $("m-time").textContent = fmtTime((performance.now() - liveT0) / 1000);
+      }, 200);
+      setPlayIcon(true);
+      liveMessage("запуск", "runner", "Система запущена на реальных моделях. Первые ответы агентов появятся здесь.");
+      return;
+    }
     if (ev.type === "agent_start") {
       liveActivate(ev.agent);
+      liveAgentIO[ev.agent] = {
+        instruction: ev.instruction || "",
+        incoming: Object.entries(ev.incoming || {}).map(([k, v]) => `${k}:\n${v}`).join("\n\n"),
+      };
       liveMessage("старт", ev.agent, (ev.instruction || "").slice(0, 200));
       return;
     }
     if (ev.type === "agent_done") {
       liveFinish(ev.agent);
-      liveMessage("результат", ev.agent, (ev.output || "(готово)").slice(0, 200));
+      liveFinished++;
+      $("p-fill").style.width = Math.min(100, (100 * liveFinished) / liveTotal).toFixed(0) + "%";
+      const io = Object.assign(liveAgentIO[ev.agent] || {},
+        { output: ev.output || "", outputKey: ev.output_key || "" });
+      liveAgentIO[ev.agent] = io;
+      const head = (io.output || "").trim().split("\n")[0].slice(0, 160);
+      liveMessage("результат", ev.agent, head || "(агент завершил работу)");
+      const node = document.querySelector(".msg:last-child");
+      if (node && !node.querySelector(".msg-io")) {
+        const d = document.createElement("details");
+        d.className = "msg-io";
+        d.innerHTML = `<summary>вход и выход</summary>
+          <div class="io-label">инструкция агента</div><pre>${esc(io.instruction || "—")}</pre>
+          <div class="io-label">на входе из состояния</div><pre>${esc(io.incoming || "—")}</pre>
+          <div class="io-label">результат агента${io.outputKey ? " → " + esc(io.outputKey) : ""}</div><pre>${esc(io.output || "—")}</pre>`;
+        node.appendChild(d);
+      }
       return;
     }
     if (ev.type === "tool") {
@@ -128,9 +172,37 @@ function _coscientistLiveConnect() {
       return;
     }
     if (ev.type === "run_end") {
+      clearInterval(liveTimer);
+      liveTimer = null;
+      setPlayIcon(false);
+      $("p-fill").style.width = "100%";
+
+      // Same "skip the critic's verdict, take the most substantial artifact"
+      // extraction as native liveRun's "done" handler — the last agent in the
+      // pipeline is often a reviewer, not the one holding the actual answer.
+      if (ev.status === "success" && ev.state && Object.keys(ev.state).length) {
+        const criticRe = /критик|critic|валид|valid|провер|review|judge|качеств|контрол|аудит|реценз|quality/i;
+        const cfgAgents = (S.preset && S.preset.config && S.preset.config.agents) || [];
+        const criticKeys = new Set(cfgAgents.filter((a) => criticRe.test(a.name))
+                                            .map((a) => a.output_key).filter(Boolean));
+        const keys = Object.keys(ev.state).filter((k) => String(ev.state[k] || "").trim());
+        const useful = keys.filter((k) => !criticKeys.has(k));
+        const pool = useful.length ? useful : keys;
+        let last = pool.length ? String(ev.state[pool[pool.length - 1]] || "") : "";
+        const longest = pool.reduce((best, k) => {
+          const v = String(ev.state[k] || "");
+          return v.length > best.length ? v : best;
+        }, "");
+        if (longest.length > last.length * 2) last = longest;
+        if (last) {
+          S.answer = { text: last, meta: "MAWConfig · живой запуск CoScientist" };
+          S.baseline = null; S.judge = null;
+          renderAnswer();
+        }
+      }
+
       liveMessage(ev.status === "success" ? "готово" : "ошибка", "система",
                   ev.status === "success" ? "Прогон завершён." : (ev.error || "Прогон завершился с ошибкой."));
-      $("p-fill").style.width = "100%";
       return;
     }
   };
@@ -1001,6 +1073,19 @@ def create_app() -> FastAPI:
     if _static_dir.exists():
         app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
+    # --- FEDOT.MAS gui-demo (vendored from infrastructure/fedot-mas-gui, see
+    # _FEDOT_DEMO_LIVE_BRIDGE above) — pure static files, no backend of its own.
+    # It used to reverse-proxy a second FEDOT.MAS gui-demo process on its own
+    # venv/port; that process is gone, along with the /api/generate, /api/run,
+    # /api/baseline and /api/judge routes it would have needed — this page only
+    # ever WATCHES the real fedot_tool via /api/fedot-live-stream below.
+    # html=True serves index.html at /fedot-demo/ and 404s any /fedot-demo/api/*
+    # the page's own probeBackend() might try, so its generate/run/baseline/judge
+    # controls stay disabled (same `online` check the native page already has).
+    _fedot_demo_dir = _static_dir / "fedot_demo"
+    if _fedot_demo_dir.exists():
+        app.mount("/fedot-demo", StaticFiles(directory=str(_fedot_demo_dir), html=True), name="fedot_demo")
+
     # --- HTML endpoint ---
     @app.get("/", response_class=HTMLResponse)
     async def index():
@@ -1652,83 +1737,8 @@ def create_app() -> FastAPI:
             result = {"status": "error", "detail": str(exc)}
         return JSONResponse(result)
 
-    # --- FEDOT.MAS gui-demo (infrastructure/fedot-mas-gui, an unmerged upstream
-    # PR — see .gitmodules) — reverse-proxied rather than imported in-process:
-    # that fork pins a newer fedotmas (ships UnknownToolRecoveryPlugin, which our
-    # pinned fedotmas doesn't have yet), so importing its server module here would
-    # force a core dependency bump for the whole app. It stays its own process on
-    # its own venv/port; this just makes it render under CoScientist's own origin
-    # instead of a separate tab, using CoScientist's own OpenRouter key (see
-    # infrastructure/fedot-mas-gui/.env).
-    FEDOT_GUI_UPSTREAM = os.getenv("FEDOT_GUI_URL", "http://127.0.0.1:4173")
-
-    @app.get("/fedot-demo")
-    async def fedot_demo_root():
-        return RedirectResponse(url="/fedot-demo/")
-
-    @app.api_route("/fedot-demo/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "HEAD"])
-    async def fedot_demo_proxy(path: str, request: Request):
-        upstream_url = f"{FEDOT_GUI_UPSTREAM}/{path}"
-        body = await request.body()
-        forward_headers = {
-            k: v for k, v in request.headers.items()
-            if k.lower() not in ("host", "content-length")
-        }
-        client = httpx.AsyncClient(timeout=None)
-        try:
-            upstream_req = client.build_request(
-                request.method, upstream_url,
-                params=request.query_params, content=body, headers=forward_headers,
-            )
-            upstream_resp = await client.send(upstream_req, stream=True)
-        except httpx.ConnectError:
-            await client.aclose()
-            return JSONResponse(
-                {"detail": "FEDOT.MAS gui-demo is not running — see infrastructure/fedot-mas-gui"},
-                status_code=502,
-            )
-
-        resp_headers = {
-            k: v for k, v in upstream_resp.headers.items()
-            if k.lower() not in ("content-length", "content-encoding", "transfer-encoding", "connection")
-        }
-
-        # app.js only: splice a small bridge script in just before its closing
-        # `})();`, wiring THEIR own loadPreset/liveActivate/liveMessage (this
-        # exact file, untouched above the splice point) to REAL fedot_tool
-        # runs via /api/fedot-live-stream, instead of this stand's own
-        # /api/run. Buffered (not streamed) because the splice needs the
-        # whole body — app.js is ~90KB, that's fine.
-        if path == "app.js" and upstream_resp.status_code == 200:
-            raw = await upstream_resp.aread()
-            await upstream_resp.aclose()
-            await client.aclose()
-            text = raw.decode("utf-8", errors="replace")
-            stripped = text.rstrip()
-            if stripped.endswith("})();"):
-                splice_at = len(stripped) - len("})();")
-                text = stripped[:splice_at] + _FEDOT_DEMO_LIVE_BRIDGE + "\n})();\n"
-            patched = text.encode("utf-8")
-            resp_headers.pop("content-length", None)
-            return Response(patched, status_code=200, media_type="text/javascript", headers=resp_headers)
-
-        async def _stream():
-            try:
-                async for chunk in upstream_resp.aiter_raw():
-                    yield chunk
-            finally:
-                await upstream_resp.aclose()
-                await client.aclose()
-
-        return StreamingResponse(
-            _stream(),
-            status_code=upstream_resp.status_code,
-            media_type=upstream_resp.headers.get("content-type"),
-            headers=resp_headers,
-        )
-
     # --- FEDOT.MAS live agent graph — real fedot_tool runs, fed into the
-    # gui-demo page above via _FEDOT_DEMO_LIVE_BRIDGE. See
+    # vendored gui-demo page mounted above via _FEDOT_DEMO_LIVE_BRIDGE. See
     # CoScientist/tools/fedot_live.py. No standalone page of its own. ---
     @app.get("/api/fedot-live-stream")
     async def fedot_live_stream():

@@ -12,7 +12,7 @@ from fedotmas.control import run_config_guardrails
 from fedotmas.plugins import LangfusePlugin, LoggingPlugin, WebSearchLimitPlugin
 
 from CoScientist.tools.fedot_artifact_plugin import ArtifactCapturePlugin
-from CoScientist.tools.fedot_live import FedotLivePlugin, fedot_live
+from CoScientist.tools.fedot_live import FedotLivePlugin, _truncate, fedot_live
 from CoScientist.logging.metrics import UsageMetricsPlugin
 from rag_tools import MCPServer
 from rag_tools.storage import PostgresClient
@@ -137,7 +137,17 @@ class FedotMASToolset(BaseToolset):
         except Exception as e:
             status, err = "error", f"FEDOT.MAS run failed: {e}"
         finally:
-            fedot_live.event({"type": "run_end", "status": status, "error": err})
+            # The /fedot-demo bridge extracts the final answer from `state` the same
+            # way gui/server/app.py's own /api/run "done" event does — without it the
+            # live viewer shows every step but never the thing the run actually produced.
+            state_out: dict[str, str] = {}
+            if result is not None:
+                try:
+                    state_raw = dict(result if isinstance(result, dict) else getattr(result, "state", {}) or {})
+                except Exception:  # noqa: BLE001 — best-effort, tracing must never break the run
+                    state_raw = {}
+                state_out = {k: _truncate(v, 40000) for k, v in state_raw.items() if k != "user_query"}
+            fedot_live.event({"type": "run_end", "status": status, "error": err, "state": state_out})
 
         # Fallback (F010.A4): scan the final MAS state for presigned URLs the plugin may
         # have missed (only when a result actually came back).
