@@ -39,6 +39,19 @@ try {
 let showInternal = !!showInternalStored;
 document.documentElement.classList.toggle('show-internal', showInternal);
 
+// Per-browser colour theme. The <head> script in index.html already applied
+// the stored value before the first paint; this only mirrors it for the UI.
+const THEME_KEY = 'cos-theme';
+let currentTheme = document.documentElement.classList.contains('light') ? 'light' : 'dark';
+
+function setTheme(theme) {
+  currentTheme = theme === 'light' ? 'light' : 'dark';
+  const root = document.documentElement;
+  root.classList.toggle('light', currentTheme === 'light');
+  root.classList.toggle('dark', currentTheme === 'dark');
+  try { localStorage.setItem(THEME_KEY, currentTheme); } catch (_) { }
+}
+
 // Mirror of the server settings (/api/settings). The settings modal edits a
 // draft copy and writes it back here after a successful save.
 const appSettings = {

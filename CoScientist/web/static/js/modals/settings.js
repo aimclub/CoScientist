@@ -67,6 +67,7 @@
         groups: [{
           fields: [
             { id: 'language', type: 'language', scope: 'browser' },
+            { id: 'theme', type: 'theme', scope: 'browser' },
             { id: 'autoNaming', path: 'general.autoNamingEnabled', type: 'toggle', scope: 'instant', env: 'AUTO_NAMING__ENABLED' },
             { id: 'showInternal', type: 'browserToggle', scope: 'browser', env: 'SHOW_INTERNAL__ENABLED' },
           ],
@@ -670,6 +671,15 @@
                 </button>`).join('')}
             </div>`;
         }
+        case 'theme':
+          return `
+            <div role="radiogroup" class="inline-flex gap-0.5 p-0.5 rounded-md bg-surface-container-high border border-outline-variant/20">
+              ${['dark', 'light'].map(theme => `
+                <button type="button" role="radio" aria-checked="${currentTheme === theme}" data-action="theme" data-theme="${theme}"
+                  class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-semibold transition-colors ${currentTheme === theme ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:text-on-surface'}">
+                  <span class="material-symbols-outlined text-sm">${theme === 'dark' ? 'dark_mode' : 'light_mode'}</span>${escHtml(t(`settings.f.theme.opt.${theme}`))}
+                </button>`).join('')}
+            </div>`;
         case 'env':
           return `
             <div class="text-right">
@@ -806,6 +816,7 @@
             break;
           }
           case 'language': applyLanguage(btn.dataset.lang); break;
+          case 'theme': setTheme(btn.dataset.theme); renderSettings(); break;
           case 'danger-ask': settingsDanger.pending = btn.dataset.target; settingsDanger.message = ''; renderSettings(); break;
           case 'danger-cancel': settingsDanger.pending = null; renderSettings(); break;
           case 'danger-confirm':

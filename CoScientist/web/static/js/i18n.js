@@ -342,6 +342,13 @@ const i18n = {
     en: 'One choice for the interface and the report. Locked while a run is active: switch before you start the session.',
     ru: 'Один выбор для интерфейса и отчёта. Во время выполнения запуска заблокировано: переключите язык до начала сессии.'
   },
+  'settings.f.theme.label': { en: 'Theme', ru: 'Тема' },
+  'settings.f.theme.desc': {
+    en: 'Colour scheme of the web interface. Remembered in this browser only.',
+    ru: 'Цветовая схема веб-интерфейса. Запоминается только в этом браузере.'
+  },
+  'settings.f.theme.opt.dark': { en: 'Dark', ru: 'Тёмная' },
+  'settings.f.theme.opt.light': { en: 'Light', ru: 'Светлая' },
   'settings.f.autoNaming.label': { en: 'Auto-name sessions', ru: 'Автоназвание сессий' },
   'settings.f.autoNaming.desc': {
     en: 'Title a new session after its first request.',
