@@ -160,8 +160,14 @@ ChemCoScientist/tests/integration/data/.last_activity
 
 session_snapshots/
 workspace/
-# Execution-graph run snapshots
+# Execution-graph run snapshots. The suffixed variants are the same thing
+# under another name — a second instance, a comparison run — and `graph_runs/`
+# does not match them. They hold per-user and per-session ids, presigned
+# storage URLs and internal host addresses, and this is a public repository.
 graph_runs/
+graph_runs_*/
+sessions_*/
+*.cossession.zip
 
 # Rasterised exports — regenerate from the committed .svg / .json
 research_graph_*.png
@@ -225,6 +231,11 @@ benchmarks/alembic/pre_comparison
 
 # Exported run folders and stray configs — session data, never source
 *_cossession/
+# Analysis scratch and generated decks: regenerated per run, and the .pptx
+# under CoScientist/present is 85 MB — over the size at which a blob is
+# permanent in history for everyone who clones.
+output/
+CoScientist/present/
 CoScientist/some.yaml
 stubs/
 reports/
