@@ -159,7 +159,7 @@ def _retry_after_s(err: Exception) -> Optional[float]:
 
 def is_proxy_error(err: Exception) -> bool:
     """Return True if *err* represents an unreachable proxy or network connection failure."""
-    if not settings.web.use_proxy:
+    if not settings.web.use_proxy or not settings.services.proxy_url:
         return False
     msg = str(err).lower()
     proxy_keywords = (
