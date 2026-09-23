@@ -6,6 +6,7 @@ from google.adk.tools.mcp_tool import McpToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
 
 from CoScientist.config import get_settings
+from CoScientist.tools.mcp_resilience import ResilientMcpToolset
 from CoScientist.utils.selective_proxy import create_mcp_proxy_httpx_factory
 
 settings = get_settings()
@@ -28,6 +29,7 @@ def _http_mcp_toolset(
     headers: Optional[dict] = None,
     tool_filter: Optional[list] = None,
     httpx_client_factory: Optional[Callable] = None,
+    retry_calls: bool = False,
 ) -> Optional[McpToolset]:
     """Build an HTTP MCP toolset, or None when the URL is not configured.
 
@@ -37,6 +39,10 @@ def _http_mcp_toolset(
 
     ``tool_filter`` names the tools to keep. A server may expose more than an
     agent should see (see the vault below).
+
+    Every toolset lists its tools resiliently (see tools/mcp_resilience.py).
+    ``retry_calls`` also repeats a call whose connection was lost — set it only
+    for a server whose tools are read-only, since the lost call may have run.
     """
     if not url:
         return None
@@ -48,9 +54,10 @@ def _http_mcp_toolset(
     }
     if httpx_client_factory is not None:
         conn_kwargs["httpx_client_factory"] = httpx_client_factory
-    return McpToolset(
+    return ResilientMcpToolset(
         connection_params=StreamableHTTPConnectionParams(**conn_kwargs),
         tool_filter=tool_filter,
+        retry_calls=retry_calls,
     )
 
 
@@ -67,8 +74,10 @@ if settings.services.proxy_url:
         enabled_fn=get_settings().web.use_proxy,
     )
 
-websearch_toolset_instance = McpToolset(
+# Search only — a call lost with its connection is safe to repeat.
+websearch_toolset_instance = ResilientMcpToolset(
     connection_params=StreamableHTTPConnectionParams(**_tavily_conn_kwargs),
+    retry_calls=True,
 )
 
 # ---------------------------------------------------------------------------
@@ -121,6 +130,8 @@ microfluidic_economic_toolset_instance = _http_mcp_toolset(
     sse_read_timeout=_ECONOMICS_TIMEOUT,
     timeout=_ECONOMICS_TIMEOUT,
     tool_filter=ECONOMICS_MCP_TOOLS,
+    # Lookups and cost estimates only: repeating a lost call is harmless.
+    retry_calls=True,
 )
 
 # The CFD service's tools (tests/fixtures/cfd_mcp/tools.json), filtered like the
@@ -165,7 +176,9 @@ _openalex_headers = {
     }.items()
     if v
 }
-papers_search_toolset_instance = _http_mcp_toolset(PAPERS_SEARCH_URL, headers=_openalex_headers)
+papers_search_toolset_instance = _http_mcp_toolset(
+    PAPERS_SEARCH_URL, headers=_openalex_headers, retry_calls=True,
+)
 
 
 # ---------------------------------------------------------------------------
