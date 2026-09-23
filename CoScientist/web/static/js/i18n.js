@@ -1037,6 +1037,7 @@ const i18n = {
   'common.loading': { en: 'Loading…', ru: 'Загрузка…' },
   'common.showMore': { en: 'Show more', ru: 'Показать больше' },
   'common.showLess': { en: 'Show less', ru: 'Скрыть' },
+  'common.copy': { en: 'Copy', ru: 'Копировать' },
   'common.errorPrefix': { en: 'Error: {error}', ru: 'Ошибка: {error}' },
 
   // ── Top bar ──

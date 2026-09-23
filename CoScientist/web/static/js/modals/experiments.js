@@ -32,6 +32,14 @@
     const tvExpandedBlocks = new Set();
     let tvExpandAll = false;
 
+    // How args/results are shown: the readable key/value tree ('yaml') or
+    // pretty-printed JSON ('json'). Per-browser preference, not per-run.
+    const TV_FORMAT_KEY = 'coscientist.toolsViewer.format';
+    let tvFormat = 'yaml';
+    try {
+      if (localStorage.getItem(TV_FORMAT_KEY) === 'json') tvFormat = 'json';
+    } catch { /* storage unavailable: keep the default */ }
+
     function resetExperimentViewer() {
       toolCallRecords = [];
       toolCallsById = new Map();
@@ -453,19 +461,50 @@
       return null;
     }
 
+    // Pretty-printed JSON with the same colours as the tree view. Built by
+    // walking the value rather than regex-highlighting JSON.stringify output,
+    // so escaping stays correct whatever the strings contain.
+    function tvJsonHtml(value, indent) {
+      indent = indent || '';
+      const inner = indent + '  ';
+      if (value === null || value === undefined) return '<span class="tv-null">null</span>';
+      if (typeof value === 'boolean' || typeof value === 'number') {
+        return `<span class="tv-scalar">${value}</span>`;
+      }
+      if (typeof value === 'string') {
+        return `<span class="tv-json-string">${escHtml(JSON.stringify(value))}</span>`;
+      }
+      if (Array.isArray(value)) {
+        if (value.length === 0) return '[]';
+        return '[\n' + value.map(v => inner + tvJsonHtml(v, inner)).join(',\n') + '\n' + indent + ']';
+      }
+      const keys = Object.keys(value);
+      if (keys.length === 0) return '{}';
+      return '{\n' + keys.map(k =>
+        `${inner}<span class="tv-key">${escHtml(JSON.stringify(k))}</span>: ${tvJsonHtml(value[k], inner)}`,
+      ).join(',\n') + '\n' + indent + '}';
+    }
+
+    function tvRenderJson(value, truncated) {
+      const note = truncated ? `<div class="tv-empty">${t('experiments.truncated')}</div>` : '';
+      return `<div class="tv-json">${tvJsonHtml(value)}</div>${note}`;
+    }
+
     // `value` may already be a plain string — either a genuine string result,
     // or a JSON-ish dict/list truncated by the server's preview cap.
     function tvRenderAny(value) {
       if (typeof value === 'string') {
         const parsed = tvTryParseJsonString(value);
-        if (parsed) return tvRenderNested(parsed, 0);
+        if (parsed) {
+          return tvFormat === 'json' ? tvRenderJson(parsed.value, parsed.truncated) : tvRenderNested(parsed, 0);
+        }
         const trimmed = value.trim();
         return trimmed ? `<div class="tv-text">${escHtml(value)}</div>` : `<div class="tv-empty">${t('experiments.emptyValue')}</div>`;
       }
       if (value === null || value === undefined || (tvIsPlainObject(value) && Object.keys(value).length === 0)) {
         return `<div class="tv-empty">${t('experiments.noValue')}</div>`;
       }
-      return tvRender(value, 0);
+      return tvFormat === 'json' ? tvRenderJson(value, false) : tvRender(value, 0);
     }
 
     // Collapsed height must match the `.tv-collapsible` max-height in <style>
@@ -494,6 +533,103 @@
       renderExperimentFeed();
     }
 
+    function setToolsViewerFormat(format) {
+      tvFormat = format === 'json' ? 'json' : 'yaml';
+      try { localStorage.setItem(TV_FORMAT_KEY, tvFormat); } catch { /* ignore */ }
+      renderExperimentFeed();
+    }
+
+    // Replaces a server-truncated value on the record with the full one.
+    async function tvFetchFullValue(rec, field) {
+      const data = await apiJson(sessionApi('/tool-activity/' + encodeURIComponent(rec.callId)));
+      const full = Object.prototype.hasOwnProperty.call(data, field) ? data[field] : null;
+      if (field === 'args') {
+        rec.args = full;
+        rec.argsTruncated = false;
+      } else {
+        rec.result = field === 'error' ? { error: full } : full;
+        rec.resultTruncated = false;
+      }
+    }
+
+    // YAML view expands JSON-text strings into trees (see `tvRender`); the
+    // copied YAML does the same so it matches what is on screen.
+    function tvExpandJsonStrings(value) {
+      if (typeof value === 'string') {
+        const parsed = tvTryParseJsonString(value);
+        return parsed ? tvExpandJsonStrings(parsed.value) : value;
+      }
+      if (Array.isArray(value)) return value.map(tvExpandJsonStrings);
+      if (tvIsPlainObject(value)) {
+        const out = {};
+        Object.keys(value).forEach(k => { out[k] = tvExpandJsonStrings(value[k]); });
+        return out;
+      }
+      return value;
+    }
+
+    // Plain-text form of a value in the current format — what the copy
+    // button puts on the clipboard, instead of the tree's rendered DOM text.
+    function tvValueText(value) {
+      if (value === null || value === undefined) return '';
+      if (typeof value === 'string') {
+        const parsed = tvTryParseJsonString(value);
+        if (!parsed) return value;
+        value = parsed.value;
+      }
+      if (tvFormat === 'yaml' && typeof jsyaml !== 'undefined') {
+        return jsyaml.dump(tvExpandJsonStrings(value), { lineWidth: -1, noRefs: true }).replace(/\n$/, '');
+      }
+      return JSON.stringify(value, null, 2);
+    }
+
+    async function tvWriteClipboard(text) {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        return;
+      }
+      // Plain-http deployments have no async clipboard API.
+      const ta = document.createElement('textarea');
+      ta.value = text;
+      ta.setAttribute('readonly', '');
+      ta.style.position = 'fixed';
+      ta.style.opacity = '0';
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        if (!document.execCommand('copy')) throw new Error('copy failed');
+      } finally {
+        ta.remove();
+      }
+    }
+
+    async function copyTvBlock(btn) {
+      const rec = toolCallsById.get(btn.dataset.uid);
+      if (!rec) return;
+      const field = btn.dataset.field;
+      const icon = btn.querySelector('.material-symbols-outlined');
+      const flash = (name) => {
+        if (!icon) return;
+        icon.textContent = name;
+        setTimeout(() => { icon.textContent = 'content_copy'; }, 1200);
+      };
+      btn.disabled = true;
+      try {
+        const truncated = field === 'args' ? rec.argsTruncated : rec.resultTruncated;
+        if (truncated && rec.callId) {
+          await tvFetchFullValue(rec, field);
+          const el = document.getElementById(`tv-${rec.uid}-${field}`);
+          if (el) el.innerHTML = tvRenderAny(field === 'args' ? rec.args : rec.result);
+        }
+        await tvWriteClipboard(tvValueText(field === 'args' ? rec.args : rec.result));
+        flash('check');
+      } catch {
+        flash('error');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
     // One "Show more" button covers two different jobs, picked per click:
     //  - a block that only *looks* cut off (tall preview, nothing hidden from
     //    the server) just expands its CSS max-height — no network involved;
@@ -513,15 +649,7 @@
         btn.disabled = true;
         btn.textContent = t('common.loading');
         try {
-          const data = await apiJson(sessionApi('/tool-activity/' + encodeURIComponent(rec.callId)));
-          const full = Object.prototype.hasOwnProperty.call(data, field) ? data[field] : null;
-          if (field === 'args') {
-            rec.args = full;
-            rec.argsTruncated = false;
-          } else {
-            rec.result = field === 'error' ? { error: full } : full;
-            rec.resultTruncated = false;
-          }
+          await tvFetchFullValue(rec, field);
           el.innerHTML = tvRenderAny(field === 'args' ? rec.args : rec.result);
         } catch (err) {
           btn.disabled = false;
@@ -641,7 +769,13 @@
       const expandedCls = tvExpandedBlocks.has(blockId) ? ' tv-expanded' : '';
       return `
         <div>
-          <div class="text-[9px] font-bold text-outline-variant uppercase tracking-widest mb-1">${label}</div>
+          <div class="flex items-center justify-between mb-1">
+            <div class="text-[9px] font-bold text-outline-variant uppercase tracking-widest">${label}</div>
+            ${tvHasValue(value) ? `<button type="button" data-uid="${rec.uid}" data-field="${field}" onclick="copyTvBlock(this)"
+              title="${t('common.copy')}" class="flex items-center text-outline-variant hover:text-primary transition-colors">
+              <span class="material-symbols-outlined text-[14px]">content_copy</span>
+            </button>` : ''}
+          </div>
           <div id="${blockId}" class="tv-collapsible${expandedCls} bg-surface-container-lowest/80 border border-outline-variant/10 rounded-md p-2.5 text-[11px] text-on-surface-variant font-mono leading-relaxed">
             ${tvHasValue(value) ? tvRenderAny(value) : `<div class="tv-empty">${escHtml(emptyText)}</div>`}
           </div>
@@ -790,6 +924,13 @@
       }
       const expandBtn = document.getElementById('experiment-expand-all');
       if (expandBtn) expandBtn.textContent = tvExpandAll ? 'Collapse all' : 'Expand all';
+      document.querySelectorAll('[data-tv-format]').forEach(btn => {
+        const active = btn.dataset.tvFormat === tvFormat;
+        btn.classList.toggle('bg-primary/15', active);
+        btn.classList.toggle('text-primary', active);
+        btn.classList.toggle('text-outline-variant', !active);
+        btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+      });
 
       const roots = agentOrder.filter(key => {
         const node = agentNodes.get(key);
@@ -823,7 +964,9 @@
     window.toggleToolCard = toggleToolCard;
     window.toggleAgentNode = toggleAgentNode;
     window.toggleExperimentExpandAll = toggleExperimentExpandAll;
+    window.setToolsViewerFormat = setToolsViewerFormat;
     window.toggleTvBlock = toggleTvBlock;
+    window.copyTvBlock = copyTvBlock;
     window.addExperimentAgentEvent = addExperimentAgentEvent;
     window.addExperimentToolCall = addExperimentToolCall;
     window.addExperimentToolResponse = addExperimentToolResponse;
