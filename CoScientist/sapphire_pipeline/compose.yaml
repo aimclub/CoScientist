@@ -1,0 +1,15 @@
+services:
+  sapphire-pipeline:
+    build:
+      context: ../..
+      dockerfile: CoScientist/sapphire_pipeline/Dockerfile
+    image: coscientist-sapphire-pipeline:local
+    env_file:
+      - ../../config.env
+    environment:
+      DATABASE_TYPE: sqlite
+      SQLITE_PATH: /app/data/etl_state.sqlite3
+      FILES_DIRECTORY: /app/data/papers
+    volumes:
+      - ../../data/sapphire_pipeline:/app/data
+    restart: "no"

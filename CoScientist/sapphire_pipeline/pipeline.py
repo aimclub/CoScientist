@@ -4,9 +4,11 @@ import hashlib
 import logging
 import math
 from collections import Counter
-from itertools import islice
+
+import requests
 
 from .client import normalize_doi, openalex_id
+from .registry import FINAL_STATUSES
 
 logger = logging.getLogger(__name__)
 
@@ -50,16 +52,20 @@ def classification(work):
 def pdf_urls(publication, work):
     """Return unique, nonempty PDF candidate URLs in download priority order.
 
-    Prefer the publication URL, then best OA and primary locations not marked
-    closed, followed by work locations explicitly marked open access.
+    Prefer the Sapphire URL, then OpenAlex's content URL and OA locations.
+    Ignore malformed locations and URLs while preserving candidate order.
     """
     candidates = [publication.get('pdf_url')]
+    content_urls = work.get('content_urls')
+    if isinstance(content_urls, dict):
+        candidates.append(content_urls.get('pdf'))
     for key in ('best_oa_location', 'primary_location'):
-        location = work.get(key) or {}
-        if location.get('is_oa') is not False:
+        location = work.get(key)
+        if isinstance(location, dict) and location.get('is_oa') is not False:
             candidates.append(location.get('pdf_url'))
-    for location in work.get('locations') or []:
-        if location.get('is_oa') is True:
+    locations = work.get('locations')
+    for location in locations if isinstance(locations, list) else []:
+        if isinstance(location, dict) and location.get('is_oa') is True:
             candidates.append(location.get('pdf_url'))
     return list(dict.fromkeys(url.strip() for url in candidates if isinstance(url, str) and url.strip()))
 
@@ -67,10 +73,11 @@ def pdf_urls(publication, work):
 class SapphirePipeline:
     """Backend implements contains(metadata), upload(key, bytes), ingest(...)."""
 
-    def __init__(self, client, backend):
-        """Bind the Sapphire client and the backend used for deduplication and ETL."""
+    def __init__(self, client, backend, registry=None):
+        """Bind the Sapphire client, RAG backend, and optional status registry."""
         self.client = client
         self.backend = backend
+        self.registry = registry
 
     def process(self, publication):
         """Process one publication and return its ingestion or skip reason.
@@ -83,9 +90,10 @@ class SapphirePipeline:
         if not allowed_domains(publication):
             return 'domain_filtered'
         identifier = openalex_id(publication.get('openalex_id'))
+        publication_doi = normalize_doi(publication.get('doi'))
         metadata = {
             'openalex_id': identifier or '',
-            'doi': normalize_doi(publication.get('doi')) or '',
+            'doi': publication_doi or '',
             'sapphire_publication_id': str(publication.get('id') or ''),
         }
         if self.backend.contains(metadata):
@@ -98,31 +106,38 @@ class SapphirePipeline:
         domain, field = classification(work)
         metadata.update(domain=domain, field=field)
         metadata['doi'] = metadata['doi'] or normalize_doi(work.get('doi')) or ''
-        if self.backend.contains(metadata):
+        if metadata['doi'] and metadata['doi'] != publication_doi and self.backend.contains(metadata):
             return 'already_in_rag'
+        network_error = False
         for url in pdf_urls(publication, work):
             try:
                 pdf = self.client.download_pdf(url)
-            except Exception:
+            except Exception as error:
+                if isinstance(error, (requests.RequestException, TimeoutError)) and not isinstance(error, requests.HTTPError):
+                    network_error = True
                 logger.warning('PDF candidate unavailable for %s', identifier, exc_info=True)
                 continue
             # Same content ID as LocalSource: catches previously ingested local PDFs.
             article_id = hashlib.md5(pdf).hexdigest()
-            if self.backend.contains(dict(metadata, article_id=article_id)):
+            if self.backend.contains({'article_id': article_id}):
                 return 'already_in_rag'
             key = f'articles/{domain}/{article_id}/paper.pdf'
             metadata.update(pdf_url=url, s3_key=key, ingestion_source='sapphire')
             self.backend.upload(key, pdf)
             self.backend.ingest(article_id, publication.get('name') or work.get('display_name') or identifier, metadata)
             return 'ingested'
+        if network_error:
+            raise RuntimeError('PDF candidates could not be checked because of a network error')
         return 'no_usable_pdf'
 
     def run(self, max_articles=None):
         """Process publications sequentially and return counters by outcome.
 
         Args:
-            max_articles: Maximum number of records to inspect, including skips
-                and failures; None processes records until pagination ends.
+            max_articles: Maximum number of records to process in this run,
+                including newly determined skips and failures. Publications with
+                a final registry status do not consume the limit. None processes
+                records until pagination ends.
 
         Count per-publication exceptions as failed and continue. Page-fetch errors
         propagate. Raise ValueError when a supplied limit is not positive.
@@ -130,18 +145,42 @@ class SapphirePipeline:
         if max_articles is not None and max_articles < 1:
             raise ValueError('max_articles must be positive')
         counts = Counter()
-        for publication in islice(self.client.publications(), max_articles):
+        attempted = 0
+        publications = iter(self.client.publications())
+        while max_articles is None or attempted < max_articles:
+            try:
+                publication = next(publications)
+            except StopIteration:
+                break
             counts['seen'] += 1
-            progress = f"{counts['seen']}/{max_articles}" if max_articles is not None else str(counts['seen'])
+            registry_key = self.registry.register(publication) if self.registry else None
+            previous_status = self.registry.status(registry_key) if self.registry else None
+            if previous_status in FINAL_STATUSES:
+                counts['registry_skipped'] += 1
+                counts[f'registry_{previous_status}'] += 1
+                logger.info(
+                    '[scan %s] %s: registry_skip (%s)',
+                    counts['seen'], publication.get('openalex_id'), previous_status,
+                )
+                continue
+            attempted += 1
+            progress = f'{attempted}/{max_articles}' if max_articles is not None else str(attempted)
             logger.info(
                 "[%s] Processing publication: %s | %s",
                 progress, publication.get('openalex_id'), publication.get('name') or 'Untitled',
             )
+            if self.registry:
+                self.registry.start_attempt(registry_key)
             try:
                 outcome = self.process(publication)
-            except Exception:
+            except Exception as error:
                 logger.exception('Publication failed: %s', publication.get('openalex_id'))
                 outcome = 'failed'
+                if self.registry:
+                    self.registry.finish(registry_key, outcome, f'{type(error).__name__}: {error}')
+            else:
+                if self.registry:
+                    self.registry.finish(registry_key, outcome)
             counts[outcome] += 1
             logger.info('[%s] %s: %s', progress, publication.get('openalex_id'), outcome)
         return dict(counts)

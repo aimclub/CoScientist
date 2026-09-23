@@ -20,6 +20,9 @@ if not __package__:
 
 from .client import SapphireClient
 from .pipeline import SapphirePipeline
+from .registry import PublicationRegistry
+from CoScientist.papers_processing_refactoring.app.settings import OpenAlexSettings
+from CoScientist.papers_processing_refactoring.definitions import CONFIG_PATH
 
 
 def main():
@@ -36,11 +39,20 @@ def main():
     parser.add_argument('--timeout', type=float, default=60)
     parser.add_argument('--max-pdf-mb', type=int, default=100)
     parser.add_argument('--lock-file', type=Path, default=Path('data/sapphire_pipeline.lock'))
+    parser.add_argument(
+        '--registry-file', type=Path, default=Path('data/sapphire_registry.sqlite3'),
+        help='SQLite file used to persist publication statuses between runs',
+    )
     args = parser.parse_args()
     if args.max_articles is not None and args.max_articles < 1:
         parser.error('--max-articles must be positive')
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
-    client = SapphireClient(args.url, args.page_size, args.timeout, args.max_pdf_mb * 1024 * 1024)
+    openalex = OpenAlexSettings(_env_file=CONFIG_PATH)
+    client = SapphireClient(
+        args.url, args.page_size, args.timeout, args.max_pdf_mb * 1024 * 1024,
+        openalex_email=openalex.email,
+        openalex_api_key=openalex.api_key.get_secret_value() if openalex.api_key else None,
+    )
     try:
         args.lock_file.parent.mkdir(parents=True, exist_ok=True)
         with args.lock_file.open('a') as lock:
@@ -49,7 +61,10 @@ def main():
             except BlockingIOError:
                 parser.exit(1, 'Sapphire pipeline is already running with this lock file\n')
             from .runtime import RAGBackend
-            counts = SapphirePipeline(client, RAGBackend()).run(max_articles=args.max_articles)
+            with PublicationRegistry(args.registry_file) as registry:
+                counts = SapphirePipeline(client, RAGBackend(), registry).run(
+                    max_articles=args.max_articles
+                )
             print(json.dumps(counts, ensure_ascii=False, indent=2))
             return 1 if counts.get('failed') else 0
     finally:

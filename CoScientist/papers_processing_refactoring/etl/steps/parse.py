@@ -16,7 +16,10 @@ class ParseStep(ETLStep):
     name = "parsing"
         
     def __init__(self):
-        self.marker_client = MarkerClient(base_url=os.getenv("MARKER_URL", "http://localhost:8080/convert"))
+        self.marker_client = MarkerClient(
+            base_url=os.getenv("MARKER_URL", "http://localhost:8080/convert"),
+            timeout=float(os.getenv("MARKER_TIMEOUT", "600")),
+        )
 
     def run(self, ctx: ETLContext) -> None:
         article_id = ctx.article.id
