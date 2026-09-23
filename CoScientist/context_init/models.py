@@ -75,8 +75,15 @@ FRAME_SPEC: Tuple[FrameSpecEntry, ...] = (
      "формальные условия достаточности свидетельств",
      ("threshold", "confirmations_needed", "reproducibility")),
     ("Модель стоимости", "cost_model", None,
-     "правило стоимости шага и правило остановки по стоимости",
-     ("cost_rule", "stop_rule")),
+     "правило стоимости шага, правило остановки и ожидаемый эффект",
+     ("cost_rule", "stop_rule", "expected_effect")),
+    # ГОСТ 19.201-78, разделы 2.2, 2.5а, 2.6, 2.7. Из дружеского запроса это не
+    # выводится: кто заказал работу и чем она принимается — вопрос к человеку, а
+    # не к модели. `question`, потому что это свойства самого исследования.
+    ("Основание и приёмка", "question", None,
+     "кто заказал работу, что она сдаёт и как принимается — разделы ТЗ по ГОСТ 19.201-78",
+     ("basis_document", "customer", "topic_name", "deliverables", "stages",
+      "acceptance")),
 )
 
 # Canonical block titles in document order.
@@ -166,6 +173,14 @@ BLOCK_I18N: Dict[str, Dict[str, Dict[str, str]]] = {
         "title": {"en": "Confirmation criteria", "ru": "Условия подтверждения"},
         "usage": {"en": "The formal conditions for sufficient evidence.",
                   "ru": "формальные условия достаточности свидетельств"},
+    },
+    "Основание и приёмка": {
+        "title": {"en": "Basis and acceptance", "ru": "Основание и приёмка"},
+        "usage": {
+            "en": "Who commissioned the work, what it hands over and how it is "
+                  "accepted — the ТЗ sections of GOST 19.201-78.",
+            "ru": "кто заказал работу, что она сдаёт и как принимается — "
+                  "разделы ТЗ по ГОСТ 19.201-78"},
     },
     "Модель стоимости": {
         "title": {"en": "Cost model", "ru": "Модель стоимости"},
@@ -373,6 +388,48 @@ FIELD_I18N: Dict[str, Dict[str, Dict[str, str]]] = {
         "placeholder": {
             "en": "Enter the reproducibility requirement, or leave it empty so the agent fills in a working value.",
             "ru": "Укажите требование к воспроизводимости или оставьте поле пустым — агент заполнит рабочее значение."},
+    },
+    "basis_document": {
+        "label": {"en": "Basis for the work", "ru": "Основание для работы"},
+        "placeholder": {
+            "en": "Name the document the work rests on — a contract, an order, a research programme — or say that it is self-initiated. Leave it empty rather than guess.",
+            "ru": "Назовите документ, на основании которого ведётся работа: договор, приказ, программа исследований — или укажите, что работа инициативная. Пустое поле лучше догадки."},
+    },
+    "customer": {
+        "label": {"en": "Customer", "ru": "Заказчик"},
+        "placeholder": {
+            "en": "The organisation or person the result is for. Leave it empty rather than guess.",
+            "ru": "Организация или человек, для которого делается работа. Пустое поле лучше догадки."},
+    },
+    "topic_name": {
+        "label": {"en": "Name of the topic", "ru": "Наименование темы"},
+        "placeholder": {
+            "en": "The official name of the work, as it should appear on the title page of the ТЗ.",
+            "ru": "Официальное наименование работы — так, как оно должно стоять на титульном листе ТЗ."},
+    },
+    "deliverables": {
+        "label": {"en": "Documents to be delivered", "ru": "Состав отчётных документов"},
+        "placeholder": {
+            "en": "Which documents the work must hand over: a GOST 7.32 research report, a dataset, a program, an article.",
+            "ru": "Какие документы работа обязана сдать: отчёт о НИР по ГОСТ 7.32, набор данных, программа, статья."},
+    },
+    "stages": {
+        "label": {"en": "Stages and deadlines", "ru": "Этапы и сроки"},
+        "placeholder": {
+            "en": "The stages the work is divided into and when each is due. One line per stage.",
+            "ru": "На какие этапы делится работа и к какому сроку каждый. По строке на этап."},
+    },
+    "acceptance": {
+        "label": {"en": "Acceptance procedure", "ru": "Порядок приёмки"},
+        "placeholder": {
+            "en": "How the result is checked and by whom it is accepted: the kinds of testing and who signs it off.",
+            "ru": "Как проверяется результат и кто его принимает: виды испытаний и кем подписывается приёмка."},
+    },
+    "expected_effect": {
+        "label": {"en": "Expected effect", "ru": "Ожидаемый эффект"},
+        "placeholder": {
+            "en": "What the work is expected to gain, against doing it the current way. Numbers if there are any.",
+            "ru": "Что работа должна дать по сравнению с тем, как задача решается сейчас. Числа, если они есть."},
     },
     "cost_rule": {
         "label": {"en": "Cost rule", "ru": "Правило стоимости"},

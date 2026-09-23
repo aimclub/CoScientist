@@ -26,7 +26,25 @@
     // reconnecting tab gets the whole picture in one snapshot instead of having
     // to add up a stream. Rows are agents; a sandbox run shows as the child of
     // the agent that started it, because that is who spent the money.
+    //
+    // The panel is folded by default — the spend is checked now and then, not
+    // watched — and the two numbers worth watching (total and elapsed) stay on
+    // the summary row either way. Whether a reader keeps it open is a per-
+    // browser habit, so it is remembered here rather than reset every reload.
     // =========================================================================
+    const USAGE_PANEL_KEY = 'coscientist.usage_open';
+
+    (function restoreUsagePanel() {
+      const panel = document.getElementById('usage-panel');
+      if (!panel) return;
+      try {
+        panel.open = localStorage.getItem(USAGE_PANEL_KEY) === 'true';
+      } catch (_) { /* private mode: the default (folded) stands */ }
+      panel.addEventListener('toggle', () => {
+        try { localStorage.setItem(USAGE_PANEL_KEY, String(panel.open)); } catch (_) { }
+      });
+    })();
+
     function fmtUsd(value) {
       const n = Number(value) || 0;
       if (n && n < 0.0001) return '<$0.0001';

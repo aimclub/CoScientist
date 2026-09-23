@@ -10,7 +10,8 @@
 # The module replaces main's execution lane:
 #   OrchestratorAgent → ExperimentModuleAgent (in TaskExecutorAgent's place)
 #   ExperimentModuleAgent = ToolPreparer → Planner(+HITL) → Executor → Result(+HITL)
-#   Coder / Fedot / ReAct-MCP / Alembic / Research / Medical are its routes.
+#   ReAct-MCP / Coder / Alembic / Research / Medical are its routes; FEDOT.MAS is
+#   an optional one, off unless EXPERIMENTS__ROUTE_FEDOT=true (see FedotAgent).
 # TaskExecutorAgent, ToolPipelineAgent and ExecutorSwitchAgent stand down: ADK
 # allows an agent exactly one `children` parent, and ToolPreparerAgent belongs
 # to the module here. `enabled: false` still builds them (A2A) but attaches
@@ -137,6 +138,16 @@ agents:
       after_model: [expand_link_refs]
 
   FedotAgent:
+    # FEDOT.MAS is an optional route here, with ONE switch:
+    # EXPERIMENTS__ROUTE_FEDOT (off by default; also in the web settings).
+    # This line attaches the agent on it, and every route decision (planner
+    # prompt and context, critique, start_task, fallback, Alembic post-build)
+    # asks state_machine.fedot_route_available, which also requires FedotAgent
+    # in ExperimentExecutorAgent.subordinates below - so deleting it from that
+    # list switches the route off too. Deleting only THIS block does not:
+    # `extends: system` brings FedotAgent back from system.yaml.
+    # Not EXECUTOR__FEDOT_FALLBACK: that is the main profile's reranker fallback.
+    enabled: "${experiments.route_fedot}"
     prompt: experiment_fedot_route
     tools: [fedot, task_tracker, graph, research_graph_readonly]
     callbacks:
@@ -167,12 +178,15 @@ agents:
     description: >-
       Plans, reviews, executes and reports one computational experiment with
       task/attempt state, finite fallback and artifact lineage. Owns tool
-      discovery (ToolPreparer), plan HITL, MCP/FEDOT/Coder/Alembic/
-      Research/Medical routing, and result HITL. Primary choice for ANY
-      computational ask (mixed evidence+compute stays in one plan).
+      discovery (ToolPreparer), plan HITL, MCP/Coder/Alembic/Research/Medical
+      routing, and result HITL. Primary choice for ANY computational ask
+      (mixed evidence+compute stays in one plan).
+    # No route names the module picks for itself (FEDOT.MAS used to be listed
+    # here): the orchestrator copies them into the brief, the brief becomes
+    # the planner's source_request, and a named route is a requested route.
     routing: >-
       for ANY computational / engineering stage: molecules, docking, properties,
-      simulations, custom code, named repos/URLs, FEDOT loops, or MCP gaps.
+      simulations, custom code, named repos/URLs, or MCP gaps.
       Call ONCE per stage with the FULL self-contained brief (goal, constraints,
       data refs, required outcomes). Retrieve tools first to decide the lane and
       to NAME the relevant tools in the brief; the FULL inventory, plan and route
@@ -183,7 +197,7 @@ agents:
       Prefer over Research whenever the ask can be computed or coded:
         - chemistry / molecule / docking / property tasks
         - custom code, sandbox, or named repository work
-        - tool discovery + execution + coder/FEDOT fallback
+        - tool discovery + execution + route fallback
     children:
       - ToolPreparerAgent
       - ExperimentPlannerAgent
@@ -205,7 +219,7 @@ agents:
         id: execute_task
         name: Execute experiment
         description: Plan, approve and run a computational experiment
-        tags: [experiment, mcp, fedot, coder]
+        tags: [experiment, mcp, coder]
 
   ExperimentPlannerAgent:
     class: custom:experiment_review

@@ -590,23 +590,97 @@ def user_links(callback_context: CallbackContext) -> None:
     return None
 
 
-def expand_refs(text: str, registry: Dict[str, Any]) -> str:
+def _link_name(entry: Dict[str, Any]) -> str:
+    """A short thing to call this link, for prose a person reads."""
+    label = str(entry.get("label") or "").strip()
+    if label:
+        return label
+    url = str(entry.get("url") or "")
+    from urllib.parse import unquote, urlsplit
+
+    name = unquote(urlsplit(url).path.rsplit("/", 1)[-1]).strip()
+    return name or urlsplit(url).netloc or "ссылка"
+
+
+def expand_refs(text: str, registry: Dict[str, Any],
+                as_markdown: bool = False) -> str:
     """Replace every ``[[linkN]]`` in ``text`` with the URL it refers to.
 
     An unknown reference is left as written rather than dropped: a visible
     `[[link7f3a]]` in the output is a legible bug report, whereas silently deleting
     it would hand the next agent a sentence with the object missing.
+
+    ``as_markdown`` writes ``[name](url)`` instead of the bare URL, and is used
+    for text a person will read. Two reasons, one of them a bug:
+
+    * a model that writes ``[[a]]/[[b]]`` produced two URLs fused by a slash,
+      and a slash is legal inside a URL — so the chat's markdown parser read
+      the pair as ONE link, shortened its visible text to the last path
+      segment, and drew a broken image with that same text as alt. What the
+      reader saw was a bare filename, twice, and no working link anywhere.
+      Wrapped in markdown, adjacent links cannot fuse.
+    * a presigned URL is 400 characters of signature. A name is what the
+      sentence was about.
+
+    Tool arguments keep the bare URL: a tool needs an address, not prose.
     """
     def substitute(match: "re.Match[str]") -> str:
         entry = registry.get(match.group(1).lower())
-        return entry["url"] if entry else match.group(0)
+        if not entry:
+            return match.group(0)
+        url = entry["url"]
+        if not as_markdown or _wants_bare_url(text, match.start(), match.end()):
+            return url
+        return f"[{_link_name(entry)}]({url})"
 
     return _LINK_REF_RE.sub(substitute, text)
 
 
-def _resolve_value(value: str, registry: Dict[str, Any]) -> str:
+#: An opening code fence, with or without a language tag.
+_FENCE_RE = re.compile(r"^\s*(```|~~~)", re.MULTILINE)
+
+
+def _wants_bare_url(text: str, start: int, end: int) -> bool:
+    """Whether this reference must expand to the URL alone, not ``[name](url)``.
+
+    The markdown form is right for a reference standing free in prose and wrong
+    everywhere a URL is already expected. Put ``[name](url)`` inside a link's
+    destination and you get ``[label]([name](url))`` — markdown whose target is
+    not a URL. A live session shows exactly that, and worse: the aggregator's
+    own text is re-redacted into ``[[ref]]`` when the history is replayed, so
+    each turn nests it one level deeper and drags the whole presigned URL into
+    view. That string, verbatim from a run:
+
+        "figure_artifact": "S3: [fig3_tsne.png]([fig3_tsne.png](http://…X-Amz-…))"
+
+    Four contexts take the bare URL: a link or image destination, an autolink,
+    an inline-code span, and a fenced block.
+    """
+    before, after = text[:start], text[end:]
+
+    # `](  [[ref]]  )` — a markdown link or image destination. Also the title
+    # form `](url "title")`, where the ref is still the destination.
+    stripped = before.rstrip()
+    if stripped.endswith("](") and after.lstrip().startswith((")", '"', "'")):
+        return True
+    # `<[[ref]]>` — an autolink.
+    if before.endswith("<") and after.startswith(">"):
+        return True
+    # Inside a fenced block: an odd number of fences opened before this point.
+    if len(_FENCE_RE.findall(before)) % 2 == 1:
+        return True
+    # Inside an inline-code span, judged on the current line only so a stray
+    # backtick paragraphs away cannot flip every reference after it.
+    line_start = before.rfind("\n") + 1
+    if before.count("`", line_start) % 2 == 1:
+        return True
+    return False
+
+
+def _resolve_value(value: str, registry: Dict[str, Any],
+                   as_markdown: bool = False) -> str:
     """One outbound string: references expanded, then retyped URLs repaired."""
-    value = expand_refs(value, registry)
+    value = expand_refs(value, registry, as_markdown)
     # Loose matching is safe here: a span is only touched when it resolves to
     # something already IN the registry, so a bare `scipy.io` nobody
     # registered leaves exactly as the model wrote it — while the user's own
@@ -962,7 +1036,8 @@ def expand_link_refs(
         if not text:
             continue
         try:
-            resolved = _resolve_value(text, registry)
+            # The one egress that a human reads, so links go out named.
+            resolved = _resolve_value(text, registry, as_markdown=True)
         except Exception as exc:  # noqa: BLE001
             logger.error("expand_link_refs failed: %s", exc)
             continue

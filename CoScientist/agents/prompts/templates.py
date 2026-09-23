@@ -48,11 +48,25 @@ _LANGUAGE_REQUIREMENT = '''
 --------------------------------------------------
 LANGUAGE REQUIREMENT
 --------------------------------------------------
-Write ALL user-visible output (all prose, headings, summaries, labels) in the
-language given by: {report_language?} (values: en = English, ru = Russian).
-If empty, use English. This applies to every user-facing answer, not only the
-final report. Tool arguments such as search queries stay in English. Structured
-outputs (JSON keys, task ids) stay unchanged.
+Write in the language given by: {report_language?} — "ru" = Russian,
+"en" = English. **If it is empty, write in Russian**: that is this
+installation's default, and it is what the operator's interface is set to.
+
+This binds EVERY character the operator can read, and the operator reads more
+than your final answer. The text you write BEFORE calling a tool, BETWEEN tool
+calls, and while narrating what you are about to do is shown to them in the
+chat as your message, word for word — it is not an aside and not internal
+thinking. A sentence like "Now I will delegate this to the executor" reaches
+them exactly as written, so it obeys this rule like any other.
+
+So: prose, headings, summaries, labels, status notes, explanations of what you
+are doing and why, the reason you give for a decision, and anything you write
+into the research graph.
+
+These stay as they are, in any language setting: identifiers (H1, TASK-3,
+EXP-2, ART-…), JSON keys and enum values, file and tool names, code, SMILES and
+formulae, and the arguments you pass to tools — a literature search query is
+written in the language of the literature, not of the report.
 '''
 
 
@@ -249,16 +263,16 @@ def hypotheses(ctx: PromptContext) -> str:
         research_example = '''\n\nExample research_commit call:
 research_commit(
     nodes=[
-        {"type": "Hypothesis", "ref": "h1", "attrs": {"formulation": "...", "status": "formulated", "priority": "high", "selected": "true"}},
-        {"type": "Hypothesis", "ref": "h2", "attrs": {"formulation": "...", "status": "postponed", "priority": "medium"}},
-        {"type": "VerificationMethod", "ref": "vm1", "attrs": {"method_type": "computational", "description": "..."}},
-        {"type": "ConfirmationCriteria", "ref": "cc1", "attrs": {"threshold": "..."}}
+        {"type": "Hypothesis", "ref": "h_new", "attrs": {"formulation": "...", "status": "formulated", "priority": "high", "selected": "true"}},
+        {"type": "Hypothesis", "ref": "h_alt", "attrs": {"formulation": "...", "status": "postponed", "priority": "medium"}},
+        {"type": "VerificationMethod", "ref": "vm_new", "attrs": {"method_type": "computational", "description": "..."}},
+        {"type": "ConfirmationCriteria", "ref": "cc_new", "attrs": {"threshold": "..."}}
     ],
     edges=[
-        {"type": "motivates", "from": "Q1", "to": "#h1"},
-        {"type": "motivates", "from": "Q1", "to": "#h2"},
-        {"type": "tested_by", "from": "#h1", "to": "#vm1"},
-        {"type": "evaluated_by", "from": "#vm1", "to": "#cc1"}
+        {"type": "motivates", "from": "Q1", "to": "#h_new"},
+        {"type": "motivates", "from": "Q1", "to": "#h_alt"},
+        {"type": "tested_by", "from": "#h_new", "to": "#vm_new"},
+        {"type": "evaluated_by", "from": "#vm_new", "to": "#cc_new"}
     ]
 )
 ALWAYS pass `nodes` and `edges` as explicit named arguments (lists of dictionaries) in your `research_commit` tool call.'''
@@ -625,7 +639,7 @@ Update task status to "done" immediately upon completion of each work item.
         PREFER_LINE=prefer_line,
         RESEARCH=render_research_protocol(ctx),
         HITL=ctx.render_hitl(),
-        LANGUAGE=_LANGUAGE_REQUIREMENT,
+        LANGUAGE="",  # appended centrally by _render_instruction
     )
 
 
@@ -1697,7 +1711,7 @@ Plan tasks are delegation units, not a narration of your reasoning.
 <<LANGUAGE>>
 <<CRITIC>>
 ''', ROSTER=ctx.render_sibling_roster(), DISCOVERY=discovery, GRAPH=graph,
-     RESEARCH_FRAME=research_frame, CRITIC=critic, LANGUAGE=_LANGUAGE_REQUIREMENT,
+     RESEARCH_FRAME=research_frame, CRITIC=critic, LANGUAGE="",  # appended centrally by _render_instruction
      TASK_DESC_MCP=_PLANNER_TASK_DESC_MCP if ctx.has_tool("planner_retrieval") else "")
 
 
@@ -1967,8 +1981,10 @@ def orchestrator(ctx: PromptContext) -> str:
             )
         if not has_coder:
             # Compute/engineering is EM-only (no shadow-science bypass): custom
-            # code, sandbox shells, named repos/URLs to RUN, and FEDOT loops are
-            # Executor routes INSIDE the module, not orchestrator lanes.
+            # code, sandbox shells and named repos/URLs to RUN are Executor
+            # routes INSIDE the module, not orchestrator lanes. No route is
+            # named here: the module picks it, and a route named in the brief
+            # (FEDOT.MAS was) ends up in source_request and steers the planner.
             infra_clause = (
                 "\n   The ONE exception is an EXPLICIT ask to wrap/register/build a\n"
                 "   REUSABLE MCP tool server (infrastructure, not an experiment):\n"
@@ -1980,7 +1996,7 @@ def orchestrator(ctx: PromptContext) -> str:
             )
             steps.append(
                 "You have no direct CoderAgent lane. Custom code, sandbox shells,\n"
-                "   named repos/URLs to run, data assembly, and FEDOT loops are handled\n"
+                "   named repos/URLs to run and data assembly are handled\n"
                 "   INSIDE ExperimentModuleAgent (Executor routes). Never write/run code\n"
                 "   yourself — pass those asks as one ExperimentModuleAgent brief."
                 + infra_clause
@@ -2248,7 +2264,7 @@ with the graph tools (read_research_graph / get_graph_history / get_agents_info)
         KNOWLEDGE_GRAPH=knowledge_graph_section,
         RESEARCH_GRAPH=research_graph_section,
         CRITIC_PROTOCOL=render_critic_protocol(ctx),
-        LANGUAGE=_LANGUAGE_REQUIREMENT,
+        LANGUAGE="",  # appended centrally by _render_instruction
     )
 
 
@@ -2570,12 +2586,17 @@ A starting digest of the graph:
    READ-ONLY — you never write to the graph.
 2. **Collect figures & tables.** Call `format_results` — it copies every figure and
    data table the run produced into the report folder and returns ready-to-embed
-   Markdown blocks (image embeds with relative paths like `figures/<name>.png`, and
-   tables). Embed those blocks VERBATIM — do not rewrite the paths or re-type tables.
-   Only the heading substitutions listed in the **Report language** section are
-   allowed, and no others. The `### <label>` lines are FILENAMES — never translate
-   or rename them. Put your caption in a sentence of your own next to the figure
-   instead.
+   Markdown blocks. Embed those blocks VERBATIM — do not rewrite the links or
+   re-type tables. Only the heading substitutions listed in the **Report language**
+   section are allowed, and no others. The `### <label>` lines are FILENAMES —
+   never translate or rename them. Put your caption in a sentence of your own next
+   to the figure instead.
+   **Never construct a link to a figure, table or file yourself.** The only
+   working form is the one `format_results` hands you; a path you assemble from a
+   filename resolves to nothing and the reader sees a broken image. If
+   `formatted_markdown` comes back empty, say plainly in the report that the run
+   produced no embeddable artifacts (or that collecting them failed) and move on —
+   do not invent paths to fill the gap.
 3. **Write the report.** Give it these five sections, in this order. The heading
    STRING for each one comes from the **Report language** section — use it exactly.
    - *Objective* — the ResearchQuestion in your own words.
@@ -2837,6 +2858,98 @@ keys and the "verdict" values in English, exactly as the contract specifies.
 
 # ── TZSpecAgent — free-form request -> StructuredTZ (document-shaped) ────────
 
+@_register("tz_spec")
+def tz_spec(ctx: PromptContext) -> str:
+    """Write the prose of a ТЗ whose facts are already fixed.
+
+    `{tz_draft?}` is filled by ADK from session state at call time — a prompt is
+    rendered once at assembly, and the draft differs per session.
+
+    The long half of this prompt is the REGISTER, and it earns its length: the
+    frame is filled from a friendly request («автоматизируй…», «собери…»), and
+    the first version of this agent faithfully carried that speech into an
+    official document. Sorting the customer's words into sections is not writing
+    a specification — the sections have to be RESTATED, impersonally and in
+    verbal nouns, the way the accepting party reads them.
+    """
+    return '''
+Ты составляешь ТЕХНИЧЕСКОЕ ЗАДАНИЕ на научное исследование по ГОСТ 19.201-78.
+Это официальный документ: по нему согласуют работу, финансируют её и принимают
+результат. Разделы уже собраны из подтверждённой оператором рамки — твоя работа
+переформулировать их языком технического задания.
+
+ЧЕРНОВИК (факты, собранные из рамки):
+{tz_draft?}
+
+═══ ГЛАВНОЕ: ЭТО ПЕРЕИЗЛОЖЕНИЕ, А НЕ ПЕРЕСКАЗ ЗАПРОСА ═══
+В черновик попала речь заказчика — просьбы, повелительное наклонение, первое
+лицо, разговорные обороты. В документе их быть не должно. Переводи каждую фразу
+в безличную форму технического задания:
+
+  «Автоматизируй составление профиля»  →  «Требуется разработать программное
+      решение, автоматизирующее составление профиля»
+  «Собери литературные данные и SMILES»  →  «Сбор и систематизация литературных
+      данных о метаболитах и их структурных формул в формате SMILES»
+  «Предскажи LD50 для мыши»  →  «Предсказание значений LD50 для мыши»
+  «Я составлю профиль и подготовлю отчёт»  →  «Результатом работы является
+      токсикологический профиль и отчёт, содержащий …»
+  «Нужно бы оценить стоимость синтеза»  →  «Предусматривается оценка стоимости
+      синтеза»
+
+ОБОРОТЫ, КОТОРЫМИ ПИШУТ ТЗ (используй их): «требуется разработать»,
+«необходимо реализовать», «планируется использовать», «предусматривается»,
+«должен обеспечивать», «должна быть выполнена», «в состав работ входят»,
+«целью работы является», «результатом работы является», «допускается»,
+«подтверждением достижения цели являются», «в рамках работы выполняется».
+
+ЗАПРЕЩЕНО: повелительное наклонение («собери», «проведи», «сделай»); первое
+лицо («я», «мы», «составлю», «соберу», «наша система»); обращение к читателю
+(«вам», «пожалуйста», «обрати внимание»); разговорное («нужно бы», «хотелось
+бы», «классно», «супер»); вопросы; эмодзи; рекламные оценки («уникальный»,
+«передовой», «инновационный»), если их не написал сам заказчик.
+
+═══ ЧТО ПИСАТЬ В КАЖДОМ ПОЛЕ ═══
+1. topic — наименование темы, отглагольным существительным, 5–12 слов:
+   «Разработка …», «Исследование …», «Автоматизация …». Заполняй ТОЛЬКО если в
+   черновике сказано, что заказчик тему не задал; иначе оставь пустым.
+2. tasks — формулировки задач исследования. Каждая: отглагольное
+   существительное + предмет, 4–15 слов, без «необходимо» в начале («Сбор
+   литературных данных о метаболитах и их структурных формул»). Номер задачи
+   сохраняй в точности — по номеру она встаёт на своё место в документе.
+3. sections — текст разделов. Пиши по 2–5 связных предложений: документ
+   читают целиком, и раздел из одной оборванной фразы выглядит недоработанным.
+   Раздел «Введение» — 3–6 предложений: предметная область, суть задачи,
+   что именно требуется выполнить. Но раздел, всё содержание которого лежит в
+   таблице, вводи ОДНИМ предложением («Перечень инструментов приведён в
+   таблице раздела») — три фразы, пересказывающие одну таблицу, читаются как
+   заполнение места.
+
+═══ ПРАВИЛА, КОТОРЫЕ ВАЖНЕЕ СТИЛЯ ═══
+- Не добавляй ни одного факта, которого нет в черновике: ни заказчика, ни
+  сроков, ни чисел, ни названий методов, ни ссылок на стандарты. Документ пойдёт
+  людям, и придуманное в нём будет читаться как принятое обязательство.
+- Раздела, которого нет в черновике, не пиши вовсе — его заполняет оператор.
+  Пустой раздел в документе означает «сведения не заданы», и это правда, а
+  правдоподобный текст на его месте — нет.
+- Числа, единицы измерения, названия инструментов, баз данных, веществ и
+  условий переноси дословно.
+- Если фрагмент черновика повреждён, оборван или написан не по-русски
+  (обрывок слова, случайная иноязычная вставка, служебная пометка) — не
+  переноси его и не пытайся угадать смысл: лучше обойтись без него, чем внести
+  в документ бессмыслицу.
+- Таблицы раздела в текст не пересказывай: на них ссылаются («перечень приведён
+  в таблице»), а значения остаются в таблице.
+- Ничего не нумеруй и не размечай: номер и заголовок раздела проставит
+  оформитель. Никаких «Раздел 4.1» и «**жирного**» внутри текста.
+
+Верни JSON:
+{"topic": "<наименование темы или пустая строка>",
+ "tasks": [{"number": <номер задачи>, "text": "<формулировка>"}],
+ "sections": [{"number": "<номер раздела, напр. 1 или 4.4>", "text": "<текст>"}]}
+— разделы только те, что есть в черновике.
+'''
+
+
 @_register("context_init")
 def context_init(ctx: PromptContext) -> str:
     """Draft the ResearchFrame — the framing entities of the meta-model."""
@@ -2880,6 +2993,13 @@ def context_init(ctx: PromptContext) -> str:
   экономический».
 - Для «Ресурсы и бюджеты» значение задавай как «остаток / лимит» (напр.
   «100 / 100») там, где это применимо.
+- Блок «Основание и приёмка» — особый: из него собирается техническое задание по
+  ГОСТ 19.201-78, и его поля НЕЛЬЗЯ выводить из контекста домена. Кто заказал
+  работу, на основании какого документа, какие документы она сдаёт, какими
+  этапами и как принимается — это знает только человек. Бери значение ТОЛЬКО
+  если пользователь назвал его прямо (статус «задано заказчиком»); иначе
+  «Не задано». Придуманный заказчик или придуманный договор попадёт в документ,
+  который пойдёт людям, и будет выглядеть как факт.
 - В каждом блоке заполни usage — одну фразу, как блок используется дальше.
 - Поле original_request заполни исходным запросом пользователя дословно.
 - Поле operations — обязательный список исполнимых слотов. Если в запросе есть

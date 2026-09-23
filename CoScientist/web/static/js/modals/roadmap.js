@@ -839,8 +839,6 @@
           StatusIndicator.feed({ type: 'tasks_updated', tasks: tasks });
         }
 
-        const hitlPanel = document.getElementById('hitl-panel');
-        if (hitlPanel) hitlPanel.classList.add('hidden');
         addSystemMsg(t('roadmap.sentForRevision') + (feedback ? ': ' + feedback : ''));
 
         window.currentPlannerHitlRequest = null;

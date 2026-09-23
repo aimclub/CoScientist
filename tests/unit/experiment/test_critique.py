@@ -21,14 +21,119 @@ def test_deterministic_critique_blocks_disabled_and_unknown_routes():
     )
     assert disabled.verdict == "revise"
     assert any(issue.category == "feasibility" for issue in disabled.issues)
+    # The fix is named: the same bound tool, run by ExperimentAgent.
+    blocker = next(i for i in disabled.issues if "'fedot_mas' is switched off" in i.message)
+    assert blocker.severity == "blocker"
+    assert "route=react_tools" in blocker.suggestion
 
     unknown = critique_plan(
         plan,
-        settings=ExperimentsSettings(),
+        settings=ExperimentsSettings(route_fedot=True),
         available_tools=[],
     )
     assert unknown.verdict == "revise"
     assert any("absent from the capability inventory" in issue.message for issue in unknown.issues)
+
+
+def test_a_switched_off_medical_task_is_told_to_use_research(monkeypatch):
+    """The critique used to approve medical tasks whatever MEDICAL__ENABLED said,
+    and start_task then refused them."""
+    from CoScientist.config import get_settings
+
+    task = _task("EXP-1", route="medical")
+    task["design"]["analysis_artifacts"] = [{
+        "name": "pubmed_notes.md", "role": "report",
+        "prepare_via": "medical", "path_or_tool": "search_pubmed",
+    }]
+    plan = _plan(task)
+    settings = ExperimentsSettings(route_fedot=True)
+    assert critique_plan(plan, settings=settings, available_tools=_inventory()).verdict == "approve"
+
+    monkeypatch.setattr(get_settings().web, "medical_agent_enabled", False)
+    off = critique_plan(plan, settings=settings, available_tools=_inventory())
+    assert off.verdict == "revise"
+    blocker = next(i for i in off.issues if "'medical' is switched off" in i.message)
+    assert blocker.severity == "blocker"
+    assert "route=research" in blocker.suggestion
+
+
+def test_a_switched_off_medical_task_gets_one_consistent_answer(monkeypatch):
+    """With the route off, its own shape checks would point back at it (bind an
+    available_medical_capabilities tool), and route=research is no answer when
+    the human scope forbids research."""
+    from CoScientist.config import get_settings
+
+    task = _task("EXP-1", route="medical")  # no medical family tool bound
+    plan = _plan(task)
+    settings = ExperimentsSettings(route_fedot=True)
+    monkeypatch.setattr(get_settings().web, "medical_agent_enabled", False)
+
+    off = critique_plan(plan, settings=settings, available_tools=_inventory())
+    assert not any("without binding a family tool" in i.message for i in off.issues)
+    assert not [i.suggestion for i in off.issues if "available_medical" in i.suggestion]
+
+    # Same order as planner rule 3 with the route off, and never "drop the
+    # step" - a task covering a frame operation cannot just go.
+    blocker = next(i for i in off.issues if "'medical' is switched off" in i.message)
+    assert "route=research" in blocker.suggestion and "route=coder" in blocker.suggestion
+    assert "drop" not in blocker.suggestion.lower()
+
+    scoped = critique_plan(plan, settings=settings, available_tools=_inventory(),
+                           pipeline_scope={"research": False})
+    blocker = next(i for i in scoped.issues if "'medical' is switched off" in i.message)
+    assert "route=research" not in blocker.suggestion
+    assert "route=coder" in blocker.suggestion
+
+
+def test_the_review_passes_the_sessions_answer_not_the_switch_as_it_is_now():
+    """A session built without MedicalAgent must not have a medical plan
+    approved because the switch went on afterwards - start_task would refuse it."""
+    task = _task("EXP-1", route="medical")
+    task["design"]["analysis_artifacts"] = [{
+        "name": "pubmed_notes.md", "role": "report",
+        "prepare_via": "medical", "path_or_tool": "search_pubmed",
+    }]
+    settings = ExperimentsSettings(route_fedot=True)
+    session_without = critique_plan(_plan(task), settings=settings,
+                                    available_tools=_inventory(), medical_on=False)
+    assert session_without.verdict == "revise"
+    session_with = critique_plan(_plan(task), settings=settings,
+                                 available_tools=_inventory(), medical_on=True)
+    assert session_with.verdict == "approve"
+
+
+def test_a_coder_task_naming_a_medical_tool_is_left_alone_while_medical_is_off(monkeypatch):
+    """With MedicalAgent in the run, Coder must not reimplement its tools; with
+    it out, pointing the planner at route=medical would ask for a refused route."""
+    from CoScientist.config import get_settings
+
+    coder = _task("EXP-1", route="coder")
+    coder["description"] = "Search the clinical literature with search_pubmed."
+    settings = ExperimentsSettings(route_fedot=True)
+
+    on = critique_plan(_plan(coder), settings=settings, available_tools=_inventory())
+    family = next(i for i in on.issues if "reimplement that family" in i.message)
+    assert "route=medical" in family.suggestion
+
+    monkeypatch.setattr(get_settings().web, "medical_agent_enabled", False)
+    off = critique_plan(_plan(coder), settings=settings, available_tools=_inventory())
+    assert not any("reimplement that family" in i.message for i in off.issues)
+    assert not [i.suggestion for i in off.issues if "medical" in i.suggestion.lower()]
+
+
+def test_revision_suggestions_never_steer_toward_fedot():
+    """Suggestions reach the planner verbatim in its revision round; they used
+    to name fedot_mas first, and did so even with the route switched off."""
+    coder = _task("EXP-1", route="coder")
+    coder["description"] = "Reimplement estimate_property in a script."
+    for route_fedot in (False, True):
+        critique = critique_plan(
+            _plan(coder),
+            settings=ExperimentsSettings(route_fedot=route_fedot),
+            available_tools=_inventory(),
+        )
+        assert any("reimplement a ready MCP" in i.message for i in critique.issues)
+        assert not [i.suggestion for i in critique.issues if "fedot" in i.suggestion.lower()]
 
 
 def test_completeness_critique_rejects_when_request_explicitly_requires_unused_tools():
@@ -101,7 +206,7 @@ def test_completeness_critique_ignores_incidental_tool_name_mentions():
     ]
     critique = critique_plan(
         plan,
-        settings=ExperimentsSettings(),
+        settings=ExperimentsSettings(route_fedot=True),
         available_tools=inventory,
         hypothesis_refs=[{"hypothesis_id": "H1", "statement": "Fixture"}],
     )
@@ -116,7 +221,7 @@ def test_completeness_critique_keeps_single_capability_plans():
     plan = _plan(_task("EXP-1"))
     critique = critique_plan(
         plan,
-        settings=ExperimentsSettings(),
+        settings=ExperimentsSettings(route_fedot=True),
         available_tools=_inventory(),
     )
     assert critique.verdict == "approve"
@@ -148,7 +253,7 @@ def test_completeness_critique_allows_named_tool_alternatives():
     plan.tasks[0].mcp_servers[0].server_id = "srv-gen"
     critique = critique_plan(
         plan,
-        settings=ExperimentsSettings(),
+        settings=ExperimentsSettings(route_fedot=True),
         available_tools=inventory,
         preferred_tools=inventory,
     )
@@ -324,6 +429,9 @@ def test_render_experiment_results_prefers_http_then_s3_and_sets_manifest():
             }
         ]
     }
+    # This case is about which address wins, not about wording, so it pins the
+    # language rather than depending on the session default (Russian).
+    state["report_language"] = "en"
     text = render_experiment_results(state)
     assert "Canonical artifact locations" in text
     assert "https://storage.example-cdn.test/runs/a/candidates.csv" in text

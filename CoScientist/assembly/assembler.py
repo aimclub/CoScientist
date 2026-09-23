@@ -45,6 +45,7 @@ from CoScientist.assembly.bindings import (
     make_plan_critic,
 )
 from CoScientist.assembly.prompting import PromptContext
+from CoScientist.agents.prompts.templates import _LANGUAGE_REQUIREMENT
 from CoScientist.assembly.registry import REGISTRY, ToolEntry
 from CoScientist.assembly.schema import (
     PIPELINE_ROOT_NAME,
@@ -228,6 +229,18 @@ def _render_instruction(cfg: AgentConfig, ctx: PromptContext) -> str:
         raise ValueError(
             f"{cfg.name}: prompt {cfg.prompt!r} left placeholders unfilled: {leftover}"
         )
+    # The language rule, on every agent whose text a human can read, appended
+    # here rather than written into each prompt. It used to be pasted into
+    # three of the thirty-four, which is why the experiment executor — author
+    # of the longest card the operator has to approve — wrote English into a
+    # Russian study. At the END because a prompt is hundreds of lines of
+    # English instructions, and a rule about language stated first and
+    # contradicted by every line after it is a rule the model reads once.
+    #
+    # `internal:` agents are exempt: they are pipeline plumbing whose output is
+    # JSON, ids and tool names, never prose, and is not shown in the UI.
+    if not cfg.internal:
+        instruction = instruction.rstrip("\n") + "\n\n" + _LANGUAGE_REQUIREMENT.strip("\n")
     # Empty placeholders (e.g. <<HITL>> when HITL is off) leave blank-line runs.
     return re.sub(r"\n{3,}", "\n\n", instruction).strip("\n") + "\n"
 

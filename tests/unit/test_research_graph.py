@@ -72,11 +72,14 @@ def test_permission_agents_exist_in_system(request):
     counterparts one grain down: 'experiment-plan-mirror', which mirrors the
     experiment module's approved plan task by task, and 'ExperimentModule',
     the module's own deterministic bridge (the AGENT is ExperimentModuleAgent;
-    the write source is the code)."""
+    the write source is the code), and 'report-writer', which records the final
+    write-up — the aggregator that produced the text holds the read-only
+    research surface, and `finalize_report` has the markdown already, so there
+    is nothing a model would add by being allowed to write it."""
     from CoScientist.assembly.schema import get_config
     agents = set(get_config().agents)
     virtual = {"human", "ValidatorAgent", "plan-mirror",
-               "experiment-plan-mirror", "ExperimentModule"}
+               "experiment-plan-mirror", "ExperimentModule", "report-writer"}
     for name in schema.AGENT_PERMISSIONS:
         if name in virtual:
             continue
@@ -1587,12 +1590,11 @@ def test_nothing_floats_however_the_agents_left_it(store, broken):
     assert _drawn_components(store.to_view()) == 1
 
 
-def test_a_folded_artifact_keeps_the_link_it_carried(store):
+def test_a_folded_artifact_travels_on_the_finding_it_produced(store):
     """A dataset is not a card, and is not a hole either.
 
-    It travels on the finding it produced — with the path it lives at, so the
-    reader can open it — and the method that produced that finding keeps its
-    arrow.
+    It travels on the finding it produced, and the method that produced that
+    finding keeps its arrow.
     """
     _build_verifiable(store)
     store.commit(
@@ -1611,7 +1613,70 @@ def test_a_folded_artifact_keeps_the_link_it_carried(store):
     assert ("VM1", "E1") in {(e["src"], e["dst"]) for e in view["edges"]}
     attached = {a["id"]: a for a in drawn["E1"]["attachments"]}
     assert "GD1" in attached
-    assert attached["GD1"]["href"] == "data/smiles.csv", "openable, or it is lost"
+    assert attached["GD1"]["label"], "the reader is told which file it was"
+
+
+def test_a_path_on_this_machine_is_not_offered_as_a_link(store):
+    """The href used to be whatever string the attr held.
+
+    ``data/smiles.csv`` resolves against ``/graph`` and 404s;
+    ``D:\\projects26\\...`` the browser will not navigate to at all. Both were
+    drawn as anchors, and in one real session twelve of twelve attachments were
+    exactly that — a link-shaped thing that does nothing when clicked, which
+    reads as a broken page rather than as a file nobody mirrored. An empty href
+    makes the panel render plain text instead.
+    """
+    _build_verifiable(store)
+    store.commit(
+        source="ExperimentAgent",
+        nodes=[{"type": "Evidence", "ref": "e",
+                "attrs": {"subtype": "computational", "measured_on": "docking",
+                          "content": "score -9.1"}},
+               {"type": "GeneratedData", "ref": "gd",
+                "attrs": {"content": "225 SMILES",
+                          "path": r"D:\projects26\code_a\workspace\smiles.csv"}}],
+        edges=[{"type": "produces", "from": "VM1", "to": "#e"},
+               {"type": "derived_from", "from": "#gd", "to": "#e"}],
+    )
+    drawn = {n["id"]: n for n in store.to_view()["nodes"]}
+    attached = {a["id"]: a for a in drawn["E1"]["attachments"]}
+    assert attached["GD1"]["href"] == "", "a local path is not a link"
+    # The path itself is not lost — the panel lists it as a field.
+    fields = attached["GD1"].get("fields") or {}
+    assert any(r"D:\projects26" in str(v) for v in fields.values()), fields
+
+
+def test_a_mirrored_artifact_is_openable(store, tmp_path, monkeypatch):
+    """The other half: once the bytes are ours, the chip is a real link.
+
+    The reference carries no session, so the URL is built from whichever scope
+    is reading — which is what lets an imported study resolve its own files.
+    The bytes must genuinely be there: a reference alone is not a link, which
+    is what stops a stale id from rendering as a 📦 that 404s on click.
+    """
+    from CoScientist.reporting import session_files
+
+    monkeypatch.setenv("GRAPH_SNAPSHOT_DIR", str(tmp_path))
+    monkeypatch.setenv("ARTIFACTS__MIRROR_TO_S3", "False")
+    _build_verifiable(store)
+    store._scope = ("u1", "s1")
+    record = session_files.put_bytes(store._scope, b"smiles\nCCO\n", filename="smiles.csv")
+    store.commit(
+        source="ExperimentAgent",
+        nodes=[{"type": "Evidence", "ref": "e",
+                "attrs": {"subtype": "computational", "measured_on": "docking",
+                          "content": "score -9.1"}},
+               {"type": "GeneratedData", "ref": "gd",
+                "attrs": {"content": "225 SMILES", "path": "data/smiles.csv",
+                          "session_artifact_id": record["artifact_id"]}}],
+        edges=[{"type": "produces", "from": "VM1", "to": "#e"},
+               {"type": "derived_from", "from": "#gd", "to": "#e"}],
+    )
+    drawn = {n["id"]: n for n in store.to_view()["nodes"]}
+    attached = {a["id"]: a for a in drawn["E1"]["attachments"]}
+    assert attached["GD1"]["href"] == (
+        f"/api/users/u1/sessions/s1/artifacts/{record['artifact_id']}"
+    )
 
 
 def test_a_tool_rides_on_the_method_that_uses_it(store):

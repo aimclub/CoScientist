@@ -127,18 +127,51 @@ async def format_results(tool_context: ToolContext) -> Dict[str, Any]:
         # keeps a file whose upload failed reachable from disk.
         synced_files=synced,
     )
-    logger.info(
-        "format_results: session=%s figures=%d tables=%d files=%d",
-        session_id, len(result["figures"]), len(result["tables"]), len(result["files"]),
+    markdown = result["blocks_markdown"]
+    # The counts the model is shown come from the BLOCKS, not from the files on
+    # disk. Reporting "figures_count: 3" beside an empty string is what misled a
+    # live run: the model concluded the figures must be somewhere and invented
+    # three `figures/<name>.png` paths that no route serves. A number here now
+    # means "this many are embedded in the markdown below", which is a promise
+    # the markdown itself keeps.
+    blocks = result.get("block_counts") or {}
+    counts = (
+        int(blocks.get("figures", len(result["figures"]))),
+        int(blocks.get("tables", len(result["tables"]))),
+        int(blocks.get("files", len(result["files"]))),
     )
-    return {
+    on_disk = (len(result["figures"]), len(result["tables"]), len(result["files"]))
+    logger.info(
+        "format_results: session=%s embedded=%d/%d/%d collected=%d/%d/%d markdown=%d chars",
+        session_id, *counts, *on_disk, len(markdown),
+    )
+    payload = {
         "status": "success",
         "report_dir": result["report_dir"],
-        "figures_count": len(result["figures"]),
-        "tables_count": len(result["tables"]),
-        "files_count": len(result["files"]),
-        "formatted_markdown": result["blocks_markdown"],
+        "figures_count": counts[0],
+        "tables_count": counts[1],
+        "files_count": counts[2],
+        "formatted_markdown": markdown,
     }
+    # Should the two ever diverge again, say so in the envelope rather than
+    # leaving the model to guess what happened to the difference.
+    if on_disk != counts:
+        payload["status"] = "partial"
+        payload["collected_but_not_embedded"] = {
+            "figures": on_disk[0] - counts[0],
+            "tables": on_disk[1] - counts[1],
+            "files": on_disk[2] - counts[2],
+        }
+        payload["note"] = (
+            "Some collected artifacts could not be turned into embeddable "
+            "markdown. Do NOT construct links for them yourself — say in the "
+            "report that they could not be embedded."
+        )
+        logger.warning(
+            "format_results: session=%s collected %d/%d/%d but embedded %d/%d/%d",
+            session_id, *on_disk, *counts,
+        )
+    return payload
 
 
 # Registered under the "result_formatter" tool key (see assembly/bindings.py).

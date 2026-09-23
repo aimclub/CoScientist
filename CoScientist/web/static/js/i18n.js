@@ -16,6 +16,12 @@ const i18n = {
   'nav.connected': { en: 'Connected', ru: 'Подключено' },
   'nav.disconnected': { en: 'Disconnected', ru: 'Отключено' },
   'nav.orchestrator': { en: 'Orchestrator', ru: 'Оркестратор' },
+  'rail.resize': {
+    en: 'Drag to resize · double-click to reset',
+    ru: 'Потяните, чтобы изменить ширину · двойной клик — сбросить',
+  },
+  'rail.show': { en: 'Show the plan column', ru: 'Показать колонку плана' },
+  'rail.hide': { en: 'Hide the plan column', ru: 'Скрыть колонку плана' },
 
   // ── Composer: report language (NOT the interface language) ──
   'composer.reportLang.ru': { en: 'Report: RU', ru: 'Отчёт: RU' },
@@ -46,6 +52,17 @@ const i18n = {
   'usage.durationFinished': { en: 'Completed in', ru: 'Выполнено за' },
 
   // ── Plan tracker (right sidebar) ──
+  // ── Document panel ──
+  // A long result is written to a file and opened here; the feed keeps a
+  // summary and a button.
+  'doc.open': { en: 'Open', ru: 'Открыть' },
+  'doc.close': { en: 'Close document', ru: 'Закрыть документ' },
+  'doc.untitled': { en: 'Document', ru: 'Документ' },
+  'doc.loading': { en: 'Loading…', ru: 'Загрузка…' },
+  'doc.failed': { en: 'Could not open this document.', ru: 'Не удалось открыть документ.' },
+  'doc.sessionDocs': { en: 'Session documents', ru: 'Документы сессии' },
+  'doc.empty': { en: 'No documents yet.', ru: 'Документов пока нет.' },
+
   'plan.header': { en: 'Plan', ru: 'План' },
   'plan.open': { en: 'Open roadmap', ru: 'Открыть план' },
   'plan.untitled': { en: 'Untitled task', ru: 'Задача без названия' },
@@ -53,6 +70,39 @@ const i18n = {
   'plan.status.in_progress': { en: 'In progress', ru: 'В работе' },
   'plan.status.done': { en: 'Completed', ru: 'Выполнена' },
   'plan.status.error': { en: 'Failed', ru: 'Ошибка' },
+
+  // ── Plan sub-steps ──
+  // What actually ran under a plan step, one line per agent that worked on it.
+  // The plan itself has no sub-steps — the planner registers a flat task list —
+  // so these are read off the live activity stream and named here by the agent
+  // that produced them. A name missing from this table falls back to the agent
+  // role from status_indicator.js, so a new agent still reads as something.
+  'plan.substeps': { en: 'Sub-steps', ru: 'Подшаги' },
+  'plan.substep.toolCount': { en: '{n} tool call(s)', ru: 'вызовов инструментов: {n}' },
+  'substep.OrchestratorAgent': { en: 'Coordination', ru: 'Координация работ' },
+  'substep.ContextInitAgent': { en: 'Research frame', ru: 'Рамка исследования' },
+  'substep.ContextInitSessionAgent': { en: 'Research frame', ru: 'Рамка исследования' },
+  'substep.PlannerAgent': { en: 'Planning', ru: 'Построение плана' },
+  'substep.PlanningPipelineAgent': { en: 'Planning', ru: 'Построение плана' },
+  'substep.PlanCriticAgent': { en: 'Plan review', ru: 'Проверка плана' },
+  'substep.HypothesesAgent': { en: 'Hypothesis generation', ru: 'Генерация гипотез' },
+  'substep.ResearchAgent': { en: 'Literature search', ru: 'Поиск и разбор литературы' },
+  'substep.TaskExecutorAgent': { en: 'Task execution', ru: 'Выполнение задачи' },
+  'substep.ToolPipelineAgent': { en: 'Tool selection', ru: 'Подбор инструментов' },
+  'substep.ToolPreparerAgent': { en: 'Tool preparation', ru: 'Подготовка инструментов' },
+  'substep.McpBuilderAgent': { en: 'Tool build', ru: 'Сборка инструмента' },
+  'substep.WebToolsDeployerAgent': { en: 'Tool deployment', ru: 'Подключение инструментов' },
+  'substep.CoderAgent': { en: 'Code run', ru: 'Запуск кода в песочнице' },
+  'substep.DatasetCollectorAgent': { en: 'Data collection', ru: 'Сбор данных' },
+  'substep.MedicalAgent': { en: 'Medical analysis', ru: 'Медицинский анализ' },
+  'substep.ExperimentAgent': { en: 'Experiment', ru: 'Эксперимент' },
+  'substep.ExperimentModuleAgent': { en: 'Experiment module', ru: 'Модуль экспериментов' },
+  'substep.ExperimentPlannerAgent': { en: 'Experiment planning', ru: 'Планирование эксперимента' },
+  'substep.ExperimentExecutorAgent': { en: 'Experiment run', ru: 'Проведение эксперимента' },
+  'substep.ExperimentResultReviewAgent': { en: 'Result review', ru: 'Приёмка результатов' },
+  'substep.FedotAgent': { en: 'AutoML modelling', ru: 'Подбор модели AutoML' },
+  'substep.ResultAggregatorAgent': { en: 'Report assembly', ru: 'Сборка отчёта' },
+  'substep.NirReportAgent': { en: 'R&D report', ru: 'Оформление отчёта НИР' },
 
   // ── Activity Rail HUD ──
   'rail.agents': { en: 'Agents', ru: 'Агенты' },
@@ -131,6 +181,7 @@ const i18n = {
     en: 'Not used: nobody is asked, so there is nothing to wait for.',
     ru: 'Не действует: подтверждение не запрашивается, ждать нечего.'
   },
+  'settings.inactive.lightOnly': { en: 'Applies to the light theme only.', ru: 'Действует только в светлой теме.' },
   'settings.inactive.parentOff': {
     en: 'Works only while "{parent}" is on.',
     ru: 'Действует, только когда включено «{parent}».'
@@ -278,6 +329,7 @@ const i18n = {
   'settings.group.search': { en: 'Web search', ru: 'Поиск в сети' },
   'settings.group.code': { en: 'Code execution', ru: 'Выполнение кода' },
   'settings.group.toolSelection': { en: 'Tool selection', ru: 'Подбор инструментов' },
+  'settings.group.experimentRoutes': { en: 'Experiment routes', ru: 'Маршруты экспериментов' },
   'settings.group.toolSelection.desc': {
     en: 'How TaskExecutorAgent decides which of the found MCP tools to use.',
     ru: 'Как TaskExecutorAgent решает, какие из найденных MCP-инструментов использовать.'
@@ -341,6 +393,32 @@ const i18n = {
     en: 'One choice for the interface and the report. Locked while a run is active: switch before you start the session.',
     ru: 'Один выбор для интерфейса и отчёта. Во время выполнения запуска заблокировано: переключите язык до начала сессии.'
   },
+  'settings.f.theme.label': { en: 'Theme', ru: 'Тема' },
+  'settings.f.theme.desc': {
+    en: 'Colour scheme of the web interface. Remembered in this browser only.',
+    ru: 'Цветовая схема веб-интерфейса. Запоминается только в этом браузере.'
+  },
+  'settings.f.theme.opt.dark': { en: 'Dark', ru: 'Тёмная' },
+  'settings.f.theme.opt.light': { en: 'Light', ru: 'Светлая' },
+  'settings.f.lightDim.label': { en: 'Light theme brightness', ru: 'Яркость светлой темы' },
+  'settings.f.lightDim.desc': {
+    en: 'Lower it if the light theme feels glaring: backgrounds turn a muted grey and text darkens with them, so contrast is kept.',
+    ru: 'Уменьшите, если светлая тема слепит: фон становится приглушённо-серым, текст темнеет вместе с ним, контраст сохраняется.'
+  },
+  'settings.f.accent.label': { en: 'Accent colour', ru: 'Акцентный цвет' },
+  'settings.f.accent.desc': {
+    en: 'Buttons, switches, links and highlights. Text shades are adjusted per theme to stay readable.',
+    ru: 'Кнопки, переключатели, ссылки и выделения. Оттенок для текста подбирается под каждую тему, чтобы оставаться читаемым.'
+  },
+  'settings.f.accent.default': { en: 'Theme default', ru: 'Как в теме' },
+  'settings.f.accent.custom': { en: 'Custom colour…', ru: 'Свой цвет…' },
+  'settings.f.font.label': { en: 'Font', ru: 'Шрифт' },
+  'settings.f.font.desc': {
+    en: 'Interface text; code and numbers stay monospaced. Fonts other than the default load from Google Fonts.',
+    ru: 'Текст интерфейса; код и числа остаются моноширинными. Шрифты, кроме стандартного, загружаются из Google Fonts.'
+  },
+  'settings.f.font.default': { en: 'default', ru: 'по умолчанию' },
+  'settings.f.font.system': { en: 'System font', ru: 'Системный шрифт' },
   'settings.f.autoNaming.label': { en: 'Auto-name sessions', ru: 'Автоназвание сессий' },
   'settings.f.autoNaming.desc': {
     en: 'Title a new session after its first request.',
@@ -386,6 +464,20 @@ const i18n = {
   'settings.f.maxHypotheses.envValues': {
     en: '1–5 (integer). 1 — only the best hypothesis is queued.',
     ru: '1–5 (целое). 1 — в очередь попадает только лучшая гипотеза.'
+  },
+  'settings.f.medicalAgent.label': { en: 'Medical agent', ru: 'Медицинский агент' },
+  'settings.f.medicalAgent.desc': {
+    en: 'MedicalAgent: PubMed search, PICO extraction, study taxonomy and DICOM image analysis. Off, the orchestrator is not offered it and experiment plans get no medical tasks — clinical literature goes to the research agent. Leave it off for studies with no clinical side. Agents served as separate A2A services read only the environment variable.',
+    ru: 'MedicalAgent: поиск в PubMed, извлечение PICO, классификация дизайна исследований и анализ DICOM-снимков. Выключен — оркестратору он не предлагается, а в планах экспериментов нет медицинских задач: клиническую литературу ищет исследовательский агент. Выключайте для исследований без клинической части. Агенты, запущенные отдельными A2A-сервисами, читают только переменную окружения.'
+  },
+  'settings.f.medicalAgent.scopeHint': {
+    en: 'The agent is added or removed for sessions that first run after saving; turning it off also takes the medical route out of experiments already running.',
+    ru: 'Агент добавляется или убирается для сессий, впервые запущенных после сохранения; выключение также убирает медицинский маршрут из уже идущих экспериментов.'
+  },
+  'settings.f.nirReport.label': { en: 'R&D report (GOST 7.32-2017)', ru: 'Отчёт о НИР (ГОСТ 7.32-2017)' },
+  'settings.f.nirReport.desc': {
+    en: 'At the end of a run, offer to produce a normative DOCX report alongside the short Markdown one, built through the "Автонормоконтроль" service. You are asked first and fill in the title-page details; declining or ignoring the question changes nothing. Needs MCP__NORMCONTROL_URL — the switch is inactive without it. Costs a strong model and dozens of pages of generation.',
+    ru: 'В конце прогона предлагать собрать нормативный документ DOCX в дополнение к краткому отчёту в Markdown — через сервис «Автонормоконтроль». Сначала спросят и попросят реквизиты титульного листа; отказ или игнорирование вопроса ничего не меняет. Требуется MCP__NORMCONTROL_URL — без него переключатель неактивен. Стоит сильной модели и десятков страниц генерации.'
   },
   'settings.f.critic.label': { en: 'Review the plan with a critic', ru: 'Проверять план критиком' },
   'settings.f.critic.desc': {
@@ -442,6 +534,18 @@ const i18n = {
   'settings.f.workOrderVeto.envValues': {
     en: '-1 — wait for a human (no auto-start)\nN > 0 — start automatically after N seconds',
     ru: '-1 — ждать решения человека (без автостарта)\nN > 0 — стартовать автоматически через N секунд'
+  },
+  'settings.f.experimentRouteFedot.label': {
+    en: 'Use FEDOT.MAS in experiments',
+    ru: 'Использовать FEDOT.MAS в экспериментах'
+  },
+  'settings.f.experimentRouteFedot.desc': {
+    en: 'Off: the experiment plan never offers FEDOT.MAS, and MCP tools are called directly by ExperimentAgent (ReAct). On: FEDOT.MAS is kept for the rare task that has to chain several tools in one search loop. Turning it on applies from the next session; turning it off also stops FEDOT.MAS in a session already running. An experiment module served as a separate A2A service reads only the environment variable.',
+    ru: 'Выключено: план эксперимента не предлагает FEDOT.MAS, и MCP-инструменты вызывает напрямую ExperimentAgent (ReAct). Включено: FEDOT.MAS остаётся для редкой задачи, которой нужно связать несколько инструментов в одном цикле поиска. Включение действует со следующей сессии, выключение останавливает FEDOT.MAS и в уже идущей. Модуль экспериментов, запущенный отдельным A2A-сервисом, читает только переменную окружения.'
+  },
+  'settings.f.experimentRouteFedot.scopeHint': {
+    en: 'Turning it on applies to sessions that first run after saving; turning it off also stops FEDOT.MAS in sessions already running.',
+    ru: 'Включение действует для сессий, впервые запущенных после сохранения; выключение останавливает FEDOT.MAS и в уже запущенных сессиях.'
   },
   'settings.f.experimentPlanAuto.label': {
     en: 'Approve the experiment plan for me',
@@ -1488,6 +1592,16 @@ const i18n = {
   'graph.field.resource_type': { en: 'Resource', ru: 'Ресурс' },
   'graph.field.remaining': { en: 'Remaining', ru: 'Осталось' },
   'graph.field.limit': { en: 'Total', ru: 'Всего' },
+  // «Основание и приёмка» — поля ТЗ по ГОСТ 19.201-78. Они ложатся атрибутами
+  // корневого вопроса, значит попадают в карточку «Постановка»; без записи здесь
+  // читатель увидел бы «basis document».
+  'graph.field.basis_document': { en: 'Basis for the work', ru: 'Основание для работы' },
+  'graph.field.customer': { en: 'Customer', ru: 'Заказчик' },
+  'graph.field.topic_name': { en: 'Name of the topic', ru: 'Наименование темы' },
+  'graph.field.deliverables': { en: 'Documents delivered', ru: 'Отчётные документы' },
+  'graph.field.stages': { en: 'Stages and deadlines', ru: 'Этапы и сроки' },
+  'graph.field.acceptance': { en: 'Acceptance procedure', ru: 'Порядок приёмки' },
+  'graph.field.expected_effect': { en: 'Expected effect', ru: 'Ожидаемый эффект' },
   'graph.field.domain': { en: 'Field', ru: 'Область' },
   'graph.field.gap': { en: 'Knowledge gap', ru: 'Пробел в знаниях' },
   'graph.field.question': { en: 'Question', ru: 'Вопрос' },
@@ -1565,6 +1679,9 @@ function applyLanguage(lang) {
     if (entry && entry[currentLang]) el.title = entry[currentLang];
   });
   if (window.PlanTracker) PlanTracker.render();
+  // The rail toggle's tooltip depends on its state, so it is not a plain
+  // data-i18n-title the loop above can swap.
+  if (typeof applySideRailState === 'function') applySideRailState();
 
   // Динамические элементы статуса и пользователя
   const nicknameEl = document.getElementById('active-nickname');

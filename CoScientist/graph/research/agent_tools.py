@@ -265,10 +265,18 @@ class ResearchGraphToolset(BaseToolset):
         Args:
             nodes: list of node ops. CREATE: {"type": "<allowed_node_type>", "attrs": {...},
                 "status": "..." (optional), "ref": "local_handle" (optional)}.
-                ENRICH an existing node's attrs: {"id": "N1", "attrs": {...}} (no "type").
+                CHANGE a node that is already in the graph: {"id": "H3",
+                "attrs": {...}} — the id is what says WHICH node, so use the id
+                the graph shows you, not the ref you once wrote. A `ref` is only
+                a handle for a node created in THIS call, to point edges at
+                before it has an id; writing an existing node's id there is
+                refused, because it reads as an update and would record a
+                duplicate. Never invent an id for a new node: the store mints
+                them.
             edges: list of {"type": "supports", "from": "E4", "to": "H2"}. To
                 point at a node created in THIS call, use its ref with a leading
-                "#", e.g. "from": "#e1".
+                "#", e.g. "from": "#e_new" — a handle of your own, never the id of a
+                node already in the graph.
             status_updates: list of {"id": "H2", "status": "under_verification",
                 "reason": "..." (optional)}.
 

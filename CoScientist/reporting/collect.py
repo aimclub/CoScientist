@@ -8,6 +8,7 @@ or task, only about *artifacts*.
 """
 from __future__ import annotations
 
+import html
 import json
 import logging
 import os
@@ -19,10 +20,16 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from CoScientist.reporting.artifact_index import load as load_artifact_index
-from CoScientist.utils.report_links import artifact_link
+from CoScientist.utils.report_links import (
+    KIND_FIGURE,
+    KIND_TABLE,
+    artifact_citation,
+    artifact_link,
+    artifact_markdown,
+)
 from CoScientist.utils.s3_refs import s3_uri
 
-from CoScientist.reporting.s3_upload import upload_and_presign
+from CoScientist.reporting.s3_upload import upload_and_ref
 
 logger = logging.getLogger(__name__)
 
@@ -63,10 +70,41 @@ SOURCES_FILENAME = ".artifact_sources.json"
 # string is optional). Bulletproof fallback: matches an artifact link embedded in
 # ANY stringified payload — a Pydantic tool-result object, a Python-repr blob an
 # agent stored on a graph node, or prose — regardless of structure.
+#
+# The character classes exclude the punctuation that *frames* a URL rather than
+# belonging to it. Without that, a link written as markdown — ``![fig](URL)`` —
+# hands back ``URL)``, and one written in backticks hands back ``URL` ``. Both
+# shapes are in the live indexes: of 82 captured artifacts across six sessions,
+# 36 carried a trailing ``)``, ``` ` ```, ``.``, ``,``, ``**`` or ``****``, and
+# each one is a link that resolves to nothing.
 _MEDIA_URL_RE = re.compile(
-    r"""https?://[^\s"'<>]+?\.(?:png|jpe?g|svg|gif|webp|csv|tsv|pdf)(?:\?[^\s"'<>]*)?""",
+    r"""https?://[^\s"'<>)\]}`*]+?\.(?:png|jpe?g|svg|gif|webp|csv|tsv|pdf)(?:\?[^\s"'<>)\]}`*]*)?""",
     re.IGNORECASE,
 )
+
+#: Punctuation that can only be prose, never the last character of a URL.
+#: Superset of ``report_links._TRAILING_PUNCTUATION``, which guards the same
+#: mistake for a narrower pattern.
+_URL_TRAILING_JUNK = ".,;:!?*`'\"()[]{}<>"
+
+
+def clean_url(url: Any) -> str:
+    """A captured URL with the prose that framed it removed.
+
+    Applied on capture *and* on read, so the entries already written with a
+    trailing ``)`` collapse onto their clean twin the next time the index is
+    loaded — no migration, and the duplicate count drops on its own.
+
+    ``html.unescape`` because MCP servers hand back ``&amp;`` between query
+    parameters, which breaks the signature. ``_download`` unescapes for the same
+    reason; doing it here means the stored string is the one that works.
+    """
+    text = html.unescape(str(url or "")).strip()
+    # A truncated URL is not a URL. `_short()` marks its cut with an ellipsis,
+    # and "http://10.3…" has been captured as an artifact that can never resolve.
+    if "…" in text:
+        return ""
+    return text.rstrip(_URL_TRAILING_JUNK)
 
 
 def _default_reports_root_str() -> str:
@@ -90,6 +128,30 @@ def _url_filename(url: str, default_ext: str) -> str:
 def _looks_like(url_or_name: str, exts: tuple) -> bool:
     low = url_or_name.lower()
     return any(low.endswith(e) or f"{e}?" in low or f"{e}&" in low for e in exts)
+
+
+def _unique_dest(folder: Path, name: str, artifact_id: str) -> Path:
+    """``folder/name``, disambiguated when two artifacts share a file name.
+
+    Six ``family_outputs.json`` in one run is ordinary — they come from six
+    different tasks. Naming the copies after the tool avoided the clash and
+    cost the real name; a short suffix from the (content-addressed) id keeps
+    both.
+    """
+    dest = folder / name
+    if not dest.exists():
+        return dest
+    stem, suffix = Path(name).stem, Path(name).suffix
+    return folder / f"{stem}-{Path(artifact_id).stem[-8:]}{suffix}"
+
+
+def _kind_from_name(name: str) -> str:
+    """Fallback classification when the store has no record to read."""
+    if _looks_like(name, _IMAGE_EXTS):
+        return KIND_FIGURE
+    if _looks_like(name, _TABLE_EXTS):
+        return KIND_TABLE
+    return "file"
 
 
 def _is_source_material(art: Dict[str, Any], url: str) -> bool:
@@ -152,10 +214,13 @@ def find_artifact_urls(obj: Any, _out: Optional[List[str]] = None) -> List[str]:
     elif obj is not None and not isinstance(obj, (int, float, bool)):
         # Non-JSON object (e.g. a Pydantic CallToolResult): scan its repr.
         out.extend(_MEDIA_URL_RE.findall(str(obj)))
-    # De-dup while preserving order.
+    # Clean, then de-dup while preserving order. Cleaning first is what collapses
+    # the five captures of one figure that differ only by the punctuation each
+    # was written next to.
     if _out is None:
         seen: set = set()
-        return [u for u in out if not (u in seen or seen.add(u))]
+        cleaned = (clean_url(u) for u in out)
+        return [u for u in cleaned if u and not (u in seen or seen.add(u))]
     return out
 
 
@@ -213,14 +278,20 @@ def _download(url: str, dest: Path, timeout: int = 30) -> bool:
 
 
 def _artifact_link(dest: Path, session_id: str, kind: str, fallback: str) -> str:
-    """Presigned S3 URL for a collected artifact, else the local fallback path.
+    """A durable link for a collected artifact, else the local fallback path.
 
     ``kind`` is ``figures``, ``tables`` or ``files``; the object lands under
     ``reports/<session_id>/<kind>/<name>``. With S3 off or on any upload
     failure the returned markdown is byte-identical to the local-path form.
+
+    Deliberately ``upload_and_ref`` and not ``upload_and_presign``: the URL a
+    presign returns carries a signature that dies in an hour and an endpoint
+    only this network can reach, and that string was going straight into report
+    prose a person opens later. ``/api/artifact/<bucket>/<key>`` is the same
+    object addressed through a route that mints a fresh signature per request.
     """
-    url = upload_and_presign(dest, f"reports/{session_id}/{kind}")
-    return url or fallback
+    reference = upload_and_ref(dest, f"reports/{session_id}/{kind}")
+    return artifact_link(*reference) if reference else fallback
 
 
 def collect_artifacts(
@@ -304,6 +375,93 @@ def collect_artifacts(
     unresolved = 0
     sources: Dict[str, Dict[str, str]] = {}
 
+    # 0) What this session already mirrored. These need no network at all: the
+    #    bytes are on disk beside the graph, captured while the tool's link was
+    #    still alive. Taken first so the URL pass below never re-downloads one.
+    skipped: List[Dict[str, Any]] = []
+    mirrored_by_url: Dict[str, str] = {}
+    mirrored_ids: Set[str] = set()
+    try:
+        from CoScientist.reporting import session_files
+
+        manifest = session_files.load_manifest(index_session, index_user)
+        scope = (index_user or "", index_session or "")
+        for artifact_id, record in manifest.items():
+            if record.get("state") != session_files.STATE_STORED:
+                # Never silent: a figure that did not survive says why, in the
+                # report, instead of simply not being there.
+                skipped.append(record)
+                continue
+            source_url = record.get("source_url")
+            if source_url:
+                mirrored_by_url[source_url] = artifact_id
+            mirrored_ids.add(artifact_id)
+            local = session_files.resolve_path(scope, artifact_id)
+            if local is None:
+                continue
+            name = Path(str(record.get("filename") or artifact_id)).name
+            citation = artifact_citation(scope, artifact_id)
+            kind = citation["kind"] if citation else _kind_from_name(name)
+            if kind == KIND_FIGURE:
+                bucket_dir, sink, blocks = figures_dir, figures, figure_blocks
+            elif kind == KIND_TABLE:
+                bucket_dir, sink, blocks = tables_dir, tables, table_blocks
+            else:
+                bucket_dir, sink, blocks = files_dir, files, file_blocks
+            # Named after the file, not after the tool that made it. The old
+            # `<tool>_<name>` prefix was invented here and returned nowhere, so
+            # the on-disk name was unknowable to anything downstream — and it
+            # leaks into the GOST report's figure captions, which are derived
+            # from file names.
+            dest = _unique_dest(bucket_dir, name, artifact_id)
+            try:
+                bucket_dir.mkdir(parents=True, exist_ok=True)
+                if dest.resolve() != local.resolve():
+                    shutil.copy2(local, dest)
+            except OSError as exc:
+                logger.warning("collect: cannot copy %s (%s)", local, exc)
+                continue
+            sink.append(str(dest))
+            # The block, not just the file. Without this the pass reports
+            # `figures_count: 3, formatted_markdown: ""` — which is what a live
+            # run produced, and the aggregator then invented three
+            # `figures/<name>.png` paths that no route serves.
+            #
+            # Emitted unconditionally, including when the store could not be
+            # asked: a CLI run and most of the tests call this with no user in
+            # the scope, and making the block conditional on a citation would
+            # reproduce that same silent gap for exactly those callers. The
+            # invariant is simple — an entry in a path list always has a block.
+            caption = str(record.get("label") or "").strip() or Path(name).stem
+            if citation:
+                block = artifact_markdown(citation, caption)
+            else:
+                link = (
+                    artifact_link(record["bucket"], record["s3_key"])
+                    if record.get("bucket") and record.get("s3_key")
+                    else _rel(dest, report_dir)
+                )
+                block = (
+                    f"### {caption}\n\n![{caption}]({link})\n\n`{name}`"
+                    if kind == KIND_FIGURE
+                    else f"### {caption} — [{name}]({link})"
+                )
+            blocks.append(block)
+            # A table is worth reading inline, the way the URL pass below does.
+            if kind == KIND_TABLE and (md := _table_to_markdown(dest)):
+                blocks[-1] = f"{blocks[-1]}\n\n{md}"
+            if record.get("bucket") and record.get("s3_key"):
+                sources[_rel(dest, report_dir)] = {
+                    "bucket": record["bucket"], "s3_key": record["s3_key"],
+                }
+        if manifest:
+            logger.info(
+                "collect: %d mirrored artifact(s), %d not stored",
+                len(manifest) - len(skipped), len(skipped),
+            )
+    except Exception as exc:  # noqa: BLE001 — the old path still works
+        logger.warning("collect: could not read the session store (%s)", exc)
+
     def _fresh_url(art: Dict[str, Any]) -> Optional[str]:
         """A download URL for this artifact, minted from the durable reference
         when the cached one is missing or dead."""
@@ -333,6 +491,18 @@ def collect_artifacts(
             seen_refs.add(ref)
 
         url = art.get("url")
+        # Already taken from the store above, bytes and all. Downloading it
+        # again would at best duplicate the file and at worst fail, because the
+        # link that worked at capture time has had a run's worth of time to die.
+        if url and url in mirrored_by_url:
+            continue
+        # Against every id the store holds, not just the ones that arrived with
+        # a source URL. An artifact the experiment runtime mirrored from a local
+        # path has no `source_url`, so it was absent from that map and came
+        # through here a second time — thirteen of eighteen records in one live
+        # session were exactly that shape.
+        if art.get("artifact_id") in mirrored_ids:
+            continue
         if not url or url in seen_urls:
             # No URL at all, or one already spent on an earlier entry. A durable
             # reference can still produce a working link.
@@ -462,6 +632,17 @@ def collect_artifacts(
         (sections_dir / "files.md").write_text(
             "## Files\n\n" + "\n\n".join(file_blocks) + "\n", encoding="utf-8"
         )
+    if skipped:
+        # An artifact that did not survive is reported, not omitted. A report
+        # missing a figure silently is indistinguishable from a run that never
+        # produced one, and the reader has no way to tell which happened.
+        rows = "\n".join(
+            f"- `{r.get('filename') or r.get('artifact_id')}` — {r.get('reason') or r.get('state')}"
+            for r in skipped
+        )
+        (sections_dir / "skipped.md").write_text(
+            "## Не собрано\n\n" + rows + "\n", encoding="utf-8"
+        )
 
     # 4) Where each collected file came from. finalize_report reads this to
     #    promote the objects out of ephemeral/ before the lifecycle rule takes
@@ -498,6 +679,15 @@ def collect_artifacts(
         "tables": tables,
         "files": files,
         "blocks_markdown": "\n\n".join(blocks),
+        # How many artifacts actually made it into the markdown, as opposed to
+        # onto disk. The tool envelope reports these, because a caller told
+        # "3 figures" while handed an empty string once concluded the figures
+        # must be somewhere and invented paths to them.
+        "block_counts": {
+            "figures": len(figure_blocks),
+            "tables": len(table_blocks),
+            "files": len(file_blocks),
+        },
     }
 
 

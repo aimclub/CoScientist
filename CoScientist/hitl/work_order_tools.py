@@ -29,6 +29,7 @@ from google.adk.tools.tool_context import ToolContext
 from CoScientist.config import get_settings
 from CoScientist.graph.session_scope import session_key
 from CoScientist.hitl.models import HITLAction, HITLRequest, HITLResponse
+from CoScientist.agents.callbacks.report_language import session_report_language
 from CoScientist.hitl.work_order import (
     Artifact,
     Assumption,
@@ -240,6 +241,8 @@ class WorkOrderToolset:
         session = session_context(tool_context)
         if not work_order_active():
             return None
+        # The contract is read by the same person the report is written for.
+        lang = session_report_language(tool_context)
         # A read-only amendment is just a notice; the contract itself always goes
         # to the human (under the veto window) — otherwise the agent starts first.
         if tier == Tier.READ and trigger != "work_order" and not force_blocking:
@@ -249,7 +252,7 @@ class WorkOrderToolset:
                     "agent_name": self.agent_name,
                     "tier": tier.value,
                     "work_order": order.model_dump(mode="json"),
-                    "text": render_work_order(order),
+                    "text": render_work_order(order, lang),
                     **(extra_context or {}),
                     "_session": session,
                 })
@@ -271,7 +274,7 @@ class WorkOrderToolset:
             context={
                 "work_order": order.model_dump(mode="json"),
                 "tier": tier.value,
-                "output": render_work_order(order),
+                "output": render_work_order(order, lang),
                 **(extra_context or {}),
                 "_session": session,
             },
@@ -288,6 +291,7 @@ class WorkOrderToolset:
         """
         if not work_order_active():
             return None
+        lang = session_report_language(tool_context)
         report = order.report or WorkReport()
         # Same windows as the declaration: veto for read/compute (a non-positive
         # window waits for the human), the global HITL timeout for side effects.
@@ -312,7 +316,7 @@ class WorkOrderToolset:
                     "amendments": list(order.amendments),
                     "deviations": list(order.deviations),
                 },
-                "output": render_work_report(order),
+                "output": render_work_report(order, lang),
                 "_session": session_context(tool_context),
             },
             invoked_via="tool",

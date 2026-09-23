@@ -192,6 +192,7 @@ agent_events.log
 runs/
 logs/
 workspace/
+local_papers/
 tz_documents/
 tz_microfluidics/
 conversations*/
@@ -225,3 +226,5 @@ benchmarks/alembic/pre_comparison
 # Exported run folders and stray configs — session data, never source
 *_cossession/
 CoScientist/some.yaml
+stubs/
+reports/

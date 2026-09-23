@@ -422,8 +422,15 @@ EDGE_TYPES: Dict[str, Tuple[Tuple[str, str], ...]] = {
                   ("Constraint", "ConfirmationCriteria")),
     "constrains": (("Constraint", "Hypothesis"),
                    ("Constraint", "VerificationMethod")),
+    # A study that reached no Conclusion still produced a write-up, and it has
+    # to hang off something — otherwise the one node a reader most wants is the
+    # one node with no edge to find it by.
+    # A Spec written BEFORE the study — the техническое задание the framing
+    # stage issues — has no conclusion and no evidence to derive from, and the
+    # question is the only thing it is about.
     "derived_from": tuple((a, t) for a in _ARTIFACT_TYPES
-                          for t in ("Conclusion", "Evidence")),
+                          for t in ("Conclusion", "Evidence"))
+    + (("Report", "ResearchQuestion"), ("Spec", "ResearchQuestion")),
     "contextualizes": (("Constraint", "ResearchQuestion"),),
     "defines_scope": (("ResearchQuestion", "EmpiricalBase"),),
     "relates_to": (("Evidence", "ResearchQuestion"), ("Evidence", "Hypothesis")),
@@ -765,17 +772,37 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         edges=_edges("tested_by", "uses", "produces", "relates_to",
                      "derived_from"),
     ),
+    # The final write-up, published by code rather than by a model. The
+    # aggregator that produces the text holds the READ-ONLY research surface,
+    # and widening an LLM's rights to record something deterministic buys
+    # nothing — `finalize_report` already has the markdown in hand. Same shape
+    # as the plan mirrors above: a named source with exactly the rights it uses.
+    # `update_attrs` matters because re-running finalize must enrich the node it
+    # already wrote instead of adding a second one, and `_stage_merge` consults
+    # this table even when enforcement is off.
+    "report-writer": AgentPerm(
+        create=frozenset({"Report"}),
+        update_attrs=frozenset({"Report"}),
+        transitions=frozenset(),
+        edges=_edges("derived_from"),
+    ),
     # The pre-stage context-initialization agent seeds the framing frame at the
     # start of a run. It writes the whole context star through the PRIVILEGED
     # init path (store.init_research, enforce_permissions=False), so these rights
     # matter only if it ever writes through research_commit directly; they are
     # kept aligned with INIT_SEED_TYPES for clarity and for schema tests.
     "ContextInitAgent": AgentPerm(
+        # `Spec` is the техническое задание, written after the frame is
+        # confirmed — through an ordinary commit, not through `init_research`,
+        # which starts a NEW study and would archive the graph it was just
+        # seeded into. So this grant is load-bearing, not decorative.
         create=frozenset({"ResearchQuestion", "Constraint", "Tool", "Resource",
-                          "EmpiricalBase", "ConfirmationCriteria", "CostModel"}),
-        update_attrs=frozenset({"ResearchQuestion"}),
+                          "EmpiricalBase", "ConfirmationCriteria", "CostModel",
+                          "Spec"}),
+        update_attrs=frozenset({"ResearchQuestion", "Spec"}),
         transitions=frozenset(),
-        edges=_edges("contextualizes", "defines_scope", "applies_to"),
+        edges=_edges("contextualizes", "defines_scope", "applies_to",
+                     "derived_from"),
     ),
     # The human writes through the HITL bridge (web endpoint / approval flow),
     # never through an LLM toolset. Expert evidence is the human's own layer-1

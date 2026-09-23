@@ -7,6 +7,7 @@ import re
 from typing import Any, Mapping, MutableMapping
 from urllib.parse import urlparse
 
+from CoScientist.config.settings import ExperimentsSettings
 from CoScientist.experiments.schemas import ExecutionRoute, ExperimentTask
 from CoScientist.experiments.runtime.shared import audit
 
@@ -274,8 +275,13 @@ def apply_alembic_success(
     *,
     mcp_url: str,
     outputs: dict[str, Any] | None = None,
+    settings: ExperimentsSettings | None = None,
 ) -> dict[str, Any]:
-    """Inject Alembic MCP and reopen the task on post_build_route."""
+    """Inject Alembic MCP and reopen the task on post_build_route.
+
+    A post_build_route of fedot_mas while FEDOT.MAS is off reopens on
+    react_tools instead: the same bound server, called by ExperimentAgent.
+    """
     outputs = outputs if isinstance(outputs, dict) else {}
     task = ExperimentTask.model_validate(task_runtime["task"])
     if task.route != ExecutionRoute.ALEMBIC_BUILD:
@@ -304,6 +310,12 @@ def apply_alembic_success(
         "health": "healthy",
     })
     post_route = task.post_build_route
+    if post_route == ExecutionRoute.FEDOT_MAS.value:
+        # Lazy: state_machine imports this module inside its functions.
+        from CoScientist.experiments.runtime.state_machine import fedot_route_available
+
+        if not fedot_route_available(settings):
+            post_route = ExecutionRoute.REACT_TOOLS.value
     updated = task.model_copy(update={
         "route": ExecutionRoute(post_route),
         "mcp_servers": [server],

@@ -6,12 +6,37 @@ from CoScientist.hitl.models import HITLAction, HITLRequest
 from CoScientist.web.handler import WebHITLHandler
 
 
+@pytest.fixture(autouse=True)
+def _session_store(tmp_path, monkeypatch):
+    """Keep the documents these requests publish out of the working tree.
+
+    `handle_request` writes each request's body into the session's artifact
+    directory; without this the suite grows `graph_runs/sessions/user_a/` in
+    the repo every time it runs.
+    """
+    monkeypatch.setenv("GRAPH_SNAPSHOT_DIR", str(tmp_path))
+    monkeypatch.setenv("ARTIFACTS__MIRROR_TO_S3", "False")
+
+
 class _Socket:
     def __init__(self):
         self.messages = []
 
     async def send_json(self, payload):
         self.messages.append(payload)
+
+async def _delivered(socket, *, ticks: int = 200):
+    """Wait for the card to reach this socket.
+
+    `handle_request` publishes the request's body as a session document before
+    it broadcasts — a thread hop, not a single loop tick — so a bare
+    `asyncio.sleep(0)` no longer proves anything either way.
+    """
+    for _ in range(ticks):
+        if socket.messages:
+            return socket.messages
+        await asyncio.sleep(0.005)
+    raise AssertionError("no HITL card was delivered")
 
 
 def test_hitl_request_and_response_are_scoped_to_session():
@@ -33,7 +58,7 @@ def test_hitl_request_and_response_are_scoped_to_session():
                 "_session": {"user_id": first_key[0], "session_id": first_key[1]},
             },
         )))
-        await asyncio.sleep(0)
+        await _delivered(first_socket)
 
         assert len(first_socket.messages) == 1
         assert second_socket.messages == []
@@ -283,7 +308,7 @@ def test_the_structured_experiment_plan_reaches_the_browser():
                 "_session": {"user_id": key[0], "session_id": key[1]},
             },
         )))
-        await asyncio.sleep(0)
+        await _delivered(socket)
 
         context = socket.messages[0]["context"]
         assert context["experiment_plan"] == plan
@@ -291,6 +316,93 @@ def test_the_structured_experiment_plan_reaches_the_browser():
         assert "_session" not in context
 
         handler.resolve_request(socket.messages[0]["request_id"],
+                                {"action": "approve", "approved": True}, key)
+        await task
+
+    asyncio.run(scenario())
+
+
+def test_a_review_arrives_as_a_summary_and_a_document():
+    """The card gets a way in; the wall of text goes to a file.
+
+    The body used to be the message. A seven-task plan is thirty kilobytes, and
+    printed into the feed it buries every message around it, so the request
+    carries a summary and the id of a document the panel opens instead.
+    """
+    async def scenario():
+        handler = WebHITLHandler()
+        key = ("user_doc", "session_doc")
+        socket = _Socket()
+        await handler.attach_websocket(socket, key)
+
+        plan = {"revision": 2, "task_count": 7, "goal": "Построить профиль токсичности."}
+        # Document-sized: a body that fits in a chat message stays in the chat
+        # message (reporting.documents.MIN_DOCUMENT_CHARS).
+        body = ("# План эксперимента · ревизия 2\n\nСемь задач, оценка 195 минут.\n\n"
+                + "## Задачи\n\n" + "".join(
+                    f"- **EXP-{i}** Задача номер {i}, структурная кластеризация.\n"
+                    for i in range(1, 9)))
+        task = asyncio.create_task(handler.handle_request(HITLRequest(
+            agent_name="ExperimentPlannerAgent",
+            action_type=HITLAction.APPROVE,
+            message="Review the plan.",
+            context={
+                "output": body,
+                "experiment_plan": plan,
+                "_session": {"user_id": key[0], "session_id": key[1]},
+            },
+        )))
+        await _delivered(socket)
+        payload = socket.messages[0]
+
+        document = payload["document"]
+        assert document["kind"] == "plan"
+        assert document["title"] == "План эксперимента · ревизия 2"
+        # The plan states its own goal in the operator's language; that beats
+        # anything derived from the rendered document.
+        assert payload["summary"] == "Построить профиль токсичности."
+        assert len(payload["summary"]) < len(body)
+
+        # The document is a real file in this session, openable by the route.
+        from CoScientist.reporting import session_files as sf
+
+        assert sf.has_artifact(key, document["artifact_id"])
+        stored = sf.resolve_path(key, document["artifact_id"]).read_text(encoding="utf-8")
+        assert stored == body.strip()
+        record = sf.load_manifest(key[1], key[0])[document["artifact_id"]]
+        assert record["media_type"].startswith("text/")
+
+        # The body stays in `context` too: nothing downstream loses the text.
+        assert payload["context"]["output"] == body
+
+        handler.resolve_request(payload["request_id"],
+                                {"action": "approve", "approved": True}, key)
+        await task
+
+    asyncio.run(scenario())
+
+
+def test_a_request_with_no_body_is_unchanged():
+    """No body, no document, no dead button."""
+    async def scenario():
+        handler = WebHITLHandler()
+        key = ("user_bare", "session_bare")
+        socket = _Socket()
+        await handler.attach_websocket(socket, key)
+
+        task = asyncio.create_task(handler.handle_request(HITLRequest(
+            agent_name="CoderAgent",
+            action_type=HITLAction.APPROVE,
+            message="Run this?",
+            context={"_session": {"user_id": key[0], "session_id": key[1]}},
+        )))
+        await _delivered(socket)
+        payload = socket.messages[0]
+
+        assert "document" not in payload
+        assert "summary" not in payload
+
+        handler.resolve_request(payload["request_id"],
                                 {"action": "approve", "approved": True}, key)
         await task
 

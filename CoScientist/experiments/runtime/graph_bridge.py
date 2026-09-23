@@ -131,13 +131,13 @@ def _sync_uncovered_hypotheses(
                 updates.append({
                     "id": nid,
                     "status": "formulated",
-                    "reason": "plan task covers this hypothesis",
+                    "reason": "задача плана покрывает эту гипотезу",
                 })
         elif status == "formulated":
             updates.append({
                 "id": nid,
                 "status": "postponed",
-                "reason": "no_method_this_stage: no plan task tests this hypothesis",
+                "reason": "no_method_this_stage: ни одна задача плана не проверяет эту гипотезу",
             })
     if not updates:
         return 0, 0
@@ -478,6 +478,20 @@ def _outer_step(store: Any, state: MutableMapping[str, Any]) -> tuple[str, str]:
     return "", task_id
 
 
+#: Status codes in the words the card already uses for them, so a reason
+#: does not read «задача EXP-3: success» in the middle of a Russian sentence.
+_RU_STATUS = {
+    "success": "успех", "partial": "частично", "failure": "неудача",
+    "failed": "не удался", "skipped": "пропущена", "done": "выполнена",
+    "running": "выполняется", "planned": "запланирована",
+}
+
+
+def _ru_status(status: Any) -> str:
+    code = str(status or "").strip()
+    return _RU_STATUS.get(code, code)
+
+
 def _graph_full(store: Any) -> dict[str, Any]:
     try:
         return store.full() or {}
@@ -534,10 +548,10 @@ def publish_plan_detail_to_graph(store: Any,
                 nodes.append({"id": existing, "attrs": attrs})
                 if graph_nodes[existing].get("status") != status:
                     updates.append({"id": existing, "status": status,
-                                    "reason": f"experiment plan revision "
-                                              f"{plan.get('revision') or '?'}"})
+                                    "reason": f"правка плана эксперимента "
+                                              f"№{plan.get('revision') or '?'}"})
                 continue
-            ref = f"xt{index}"
+            ref = f"xt_{index}"
             ref_to_task[ref] = task_id
             nodes.append({"type": "ExperimentTask", "ref": ref,
                           "status": status, "attrs": attrs})
@@ -680,7 +694,7 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
                 nodes.append({"id": existing_vm, "attrs": attrs})
                 vm_ref = existing_vm
             else:
-                ref = f"vm{index}"
+                ref = f"vm_{index}"
                 ref_to_task[ref] = task_id
                 nodes.append({"type": "VerificationMethod", "ref": ref, "attrs": attrs})
                 vm_ref = f"#{ref}"
@@ -695,7 +709,7 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
                 elif key in tool_refs:
                     target = f"#{tool_refs[key]}"
                 else:
-                    tool_ref = f"tool{len(tool_refs)}"
+                    tool_ref = f"tool_{len(tool_refs)}"
                     tool_refs[key] = tool_ref
                     ref_to_tool[tool_ref] = key
                     nodes.append({
@@ -742,7 +756,8 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
         # Tasks dropped by a replan: mark their still-live VMs as failed.
         current = {str(t.get("id") or "") for t in tasks}
         stale = [
-            {"id": vm, "status": "failed", "reason": "replanned: task removed from plan"}
+            {"id": vm, "status": "failed",
+             "reason": "перепланировано: задача убрана из плана"}
             for task_id, vm in vm_ids.items()
             if task_id not in current
             and graph_nodes.get(vm, {}).get("status") in ("planned", "running")
@@ -762,9 +777,24 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
 
 
 def _artifact_location(artifact: dict[str, Any]) -> str:
+    """Where this artifact can be found, best address first.
+
+    ``external_url`` is in the list because ``ArtifactRef`` names the field that
+    way while this lookup asked for ``url``: an artifact whose only canonical
+    location was an external address therefore matched nothing, returned "",
+    and was dropped — no ``GeneratedData`` node, and an empty ``source_ref`` on
+    the Evidence beside it. Silently, on every run that produced one.
+    """
+    # `session_artifact_id`, never `artifact_id`: the latter is this runtime's
+    # own identity (``ART-<uuid>``), and reading it as a store id produced
+    # ``cos-artifact:ART-…`` — a link to a file stored under no such name.
+    if aid := str(artifact.get("session_artifact_id") or "").strip():
+        # The copy in this session's own store: survives the link's expiry and
+        # travels with an exported bundle.
+        return f"cos-artifact:{aid}"
     if artifact.get("bucket") and artifact.get("s3_key"):
         return f"s3://{artifact['bucket']}/{artifact['s3_key']}"
-    for key in ("location", "url", "path", "workspace_path"):
+    for key in ("location", "external_url", "url", "path", "workspace_path"):
         if val := str(artifact.get(key) or "").strip():
             return val
     return ""
@@ -839,7 +869,7 @@ def _advance_task_card(store: Any, state: MutableMapping[str, Any],
         if current.get("status") == final:
             return
         update: dict[str, Any] = {"id": xt_id, "status": final,
-                                  "reason": f"task {task_id} result: {status}"}
+                                  "reason": f"задача {task_id}: {_ru_status(status)}"}
         # A card that says a thing failed and not why is the gap the graph
         # reports as `unreasoned_failures`, so the failure carries its message.
         attrs = None
@@ -889,7 +919,7 @@ def publish_result_to_graph(
             store.commit(
                 source=_SOURCE,
                 status_updates=[{"id": vm_id, "status": "running",
-                                 "reason": f"task {task_id} executed"}],
+                                 "reason": f"задача {task_id} запущена"}],
                 enforce_permissions=False,
             )
 
@@ -903,7 +933,7 @@ def publish_result_to_graph(
             )
             nodes.append({
                 "type": "Evidence",
-                "ref": "e0",
+                "ref": "e_0",
                 "attrs": {
                     "subtype": "computational",
                     "content": _clean(task_result.get("summary")) or f"Task {task_id}: {status}",
@@ -913,30 +943,32 @@ def publish_result_to_graph(
                     "result_id": str(task_result.get("result_id") or ""),
                 },
             })
-            edges.append({"type": "produces", "from": vm_id, "to": "#e0"})
+            edges.append({"type": "produces", "from": vm_id, "to": "#e_0"})
             for hid in _task_hypothesis_ids((task or {}).get("design") or {}):
                 if graph_nodes.get(hid, {}).get("type") == "Hypothesis":
-                    edges.append({"type": "relates_to", "from": "#e0", "to": hid})
+                    edges.append({"type": "relates_to", "from": "#e_0", "to": hid})
             for i, artifact in enumerate(artifacts[:_MAX_GENERATED_DATA]):
                 location = _artifact_location(artifact)
                 if not location:
                     continue
-                ref = f"gd{i}"
-                nodes.append({
-                    "type": "GeneratedData",
-                    "ref": ref,
-                    "attrs": {
-                        "description": _clean(artifact.get("name") or artifact.get("description"), 200),
-                        "path": location,
-                    },
-                })
-                edges.append({"type": "derived_from", "from": f"#{ref}", "to": "#e0"})
+                ref = f"gd_{i}"
+                attrs = {
+                    "description": _clean(artifact.get("name") or artifact.get("description"), 200),
+                    "path": location,
+                }
+                # Kept beside `path` rather than inside it: the panel resolves
+                # this into a link, and `path` stays readable as the place the
+                # file sat on the machine that made it.
+                if aid := str(artifact.get("session_artifact_id") or "").strip():
+                    attrs["session_artifact_id"] = aid
+                nodes.append({"type": "GeneratedData", "ref": ref, "attrs": attrs})
+                edges.append({"type": "derived_from", "from": f"#{ref}", "to": "#e_0"})
         status_updates = []
         current_vm_status = _graph_nodes(store).get(vm_id, {}).get("status")
         if current_vm_status in ("planned", "running") and current_vm_status != final:
             status_updates.append({
                 "id": vm_id, "status": final,
-                "reason": f"task {task_id} result: {status}",
+                "reason": f"задача {task_id}: {_ru_status(status)}",
             })
         result = store.commit(
             source=_SOURCE, nodes=nodes, edges=edges,

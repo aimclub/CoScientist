@@ -107,10 +107,10 @@ it doesn't have.)
 
 ```jsonc
 nodes: [
-  {"type": "Evidence", "attrs": {"subtype": "computational", "content": "AUC=0.91"}, "ref": "e1"},
+  {"type": "Evidence", "attrs": {"subtype": "computational", "content": "AUC=0.91"}, "ref": "e_new"},
   {"id": "EB1", "attrs": {"volume": "20k"}}          // enrich an existing node (no "type")
 ]
-edges: [ {"type": "supports", "from": "#e1", "to": "H2"} ]   // "#ref" points at a node made in this call
+edges: [ {"type": "supports", "from": "#e_new", "to": "H2"} ] // "#ref" points at a node made in this call
 status_updates: [ {"id": "H2", "status": "under_verification", "reason": "..."} ]
 ```
 

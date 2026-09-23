@@ -25,7 +25,7 @@
         <span class="text-[10px] text-outline-variant font-mono">${ts(timestamp)}</span>
       </div>
       <div class="bg-surface-container-lowest p-3 rounded-lg border border-outline-variant/10">
-        <p class="font-mono text-[11px] leading-relaxed text-on-surface-variant whitespace-pre-wrap">${escHtml(text)}</p>
+        ${foldable(`<p class="font-mono text-[12px] leading-relaxed text-on-surface-variant whitespace-pre-wrap">${escHtml(text)}</p>`, text, { bg: '#0b0e14' })}
       </div>
     </div>`);
 
@@ -55,25 +55,78 @@
       return parts.join('\n\n');
     }
 
-    // Reasoning folds shorter than a deliverable: it is context, not the point.
-    const THINKING_FOLD = 420;
+    // Everything long in the feed folds the same way, and everything foldable
+    // arrives folded. One agent report, one approved research frame or one
+    // tool dump otherwise buries the whole conversation; the reader opens what
+    // they want to read. 280 characters is about four lines at the body size —
+    // below that there is nothing worth hiding.
+    const FOLD_CHARS = 280;
+
+    // `text` is measured rather than `bodyHtml`, so markup never counts toward
+    // the threshold: a short sentence full of links is not a long message.
+    // `open` is for the one case a fold must start expanded: a form the reader
+    // has to fill in right now. It still gets the wrapper, so answering it can
+    // fold it away — see collapseFold, called from disableHitlControls.
+    function foldable(bodyHtml, text, { chars = FOLD_CHARS, bg = '', open = false } = {}) {
+      if (String(text == null ? '' : text).length <= chars) return bodyHtml;
+      const style = bg ? ` style="--fold-bg:${bg}"` : '';
+      return `<div class="fold${open ? ' fold-open' : ''}"${style}>
+          <div class="fold-body">${bodyHtml}</div>
+          <button type="button" onclick="toggleFold(this)" aria-expanded="${open}"
+            class="fold-btn">${escHtml(open ? t('chat.collapse') : t('chat.showFull'))}</button>
+        </div>`;
+    }
+
+    // A card that has been answered has nothing left to act on, so it tidies
+    // itself away instead of staying open for the rest of the conversation.
+    function collapseFold(wrap) {
+      if (!wrap || !wrap.classList.contains('fold-open')) return;
+      wrap.classList.remove('fold-open');
+      const button = wrap.querySelector('.fold-btn');
+      if (button) {
+        button.setAttribute('aria-expanded', 'false');
+        button.textContent = t('chat.showFull');
+      }
+    }
+
+    function toggleFold(button) {
+      const wrap = button.closest('.fold');
+      if (!wrap) return;
+      const open = wrap.classList.toggle('fold-open');
+      button.setAttribute('aria-expanded', String(open));
+      button.textContent = open ? t('chat.collapse') : t('chat.showFull');
+      // Closing a block that ran past the viewport would otherwise leave the
+      // reader somewhere below where the message now ends.
+      if (!open) wrap.scrollIntoView({ block: 'nearest' });
+    }
+
+    // A message whose body was written to a document shows the summary and a
+    // way in, not the body. `foldable` stays for everything with no document —
+    // a short answer is still just an answer.
+    function documentBlock(event) {
+      const doc = (event && event.document) || null;
+      if (!doc || !doc.artifact_id) return '';
+      const summary = String((event && event.summary) || doc.title || '').trim();
+      const title = doc.title || '';
+      return `
+        <div class="flex flex-col gap-2.5">
+          ${summary ? `<p class="doc-summary break-words">${escHtml(summary)}</p>` : ''}
+          <button type="button" class="doc-btn self-start" aria-pressed="false"
+            data-doc-id="${escHtml(doc.artifact_id)}"
+            onclick="openDocument('${escJs(doc.artifact_id)}', '${escJs(title)}')">
+            <span class="material-symbols-outlined text-base">description</span>${escHtml(t('doc.open'))}
+          </button>
+        </div>`;
+    }
 
     function thinkingBlock(text) {
       const thinking = takeThinking(text);
       if (!thinking) return '';
-      const folded = thinking.length > THINKING_FOLD;
-      const toggle = folded
-        ? `<button onclick="toggleAgentOutput(this)"
-             class="self-start text-[10px] font-mono uppercase tracking-widest text-outline-variant hover:text-on-surface transition-colors">
-             Show full reasoning</button>`
-        : '';
       return `
-        <div class="flex flex-col gap-1.5 mb-2 pb-2 border-b border-outline-variant/15">
-          <span class="self-start text-[9px] font-mono uppercase tracking-widest text-outline-variant bg-outline-variant/10 border border-outline-variant/20 px-1.5 py-0.5 rounded">Thinking</span>
-          <div class="${folded ? 'max-h-24 overflow-hidden' : ''}">
-            <div class="text-xs text-outline-variant leading-relaxed md-body">${renderMarkdown(thinking)}</div>
-          </div>
-          ${toggle}
+        <div class="flex flex-col gap-1.5 mb-3 pb-3 border-b border-outline-variant/20">
+          <span class="self-start text-[10px] font-mono uppercase tracking-widest text-outline-variant bg-outline-variant/10 border border-outline-variant/20 px-1.5 py-0.5 rounded">Thinking</span>
+          ${foldable(`<div class="text-on-surface-variant md-body md-body-quiet">${renderMarkdown(thinking)}</div>`,
+            thinking, { bg: '#1d2026' })}
         </div>`;
     }
 
@@ -100,6 +153,9 @@
         // Reminted artifact paths: GFM only auto-links full URLs, so a bare
         // root-relative path would render as unclickable text.
         .replace(/(^|\s)(\/api\/artifact\/[^\s)]*)/g, '$1[$2]($2)')
+        // The session's own copy of a file, resolved server-side from a
+        // cos-artifact: reference. Same reason as the line above.
+        .replace(/(^|\s)(\/api\/users\/[^\s)]*\/artifacts\/[^\s)]*)/g, '$1[$2]($2)')
         // Live MCP build page: /alembic/builds/<job_id> (agent surfaces it as progress_page).
         .replace(/(^|\s)(\/alembic\/builds\/[A-Za-z0-9._-]+)/g, '$1[$2]($2)');
       const html = marked.parse(withLocalLinks);
@@ -208,83 +264,95 @@
       return typeof value === 'string' && stripThinking(value).length > 0;
     }
 
-    function addAgentMsg(author, text, timestamp = null) {
+    // Tools that put a question to the operator: the text written next to such
+    // a call is the context of the decision, so it stays in the chat.
+    const OPERATOR_QUESTION_TOOLS = ['request_approval', 'request_selection', 'request_input', 'adk_request_input'];
+
+    // Text that belongs outside the chat, in the telemetry panel:
+    //  * a non-final `agent_event` written before the model's own tool call
+    //    («Проверю граф…», «Запускаю ResearchAgent…») — an aside to the model,
+    //    not a message to the reader. Server notices (the sandbox links) are
+    //    non-final too but carry no call, so they stay;
+    //  * anything the planner and its critic say: the plan has its own button
+    //    and view, and the planner's approval card still reaches the chat as a
+    //    `hitl_request`.
+    const PLAN_AGENTS = ['PlannerAgent', 'PlanCriticAgent'];
+
+    // The framing agent used to speak its whole frame summary into the chat
+    // immediately after the review card had shown the reader the same text.
+    // The backend stopped emitting it (e33f523 turned that event's content
+    // into a log line), but reopening an older session replays the old
+    // transcript — so the echo is dropped on the way in rather than printed
+    // under the card that already carries it.
+    function isFrameEcho(event) {
+      return String(event.author || '').startsWith('ContextInit')
+        && /(^|\n)##\s*Рамка исследования/.test(String(event.content || ''));
+    }
+
+    function isChatNoise(event) {
+      if (!event) return false;
+      if (PLAN_AGENTS.includes(event.author)) return true;
+      if (isFrameEcho(event)) return true;
+      if (event.is_final) return false;
+      const calls = event.tool_calls || [];
+      return calls.length > 0
+        && !calls.some(call => OPERATOR_QUESTION_TOOLS.includes(call.name));
+    }
+
+    function addAgentMsg(author, text, timestamp = null, event = null) {
       // Blank-but-present text produces an empty bubble; such events carry a
       // function call, not an utterance. (Also guards history recorded before
       // the backend started filtering them.)
       const cleanText = stripThinking(text);
       if (!hasText(cleanText)) return;
       appendMsgToFeed(`
-    <div class="flex items-start gap-4 max-w-3xl msg-enter">
+    <div class="flex items-start gap-4 max-w-4xl msg-enter">
       <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center shrink-0">
         <span class="material-symbols-outlined text-sm text-primary">smart_toy</span>
       </div>
-      <div class="flex flex-col gap-1">
+      <div class="flex flex-col gap-1 flex-1 min-w-0">
         <div class="flex items-center gap-2">
           <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">${escHtml(author)}</span>
           <span class="text-[10px] text-outline-variant">${ts(timestamp)}</span>
         </div>
-        <div class="bg-surface-container-high p-4 rounded-xl rounded-tl-none border border-outline-variant/5">
+        <div class="bg-surface-container p-4 rounded-xl rounded-tl-none border border-outline-variant/15">
           ${thinkingBlock(text)}
-          <div class="text-sm text-on-surface leading-relaxed md-body">${renderMarkdown(cleanText)}</div>
+          ${documentBlock(event)
+        || foldable(`<div class="text-on-surface md-body">${renderMarkdown(cleanText)}</div>`,
+          cleanText, { bg: '#1d2026' })}
         </div>
       </div>
     </div>`);
     }
 
-    // Above this many characters a final answer is folded, so one long report
-    // (a full hypothesis set) cannot bury the rest of the conversation.
-    const AGENT_OUTPUT_FOLD = 900;
-
     // A key agent's final answer (`agent_output`): the deliverable itself —
     // the hypotheses, the research summary, the execution report. It reaches
     // its caller as an AgentTool result and is never spoken in the top-level
     // stream, so it is rendered here as that agent's own, distinct message.
-    function addAgentOutputMsg(agent, text, timestamp = null, caller = null) {
+    function addAgentOutputMsg(agent, text, timestamp = null, caller = null, event = null) {
       const cleanText = stripThinking(text);
       if (!hasText(cleanText)) return;
       const body = cleanText;
-      const folded = body.length > AGENT_OUTPUT_FOLD;
-      const toggle = folded
-        ? `<button onclick="toggleAgentOutput(this)"
-             class="self-start text-[10px] font-mono uppercase tracking-widest text-primary/80 hover:text-primary transition-colors">
-             ${t('chat.showFull')}</button>`
-        : '';
       appendMsgToFeed(`
-    <div class="flex items-start gap-4 max-w-3xl msg-enter">
+    <div class="flex items-start gap-4 max-w-4xl msg-enter">
       <div class="w-8 h-8 rounded-lg bg-secondary/10 border border-secondary/30 flex items-center justify-center shrink-0">
         <span class="material-symbols-outlined text-sm text-secondary">lightbulb</span>
       </div>
-      <div class="flex flex-col gap-1 min-w-0">
+      <div class="flex flex-col gap-1 flex-1 min-w-0">
         <div class="flex items-center gap-2 flex-wrap">
           <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">${escHtml(agent || 'agent')}</span>
           <span class="text-[9px] font-mono uppercase tracking-widest text-secondary bg-secondary/10 border border-secondary/20 px-1.5 py-0.5 rounded">${t('chat.result')}</span>
           ${caller ? `<span class="text-[9px] font-mono text-outline-variant">→ ${escHtml(caller)}</span>` : ''}
           <span class="text-[10px] text-outline-variant">${ts(timestamp)}</span>
         </div>
-        <div class="flex flex-col gap-2 bg-surface-container-high p-4 rounded-xl rounded-tl-none border border-secondary/20">
+        <div class="flex flex-col gap-2 bg-surface-container p-4 rounded-xl rounded-tl-none border border-secondary/25">
           ${thinkingBlock(text)}
-          <div class="${folded ? 'max-h-64 overflow-hidden' : ''}">
-            <div class="text-sm text-on-surface leading-relaxed break-words md-body">${renderMarkdown(body)}</div>
-          </div>
-          ${toggle}
+          ${documentBlock(event)
+        || foldable(`<div class="text-on-surface break-words md-body">${renderMarkdown(body)}</div>`,
+          body, { bg: '#1d2026' })}
         </div>
       </div>
     </div>`);
-    }
-
-    function toggleAgentOutput(button) {
-      const box = button.previousElementSibling;
-      if (!box) return;
-      // Reasoning folds shorter than a deliverable, so the height class differs
-      // per block; remember the button's own label for the same reason.
-      const height = [...box.classList].find(c => c.startsWith('max-h-')) || button.dataset.fold;
-      if (height) button.dataset.fold = height;
-      if (!button.dataset.label) button.dataset.label = button.textContent.trim();
-      const collapsed = box.classList.toggle(button.dataset.fold);
-      box.classList.toggle('overflow-hidden', collapsed);
-      button.textContent = collapsed ? button.dataset.label : t('chat.collapse');
-      if (collapsed) box.scrollIntoView({ block: 'nearest' });
     }
 
     function addUserMsg(text, timestamp = null) {
@@ -407,7 +475,7 @@
     <span class="flex items-center gap-1.5 max-w-full bg-surface-container-high border border-primary/20 rounded-md pl-2 pr-1 py-1">
       <span class="material-symbols-outlined text-primary text-sm">folder_zip</span>
       <a href="${escHtml(datasetUrl)}" target="_blank" title="${escHtml(datasetUrl)}"
-        class="font-mono text-[10px] text-on-surface-variant truncate max-w-[24rem] hover:text-primary">${escHtml(datasetUrl)}</a>
+        class="font-mono text-[11px] text-on-surface-variant truncate max-w-[28rem] hover:text-primary">${escHtml(datasetUrl)}</a>
       <button type="button" onclick="clearDatasetLink()" title="${t('chat.detachDataset')}"
         class="p-0.5 text-outline-variant hover:text-error transition-colors flex items-center">
         <span class="material-symbols-outlined text-sm">close</span>

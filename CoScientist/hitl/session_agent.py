@@ -88,8 +88,8 @@ class SessionAgent(LlmAgent):
     # Who the critic's review is reported as in the web UI (activity rail,
     # agent tree, ToolsViewer, status line). Not a YAML agent, so never internal.
     critic_agent_name: str = "PlanCriticAgent"
-    correction_prompt: str = "The human reviewed your output and provided this feedback/correction:\n\n{feedback}\n\nYou MUST rewrite your output incorporating this feedback. Write your answer in the report language of this session. The session state key `report_language` gives it: en = English, ru = Russian. If it is empty, use English."
-    critic_correction_prompt: str = "A plan critic reviewed your output and asked for one revision:\n\n{feedback}\n\nProduce the output again ONCE, in full, fixing exactly what the critic named — the previous version was discarded. Registering it normalises it (ids are renumbered, adjacent steps with the same executor assignee are merged); that is expected, so do not register again to undo it. This is the last round: there is no second review. Write your answer in the report language of this session. The session state key `report_language` gives it: en = English, ru = Russian. If it is empty, use English."
+    correction_prompt: str = "The human reviewed your output and provided this feedback/correction:\n\n{feedback}\n\nYou MUST rewrite your output incorporating this feedback."
+    critic_correction_prompt: str = "A plan critic reviewed your output and asked for one revision:\n\n{feedback}\n\nProduce the output again ONCE, in full, fixing exactly what the critic named — the previous version was discarded. Registering it normalises it (ids are renumbered, adjacent steps with the same executor assignee are merged); that is expected, so do not register again to undo it. This is the last round: there is no second review."
 
     def _review_output(self, output_text) -> str:
         """How the proposed output is presented to the human reviewer.
@@ -189,7 +189,13 @@ class SessionAgent(LlmAgent):
         """
         extras = list(self._post_final_events(ctx, output_text))
         if extras and final_event.content and final_event.content.parts:
-            final_event.content.parts[0].text = ""
+            # Каждую текстовую часть, а не первую: у рассуждающей модели первой
+            # идёт мысль (её и так не показывают), а ответ — второй. Погасив
+            # только нулевую, мы стёрли бы невидимое и оставили в ленте сырой
+            # JSON рядом с объявлением о документе.
+            for part in final_event.content.parts:
+                if getattr(part, "text", None):
+                    part.text = ""
         yield final_event
         for extra in extras:
             yield extra

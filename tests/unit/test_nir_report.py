@@ -376,19 +376,15 @@ def _aggregator(monkeypatch, *, nir_enabled: bool, url: str | None):
     return system
 
 
-@pytest.mark.parametrize(
-    "nir_enabled,url",
-    [(False, None), (False, "http://localhost:8001/mcp"), (True, None)],
-    ids=["all-off", "flag-off", "no-server"],
-)
-def test_the_aggregator_is_untouched_unless_both_switches_are_on(monkeypatch, nir_enabled, url):
-    """The whole point of the feature's default state.
+@pytest.mark.parametrize("nir_enabled", [False, True], ids=["flag-off", "flag-on"])
+def test_no_normcontrol_server_means_no_agent_at_all(monkeypatch, nir_enabled):
+    """Without somewhere to submit the document, the feature does not exist.
 
-    A run that did not ask for a GOST report must be the run this pipeline
-    produced before the feature existed: no extra subordinate in the roster, no
-    extra tool, and nothing about НИР in the prompt.
+    The flag is irrelevant here: a run with no normcontrol server must be the
+    run this pipeline produced before the feature existed — no extra subordinate
+    in the roster, no extra tool, and nothing about НИР in the prompt.
     """
-    system = _aggregator(monkeypatch, nir_enabled=nir_enabled, url=url)
+    system = _aggregator(monkeypatch, nir_enabled=nir_enabled, url=None)
     aggregator = system.agent("ResultAggregatorAgent")
 
     names = {getattr(t, "name", type(t).__name__) for t in aggregator.tools}
@@ -400,15 +396,33 @@ def test_the_aggregator_is_untouched_unless_both_switches_are_on(monkeypatch, ni
     )
 
 
-def test_both_switches_on_attaches_the_subordinate(monkeypatch):
-    system = _aggregator(monkeypatch, nir_enabled=True, url="http://localhost:8001/mcp")
-    aggregator = system.agent("ResultAggregatorAgent")
-    assert "NirReportAgent" in {getattr(t, "name", "") for t in aggregator.tools}
+def test_the_operator_switch_does_not_decide_attachment(monkeypatch):
+    """With a server configured the agent is built whether the flag is on or not.
 
-    writer = system.agent("NirReportAgent")
-    assert {getattr(t, "name", "") for t in writer.tools} == {
-        "nir_report_outline", "nir_report_draft", "nir_report_submit"
-    }
+    Attachment happens once, when the tree is assembled at import; the switch
+    lives in the web Settings modal and is flipped long afterwards, so a
+    build-time gate on it could only ever read the value the process started
+    with. The switch therefore gates the QUESTION, not the wiring —
+    ``ask_nir_report`` reads it on every run.
+
+    What must still hold with the flag off is the part a reader can see: the
+    aggregator's prompt says nothing about НИР, because `{nir_block?}` is only
+    ever written by the callback, and the tools refuse without an operator
+    request (see ``test_the_tools_refuse_without_an_operator_request``).
+    """
+    for enabled in (False, True):
+        system = _aggregator(
+            monkeypatch, nir_enabled=enabled, url="http://localhost:8001/mcp"
+        )
+        aggregator = system.agent("ResultAggregatorAgent")
+        assert "NirReportAgent" in {getattr(t, "name", "") for t in aggregator.tools}
+        assert "НИР" not in aggregator.instruction
+        assert "{nir_block?}" in aggregator.instruction
+
+        writer = system.agent("NirReportAgent")
+        assert {getattr(t, "name", "") for t in writer.tools} == {
+            "nir_report_outline", "nir_report_draft", "nir_report_submit"
+        }
 
 
 def test_the_callback_disables_itself_when_nothing_can_answer(monkeypatch):
