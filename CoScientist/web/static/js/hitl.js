@@ -607,8 +607,9 @@ function woStepChip(step) {
   const tip = [step.id, step.title, step.note, step.expected_outcome]
     .filter(Boolean).join(' — ');
   const tone = status === 'done' ? 'text-secondary border-secondary/40 bg-secondary/10'
-    : status === 'running' ? 'text-primary border-primary/50 bg-primary/10'
-      : 'text-outline-variant border-outline-variant/30';
+    : status === 'in_progress' ? 'text-primary border-primary/50 bg-primary/10'
+      : status === 'skipped' ? 'text-outline-variant/70 border-outline-variant/20'
+        : 'text-outline-variant border-outline-variant/30';
   return `
           <li data-wo-step="${escHtml(step.id)}" data-wo-status="${escHtml(status)}"
             title="${escHtml(tip)}"
@@ -661,50 +662,76 @@ function workOrderBody(order, rid, interactive, compact) {
       + order.steps.map(step => woStepRow(step, compact)).join('') + '</ol>'
     : '');
 
+  // What the card is answered with, and what a progress notice patches. Never
+  // folded: `.fold-body` clips with `overflow: hidden`, so a checkbox below the
+  // line cannot be clicked and a step chip cannot be seen to tick.
+  //
+  // With a document it is chips, because the words are in the file. Without
+  // one there is nowhere else for them to be, so it is the real thing.
+  const controls = `
+        <div class="text-xs text-on-surface-variant leading-relaxed flex flex-col gap-1.5 mt-3">
+          ${compact ? chipsRow(order, interactive) + stepsRow(order)
+    : assumptionsBlock + stepsBlock}
+          <div data-wo-deviations class="flex flex-col gap-1"></div>
+        </div>`;
+
   if (compact) {
     // Only the mechanism, never the prose: a checkbox per assumption because
     // `respondWorkOrder` reads them back, a chip per step because the progress
     // notices replace them as the agent works. Both say what they are in a
     // tooltip and in full in the document this card opens.
-    const chips = (order.assumptions || []).map(a => `
-            <label title="${escHtml(a.id + ' — ' + (a.text || ''))}"
-              class="inline-flex items-baseline gap-1 px-1.5 py-0.5 rounded border cursor-pointer
-                     font-mono text-[11px] text-on-surface-variant border-outline-variant/30
-                     hover:border-primary/50 transition-colors">
-              <input type="checkbox" checked data-wo-assumption="${escHtml(a.id)}"
-                class="accent-primary align-middle" ${interactive ? '' : 'disabled'} />
-              ${escHtml(a.id)}
-            </label>`).join('');
-    const done = (order.steps || []).filter(s => (s.status || '') === 'done').length;
-    return `
-        <div class="text-xs text-on-surface-variant leading-relaxed flex flex-col gap-1.5 mt-3">
-          ${chips ? `<div class="flex items-baseline flex-wrap gap-1.5">
-            <span class="text-[12px] text-outline-variant shrink-0">${hitlLabel('workOrder.assumptions')}</span>
-            ${chips}
-          </div>` : ''}
-          ${(order.steps || []).length ? `<div class="flex items-baseline flex-wrap gap-1.5">
-            <span class="text-[12px] text-outline-variant shrink-0">${hitlLabel('workOrder.steps')}</span>
-            <ol data-wo-steps data-compact="1" class="inline-flex flex-wrap items-baseline gap-1">${
-          order.steps.map(woStepChip).join('')}</ol>
-            <span data-wo-progress class="text-[11px] font-mono text-outline-variant">${done}/${order.steps.length}</span>
-          </div>` : ''}
-          <div data-wo-deviations class="flex flex-col gap-1"></div>
-        </div>`;
+    return controls;
   }
 
   const body = `
         <div class="text-xs text-on-surface-variant leading-relaxed">
           ${woSection('workOrder.goal', `<p class="text-on-surface">${escHtml(order.goal || '')}</p>`)}
           ${woSection('workOrder.done', order.done_criteria ? `<p>${escHtml(order.done_criteria)}</p>` : '')}
-          ${assumptionsBlock}
-          ${stepsBlock}
           ${tools ? `<div class="${toolsOnlyInternal ? 'wo-internal' : ''}">${woSection('workOrder.tools', `<div class="flex flex-wrap gap-1">${tools}</div>`)}</div>` : ''}
           ${woSection('workOrder.sideEffects', effects ? `<div class="flex flex-wrap gap-1">${effects}</div>` : '')}
           ${woSection('workOrder.expected', order.expected_outcome ? `<p>${escHtml(order.expected_outcome)}</p>` : '')}
           ${woSection('workOrder.fallback', order.fallback ? `<p>${escHtml(order.fallback)}</p>` : '')}
-          <div data-wo-deviations class="mt-2 flex flex-col gap-1"></div>
         </div>`;
-  return foldable(body, JSON.stringify(order), { bg: '#191c22' });
+  // The prose folds; the controls under it do not. `.fold-body` clips with
+  // `overflow: hidden`, so anything inside it that has to be clicked — or
+  // patched by a progress notice — would be unreachable below the 11rem line.
+  return foldable(body, JSON.stringify(order), { bg: '#191c22' }) + controls;
+}
+
+// ── The two rows the card is answered with ────────────────────────────────
+function chipsRow(order, interactive) {
+  const chips = (order.assumptions || []).map(a => `
+            <label title="${escHtml(a.id + ' — ' + (a.text || ''))}"
+              class="inline-flex items-baseline gap-1 px-1.5 py-0.5 rounded border cursor-pointer
+                     font-mono text-[11px] border-outline-variant/30 hover:border-primary/50
+                     transition-colors ${a.rejected ? 'line-through-dim' : 'text-on-surface-variant'}">
+              <input type="checkbox" data-wo-assumption="${escHtml(a.id)}"
+                class="accent-primary align-middle"
+                ${a.rejected ? '' : 'checked'} ${interactive ? '' : 'disabled'} />
+              ${escHtml(a.id)}
+            </label>`).join('');
+  if (!chips) return '';
+  return `<div class="flex items-baseline flex-wrap gap-1.5">
+            <span class="text-[12px] text-outline-variant shrink-0">${hitlLabel('workOrder.assumptions')}</span>
+            ${chips}
+          </div>`;
+}
+
+// `done` is not the only way a step closes: the server counts `skipped` as
+// closed too (work_order.report_warnings reads open_steps the same way), so a
+// run that skipped one would otherwise read 3/4 for ever.
+const WO_STEP_OPEN = new Set(['pending', 'in_progress']);
+
+function stepsRow(order) {
+  const steps = order.steps || [];
+  if (!steps.length) return '';
+  const closed = steps.filter(s => !WO_STEP_OPEN.has(s.status || 'pending')).length;
+  return `<div class="flex items-baseline flex-wrap gap-1.5">
+            <span class="text-[12px] text-outline-variant shrink-0">${hitlLabel('workOrder.steps')}</span>
+            <ol data-wo-steps data-compact="1" class="inline-flex flex-wrap items-baseline gap-1">${
+    steps.map(woStepChip).join('')}</ol>
+            <span data-wo-progress class="text-[11px] font-mono text-outline-variant">${closed}/${steps.length}</span>
+          </div>`;
 }
 
 function workOrderDiff(ctx) {
@@ -995,7 +1022,7 @@ function workReportBody(order, report, extra, interactive, compact) {
           ${woSection('workOrder.done', done)}
           ${woSection('workReport.outcome', outcome)}
           ${woSection('workReport.steps', (order.steps || []).length
-      ? `<ol class="flex flex-col gap-1.5">${order.steps.map(woStepRow).join('')}</ol>` : '')}
+      ? `<ol class="flex flex-col gap-1.5">${order.steps.map(s => woStepRow(s, false)).join('')}</ol>` : '')}
           ${woSection('workReport.artifacts', artifacts ? `<div class="flex flex-col gap-1">${artifacts}</div>` : '')}
           ${woSection('workReport.journal', journalHtml)}
         </div>`;
@@ -1097,8 +1124,8 @@ function renderWorkOrderNotice(data) {
     const tally = card.querySelector('[data-wo-progress]');
     if (tally && list) {
       const steps = [...list.querySelectorAll('[data-wo-step]')];
-      const done = steps.filter(el => el.dataset.woStatus === 'done').length;
-      tally.textContent = `${done}/${steps.length}`;
+      const closed = steps.filter(el => !WO_STEP_OPEN.has(el.dataset.woStatus || 'pending')).length;
+      tally.textContent = `${closed}/${steps.length}`;
     }
     return;
   }
