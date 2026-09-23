@@ -1329,6 +1329,18 @@ def _stage_tz_draft():
 
 # The assembled ТЗ, staged where `{tz_draft?}` can reach it.
 _cb("stage_tz_draft", "before_agent", factory=lambda ctx: _stage_tz_draft())
+
+
+def _brief_hypotheses_regime():
+    from CoScientist.agents.callbacks.hypothesis_brief import brief_hypotheses_regime
+    return brief_hypotheses_regime
+
+
+# What the run can already measure, staged where `{hypothesis_brief?}` reaches
+# the hypothesis generator: with tools in hand it aims the claim at them, with
+# none it spends the effort on judging the candidates instead.
+_cb("brief_hypotheses_regime", "before_agent",
+    factory=lambda ctx: _brief_hypotheses_regime())
 # Render the approved ТЗ into the reference Markdown document (state + file).
 _cb("save_tz_document", "after_agent", factory=lambda ctx: _save_tz_document())
 # Save the ТЗ + literature queries as shareable Markdown & HTML for hand-off.

@@ -408,18 +408,154 @@ def test_ready_trigger(store):
     assert [i["hypothesis"] for i in ready] == ["H1"]
 
 
-def test_ready_trigger_offers_one_hypothesis_at_a_time(store):
-    """Several verifiable hypotheses ⇒ exactly ONE is actionable; the rest are
-    reported as queued so the orchestrator does not verify them in parallel."""
+def test_ready_trigger_offers_as_many_hypotheses_as_the_setting_allows(store, monkeypatch):
+    """The digest follows `web.max_active_hypotheses` — the same number the
+    prompt asks for and the store admits.
+
+    It used to hand over exactly one whatever the setting said, which made the
+    setting a lie above 1: the store let three in, the orchestrator was told it
+    could run three in parallel, and this digest named one and called the other
+    two "do NOT verify in parallel".
+    """
+    settings = get_settings()
+    monkeypatch.setattr(settings.web, "max_active_hypotheses", 1)
     _build_verifiable(store)
     store.commit(source="HypothesesAgent",
-                 nodes=[{"type": "Hypothesis", "ref": "h2",
+                 nodes=[{"type": "Hypothesis", "ref": "h2", "status": "postponed",
                          "attrs": {"formulation": "alt", "priority": "high"}}],
                  edges=[{"type": "motivates", "from": "Q1", "to": "#h2"}])
+    # One slot, one occupant: H2 was committed postponed, so H1 holds it.
     ready = queries.ready_hypotheses(store)
-    assert [i["hypothesis"] for i in ready["items"]] == ["H2"]   # higher priority wins
+    assert [i["hypothesis"] for i in ready["items"]] == ["H1"]
+    assert not ready["queued"]
+
+    # Raise the ceiling and revive the alternative: now both are offered.
+    monkeypatch.setattr(settings.web, "max_active_hypotheses", 2)
+    assert store.commit(source="OrchestratorAgent",
+                        status_updates=[{"id": "H2", "status": "formulated"}]).ok
+    ready = queries.ready_hypotheses(store)
+    assert [i["hypothesis"] for i in ready["items"]] == ["H2", "H1"]  # priority first
+    assert not ready["queued"]
+    assert "up to 2 may run in parallel" in ready["rendered"]
+
+    # A third candidate has no slot, so it is named as queued, not as work.
+    monkeypatch.setattr(settings.web, "max_active_hypotheses", 1)
+    ready = queries.ready_hypotheses(store)
+    assert [i["hypothesis"] for i in ready["items"]] == ["H2"]
     assert [i["hypothesis"] for i in ready["queued"]] == ["H1"]
     assert "QUEUED" in ready["rendered"]
+
+
+def test_the_ceiling_counts_the_graph_not_the_commit(store, monkeypatch):
+    """Two commits of one hypothesis each used to give two active hypotheses at
+    a setting of one — the ceiling looked only at the drafts in front of it.
+
+    That is how a run configured for one came to verify several: the generator
+    was told «at most three per call, make more calls if you need more», and
+    every call got its own full allowance.
+    """
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 1)
+    _init(store)
+    for i, text in enumerate(("first", "second", "third")):
+        r = store.commit(source="HypothesesAgent",
+                         nodes=[{"type": "Hypothesis", "ref": f"hyp_{i}",
+                                 "attrs": {"formulation": text}}])
+        assert r.ok, r.errors
+    statuses = [n["status"] for n in store.full()["nodes"] if n["type"] == "Hypothesis"]
+    assert statuses.count("formulated") == 1, statuses
+    assert statuses.count("postponed") == 2, statuses
+
+
+def test_reviving_a_hypothesis_needs_a_free_slot(store, monkeypatch):
+    """The ceiling used to be one-sided: refused on the way in, free on the way
+    back. `postponed → formulated` takes a verification slot just as creating
+    one does."""
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 1)
+    _init(store)
+    store.commit(source="HypothesesAgent",
+                 nodes=[{"type": "Hypothesis", "ref": "a", "attrs": {"formulation": "one"}},
+                        {"type": "Hypothesis", "ref": "b", "attrs": {"formulation": "two"}}])
+    refused = store.commit(source="OrchestratorAgent",
+                           status_updates=[{"id": "H2", "status": "formulated"}])
+    assert not refused.ok
+    assert "holds 1 of 1" in refused.errors[0], refused.errors
+
+    # Closing one and opening another in the SAME commit is not an excess —
+    # and it is a swap whichever order the two updates are written in. The
+    # plan mirror builds its list in node-id order and does not get to choose.
+    swap = store.commit(source="OrchestratorAgent",
+                        status_updates=[{"id": "H2", "status": "formulated"},
+                                        {"id": "H1", "status": "postponed"}])
+    assert swap.ok, swap.errors
+    statuses = {n["id"]: n["status"] for n in store.full()["nodes"]
+                if n["type"] == "Hypothesis"}
+    assert statuses == {"H1": "postponed", "H2": "formulated"}
+
+
+def test_every_door_into_verification_costs_a_slot(store, monkeypatch):
+    """`postponed → formulated` is not the only way back into the busy set.
+
+    The validator writes `inconclusive` on every verdict it refuses to confirm,
+    and reopening such a branch (`inconclusive → under_verification`) is the
+    orchestrator's documented scheduling move. Charged only on the first door,
+    the ceiling let an ordinary pair of commits hold two branches at once.
+    """
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 1)
+    _init(store)
+    store.commit(source="HypothesesAgent",
+                 nodes=[{"type": "Hypothesis", "ref": "a", "attrs": {"formulation": "one"}},
+                        {"type": "Hypothesis", "ref": "b", "attrs": {"formulation": "two"}}])
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "under_verification"}])
+    store.commit(source="ValidatorAgent",
+                 status_updates=[{"id": "H1", "status": "inconclusive"}])
+    # The slot is free now, so the alternative may take it.
+    assert store.commit(source="OrchestratorAgent",
+                        status_updates=[{"id": "H2", "status": "formulated"}]).ok
+    # And reopening the inconclusive branch is refused while it is held.
+    refused = store.commit(source="OrchestratorAgent",
+                           status_updates=[{"id": "H1", "status": "under_verification"}])
+    assert not refused.ok, refused.warnings
+    assert len(store._active_hypotheses()) == 1
+
+
+def test_a_commit_that_frees_a_slot_may_fill_it_with_a_new_hypothesis(store, monkeypatch):
+    """One commit, one move: parking the branch that is done and proposing the
+    next claim. Judged in halves, the new hypothesis was filed as a backlog
+    entry into the slot that same commit had just freed — and postponed means
+    never verified."""
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 1)
+    _init(store)
+    store.commit(source="HypothesesAgent",
+                 nodes=[{"type": "Hypothesis", "ref": "a", "attrs": {"formulation": "one"}}])
+    r = store.commit(
+        source="HypothesesAgent",
+        nodes=[{"type": "Hypothesis", "ref": "b", "attrs": {"formulation": "next"}}],
+        status_updates=[{"id": "H1", "status": "postponed"}])
+    assert r.ok, r.errors
+    statuses = {n["id"]: n["status"] for n in store.full()["nodes"]
+                if n["type"] == "Hypothesis"}
+    assert statuses == {"H1": "postponed", "H2": "formulated"}
+
+
+def test_the_backlog_is_offered_only_when_a_slot_is_free(store, monkeypatch):
+    """The digest used to say «revive the most relevant one» whenever nothing
+    was ready — including when every slot was held by a branch under
+    verification, where the store now refuses exactly that commit."""
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 1)
+    _init(store)
+    store.commit(source="HypothesesAgent",
+                 nodes=[{"type": "Hypothesis", "ref": "a", "attrs": {"formulation": "one"}},
+                        {"type": "Hypothesis", "ref": "b", "attrs": {"formulation": "two"}}])
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "under_verification"}])
+    # Nothing is READY (H1 is being verified), but the slot is taken.
+    assert not queries.ready_hypotheses(store)["items"]
+    assert not queries.postponed_hypotheses(store)["rendered"]
+
+    store.commit(source="ValidatorAgent",
+                 status_updates=[{"id": "H1", "status": "refuted"}])
+    assert "BACKLOG" in queries.postponed_hypotheses(store)["rendered"]
 
 
 def test_commit_keeps_one_hypothesis_active_and_postpones_the_rest(store, monkeypatch):
@@ -2329,17 +2465,14 @@ def test_the_orchestrator_is_told_to_get_a_hypothesis_before_running_methods():
     assert "Anything that gets a" in prompt and "PLAN goes in the graph" in prompt
 
 
-def test_the_generator_is_asked_for_one_or_two_hypotheses_that_could_be_wrong():
-    """It asked for "a small set (2–5)". Five hypotheses on one question buy
-    five verification branches and finish none, and the surplus are usually
-    the same claim reworded. The ceiling is two, and the two rules underneath
-    are what stop a restated request or a method from being filed as one.
+def test_the_generator_is_asked_for_exactly_as_many_hypotheses_as_the_run_can_verify():
+    """One setting decides the count, everywhere.
 
-    The ceiling has to FOLLOW `web.max_active_hypotheses`, not ignore it: the
-    selection scaffolding further down the prompt is generated from that
-    setting, so a hardcoded "propose one or two, not five" told the model to
-    write two hypotheses and then handed it five SELECTED HYPOTHESIS slots to
-    fill. Raising the active limit is the operator asking for more branches.
+    It used to be three numbers. The prompt allowed `max(2, limit)` — two even
+    when the operator had asked for one — the store admitted its own count per
+    commit, and the READY digest offered exactly one whatever either said. The
+    graph filled with hypotheses nothing would ever test, which is how a run
+    configured for one ended up showing six.
     """
     from CoScientist.assembly import load_config
     from CoScientist.assembly.prompting import PromptContext
@@ -2349,26 +2482,39 @@ def test_the_generator_is_asked_for_one_or_two_hypotheses_that_could_be_wrong():
     cfg = load_config()
     settings = get_settings()
     original = settings.web.max_active_hypotheses
+    # With the agent's real tools attached, or the render falls through to the
+    # branch for a run without the research graph — a prompt nobody gets here.
+    entries = [REGISTRY.tool(key) for key in cfg.agent("HypothesesAgent").tools]
     try:
         rendered = {}
         for limit in (1, 2, 5):
             settings.web.max_active_hypotheses = limit
             rendered[limit] = REGISTRY.prompt("hypotheses")(
-                PromptContext(config=cfg.agent("HypothesesAgent"), system=cfg))
+                PromptContext(config=cfg.agent("HypothesesAgent"), system=cfg,
+                              tool_entries=entries))
     finally:
         settings.web.max_active_hypotheses = original
 
+    # The research_commit example is the part the model copies, so it has to
+    # show what the rules allow and nothing else.
+    assert "research_commit(" in rendered[1]
+    assert "postponed" not in rendered[1].split("Example research_commit call:")[-1]
+
+    assert "exactly ONE hypothesis" in rendered[1]
+    assert "UP TO" not in rendered[1].split("### What counts")[0], (
+        "at a ceiling of one there is no second hypothesis to invite")
+    for limit in (2, 5):
+        assert f"UP TO {limit} hypotheses" in rendered[limit]
+        # and the only thing a second one may be
+        assert "RIVAL EXPLANATION" in rendered[limit], limit
+        assert "ONE RUN DECIDES BOTH" in rendered[limit], limit
+    assert "RIVAL EXPLANATION" not in rendered[1]
+
     for limit, prompt in rendered.items():
         assert "(2–5)" not in prompt, limit
-        assert "ONE or TWO" in prompt, f"the preference survives at limit {limit}"
-        # The one combination that used to contradict itself.
-        if limit > 2:
-            assert "Not five" not in prompt, (
-                f"limit {limit} offers {limit} selection slots, so the prompt "
-                f"must not also forbid five")
-            assert f"at most {limit} hypotheses" in prompt
-        else:
-            assert "Propose ONE or TWO hypotheses" in prompt
+        # Nothing is parked: what is committed is what gets verified.
+        assert "EVERYTHING YOU HAND OVER WILL BE VERIFIED" in prompt, limit
+        assert "ranked backlog" not in prompt, limit
 
     prompt = rendered[2]                      # the configured default
     assert "threshold test" in prompt and "restatement test" in prompt

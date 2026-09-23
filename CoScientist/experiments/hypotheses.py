@@ -21,7 +21,23 @@ logger = logging.getLogger(__name__)
 _OUTPUT_KEYS = ("hypotheses", "experiment_hypotheses")
 _PENDING_FC_KEY = "_em_hypotheses_from_fc"
 _FORCE_COMMIT_KEY = "_em_hypotheses_commit_forced"
-_MAX_H_PER_COMMIT = 3
+#: Ceiling for the REPAIR paths — how many hypotheses a rebuilt commit may
+#: carry. It has to follow the operator's setting, or a run configured for five
+#: would have the repair silently cut it to three and the agent would meet a
+#: graph that lost two of its claims without saying so.
+_MAX_H_PER_COMMIT_FLOOR = 3
+
+
+def _max_h_per_commit() -> int:
+    try:
+        from CoScientist.config import get_settings
+
+        return max(_MAX_H_PER_COMMIT_FLOOR,
+                   min(5, int(get_settings().web.max_active_hypotheses)))
+    except Exception:  # noqa: BLE001 — a repair must not depend on settings
+        return _MAX_H_PER_COMMIT_FLOOR
+
+
 #: Above this the commit is compacted to hypotheses alone. It is a size, not a
 #: policy: the point of the rewrite is a function call the channel can carry,
 #: and a payload under it was never the problem the rewrite was built for.
@@ -173,6 +189,15 @@ def _clear_leftover_inventory(state: Any) -> None:
     state["accumulated_tools"] = []
     state["filtered_tools"] = []
     state["retrieval_queries"] = []
+    # And the reranker's verdict about them. Left behind, it says a search
+    # happened for THIS ask and found nothing, when in fact nothing has looked
+    # yet — two different things to tell the hypothesis generator.
+    try:
+        from CoScientist.agents.callbacks.tool_callbacks import TOOL_MATCH_STATE_KEY
+
+        state[TOOL_MATCH_STATE_KEY] = None
+    except Exception:  # noqa: BLE001
+        pass
     try:
         from CoScientist.tools.retrieval_tools import clear_session_accumulated_tools
 
@@ -218,25 +243,34 @@ def seed_hypotheses_from_em_request(
             elif isinstance(item, str) and item.strip():
                 lines.append(f"- {item.strip()}")
         if lines:
+            # The operations BOUND the study; they do not enumerate hypotheses.
+            # This block used to say "one hypothesis per slot; H1 matches OP-1,
+            # …; do not skip a slot", which contradicted the agent's own
+            # instruction ("one claim covering five operations is the goal") and
+            # won, because it arrives as the user turn. Six operations then
+            # produced six hypotheses whatever the operator had configured.
             op_block = (
-                "AUTHORITATIVE operations (one hypothesis per slot; "
-                "H1 matches OP-1, H2 matches OP-2, …). Do not invent extra "
-                "endpoints and do not skip a slot:\n"
+                "SCOPE — the operations this study was asked for. A hypothesis "
+                "may span several of them; do not invent endpoints beyond them. "
+                "This list is NOT a list of hypotheses: do not write one per "
+                "line, and do not treat a line as something that must be "
+                "covered by a claim of its own — the plan links its tasks to "
+                "these operations anyway.\n"
                 + "\n".join(lines)
                 + "\n"
             )
     prompt = (
         "Generate falsifiable scientific hypotheses for the computational experiment below.\n"
         f"{op_block}"
-        "Prefer one distinct hypothesis per distinct operation the user asked to "
-        "execute (numbered/separated steps in ASK, or AUTHORITATIVE operations "
-        "above). Do not invent extra endpoints beyond those operations. Skip a "
+        "How MANY to propose is stated in your instructions and comes from the "
+        "operator's setting — do not infer a count from the list above. Skip a "
         "narrative-only report step — that is ResultAggregator, not a hypothesis.\n"
         "CRITICAL — keep research_commit SMALL and reliable:\n"
         "- Commit Hypothesis nodes ONLY (no VerificationMethod / ConfirmationCriteria "
         "in the same call). Add VM/CC later in separate small commits if needed.\n"
-        f"- At most {_MAX_H_PER_COMMIT} Hypothesis nodes per research_commit; "
-        "make additional commits if you need more.\n"
+        "- Commit every hypothesis in ONE research_commit. Extra calls do not "
+        "raise the ceiling: the surplus is filed as 'postponed', and a "
+        "postponed hypothesis is never verified.\n"
         "- Prefer short formulation strings; avoid huge protocol_steps dumps.\n"
         "The research graph already has its ResearchQuestion root by the time you "
         "run. If you somehow still see an empty graph, do NOT try to create the "
@@ -421,7 +455,7 @@ def _refs_from_numbered_drafts(text: str) -> list[dict[str, str]]:
             continue
         seen.add(statement)
         out.append({"hypothesis_id": f"H{len(out) + 1}", "statement": statement})
-        if len(out) >= _MAX_H_PER_COMMIT:
+        if len(out) >= _max_h_per_commit():
             break
     return out
 
@@ -430,7 +464,7 @@ def _refs_from_model_draft(text: str) -> list[dict[str, str]]:
     """Prefer explicit Hypothesis-N labels; else numbered thinking drafts."""
     refs = extract_hypothesis_refs(text or "")
     if refs:
-        return refs[:_MAX_H_PER_COMMIT]
+        return refs[:_max_h_per_commit()]
     return _refs_from_numbered_drafts(text)
 
 
@@ -450,7 +484,7 @@ def _commit_args_from_refs(
     refs: list[dict[str, str]], *, root_id: str,
 ) -> dict[str, Any]:
     nodes: list[dict[str, Any]] = []
-    for i, ref in enumerate(refs[:_MAX_H_PER_COMMIT], start=1):
+    for i, ref in enumerate(refs[:_max_h_per_commit()], start=1):
         statement = re.sub(r"\s+", " ", str(ref.get("statement") or "").strip())[:500]
         if not statement:
             continue
@@ -649,7 +683,7 @@ def _shrink_commit_args(args: dict[str, Any]) -> tuple[dict[str, Any], list[dict
     # formulations". Enforce it where it was broken; leave a commit that kept to
     # it alone, so the criteria and methods written in the same breath reach the
     # graph instead of being re-sent a turn later.
-    if creates <= _MAX_H_PER_COMMIT and _estimate_commit_chars(args) <= _MAX_COMMIT_CHARS:
+    if creates <= _max_h_per_commit() and _estimate_commit_chars(args) <= _MAX_COMMIT_CHARS:
         # `changed` is what makes the callback ship a rewritten call, so a
         # repaired payload has to claim it — otherwise the repair is computed
         # and thrown away with the rest of the untouched response.
@@ -661,7 +695,7 @@ def _shrink_commit_args(args: dict[str, Any]) -> tuple[dict[str, Any], list[dict
     for n in hyp_nodes:
         if n.get("ref"):
             seen += 1
-            if seen > _MAX_H_PER_COMMIT:
+            if seen > _max_h_per_commit():
                 continue
         kept.append(n)
     hyp_nodes = kept

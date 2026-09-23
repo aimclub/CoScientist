@@ -141,9 +141,30 @@ def _sync_uncovered_hypotheses(
             })
     if not updates:
         return 0, 0
-    store.commit(source=_SOURCE, status_updates=updates, enforce_permissions=False)
-    postponed = sum(1 for row in updates if row["status"] == "postponed")
-    revived = sum(1 for row in updates if row["status"] == "formulated")
+    # Two commits, and the revivals one at a time. A revival can now be refused
+    # for want of a verification slot, and one refusal loses the WHOLE commit —
+    # including the postponements the plan is asking for, which is how a
+    # hypothesis no task covers stayed active. The postponements go first
+    # precisely because they free the slots the revivals then ask for.
+    postponed = revived = 0
+    down = [row for row in updates if row["status"] == "postponed"]
+    up = [row for row in updates if row["status"] == "formulated"]
+    if down:
+        result = store.commit(source=_SOURCE, status_updates=down,
+                              enforce_permissions=False)
+        if getattr(result, "ok", True):
+            postponed = len(down)
+        else:
+            logger.warning("зеркало плана: %d гипотез не отложены (%s)",
+                           len(down), (getattr(result, "errors", None) or [""])[0])
+    for row in up:
+        result = store.commit(source=_SOURCE, status_updates=[row],
+                              enforce_permissions=False)
+        if getattr(result, "ok", True):
+            revived += 1
+        else:
+            logger.info("зеркало плана: %s не оживлена (%s)", row["id"],
+                        (getattr(result, "errors", None) or [""])[0])
     return postponed, revived
 
 

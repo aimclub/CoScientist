@@ -2005,8 +2005,10 @@ class ResearchGraphStore:
                             "attrs": attrs, "source": d.get("source"),
                             "twin": twin})
 
-        # -- one active hypothesis per commit --------------------------------
-        self._normalize_hypothesis_selection(creates, warnings)
+        # The hypothesis ceiling is applied further down, once the commit's
+        # status_updates are staged too: a commit that closes a branch AND
+        # proposes a new hypothesis is one move, and judging its halves apart
+        # made the new one wait for a slot the same commit had just freed.
 
         # -- edges: resolve endpoints against existing nodes + this commit ---
         staged_edges: List[Dict[str, Any]] = []
@@ -2149,7 +2151,17 @@ class ResearchGraphStore:
                 continue
             if not tr_errs:
                 staged_status.append({"id": nid, "type": ntype, "from": cur,
-                                      "to": new, "reason": d.get("reason")})
+                                      "to": new, "reason": d.get("reason"),
+                                      "index": k})
+
+        # -- verification slots: the whole commit at once ---------------------
+        # After the loop, not inside it. Inside, each update could only see the
+        # ones staged BEFORE it, so the same swap — close one branch, open
+        # another — passed or was refused depending on the order it was written
+        # in. `graph_bridge._sync_uncovered_hypotheses` builds its list in node
+        # id order and does not get to choose that order.
+        taken = self._charge_slots(creates, staged_status, errors)
+        self._normalize_hypothesis_selection(creates, warnings, taken)
 
         if errors:
             return CommitResult(ok=False, errors=errors, warnings=warnings,
@@ -2441,54 +2453,130 @@ class ResearchGraphStore:
                 outstanding.append(src)
         return sorted(outstanding)
 
-    def _normalize_hypothesis_selection(self, creates: List[Dict[str, Any]],
-                                        warnings: List[str]) -> None:
-        """Store invariant: at most N hypotheses enter the run as active per commit.
+    def max_active_hypotheses(self) -> int:
+        """How many hypotheses the run may verify at once — the one ceiling.
 
-        N = ``settings.web.max_active_hypotheses`` (default 1).
-
-        A generator agent naturally proposes several hypotheses at once; if they
-        all land as ``formulated``, every one of them shows up as READY and the
-        orchestrator starts verifying them — which may not be desired. So
-        exactly N (the agent's own picks: ``attrs.selected``, else the highest
-        ``attrs.priority``, else the first N) stay ``formulated`` and the rest
-        are created as ``postponed``: they remain in the graph as the ranked
-        backlog, invisible to the READY trigger, and the orchestrator can revive
-        one (postponed→formulated) once an active branch has a verdict.
-
-        Deterministic and mechanical — it never drops or rewrites a hypothesis,
-        only decides which ones are offered for verification next.
+        `settings.web.max_active_hypotheses` (default 1) is the single place the
+        number is set: the generator's prompt asks for up to this many, this
+        store admits up to this many, and `queries.ready_hypotheses` offers up
+        to this many for verification. Three readers, one number — when they
+        disagreed, the graph filled with hypotheses nothing would ever test.
         """
         from CoScientist.config import get_settings
-        max_active = max(1, min(5, get_settings().web.max_active_hypotheses))
+
+        return max(1, min(5, get_settings().web.max_active_hypotheses))
+
+    #: A hypothesis in one of these states holds a verification slot: it is
+    #: either offered for verification or being verified. Every other state is
+    #: either a verdict or a shelf.
+    _BUSY = ("formulated", "under_verification")
+
+    def _active_hypotheses(self) -> List[str]:
+        """Hypotheses already occupying a verification slot in the graph."""
+        return [n for n, d in self._g.nodes(data=True)
+                if d.get("type") == "Hypothesis"
+                and d.get("status") in self._BUSY]
+
+    def _charge_slots(self, creates: List[Dict[str, Any]],
+                      staged_status: List[Dict[str, Any]],
+                      errors: List[str]) -> int:
+        """Refuse the status updates that would put the run over its ceiling.
+
+        Returns how many slots are taken once the surviving updates apply —
+        the occupancy the newly created hypotheses then have to fit into.
+
+        Entering the busy set is what costs a slot, whichever door it comes
+        through. Charging only `postponed → formulated` left the other one
+        open: `inconclusive → under_verification` is an ordinary move (the
+        validator writes `inconclusive` on every verdict it refuses to
+        confirm, and reopening such a branch is the orchestrator's documented
+        scheduling step), and it walked straight past the ceiling.
+        """
+        max_active = self.max_active_hypotheses()
+        taken = len(self._active_hypotheses())
+        entering: List[Dict[str, Any]] = []
+        for s in staged_status:
+            if s["type"] != "Hypothesis":
+                continue
+            was, now = s["from"] in self._BUSY, s["to"] in self._BUSY
+            if was and not now:
+                taken -= 1        # this branch closes and frees its slot
+            elif now and not was:
+                entering.append(s)
+        room = max(0, max_active - taken)
+        for s in entering[room:]:
+            errors.append(
+                f"status_updates[{s['index']}]: {s['id']} cannot be made "
+                f"active — the run holds {taken + room} of {max_active} "
+                f"hypotheses under verification. Close a branch "
+                f"(confirmed/refuted/inconclusive) in the same commit, or "
+                f"raise the limit in the settings.")
+        return taken + min(len(entering), room)
+
+    def _normalize_hypothesis_selection(self, creates: List[Dict[str, Any]],
+                                        warnings: List[str],
+                                        taken: int = 0) -> None:
+        """Store invariant: the RUN never holds more than N active hypotheses.
+
+        N = ``settings.web.max_active_hypotheses`` (default 1). `taken` is what
+        `_charge_slots` worked out — the occupancy once this commit's own
+        status updates apply, so a commit that closes a branch leaves room for
+        the hypothesis it proposes in the same breath.
+
+        The slots already taken in the graph count. They did not use to: the
+        ceiling looked at one commit's drafts only, so an agent told to «commit
+        at most three per call, make more calls if you need more» produced one
+        active hypothesis per call and the run ended up verifying several at
+        once while the setting said one.
+
+        Surplus is created ``postponed``, never dropped — the agent's work is
+        its own, and the operator can see what was proposed. But postponed is a
+        dead end by the schema (there is no ``postponed → under_verification``),
+        so a hypothesis filed here will not be tested until something revives
+        it. That is why this is a guard rail and not a plan: the generator is
+        asked for at most N in the first place, and reaching this code means
+        something went past that.
+        """
+        max_active = self.max_active_hypotheses()
 
         active = [c for c in creates
                   if c["type"] == "Hypothesis" and c["status"] == "formulated"
                   and not c.get("twin")]
-        if len(active) <= max_active:
+        room = max(0, max_active - taken)
+        if len(active) <= room:
             return
-        # Sort by priority_rank (lower = higher priority) and keep top N.
+        # Sort by priority_rank (lower = higher priority) and keep the top ones
+        # that still fit.
         ranked = sorted(active, key=lambda c: priority_rank(c["attrs"]))
-        primary_set = set(id(c) for c in ranked[:max_active])
+        primary_set = set(id(c) for c in ranked[:room])
         for c in active:
             if id(c) in primary_set:
                 continue
             c["status"] = "postponed"
             c["attrs"].setdefault(
                 "postponed_reason",
-                "альтернативная гипотеза — отложена в очередь, пока "
-                "проверяются выбранные")
-        kept_labels = ", ".join(
-            f'"{self._label(c, 60) or c.get("ref") or "?"}"'
-            for c in ranked[:max_active])
+                "сверх предела одновременно проверяемых гипотез — отложена, "
+                "пока проверяются выбранные")
+        proposed = (f"{len(active)} hypotheses were proposed as active at once"
+                    if len(active) > 1 else "this hypothesis was proposed as active")
+        held = (f", and {taken} of the {max_active} slots "
+                f"{'is' if taken == 1 else 'are'} already taken in the graph"
+                if taken else "")
+        if room:
+            kept = ", ".join(f'"{self._label(c, 60) or c.get("ref") or "?"}"'
+                             for c in ranked[:room])
+            outcome = (f"so {kept} stay 'formulated' and the remaining "
+                       f"{len(active) - room} were created as 'postponed'")
+        else:
+            outcome = (f"so all {len(active)} were created as 'postponed' — the "
+                       f"run has no free slot right now")
         warnings.append(
-            f"{len(active)} hypotheses were proposed as active at once; only "
-            f"{max_active} may be verified at a time, so {kept_labels} "
-            f"stay 'formulated' and the other "
-            f"{len(active) - max_active} were created as 'postponed' (backlog). "
-            f"To choose which ones are verified, mark them with "
-            f"attrs.selected=true or a higher attrs.priority; the orchestrator "
-            f"can revive a postponed one later.")
+            f"{proposed}; only {max_active} may be verified at a time{held}, "
+            f"{outcome}. A postponed hypothesis is NOT verified: the graph gives "
+            f"it no route to a verdict until someone revives it "
+            f"(postponed→formulated), and the study stays open while it sits. "
+            f"Propose at most {max_active} so nothing is stranded, and mark your "
+            f"pick with attrs.selected=true or a higher attrs.priority.")
 
     def _stage_merge(self, source: str, i: int, draft: Dict[str, Any],
                      merges: List[Dict[str, Any]],
