@@ -3801,24 +3801,24 @@ previous one has delivered:
 3. **ModuleC_Optimization** — immediately after B: the rig campaign of the
    external condition-optimization block, from the same hand-off. Do not
    introduce another qualification, screening, or transition approval after
-   the route selection.
-4. **ModuleC_Reactor** — immediately after ModuleC_Optimization, whatever the
-   campaign's outcome (completed, blocked, skipped or failed): the campaign
-   result is context for C, not a gate.
-5. **ReportAgent** — always last. Run it after C, or immediately after B when
-   no A2A hand-off is possible; it must report the blockers rather than end the
-   session without a customer-facing result.
+   the route selection. This is the LAST working module: the pipeline stops
+   here — there are no experiment/reactor stages after it.
+4. **ReportAgent** — always last. Run it immediately after
+   ModuleC_Optimization, whatever the campaign's outcome (completed, blocked,
+   skipped or failed), or immediately after B when no A2A hand-off is
+   possible; it must report the blockers rather than end the session without
+   a customer-facing result.
 
 ### RULES
 - A human-confirmed active route is final. Call ModuleB immediately after
-  ModuleA, ModuleC_Optimization immediately after B and ModuleC_Reactor
+  ModuleA, ModuleC_Optimization immediately after B and ReportAgent
   immediately after ModuleC_Optimization. Never re-run ModuleA, request a
   second route decision, or apply a later qualification/screening gate.
 - ModuleA has already selected the only active route at its end. Start
   ModuleB immediately after ModuleA returns; do not request a second HITL
   confirmation for the route hand-off. The confirmed route is delivered to
-  economics and to ModuleC_Optimization / ModuleC_Reactor as-is. Physical
-  execution is approved separately inside each A2A lifecycle.
+  economics and to ModuleC_Optimization as-is. Physical execution is
+  approved separately inside the A2A lifecycle.
 - Never run a module early. ReportAgent still runs after every branch.
 - Module calls carry only the requested stage action. Never restate or
   "clarify" numeric limits, prohibited substances, sources, or literature
@@ -4244,9 +4244,9 @@ def microfluidics_campaign(ctx: PromptContext) -> str:
     return render_template('''You are the OptimizationAgent, the CoScientist liaison
 with the external flow-synthesis condition-optimization block over A2A. The
 block runs an optimization campaign on the physical rig and returns its result
-(best parameters, rig recipe, stop reason, flags). It runs BEFORE the
-ReactorAgent, from exactly the same hand-off. You do not run the campaign
-locally and do not rewrite its plan or results.
+(best parameters, rig recipe, stop reason, flags). It is the LAST working
+stage of the pipeline: after you only the final report is composed. You do not
+run the campaign locally and do not rewrite its plan or results.
 
 ### ТЗ
 {structured_tz?}
@@ -4267,7 +4267,7 @@ locally and do not rewrite its plan or results.
 1. Кампания на установке ставится только для квалифицированного маршрута:
    при `qualified_routes.status="ok"` вызови campaign_start(). При любом другом
    статусе НЕ вызывай A2A: кратко напиши, что кампания пропущена и почему, —
-   дальше пайплайн продолжит ReactorAgent.
+   дальше пайплайн сразу перейдёт к итоговому отчёту.
    Инструмент сам проверяет передаваемые данные (тот же контракт, что у
    optimization_start). Если пригодного `economics_ranking` нет, campaign_start
    САМ показывает оператору форму стоимостей — вызови его один раз.
@@ -4418,10 +4418,11 @@ optimization_result и optimization_a2a_runs. Не создавай локаль
 
 @_register("microfluidics_report")
 def microfluidics_report(ctx: PromptContext) -> str:
-    return render_template('''You are the ReportAgent (стадия 11) of the
+    return render_template('''You are the ReportAgent (final stage) of the
 CoScientist microfluidics instance. You write the final report for the
-customer. Every stage before you has left its result in the state below — the
-report is where they come together.
+customer. The pipeline ends with the condition-optimization campaign: there
+are no reactor experiments or CFD stages after it. Every stage before you has
+left its result in the state below — the report is where they come together.
 
 ### ТЗ (источник требований)
 {structured_tz?}
@@ -4474,18 +4475,6 @@ report is where they come together.
 ### КАМПАНИЯ НА УСТАНОВКЕ — СВОДКА СОПРОВОЖДЕНИЯ (не источник измерений)
 {campaign_summary?}
 
-### ИСХОДНЫЕ РЕЗУЛЬТАТЫ ВНЕШНЕЙ ЭКСПЕРИМЕНТАЛЬНОЙ СИСТЕМЫ
-{optimization_result?}
-
-### СВОДКА СОПРОВОЖДЕНИЯ A2A (не источник измерений)
-{optimization_summary?}
-
-### ОПТИМИЗАЦИЯ И CFD — ИСХОДНЫЕ ОТВЕТЫ A2A-МОДУЛЯ
-{optimization_a2a_runs?}
-
-### CFD — РАСЧЁТЫ ПО ИДЕНТИФИКАТОРАМ ЗАПРОСОВ
-{cfd_runs?}
-
 ### АРТЕФАКТЫ ВНЕШНИХ СЕРВИСОВ (файлы, ссылки)
 {mcp_artifacts?}
 
@@ -4501,16 +4490,15 @@ report is where they come together.
 5. **Сколько стоит и из чего делать** — стоимость, доступность реагентов в РФ,
    риски поставок. Если есть цифры сервера стоимости — суммы бери из них, с
    валютой и статусом маршрута (partial — нижняя граница).
-6. **Эксперименты** — сначала кампания на установке: task_id, статус,
-   stop_reason, лучшие параметры с целевой функцией, рецептура (концентрации
-   питания, расходы по стадиям) и ВСЕ флаги; при has_blockers=true прямо
-   напиши, что результат не подтверждён, и назови флаги-blocker. Затем
-   оптимизация: что планировали, что получили, как менялся план в ходе
-   оптимизации и чем она закончилась. Укажи task_id и статус A2A.
-   Расчёты CFD бери только из ответов модуля оптимизации, с идентификаторами
-   и статусами. completed задачи A2A сам по себе не подтверждает успех CFD.
+6. **Оптимизация условий синтеза** — кампания на установке: task_id,
+   статус, stop_reason, лучшие параметры с целевой функцией, рецептура
+   (концентрации питания, расходы по стадиям) и ВСЕ флаги; при
+   has_blockers=true прямо напиши, что результат не подтверждён, и назови
+   флаги-blocker. completed задачи A2A сам по себе не подтверждает результат.
    Ожидание, запрос ввода/подтверждения и ошибки — не успешная оптимизация.
-   Если расчётов нет, так и напиши; данные заглушки не являются измерениями.
+   Если кампания не выполнялась, так и напиши; данные заглушки не являются
+   измерениями. Эксперименты на реакторе и CFD в этом пайплайне не
+   проводятся — не описывай их как выполненные.
 7. **Технико-экономическое обоснование (ТЭО)** — для рекомендованного
    маршрута: целевое количество, себестоимость (cost_per_unit) и чек за
    упаковки (cost_packs) с валютой из цифр сервера стоимости, пересчёт на 1 кг
@@ -4522,22 +4510,22 @@ report is where they come together.
    стадии реагенты с количествами на целевое количество продукта (из
    starting_materials рейтинга стоимости; промежуточные продукты — «продукт
    стадии N»), растворители и катализаторы, условия (температура, время,
-   соотношения, давление), ожидаемый выход, режим проточного реактора (расход,
-   время пребывания — из расчётов CFD или опытов, если они есть). Каждое число —
-   с пометкой источника.
+   соотношения, давление), ожидаемый выход, режим проточной установки (расход,
+   время пребывания — из результата кампании оптимизации, если он есть).
+   Каждое число — с пометкой источника.
 9. **Выводы и рекомендации** — прямой ответ на запрос заказчика.
 10. **Ограничения и что дальше** — незакрытые поля ТЗ («не задано»; поля «не
    требуется» — не пробелы, а намеренно свободные параметры), допущения,
    и — обязательно — какие результаты получены на ЗАГЛУШКАХ, а не на реальных
    сервисах и установке.
-11. **Ход работы по стадиям** — таблица: стадия (1–11) | агент | что получено
+11. **Ход работы по стадиям** — таблица: стадия | агент | что получено
    (1 строка) | источник данных (сервис / литература / расчёт / заглушка /
    не выполнялась). Каждая стадия — одна строка, включая невыполненные.
 
 ### ПРАВИЛА
 - Отчёт — ПОЛНЫЙ: он должен содержать ВСЁ существенное из разделов состояния
   выше (каждый кандидат, каждый маршрут с условиями, каждую цифру сервера
-  стоимости, каждый ответ модуля оптимизации). Это единственный документ,
+  стоимости, результат кампании оптимизации). Это единственный документ,
   который увидит заказчик; сокращать данные стадий нельзя.
 - Если раздел состояния пуст — так и напиши («стадия не выполнялась»), не
   выдумывай содержимое.

@@ -2,8 +2,8 @@
 # CoScientist — MICROFLUIDICS profile.
 #
 # A reduced CoScientist deployment for the microfluidics case (ПАВ / target
-# molecules synthesised on a flow / microfluidic reactor), covering stages 1–11
-# from the ТЗ to the final report.
+# molecules synthesised on a flow / microfluidic reactor), from the ТЗ through
+# the condition-optimization campaign to the final report.
 #
 # The graph is MODULAR. RootOrchestrator routes whole modules and never reaches
 # inside one. The external experimental subsystem is reached only through A2A.
@@ -25,10 +25,10 @@
 #   │    └─ OptimizationAgent                 condition-optimization block (A2A);
 #   │                                         same inputs as C, result ->
 #   │                                         state["optimization"]
-#   ├─ ModuleC_Reactor (sequential)           external experimental subsystem
-#   │    └─ ReactorAgent                      one A2A task owns planning, CFD,
-#   │                                         equipment and the reactor runs
-#   └─ ReportAgent (llm)                      stage 11
+#   ├─ ModuleC_Reactor (sequential)           DISABLED (enabled: false) — the
+#   │    └─ ReactorAgent                      pipeline stops after the
+#   │                                         optimization campaign
+#   └─ ReportAgent (llm)                      final report
 #
 # Optimization, CFD and equipment are owned by the external A2A system.
 # CoScientist supplies inputs and consumes its raw results for reporting.
@@ -49,7 +49,7 @@ defaults:
 # The root runs the modules in order and each module its steps in order, so
 # the web status indicator shows "stage k of N". The stages are the modules'
 # steps (SystemConfig.linear_stages: ТЗ, queries, plan, literature, design ×3,
-# external experimentation, report); each is labelled by its `title`.
+# condition optimization, report); each is labelled by its `title`.
 pipeline:
   linear: true
 
@@ -69,7 +69,7 @@ agents:
     root: true
     description: >-
       CoScientist microfluidics root orchestrator — runs the case module by
-      module: ТЗ + literature, design, experiment, report.
+      module: ТЗ + literature, design, condition optimization, report.
     prompt: microfluidics_root_orchestrator
     # The root owns the B→C decision.  It asks for a human confirmation before
     # entering C and exposes a strictly planning-only override when code has
@@ -436,7 +436,8 @@ agents:
   # (agent card: https://mcp2.rzhevskyrobotics.com/.well-known/agent-card.json,
   # endpoint CAMPAIGN_A2A_URL). It takes exactly the optimization hand-off;
   # its campaign_result is normalized into state["optimization"]
-  # (current / history / has_blockers) for ModuleC_Reactor and the report.
+  # (current / history / has_blockers) for the report. It is the LAST working
+  # module: ModuleC_Reactor after it is disabled.
   ModuleC_Optimization:
     class: sequential
     description: >-
@@ -444,9 +445,9 @@ agents:
       внешний A2A-блок и сохраняет её результат (лучшие параметры, рецептура,
       флаги).
     routing: >-
-      run after module B, before ModuleC_Reactor, with the same hand-off
-      (ТЗ, routes, economic ranking). The external block runs the campaign on
-      the rig; its result is kept as given.
+      run after module B with its hand-off (ТЗ, routes, economic ranking).
+      The external block runs the campaign on the rig; its result is kept as
+      given. This is the last working module — ReportAgent follows.
     children:
       - OptimizationAgent
 
@@ -466,8 +467,13 @@ agents:
     output_key: campaign_summary
 
   # ── Module C — external experimental subsystem through A2A ────────────────
+  # DISABLED: the pipeline stops after ModuleC_Optimization. Kept (still built,
+  # not attached to the root) so it can be switched back on with `enabled: true`
+  # — then restore its step in the microfluidics_root_orchestrator /
+  # microfluidics_campaign / microfluidics_report prompts.
   ModuleC_Reactor:
     class: sequential
+    enabled: false
     description: >-
       передаёт ТЗ, литературу, маршруты и экономический рейтинг во внешнюю
       A2A-систему, которая сама выполняет CFD, опыты и оптимизацию.
@@ -505,8 +511,8 @@ agents:
       финальный отчёт — сводит ТЗ, литературу, кандидатов, маршруты, экономику
       и эксперименты в ответ заказчику.
     routing: >-
-      run LAST, once the experiment module is finished or it is clear no
-      further optimization is possible; report pending/failed tasks honestly.
+      run LAST, once the optimization module is finished or it is clear no
+      A2A hand-off is possible; report pending/failed tasks honestly.
     reasoning: low
     prompt: microfluidics_report
     output_key: final_report

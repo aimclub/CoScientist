@@ -196,15 +196,18 @@ def test_session_agent_keeps_polling_the_campaign():
     assert "optimization_get_status" in feedback(OptimizationSessionAgent, {adapter.ACTIVE_KEY: {"state": "working"}})
 
 
-def test_campaign_module_runs_before_optimization():
+def test_campaign_module_is_the_last_before_report():
     from CoScientist.assembly import bindings  # noqa: F401
     from CoScientist.agents.prompts.templates import microfluidics_optimizer, microfluidics_report
     from CoScientist.assembly.registry import REGISTRY
     from CoScientist.hitl.work_order_risk import Tier, tool_tier
 
     agents = yaml.safe_load((ROOT / "CoScientist/agents/microfluidics.yaml").read_text())["agents"]
-    modules = agents["RootOrchestrator"]["subordinates"]
-    assert modules.index("ModuleC_Optimization") + 1 == modules.index("ModuleC_Reactor")
+    modules = [m for m in agents["RootOrchestrator"]["subordinates"]
+               if agents[m].get("enabled", True) is not False]
+    assert modules.index("ModuleC_Optimization") + 1 == modules.index("ReportAgent")
+    # The reactor module is kept but switched off: the pipeline stops after the campaign.
+    assert agents["ModuleC_Reactor"]["enabled"] is False
     assert agents["ModuleC_Optimization"]["children"] == ["OptimizationAgent"]
     entry = REGISTRY.tool("campaign_a2a")
     assert {tool.__name__ for tool in entry.factory()} == {doc.name for doc in entry.resolved_docs()}
