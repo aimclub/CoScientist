@@ -45,7 +45,7 @@ This server's MCP tools include:
 	- Papers are unique `article_id` values. Chunks with `role="summary"` are outdated and ignored. A paper's domain and field are the values most of its chunks carry, so every section shares one denominator.
 
 ```markdown
-Данные на 21.09.2026 17:24 UTC (12 мин назад). Статистика обновляется автоматически при изменении коллекции.
+Данные на 21.09.2026 17:24 UTC (12 мин назад). Коллекция проверяется на изменения каждые 10 мин; при изменениях статистика пересчитывается автоматически.
 
 ## Сводка
 

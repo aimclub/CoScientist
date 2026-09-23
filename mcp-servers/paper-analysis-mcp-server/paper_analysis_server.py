@@ -79,7 +79,6 @@ logger = logging.getLogger(__name__)
 # full scan reads every chunk's metadata, far too slow to repeat per call.
 paper_statistics = PaperStatisticsCache(
     vector_store,
-    location=f"{os.getenv('CHROMADB_HOST')}:{os.getenv('CHROMADB_PORT')}",
     check_interval_minutes=float(os.getenv("PAPER_STATS_CHECK_MINUTES") or 10),
     max_age_hours=float(os.getenv("PAPER_STATS_MAX_AGE_HOURS") or 24),
 )

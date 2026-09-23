@@ -53,8 +53,6 @@ UNKNOWN = "unknown"
 class PaperStatistics:
     """Aggregated state of the paper collection."""
 
-    collection: str
-    location: str
     total_papers: int
     domains: Counter
     fields: Counter
@@ -67,8 +65,6 @@ class PaperStatistics:
 
 def aggregate_paper_statistics(
     metadatas: Iterable[dict],
-    collection: str = "",
-    location: str = "",
     excluded_roles: Sequence[str] = EXCLUDED_ROLES,
 ) -> PaperStatistics:
     """Aggregate chunk metadata into paper statistics.
@@ -118,8 +114,6 @@ def aggregate_paper_statistics(
     ]
 
     return PaperStatistics(
-        collection=collection,
-        location=location,
         total_papers=len(paper_pairs),
         domains=Counter(domain for domain, _ in paper_pairs),
         fields=Counter(field for _, field in paper_pairs),
@@ -149,7 +143,6 @@ class PaperStatisticsCache:
     def __init__(
         self,
         store: "ChromaVectorStore",
-        location: str = "",
         check_interval_minutes: float = 10,
         max_age_hours: float = 24,
         page_size: int = DEFAULT_PAGE_SIZE,
@@ -158,7 +151,6 @@ class PaperStatisticsCache:
         if check_interval_minutes <= 0 or max_age_hours <= 0:
             raise ValueError("check_interval_minutes and max_age_hours must be positive")
         self._store = store
-        self._location = location
         self._check_interval = check_interval_minutes * 60
         self._max_age = max_age_hours * 3600
         self._page_size = page_size
@@ -255,8 +247,6 @@ class PaperStatisticsCache:
 
         stats = aggregate_paper_statistics(
             self._counted(self._store.iter_metadata(self._page_size)),
-            collection=self._store.collection.name,
-            location=self._location,
             excluded_roles=self._excluded_roles,
         )
 
@@ -321,7 +311,8 @@ class PaperStatisticsCache:
 
         notes = [
             f"Данные на {_clock(computed_at)} ({_ago(now_mono - computed_mono)}). "
-            "Статистика обновляется автоматически при изменении коллекции."
+            f"Коллекция проверяется на изменения каждые {_every(self._check_interval)}; "
+            "при изменениях статистика пересчитывается автоматически."
         ]
         if progress:
             notes.append(
@@ -396,6 +387,13 @@ def _ago(seconds: float) -> str:
         return f"{minutes} мин назад"
     hours, minutes = divmod(minutes, 60)
     return f"{hours} ч {minutes} мин назад"
+
+
+def _every(seconds: float) -> str:
+    """The check interval as the freshness note states it: "10 мин", "1,5 мин", "30 с"."""
+    if seconds < 60:
+        return f"{max(1, round(seconds))} с"
+    return f"{seconds / 60:g}".replace(".", ",") + " мин"
 
 
 def _num(count: int) -> str:
