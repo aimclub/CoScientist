@@ -244,8 +244,15 @@ def critique_plan(
     repo_candidates: Iterable[Any] = (),
     operations: Iterable[Any] = (),
     pipeline_scope: dict[str, Any] | None = None,
+    fedot_on: bool | None = None,
+    medical_on: bool | None = None,
 ) -> PlanCritique:
-    """Routes, registry refs, scientific design, revision invariants."""
+    """Routes, registry refs, scientific design, revision invariants.
+
+    ``fedot_on`` / ``medical_on``: whether the running session's executor can
+    take those routes (the review agent passes them); None asks the YAML and
+    switches as they are now.
+    """
     from CoScientist.context_init.operations import normalize_operation_rows
 
     issues: list[CritiqueIssue] = []
@@ -296,14 +303,24 @@ def critique_plan(
         isinstance(pipeline_scope, dict) and pipeline_scope.get("research") is False
     )
     # Lazy: the runtime package imports critique.coverage at module load.
-    from CoScientist.experiments.runtime.state_machine import fedot_route_available
+    from CoScientist.experiments.runtime.state_machine import (
+        fedot_route_available,
+        medical_route_available,
+    )
 
-    enabled = {ExecutionRoute.REACT_TOOLS, ExecutionRoute.CODER,
-               ExecutionRoute.RESEARCH, ExecutionRoute.MEDICAL}
-    # The same answer start_task gets (switch AND FedotAgent attached): the bare
-    # switch approved fedot_mas plans for an agent the YAML had removed.
-    if fedot_route_available(settings):
+    enabled = {ExecutionRoute.REACT_TOOLS, ExecutionRoute.CODER, ExecutionRoute.RESEARCH}
+    # The same answers start_task gets (switch AND agent attached): the bare
+    # switches approved fedot_mas plans for an agent the YAML had removed, and
+    # medical plans for an agent MEDICAL__ENABLED had taken out of the tree.
+    if fedot_on is None:
+        fedot_on = fedot_route_available(settings)
+    if fedot_on:
         enabled.add(ExecutionRoute.FEDOT_MAS)
+    if medical_on is None:
+        medical_on = medical_route_available()
+    if medical_on:
+        enabled.add(ExecutionRoute.MEDICAL)
+    families = {FAMILY_RESEARCH} | ({FAMILY_MEDICAL} if medical_on else set())
     if settings.route_alembic:
         enabled.add(ExecutionRoute.ALEMBIC_BUILD)
 
@@ -435,6 +452,15 @@ def critique_plan(
         elif task.route == ExecutionRoute.FEDOT_MAS and task.route not in enabled:
             fe(tid, "blocker", "Route 'fedot_mas' is switched off (FEDOT.MAS is not in this run).",
                "Set route=react_tools and keep the same mcp_servers binding.")
+        elif task.route == ExecutionRoute.MEDICAL and task.route not in enabled:
+            # Same order as planner rule 3 with the route off. Not "drop the
+            # step": a task covering a frame operation cannot just go.
+            fe(tid, "blocker", "Route 'medical' is switched off (MedicalAgent is not in this run).",
+               "Cover it with route=coder, or alembic_build / react_tools when one fits."
+               if research_forbidden else
+               "Cover the literature part with route=research and a research family tool, "
+               "and the rest (PICO, DICOM) with route=coder, or alembic_build / react_tools "
+               "when one fits.")
         elif task.route not in enabled:
             fe(tid, "blocker", f"Route {task.route.value!r} is disabled by profile settings.",
                "Choose an enabled route.")
@@ -460,7 +486,9 @@ def critique_plan(
                f"{tid} uses {task.route.value} but the MCP capability inventory is empty.",
                "Use route=coder when no exact ready MCP covers the task.")
 
-        if task.route in _EVIDENCE_AGENTS and not (
+        # A switched-off evidence route already has its blocker above; its own
+        # shape checks would only point the planner back at it.
+        if task.route in _EVIDENCE_AGENTS and task.route in enabled and not (
             research_forbidden and task.route == ExecutionRoute.RESEARCH
         ):
             if task.mcp_servers:
@@ -488,7 +516,7 @@ def critique_plan(
                    f"{tid} uses {task.route.value} without binding a family tool "
                    f"({', '.join(sorted(family_tools)[:4])}, …).",
                    "Set design.analysis_artifacts.path_or_tool to an exact "
-                   "available_research_capabilities / available_medical_capabilities name.")
+                   f"available_{task.route.value}_capabilities name.")
 
         if task.route == ExecutionRoute.CODER and task.mcp_servers and not settings.route_coder_mcp:
             fe(tid, "major", "Direct MCP-to-Coder mode is disabled.",
@@ -496,13 +524,14 @@ def critique_plan(
 
         if task.route == ExecutionRoute.CODER and not task.optional:
             blob = _task_coverage_blob(task, ops_index)
-            if match_named_family_capability(blob) and not research_forbidden:
+            if match_named_family_capability(blob, families=families) and not research_forbidden:
                 fe(
                     tid, "major",
-                    f"{tid} uses route=coder, but THIS task names a research/medical "
+                    f"{tid} uses route=coder, but THIS task names a "
+                    f"{'research/medical' if medical_on else 'research'} "
                     "family tool — Coder must not reimplement that family.",
-                    "Set route=research or route=medical and bind the family tool on "
-                    "design.analysis_artifacts.path_or_tool.",
+                    ("Set route=research or route=medical" if medical_on else "Set route=research")
+                    + " and bind the family tool on design.analysis_artifacts.path_or_tool.",
                 )
             elif by_tool_caps and match_named_inventory_tool(blob, by_tool_caps):
                 fe(
@@ -554,7 +583,7 @@ def critique_plan(
     if named_compute and has_evidence and not has_mcp:
         add(category="feasibility", severity="major",
             message="A frame operation names a retrieved compute tool but the plan has no "
-                    "MCP-route task — research/medical cannot replace that named tool.",
+                    "MCP-route task — an evidence route cannot replace that named tool.",
             suggestion="Add ≥1 react_tools task bound to the named inventory tool.")
 
     if miss := _named_inventory_tools_missing(plan, available_tools=completeness):
@@ -605,6 +634,8 @@ def validate_and_critique_plan(
     repo_candidates: Iterable[Any] = (),
     operations: Iterable[Any] = (),
     pipeline_scope: dict[str, Any] | None = None,
+    fedot_on: bool | None = None,
+    medical_on: bool | None = None,
     **_kwargs: Any,
 ) -> tuple[ExperimentPlan, PlanCritique]:
     """Strict schema validation, then deterministic policy checks."""
@@ -627,6 +658,8 @@ def validate_and_critique_plan(
         previous_plan=previous_plan, hypothesis_refs=hypothesis_refs, repo_candidates=repo_list,
         operations=operations,
         pipeline_scope=pipeline_scope,
+        fedot_on=fedot_on,
+        medical_on=medical_on,
     )
 
 

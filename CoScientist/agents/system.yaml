@@ -548,9 +548,11 @@ agents:
       after_tool: [register_tool_result_links]
 
   MedicalAgent:
-    # Narrow role — switch it off with MEDICAL__ENABLED=false. The experiment
-    # module's `medical` route follows this, so nothing offers a route to an
-    # agent that is not in the tree.
+    # Narrow role — switch it off with MEDICAL__ENABLED=false or in the web
+    # settings. The experiment module's `medical` route follows this agent
+    # (state_machine.medical_route_available: planner prompt and context,
+    # critique, start_task), so nothing offers a route to an agent that is not
+    # in the tree.
     enabled: "${web.medical_agent_enabled}"
     class: llm
     description: >-

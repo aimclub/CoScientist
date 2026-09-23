@@ -591,10 +591,11 @@ def _prompt_context(context: dict[str, Any]) -> str:
         "available_research_capabilities": [
             _cap_for_prompt(c) for c in (context.get("available_research_capabilities") or [])
         ],
-        "available_medical_capabilities": [
-            _cap_for_prompt(c) for c in (context.get("available_medical_capabilities") or [])
-        ],
     }
+    # Only while the medical route is in the run: an empty list would still name
+    # it to the planner.
+    if medical := context.get("available_medical_capabilities"):
+        slim["available_medical_capabilities"] = [_cap_for_prompt(c) for c in medical]
     for key in _PROMPT_OPTIONAL_KEYS:
         if key == "hypotheses" and context.get("hypothesis_refs"):
             continue
@@ -786,8 +787,18 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
         FAMILY_RESEARCH,
         declared_family_capabilities,
     )
-    from CoScientist.experiments.runtime.state_machine import fedot_route_available
+    from CoScientist.experiments.runtime.state_machine import (
+        fedot_route_available,
+        medical_route_available,
+        session_route_agents,
+    )
     experiments = get_settings().experiments
+    # Routes as this session's executor holds them - the tree start_task hands
+    # work to, not the YAML and switches as they are now.
+    route_agents = session_route_agents(
+        getattr(getattr(callback_context, "_invocation_context", None), "agent", None)
+    )
+    medical_on = medical_route_available(route_agents=route_agents)
     revision_feedback: list[dict[str, Any]] = []
     if state.get("experiment_plan_validation_errors"):
         revision_feedback.append({
@@ -855,7 +866,9 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
         "available_mcp_capabilities": planner_caps,
         "available_mcp_servers": get_grouped_mcp_inventory(planner_caps),
         "available_research_capabilities": declared_family_capabilities(FAMILY_RESEARCH),
-        "available_medical_capabilities": declared_family_capabilities(FAMILY_MEDICAL),
+        "available_medical_capabilities": (
+            declared_family_capabilities(FAMILY_MEDICAL) if medical_on else []
+        ),
         "preferred_mcp_capabilities": preferred if preferred else planner_caps,
         "critique_mcp_capabilities": capabilities if capabilities else planner_caps,
         "explicit_mcp_servers": _bounded(state.get("experiment_explicit_mcps") or [], 20),
@@ -866,7 +879,8 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
         # bare switch: the planner used to see route_fedot=true for an agent the
         # YAML had already removed.
         "route_alembic": bool(experiments.route_alembic),
-        "route_fedot": fedot_route_available(experiments),
+        "route_fedot": fedot_route_available(experiments, route_agents=route_agents),
+        "route_medical": medical_on,
     }
     scope = state.get("pipeline_scope")
     if isinstance(scope, dict) and scope.get("source") == "hitl":

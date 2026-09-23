@@ -63,6 +63,9 @@ const appSettings = {
   researchAgent: {
     maxSearches: 2,
   },
+  medicalAgent: {
+    enabled: true,                     // MEDICAL__ENABLED; the agent and the experiment medical route
+  },
   taskExecutorAgent: {
     keepScore: 0.3,
     abstainScore: 0.2,

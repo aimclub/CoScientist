@@ -367,7 +367,9 @@ class WebSettings(BaseModel):
     # role, and a study that needs none of it pays for the agent in the
     # orchestrator's roster and in the router's choices — so it switches off.
     # Turning it off also withdraws `medical` as an execution route, because a
-    # route whose agent is not in the tree is a route that cannot run.
+    # route whose agent is not in the tree is a route that cannot run: the
+    # experiment planner is not offered it, the critique refuses it, and a task
+    # already planned on it is blocked. Also a toggle in the web settings.
     medical_agent_enabled: bool = _os.getenv("MEDICAL__ENABLED", "true").lower() in ("true", "1", "yes")
     # The hypothesis generator's thinking budget. `high` by default because
     # ideation plus choosing what to test first is the most reasoning-bound job

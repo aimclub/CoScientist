@@ -145,6 +145,35 @@ def test_the_tools_tab_switches_fedot_for_the_next_session(monkeypatch):
     assert _current_settings()["experimentModule"]["routeFedot"] is True
 
 
+def test_the_research_tab_switches_the_medical_agent(monkeypatch):
+    """MEDICAL__ENABLED from the browser: it lands on the flag MedicalAgent's
+    `enabled` reads, takes the experiment medical route with it, and reads back."""
+    from CoScientist.experiments.runtime.state_machine import medical_route_available
+    from CoScientist.web.app import _apply_frontend_settings, _current_settings
+
+    web = get_settings().web
+    monkeypatch.setattr(web, "medical_agent_enabled", True)
+    _apply_frontend_settings({"medicalAgent": {"enabled": False}})
+    assert web.medical_agent_enabled is False
+    assert medical_route_available() is False
+    assert _current_settings()["medicalAgent"] == {"enabled": False}
+
+    _apply_frontend_settings({"medicalAgent": {"enabled": True}})
+    assert web.medical_agent_enabled is True
+    assert medical_route_available() is True
+
+
+def test_the_medical_switch_is_in_the_research_tab_with_its_own_scope_hint():
+    modal = _read(WEB / "modals" / "settings.js")
+    research = modal[modal.index("id: 'research'"):modal.index("id: 'interface'")]
+    row = research[research.index("id: 'medicalAgent'"):]
+    row = row[:row.index("},")]
+    assert "path: 'medicalAgent.enabled'" in row
+    assert "env: 'MEDICAL__ENABLED'" in row
+    assert "scopeHintKey: 'settings.f.medicalAgent.scopeHint'" in row
+    assert "'settings.f.medicalAgent.scopeHint'" in _read(WEB / "i18n.js")
+
+
 def test_the_fedot_switch_is_in_the_tools_tab_and_session_scoped():
     modal = _read(WEB / "modals" / "settings.js")
     tools = modal[modal.index("id: 'tools'"):]

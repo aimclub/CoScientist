@@ -229,16 +229,21 @@ def match_inventory_tool(
     return match_named_inventory_tool(blob, by_tool, source_request=source_request)
 
 
-def match_named_family_capability(blob: str) -> dict[str, Any] | None:
+def match_named_family_capability(
+    blob: str, *, families: Iterable[str] | None = None,
+) -> dict[str, Any] | None:
     """First research/medical tool name appearing in *task* text.
 
     Does not consult source_request: mixed asks mention several families, and
     per-task routing must follow this task's text, not the whole brief.
+    ``families`` narrows the match to the routes this run has - a switched-off
+    medical agent must not pull a task onto its route.
     """
-    rows = declared_family_capabilities(FAMILY_RESEARCH, FAMILY_MEDICAL)
-    by_tool = index_inventory_tools(
-        rows, families={FAMILY_RESEARCH, FAMILY_MEDICAL},
-    )
+    wanted = {FAMILY_RESEARCH, FAMILY_MEDICAL} if families is None else set(families)
+    if not wanted:
+        return None
+    rows = declared_family_capabilities(*wanted)
+    by_tool = index_inventory_tools(rows, families=wanted)
     return match_named_inventory_tool(blob, by_tool)
 
 

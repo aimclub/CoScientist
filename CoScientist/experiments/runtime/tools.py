@@ -29,13 +29,7 @@ def _route_agents(tool_context: ToolContext) -> frozenset[str] | None:
     start_task then goes by the YAML alone.
     """
     agent = getattr(getattr(tool_context, "_invocation_context", None), "agent", None)
-    tools = getattr(agent, "tools", None)
-    if not isinstance(tools, list):
-        return None
-    return frozenset(
-        name for tool in tools
-        if isinstance(name := getattr(getattr(tool, "agent", None), "name", None), str)
-    )
+    return state_machine.agent_tool_names(agent)
 
 
 def _mirror_result_to_graph(tool_context: ToolContext, task_id: str, stored: dict[str, Any]) -> None:

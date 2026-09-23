@@ -156,6 +156,9 @@ RUNTIME_KEY = "experiment_runtime"
 # left the budget bounding nothing. builder.py resets this key only when the
 # ask itself changes, so it bounds the run rather than a single plan.
 REPLAN_ROUNDS_KEY = "experiment_replan_rounds"
+# The task as planned, before start_task moved a coder task onto the research or
+# medical family its text names; restored if that family's route goes away.
+_PRE_FAMILY_REWRITE_KEY = "task_before_family_rewrite"
 # The agent the route agents are attached to: a route is live only while its
 # agent is one of this executor's enabled subordinates.
 EXECUTOR_AGENT = "ExperimentExecutorAgent"
@@ -470,6 +473,7 @@ def _route_agent_attached(agent_name: str, system: Any = None) -> bool:
 
 def fedot_route_available(
     settings: ExperimentsSettings | None = None, *, system: Any = None,
+    route_agents: Collection[str] | None = None,
 ) -> bool:
     """The one answer to "may fedot_mas be planned, validated or run?".
 
@@ -481,41 +485,80 @@ def fedot_route_available(
     for an agent the YAML had removed, and start_task handed back
     ``route_agent=FedotAgent`` for an agent that was never attached, which
     ``enforce_continue_until_reporting`` then demanded until the run stalled.
+    ``route_agents``: the AgentTools of the executor the session actually runs,
+    when the caller can see them - the YAML and the switch may have changed
+    since that tree was built, and it is the tree that gets the work.
     Fails closed: react_tools is always there to take the task.
     """
     if not _settings(settings).route_fedot:
         return False
+    agent = ROUTE_AGENT_BY_ROUTE[ExecutionRoute.FEDOT_MAS.value]
+    if route_agents is not None and agent not in route_agents:
+        return False
     try:
-        return _route_agent_attached(ROUTE_AGENT_BY_ROUTE[ExecutionRoute.FEDOT_MAS.value], system)
+        return _route_agent_attached(agent, system)
     except Exception as exc:  # noqa: BLE001 - an unreadable config must not stop a run
         logger.warning("FEDOT.MAS route: agent tree unreadable (%s) - treating it as off", exc)
         return False
 
 
 def _fedot_live(settings: ExperimentsSettings, route_agents: Collection[str] | None) -> bool:
-    """fedot_route_available, narrowed to the executor that is actually running.
+    return fedot_route_available(settings, route_agents=route_agents)
 
-    ``route_agents`` are the route agents attached to the calling executor, when
-    the caller can see them. The YAML can change under a running session, and
-    the tree that session runs is the one that has to hold FedotAgent.
+
+def medical_route_available(
+    *, system: Any = None, route_agents: Collection[str] | None = None,
+) -> bool:
+    """The one answer to "may the medical route be planned, validated or run?".
+
+    MedicalAgent listed and enabled under ExperimentExecutorAgent. The switch
+    itself (MEDICAL__ENABLED, also in the web settings) is the agent's own
+    ``enabled`` in the YAML, so the tree already carries it. Same consumers and
+    the same ``route_agents`` as fedot_route_available, for the same reason:
+    when only the runtime read the switch, the planner went on writing medical
+    tasks, the critique approved them, and start_task refused them with the
+    task left 'ready' for ever. Fails closed: see start_task for what then
+    happens to a task planned on it.
     """
-    if route_agents is not None and ROUTE_AGENT_BY_ROUTE[ExecutionRoute.FEDOT_MAS.value] not in route_agents:
+    agent = ROUTE_AGENT_BY_ROUTE[ExecutionRoute.MEDICAL.value]
+    if route_agents is not None and agent not in route_agents:
         return False
-    return fedot_route_available(settings)
+    try:
+        return _route_agent_attached(agent, system)
+    except Exception as exc:  # noqa: BLE001 - an unreadable config must not stop a run
+        logger.warning("medical route: agent tree unreadable (%s) - treating it as off", exc)
+        return False
 
 
-def _medical_route_available() -> bool:
-    """`medical` is a route only while MedicalAgent is actually in the tree.
+def _medical_live(route_agents: Collection[str] | None) -> bool:
+    return medical_route_available(route_agents=route_agents)
 
-    Same reason as `fedot_route_available`: with the
-    agent switched off, `start_task` would hand back route_agent=MedicalAgent
-    for an agent nobody attached, and `enforce_continue_until_reporting` would
-    keep demanding a call to it until the attempt budget ran out.
+
+def agent_tool_names(agent: Any) -> frozenset[str] | None:
+    """Names of the agents attached to ``agent`` as AgentTools, or None."""
+    tools = getattr(agent, "tools", None)
+    if not isinstance(tools, list):
+        return None
+    return frozenset(
+        name for tool in tools
+        if isinstance(name := getattr(getattr(tool, "agent", None), "name", None), str)
+    )
+
+
+def session_route_agents(agent: Any) -> frozenset[str] | None:
+    """The route agents on the ExperimentExecutorAgent of the tree ``agent`` runs in.
+
+    The planner and its critique run beside the executor, not inside it. This
+    lets them ask about the tree the session was built with - the one start_task
+    hands work to - instead of the YAML and switches as they are now: a route
+    switched on after the session was built would otherwise be planned and
+    approved, then refused at start_task. None when there is no tree to read.
     """
     try:
-        return bool(get_settings().web.medical_agent_enabled)
-    except Exception:  # noqa: BLE001 - an unreadable setting must not stop a run
-        return True
+        root = getattr(agent, "root_agent", None) or agent
+        return agent_tool_names(root.find_agent(EXECUTOR_AGENT))
+    except Exception:  # noqa: BLE001 - no tree means the YAML decides
+        return None
 
 
 def _route_enabled(route: str, settings: ExperimentsSettings) -> bool:
@@ -524,7 +567,7 @@ def _route_enabled(route: str, settings: ExperimentsSettings) -> bool:
     if route == ExecutionRoute.ALEMBIC_BUILD.value:
         return settings.route_alembic
     if route == ExecutionRoute.MEDICAL.value:
-        return _medical_route_available()
+        return medical_route_available()
     return route in {
         ExecutionRoute.REACT_TOOLS.value,
         ExecutionRoute.CODER.value,
@@ -716,15 +759,47 @@ def start_task(
             "reason": "FEDOT unavailable (EXPERIMENTS__ROUTE_FEDOT off or FedotAgent "
                       "not attached to ExperimentExecutorAgent)",
         })
+    if route == ExecutionRoute.MEDICAL.value and not _medical_live(route_agents):
+        planned = task_runtime["planned_route"]
+        if planned != ExecutionRoute.MEDICAL.value and _route_live(planned, cfg, route_agents):
+            # The runtime put it on medical (a coder task naming a medical tool,
+            # or a fallback), not the plan: go back to the route that was planned.
+            if (original := task_runtime.pop(_PRE_FAMILY_REWRITE_KEY, None)) is not None:
+                task_runtime["task"] = original
+            route = planned
+            task_runtime["current_route"] = route
+            task_runtime["route_history"].append({
+                "route": route,
+                "reason": "medical unavailable (MEDICAL__ENABLED off or MedicalAgent not "
+                          "attached to ExperimentExecutorAgent); back to the planned route",
+            })
+        else:
+            # Planned on medical, and nothing stands in for MedicalAgent (PICO,
+            # DICOM): blocked - terminal, reported - rather than left 'ready' for
+            # a start_task that can never succeed.
+            exc = ExperimentRuntimeError(
+                "route_disabled",
+                "Route 'medical' is switched off: MedicalAgent is not in this run "
+                "(MEDICAL__ENABLED off, or not attached to ExperimentExecutorAgent).",
+            )
+            _block_unstartable(state, task_id, exc)
+            raise exc
     if not _route_enabled(route, cfg):
         raise ExperimentRuntimeError("route_disabled", f"Route {route!r} is disabled for Experiment Module v0.")
 
     task_model = ExperimentTask.model_validate(task_runtime["task"])
     if route == ExecutionRoute.CODER.value and not mcp_routes_tried(task_runtime):
-        from CoScientist.experiments.capabilities.inventory import match_named_family_capability
+        from CoScientist.experiments.capabilities.inventory import (
+            FAMILY_MEDICAL,
+            FAMILY_RESEARCH,
+            match_named_family_capability,
+        )
 
         blob = task_coverage_blob(state, task_model)
-        if family_hit := match_named_family_capability(blob):
+        # A switched-off medical family is no rewrite target: the rewrite would
+        # only be refused as route_disabled one line later.
+        families = {FAMILY_RESEARCH} | ({FAMILY_MEDICAL} if _medical_live(route_agents) else set())
+        if family_hit := match_named_family_capability(blob, families=families):
             route = str(family_hit["family"])
             if not _route_enabled(route, cfg):
                 raise ExperimentRuntimeError(
@@ -740,6 +815,8 @@ def start_task(
                     if family_hit.get("tool"):
                         art["path_or_tool"] = family_hit["tool"]
             task_model = ExperimentTask.model_validate(dumped)
+            # Kept so the rewrite can be undone if its route goes away later.
+            task_runtime.setdefault(_PRE_FAMILY_REWRITE_KEY, copy.deepcopy(task_runtime["task"]))
             task_runtime["task"] = task_model.model_dump(mode="json")
             task_runtime["current_route"] = route
             task_runtime["route_history"].append({
@@ -894,9 +971,11 @@ def mark_route_returned(state: MutableMapping[str, Any], route_agent: str) -> No
 
 
 def _route_live(route: str, settings: ExperimentsSettings, route_agents: Collection[str] | None) -> bool:
-    """_route_enabled, with FEDOT narrowed to the executor that is running."""
+    """_route_enabled, with FEDOT and medical narrowed to the executor that is running."""
     if route == ExecutionRoute.FEDOT_MAS.value:
         return _fedot_live(settings, route_agents)
+    if route == ExecutionRoute.MEDICAL.value:
+        return _medical_live(route_agents)
     return _route_enabled(route, settings)
 
 
@@ -1362,8 +1441,22 @@ def amend_task(
     amended.update(copy.deepcopy(patch))
     task = ExperimentTask.model_validate(amended)
     task_runtime["task"] = task.model_dump(mode="json")
+    original = task_runtime.get(_PRE_FAMILY_REWRITE_KEY)
+    if original is not None and "route" not in patch:
+        # The runtime's family rewrite stays in force and the planned route with
+        # it; the amendment is carried onto the planned copy, so a later return
+        # to that route keeps it.
+        try:
+            task_runtime[_PRE_FAMILY_REWRITE_KEY] = ExperimentTask.model_validate(
+                {**copy.deepcopy(original), **copy.deepcopy(patch)}
+            ).model_dump(mode="json")
+        except ValueError:
+            original = None
+    if original is None or "route" in patch:
+        # A new route is a new plan for this task: nothing earlier to go back to.
+        task_runtime.pop(_PRE_FAMILY_REWRITE_KEY, None)
+        task_runtime["planned_route"] = task.route.value
     task_runtime["current_route"] = task.route.value
-    task_runtime["planned_route"] = task.route.value
     task_runtime["route_history"].append({"route": task.route.value, "reason": f"amend: {reason}"})
     requires_review = "success_criteria" in patch
     if requires_review:

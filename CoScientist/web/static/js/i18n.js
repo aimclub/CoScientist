@@ -388,6 +388,15 @@ const i18n = {
     en: '1–5 (integer). 1 — only the best hypothesis is queued.',
     ru: '1–5 (целое). 1 — в очередь попадает только лучшая гипотеза.'
   },
+  'settings.f.medicalAgent.label': { en: 'Medical agent', ru: 'Медицинский агент' },
+  'settings.f.medicalAgent.desc': {
+    en: 'MedicalAgent: PubMed search, PICO extraction, study taxonomy and DICOM image analysis. Off, the orchestrator is not offered it and experiment plans get no medical tasks — clinical literature goes to the research agent. Leave it off for studies with no clinical side. Agents served as separate A2A services read only the environment variable.',
+    ru: 'MedicalAgent: поиск в PubMed, извлечение PICO, классификация дизайна исследований и анализ DICOM-снимков. Выключен — оркестратору он не предлагается, а в планах экспериментов нет медицинских задач: клиническую литературу ищет исследовательский агент. Выключайте для исследований без клинической части. Агенты, запущенные отдельными A2A-сервисами, читают только переменную окружения.'
+  },
+  'settings.f.medicalAgent.scopeHint': {
+    en: 'The agent is added or removed for sessions that first run after saving; turning it off also takes the medical route out of experiments already running.',
+    ru: 'Агент добавляется или убирается для сессий, впервые запущенных после сохранения; выключение также убирает медицинский маршрут из уже идущих экспериментов.'
+  },
   'settings.f.critic.label': { en: 'Review the plan with a critic', ru: 'Проверять план критиком' },
   'settings.f.critic.desc': {
     en: 'Before execution a separate model checks the roadmap (assignees, coverage, dependencies) and sends it back if it objects. One extra model call per review.',

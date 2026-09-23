@@ -50,18 +50,30 @@ Root Orchestrator Goal: {orchestrator_root_goal?}
     )
 
 
-def _fedot_planned(ctx: PromptContext) -> bool:
-    """Offer FEDOT.MAS to the planner only when the tree being built can run it.
+def _built_system(ctx: PromptContext):
+    """The config this prompt is built into, or None for a test double.
 
-    ``ctx.system`` is the very config this prompt is built into, so the planner
-    and the executor's route roster cannot disagree. A test double without a
-    real config falls back to the YAML on disk.
+    Asking the route predicates about ``ctx.system`` keeps the planner and the
+    executor's route roster from disagreeing; None falls back to the YAML on disk.
     """
     from CoScientist.assembly.schema import SystemConfig
-    from CoScientist.experiments.runtime.state_machine import fedot_route_available
 
     system = getattr(ctx, "system", None)
-    return fedot_route_available(system=system if isinstance(system, SystemConfig) else None)
+    return system if isinstance(system, SystemConfig) else None
+
+
+def _fedot_planned(ctx: PromptContext) -> bool:
+    """Offer FEDOT.MAS to the planner only when the tree being built can run it."""
+    from CoScientist.experiments.runtime.state_machine import fedot_route_available
+
+    return fedot_route_available(system=_built_system(ctx))
+
+
+def _medical_planned(ctx: PromptContext) -> bool:
+    """Offer the medical route only when the tree being built holds MedicalAgent."""
+    from CoScientist.experiments.runtime.state_machine import medical_route_available
+
+    return medical_route_available(system=_built_system(ctx))
 
 
 @_register("experiment_planner")
@@ -70,7 +82,9 @@ def experiment_planner(ctx: PromptContext) -> str:
     # route. FEDOT.MAS is not reliable enough to be a default one: it is offered
     # only as a narrow exception, and when it is switched off the planner never
     # hears of it - a route named in the prompt is a route the model will use.
+    # The medical route follows its agent the same way (MEDICAL__ENABLED).
     fedot = _fedot_planned(ctx)
+    medical = _medical_planned(ctx)
     return render_template(
         """You are ExperimentPlannerAgent (Experiment Module v1b/v1a).
 PLAN only — never call an execution tool. Emit exactly one ExperimentPlan
@@ -94,7 +108,7 @@ CLOSED ENUMS (literals only):
 - design.baselines[].kind: method|model|prior_result|external
 - design.metrics[].direction: maximize|minimize|compare
 - design.analysis_artifacts[].role: code|config|metrics_table|report
-- design.analysis_artifacts[].prepare_via: coder|mcp|existing|research|medical
+- design.analysis_artifacts[].prepare_via: <<PREPARE_VIA>>
 - launch_params: JSON object *string*, e.g. "{\"case\":\"alzheimer\",\"num\":10,\"upload_results_to_s3\":true}"
 
 RULES:
@@ -132,11 +146,11 @@ RULES:
       - Non-empty inventory with matching operation ⇒ ≥1 MCP compute task (5.1).
    2) SAME-operation literature/web AND source_request asks → research, mcp_servers=[].
       Bind family tool on analysis_artifacts.path_or_tool (prepare_via=research; role=report|data).
-   3) SAME-operation PubMed/PICO/DICOM AND source_request asks → medical, mcp_servers=[].
+   3) <<CLINICAL_RULE>>
    4) route_alembic=true AND a repo_candidates[].url fits → alembic_build, repo_url=<exact
       url>, post_build_route=react_tools, mcp_servers=[]. PREFERRED over coder when a repo fits.
    5) else required route=coder (for multi-target scripting, comparative data tables, plots, or uncovered operations).
-   Mixed ask = one plan: research/medical evidence, react_tools compute, coder uncovered/comparative.
+   Mixed ask = one plan: <<EVIDENCE_ROUTES>> evidence, react_tools compute, coder uncovered/comparative.
 6. Copy experiment_run_id + source_request verbatim. plan_id: one stable
    non-empty id, e.g. PLAN-<uuid>; revision: integer >= 1. On a REVISION round
    the runtime overwrites both from the previous plan, so never try to recall
@@ -170,10 +184,19 @@ Top-level: schema_version, plan_id, experiment_run_id, revision, source_request,
 goal, hypothesis, hypotheses, methods, context_digest, context_refs, tasks,
 risks, assumptions, total_est_duration_min, created_at (UTC ISO-8601 Z).
 """,
-        ROUTES=(
-            "react_tools|fedot_mas|coder|alembic_build|research|medical" if fedot
-            else "react_tools|coder|alembic_build|research|medical"
+        ROUTES="|".join([
+            "react_tools", *(["fedot_mas"] if fedot else []), "coder", "alembic_build",
+            "research", *(["medical"] if medical else []),
+        ]),
+        PREPARE_VIA="coder|mcp|existing|research" + ("|medical" if medical else ""),
+        # Kept as rule 3 either way: the rules are cited by number.
+        CLINICAL_RULE=(
+            "SAME-operation PubMed/PICO/DICOM AND source_request asks → medical, mcp_servers=[]."
+            if medical else
+            "PubMed/PICO/DICOM asks: there is no clinical route in this run. Literature"
+            " part → research (route 2); anything else falls through to routes 4-5."
         ),
+        EVIDENCE_ROUTES="research/medical" if medical else "research",
         POST_BUILD_ROUTES="react_tools|fedot_mas" if fedot else "react_tools",
         FEDOT_RULE=(
             "\n      - fedot_mas ONLY when ONE task must itself chain ≥2 different bound"

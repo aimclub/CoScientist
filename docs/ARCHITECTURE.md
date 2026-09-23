@@ -211,6 +211,13 @@ names it to the planner, and MCP work goes to `react_tools` (ExperimentAgent).
 On, `fedot_mas` is still only the exception for one task chaining several tools
 in a search loop.
 
+The `medical` route follows `MedicalAgent` the same way, through
+`state_machine.medical_route_available`: its switch is `MEDICAL__ENABLED` (also
+in the web settings, research tab), which is the agent's own `enabled`. Off, the
+planner is not offered the route (clinical literature goes to `research`), the
+critique refuses it, and a task already planned on it is blocked rather than
+left waiting for an agent that is not there.
+
 **Execution Flow (FedotAgent)**:
 1. Receive task description
 2. Build FEDOT.MAS pipeline

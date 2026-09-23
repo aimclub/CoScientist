@@ -21,7 +21,12 @@ from CoScientist.experiments.runtime.execution_bridge import (
     record_plan_proposed,
 )
 from CoScientist.experiments.runtime.shared import audit
-from CoScientist.experiments.runtime.state_machine import REPLAN_ROUNDS_KEY
+from CoScientist.experiments.runtime.state_machine import (
+    REPLAN_ROUNDS_KEY,
+    fedot_route_available,
+    medical_route_available,
+    session_route_agents,
+)
 from CoScientist.experiments.schemas import ExperimentPlan
 from CoScientist.graph.session_scope import session_key
 from CoScientist.hitl.handler import AbstractHITLHandler, DelegatingHITLHandler
@@ -590,6 +595,10 @@ class ExperimentReviewSessionAgent(SessionAgent):
             runtime = state.get("experiment_runtime") or {}
             previous = ExperimentPlan.model_validate(runtime["plan"]) if runtime.get("plan") else None
             payload = _stamp_context_invariants(_json_payload(output_text), context, previous)
+            # Asked of this session's executor, the one start_task hands work to:
+            # a route switched on after the session was built must not be
+            # approved here and then refused there.
+            route_agents = session_route_agents(getattr(ctx, "agent", None))
             plan, critique = validate_and_critique_plan(
                 payload, settings=cfg,
                 available_tools=(
@@ -601,6 +610,8 @@ class ExperimentReviewSessionAgent(SessionAgent):
                 repo_candidates=context.get("repo_candidates") or [],
                 operations=context.get("operations") or [],
                 pipeline_scope=context.get("pipeline_scope"),
+                fedot_on=fedot_route_available(cfg, route_agents=route_agents),
+                medical_on=medical_route_available(route_agents=route_agents),
             )
             if errs := _context_invariant_errors(plan, context):
                 raise PlanValidationError("ExperimentPlan context invariants failed", errors=errs)

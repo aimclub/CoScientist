@@ -458,6 +458,28 @@ def test_with_fedot_on_react_tools_stays_the_mcp_route():
     assert "<<" not in on
 
 
+def test_the_planner_is_offered_the_medical_route_only_with_its_agent(monkeypatch):
+    """MEDICAL__ENABLED used to reach only the runtime: the planner kept writing
+    medical tasks for an agent that was not in the tree."""
+    from CoScientist.config import get_settings
+
+    config = load_config(resolve_config_path("experiments"))
+    on = _planner_prompt(config)
+    assert "research|medical" in on
+    assert "→ medical, mcp_servers=[]" in on
+
+    monkeypatch.setattr(get_settings().web, "medical_agent_enabled", False)
+    roster = [a.name for a in config.enabled_subordinates("ExperimentExecutorAgent")]
+    assert "MedicalAgent" not in roster
+    off = _planner_prompt(config)
+    assert "medic" not in off.lower()
+    # Rule 3 stays, so the rules cited by number still line up.
+    assert "3) PubMed/PICO/DICOM asks: there is no clinical route in this run." in off
+    # Falls through to Alembic (4) before coder (5), as with the route on.
+    assert "anything else falls through to routes 4-5" in off
+    assert "<<" not in off
+
+
 def test_the_profile_builds_without_fedot(monkeypatch):
     """Switched off, FedotAgent is neither a tool of the executor nor a line in
     its route roster, so nothing can hand work to it."""

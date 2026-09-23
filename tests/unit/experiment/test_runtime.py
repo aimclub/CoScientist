@@ -1424,6 +1424,175 @@ def test_the_fallback_never_offers_fedot_the_running_executor_lacks():
     assert fallback["route"] == "coder"
 
 
+# ── The medical route follows MedicalAgent the same way ────────────────────
+
+def _medical_task(task_id: str = "EXP-1") -> dict:
+    task = _task(task_id, route="medical")
+    task["design"]["analysis_artifacts"] = [{
+        "name": "pubmed_notes.md", "role": "report",
+        "prepare_via": "medical", "path_or_tool": "search_pubmed",
+    }]
+    return task
+
+
+def _forced_state(*tasks: dict) -> dict:
+    state: dict = {}
+    initialize_runtime(
+        state, _plan(*tasks), critique={"verdict": "approve", "issues": [], "summary": "forced"},
+    )
+    approve_plan(state)
+    return state
+
+
+def test_medical_route_available_follows_the_agent(monkeypatch):
+    from CoScientist.assembly.schema import load_config, resolve_config_path
+    from CoScientist.config import get_settings
+    from CoScientist.experiments.runtime import state_machine
+    from CoScientist.experiments.runtime.state_machine import medical_route_available
+
+    tree = _experiments_tree()
+    assert medical_route_available(system=tree) is True
+    detached = _experiments_tree()
+    detached.agents["ExperimentExecutorAgent"].subordinates.remove("MedicalAgent")
+    assert medical_route_available(system=detached) is False
+    main = load_config(resolve_config_path("system"))
+    assert medical_route_available(system=main) is True
+    # MEDICAL__ENABLED is MedicalAgent's own `enabled`, read on every call.
+    monkeypatch.setattr(get_settings().web, "medical_agent_enabled", False)
+    assert medical_route_available(system=tree) is False
+    assert medical_route_available(system=main) is False
+
+    def broken():
+        raise ValueError("unparsable profile")
+
+    monkeypatch.setattr(state_machine, "_config_tree", broken)
+    monkeypatch.setattr(get_settings().web, "medical_agent_enabled", True)
+    assert medical_route_available() is False
+
+
+@pytest.mark.parametrize("switch_off, route_agents", [
+    (True, None),
+    (False, frozenset({"ExperimentAgent", "CoderAgent", "ResearchAgent"})),
+])
+def test_a_medical_task_is_blocked_not_stranded_when_the_agent_is_gone(
+    monkeypatch, switch_off, route_agents,
+):
+    """start_task used to refuse it as route_disabled and leave it 'ready' - a
+    state neither retry_task nor fallback_task accepts. Nothing can stand in for
+    MedicalAgent, so the task is blocked: terminal, and the run moves on."""
+    from CoScientist.config import get_settings
+
+    state = _forced_state(_medical_task())
+    if switch_off:
+        monkeypatch.setattr(get_settings().web, "medical_agent_enabled", False)
+
+    with pytest.raises(ExperimentRuntimeError) as exc:
+        start_task(state, "EXP-1", route_agents=route_agents)
+    assert exc.value.code == "route_disabled"
+    runtime = state["experiment_runtime"]
+    assert runtime["tasks"]["EXP-1"]["status"] == "blocked"
+    assert runtime["phase"] == "reporting"
+
+
+def test_a_medical_task_starts_while_its_agent_is_attached():
+    state = _forced_state(_medical_task())
+    started = start_task(state, "EXP-1")
+    assert started["route"] == "medical"
+    assert started["route_agent"] == "MedicalAgent"
+
+
+@pytest.mark.parametrize("medical_on, route", [(True, "medical"), (False, "coder")])
+def test_a_coder_task_naming_a_medical_tool_follows_the_switch(monkeypatch, medical_on, route):
+    """The runtime rewrite of a coder task onto the family its text names must
+    not pick a switched-off medical route - it would be refused one line later."""
+    from CoScientist.config import get_settings
+
+    task = _task("EXP-1", route="coder")
+    task["description"] = "Search the clinical literature with search_pubmed."
+    state = _forced_state(task)
+    monkeypatch.setattr(get_settings().web, "medical_agent_enabled", medical_on)
+
+    started = start_task(state, "EXP-1")
+    assert started["route"] == route
+
+
+def test_a_coder_task_the_runtime_moved_to_medical_goes_back_to_coder(monkeypatch):
+    """Only a task PLANNED on medical has nothing to fall back on. One the runtime
+    moved there itself (its text named a medical tool) returns to its planned
+    coder route, as planned - and its dependents are not blocked with it."""
+    from CoScientist.config import get_settings
+
+    first = _task("EXP-1", route="coder")
+    first["description"] = "Search the clinical literature with search_pubmed."
+    second = _task("EXP-2", route="coder", depends_on=["EXP-1"])
+    state = _forced_state(first, second)
+    planned_task = state["experiment_runtime"]["tasks"]["EXP-1"]["task"]
+
+    started = start_task(state, "EXP-1")
+    assert started["route"] == "medical"
+    mark_route_returned(state, "MedicalAgent")
+    record_result(state, "EXP-1", started["attempt_id"],
+                  {**_route_failure(), "error_code": "timeout", "retryable": True})
+    retry_task(state, "EXP-1")
+    monkeypatch.setattr(get_settings().web, "medical_agent_enabled", False)
+
+    again = start_task(state, "EXP-1")
+    assert again["route"] == "coder"
+    assert again["route_agent"] == "CoderAgent"
+    task_runtime = state["experiment_runtime"]["tasks"]["EXP-1"]
+    assert task_runtime["task"] == planned_task
+    assert any("back to the planned route" in h["reason"] for h in task_runtime["route_history"])
+    assert state["experiment_runtime"]["tasks"]["EXP-2"]["status"] != "blocked"
+
+
+def test_an_amendment_keeps_the_planned_route_of_a_task_the_runtime_moved(monkeypatch):
+    """An amend that does not touch the route must not turn the runtime's own
+    coder->medical move into a plan: the task still goes back to coder, and
+    keeps the amendment when it does."""
+    from CoScientist.config import get_settings
+
+    task = _task("EXP-1", route="coder")
+    task["description"] = "Search the clinical literature with search_pubmed."
+    state = _forced_state(task)
+    started = start_task(state, "EXP-1")
+    assert started["route"] == "medical"
+    mark_route_returned(state, "MedicalAgent")
+    record_result(state, "EXP-1", started["attempt_id"],
+                  {**_route_failure(), "error_code": "timeout", "retryable": True})
+    retry_task(state, "EXP-1")
+    amend_task(state, "EXP-1", {"launch_params": {"smiles": "CCN"}}, "different input")
+    task_runtime = state["experiment_runtime"]["tasks"]["EXP-1"]
+    assert task_runtime["planned_route"] == "coder"
+
+    monkeypatch.setattr(get_settings().web, "medical_agent_enabled", False)
+    again = start_task(state, "EXP-1")
+    assert again["route"] == "coder"
+    assert task_runtime["task"]["route"] == "coder"
+    assert task_runtime["task"]["launch_params"] == {"smiles": "CCN"}
+
+
+def test_session_route_agents_reads_the_executor_of_the_running_tree():
+    """The planner and its critique sit beside the executor; they find it
+    through the tree the session was built with."""
+    from CoScientist.experiments.runtime.state_machine import session_route_agents
+
+    executor = SimpleNamespace(tools=[
+        SimpleNamespace(agent=SimpleNamespace(name="ExperimentAgent")),
+        SimpleNamespace(agent=SimpleNamespace(name="CoderAgent")),
+        object(),
+    ])
+
+    class _Root:
+        def find_agent(self, name):
+            return executor if name == "ExperimentExecutorAgent" else None
+
+    planner = SimpleNamespace(root_agent=_Root())
+    assert session_route_agents(planner) == frozenset({"ExperimentAgent", "CoderAgent"})
+    # No executor in this tree (the main profile) or no tree at all: the YAML decides.
+    assert session_route_agents(SimpleNamespace(root_agent=SimpleNamespace(find_agent=lambda n: None))) is None
+    assert session_route_agents(None) is None
+
+
 def test_fedot_switched_off_after_the_fallback_chose_it_does_not_strand_the_task():
     """The fallback moved a task onto fedot_mas after react_tools had spent its
     attempts, and then FEDOT went away. start_task must still open an attempt:

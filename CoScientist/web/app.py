@@ -417,6 +417,14 @@ def _apply_frontend_settings(frontend: dict) -> None:
     if "abstainScore" in task_exec:
         web.executor_tool_abstain_score = float(task_exec["abstainScore"])
 
+    # MEDICAL__ENABLED. The next session's tree attaches MedicalAgent on it
+    # (orchestrator roster, experiment executor, planner prompt). Off also takes
+    # the medical route out of a running experiment at once: the critique and
+    # start_task ask medical_route_available on every call.
+    medical = frontend.get("medicalAgent", {})
+    if "enabled" in medical:
+        web.medical_agent_enabled = bool(medical["enabled"])
+
     hypotheses = frontend.get("hypothesesAgent", {})
     if "maxActiveHypotheses" in hypotheses:
         val = int(hypotheses["maxActiveHypotheses"])
@@ -499,6 +507,7 @@ def _current_settings() -> dict:
             "mergeTasksEnabled": web.merge_tasks_enabled,
         },
         "researchAgent": {"maxSearches": web.max_searches},
+        "medicalAgent": {"enabled": web.medical_agent_enabled},
         "hypothesesAgent": {
             "maxActiveHypotheses": web.max_active_hypotheses,
         },
