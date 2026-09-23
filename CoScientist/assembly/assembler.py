@@ -200,6 +200,16 @@ def _work_order_tool_names(
     return names
 
 
+def _attach_transient_error_refund(kwargs: dict) -> None:
+    """First after_tool on every agent: a call that died on a dropped MCP
+    session gives its attempt back to whichever limiter charged it."""
+    from CoScientist.agents.callbacks.tool_callbacks import refund_transient_tool_error
+
+    current = kwargs.get("after_tool_callback")
+    rest = [] if current is None else list(current) if isinstance(current, list) else [current]
+    kwargs["after_tool_callback"] = [refund_transient_tool_error] + rest
+
+
 def _attach_work_order_callbacks(
     kwargs: dict, agent_name: str, internal_tools: List[str], step_review: bool = False
 ) -> None:
@@ -339,6 +349,7 @@ def _build_llm_agent(
     _check_tool_consistency(cfg, ctx, tools)
 
     callbacks = _callback_kwargs(cfg, ctx)
+    _attach_transient_error_refund(callbacks)
     if work_order_attached:
         _attach_work_order_callbacks(
             callbacks, cfg.name, system.internal_tools,

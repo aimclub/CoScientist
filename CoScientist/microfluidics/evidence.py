@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from typing import Any
 
@@ -11,6 +12,8 @@ from google.adk.agents.callback_context import CallbackContext
 from CoScientist.microfluidics.models import LiteratureAnalysis
 
 TRACE_KEY = "_evidence_verifier_trace"
+DRAFT_KEY = "literature_analysis_draft"
+logger = logging.getLogger(__name__)
 _URL = re.compile(r"https?://[^\s\"'<>]+", re.I)
 _PATENT = re.compile(r"\b(?:WO|EP|US|RU)\s*[-/]?\s*\d{5,}[A-Z]\d?\b", re.I)
 _STANDARD = re.compile(r"\b(?:ASTM|ISO|EN|GOST|ГОСТ)\s+[A-ZА-Я0-9][A-ZА-Я0-9.:-]*", re.I)
@@ -145,11 +148,43 @@ def authenticate_analysis(analysis: Any, trace: Any) -> LiteratureAnalysis:
     return model
 
 
+def _lost_draft_content(verified: Any, draft: Any) -> list[str]:
+    """What the verifier's answer dropped from the synthesis draft.
+
+    The verifier only re-grades claims; it never removes routes or sources.
+    An answer without them is a failed structured answer (a malformed call
+    validates to an empty analysis), not a verdict.
+    """
+    try:
+        before = LiteratureAnalysis.model_validate(draft or {})
+        after = LiteratureAnalysis.model_validate(verified or {})
+    except Exception:  # noqa: BLE001 - an unreadable draft has nothing to protect
+        return []
+    lost = []
+    missing_routes = (
+        {route.route_id for route in before.synthesis_routes}
+        - {route.route_id for route in after.synthesis_routes}
+    )
+    if missing_routes:
+        lost.append(f"routes {sorted(missing_routes)}")
+    if before.source_records and not after.source_records:
+        lost.append(f"{len(before.source_records)} source records")
+    return lost
+
+
 def authenticate_evidence_verification(callback_context: CallbackContext) -> None:
     state = callback_context.state
-    state["literature_analysis"] = authenticate_analysis(
-        state.get("literature_analysis"), state.get(TRACE_KEY),
-    ).model_dump()
+    analysis = state.get("literature_analysis")
+    lost = _lost_draft_content(analysis, state.get(DRAFT_KEY))
+    if lost:
+        # Authenticate the draft instead: its claims stay unverified unless
+        # the trace proves the exact source was read.
+        logger.warning(
+            "evidence verifier answer dropped %s from the draft — authenticating the draft",
+            ", ".join(lost),
+        )
+        analysis = state.get(DRAFT_KEY)
+    state["literature_analysis"] = authenticate_analysis(analysis, state.get(TRACE_KEY)).model_dump()
     return None
 
 

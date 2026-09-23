@@ -399,3 +399,40 @@ def sanitize_json_output(
     return LlmResponse(
         content=types.Content(role="model", parts=[types.Part(text=clean)])
     )
+
+
+def unwrap_model_response_args(
+    tool: Any = None,
+    args: Any = None,
+    tool_context: Any = None,
+    **_: Any,
+) -> None:
+    """before_tool callback: lift a ``set_model_response`` answer out of one
+    extra wrapper key before ADK validates it.
+
+    Some models call ``set_model_response({"params": {...}})`` instead of
+    passing the schema fields at the top level. ADK validates the arguments
+    as they come, and a schema whose fields all have defaults accepts the
+    unknown key silently — the answer becomes an EMPTY object and whatever
+    the agent produced (the literature routes, in the run this guards) is
+    lost. The arguments are rewritten in place: ADK hands the tool the same
+    dict it gave the callbacks.
+    """
+    if getattr(tool, "name", "") != "set_model_response" or not isinstance(args, dict):
+        return None
+    model_type = getattr(tool, "_model_type", None)
+    fields = set(getattr(model_type, "model_fields", None) or ())
+    if not fields or len(args) != 1 or set(args) & fields:
+        return None
+    (key, inner), = args.items()
+    if isinstance(inner, str):
+        inner = _try_loads(inner)
+    if not isinstance(inner, dict) or not set(inner) & fields:
+        return None
+    logger.warning(
+        "[%s] set_model_response answer was wrapped in %r — unwrapped",
+        getattr(tool_context, "agent_name", "?"), key,
+    )
+    args.clear()
+    args.update(inner)
+    return None

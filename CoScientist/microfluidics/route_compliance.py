@@ -369,6 +369,12 @@ def _check_metal_catalyst(
                      or _NO_CATALYST_VALUE.search(condition.value))
                 for condition in step.conditions
             )
+            # The same statement written on the catalyst itself:
+            # «полиэлектролитный коацерват (катализатор, без металлов)».
+            or any(
+                _CATALYST_LABEL.search(agent.name) and _NO_METAL_VALUE.search(agent.name)
+                for agent in step.agents
+            )
             or bool(_NO_CATALYST.search(_condition_text(step)))
         )
     if not all(explicit_absence):

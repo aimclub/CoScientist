@@ -52,6 +52,8 @@ class RepeatCallGuardPlugin(BasePlugin):
     def __init__(self, name: str = "repeat_call_guard") -> None:
         super().__init__(name=name)
         self._counts: Counter = Counter()
+        # function_call_id → counter key, so a dropped MCP session can refund.
+        self._pending: Dict[str, str] = {}
 
     async def before_tool_callback(self, *, tool, tool_args, tool_context) -> Optional[Dict[str, Any]]:
         if not _enabled():
@@ -68,6 +70,9 @@ class RepeatCallGuardPlugin(BasePlugin):
         self._counts[key] += 1
         n = self._counts[key]
         if n <= _limit():
+            call_id = getattr(tool_context, "function_call_id", None)
+            if call_id:
+                self._pending[call_id] = key
             return None
 
         return {
@@ -82,6 +87,16 @@ class RepeatCallGuardPlugin(BasePlugin):
                 "for a long job, poll it with check_job instead."
             ),
         }
+
+    async def after_tool_callback(
+        self, *, tool, tool_args, tool_context, result
+    ) -> Optional[Dict[str, Any]]:
+        from CoScientist.agents.callbacks.tool_callbacks import is_transient_tool_error
+
+        key = self._pending.pop(getattr(tool_context, "function_call_id", None) or "", None)
+        if key and is_transient_tool_error(result) and self._counts[key] > 0:
+            self._counts[key] -= 1
+        return None
 
 
 repeat_call_guard_plugin = RepeatCallGuardPlugin()

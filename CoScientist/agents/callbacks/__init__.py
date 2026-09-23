@@ -12,7 +12,7 @@ from CoScientist.agents.callbacks.med_callbacks import (
     before_model_modifier,
     med_agent_before_model,
 )
-from CoScientist.agents.callbacks.json_output import sanitize_json_output
+from CoScientist.agents.callbacks.json_output import sanitize_json_output, unwrap_model_response_args
 from CoScientist.agents.callbacks.link_registry import (
     expand_link_refs,
     redact_link_urls,
@@ -82,6 +82,7 @@ __all__ = [
     "inject_fedot_candidates",
     "inject_report_language",
     "sanitize_json_output",
+    "unwrap_model_response_args",
     "user_links",
     "redact_link_urls",
     "resolve_link_refs",

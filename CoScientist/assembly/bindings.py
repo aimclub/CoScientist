@@ -1730,7 +1730,11 @@ def _tavily_search_limiter():
 
 def _per_tool_call_limiter():
     from CoScientist.agents.callbacks.tool_callbacks import PerToolCallLimiter
-    return PerToolCallLimiter(max_calls=2).limit_tool_calls
+    # PaperRetriever's full-text analysis needs a third pass; ResearchAgent is
+    # forbidden explore_my_papers, so the override never widens its budget.
+    return PerToolCallLimiter(
+        max_calls=2, per_tool={"explore_my_papers": 3}
+    ).limit_tool_calls
 
 
 def _evidence_verifier_tool_limiter():
@@ -1751,6 +1755,11 @@ def _forbid_explore_my_papers():
 def _sanitize_json_output():
     from CoScientist.agents.callbacks import sanitize_json_output
     return sanitize_json_output
+
+
+def _unwrap_model_response_args():
+    from CoScientist.agents.callbacks import unwrap_model_response_args
+    return unwrap_model_response_args
 
 
 def _microfluidics_evidence(name: str):
@@ -1990,8 +1999,8 @@ _cb("count_research_searches", "after_tool", factory=lambda ctx: _count_research
 _cb("reset_research_searches", "before_agent", factory=lambda ctx: _reset_research_searches())
 # A separate per-agent quota for EconomicsAgent / ReactorAgent Tavily fallback.
 _cb("TavilySearchLimiter", "before_tool", factory=lambda ctx: _tavily_search_limiter())
-# Microfluidics ResearchAgent budget: two calls per concrete tool and per
-# delegated agent branch, so parallel LIT-* tasks never share a counter.
+# Microfluidics ResearchAgent budget: two calls per concrete tool (three for
+# explore_my_papers) and per delegated agent branch, so parallel LIT-* tasks never share a counter.
 _cb("PerToolCallLimiter", "before_tool", factory=lambda ctx: _per_tool_call_limiter())
 _cb("EvidenceVerifierToolLimiter", "before_tool", factory=lambda ctx: _evidence_verifier_tool_limiter())
 # Clamp OpenAlex result sets before the request reaches the remote papers MCP.
@@ -2007,6 +2016,11 @@ _cb("finish_after_plan_registered", "after_model",
 # Trim prose/fences/trailing text around a JSON answer BEFORE strict
 # output_schema validation (providers don't always honour response_format).
 _cb("sanitize_json_output", "after_model", factory=lambda ctx: _sanitize_json_output())
+# The same answer given through set_model_response (agents with tools AND an
+# output_schema): lift it out of a wrapper key the model invented, so schema
+# validation does not silently turn it into an empty object.
+_cb("unwrap_model_response_args", "before_tool",
+    factory=lambda ctx: _unwrap_model_response_args())
 _cb("begin_evidence_verification", "before_agent",
     factory=_microfluidics_evidence("begin_evidence_verification"))
 _cb("capture_evidence_verification", "after_tool",
@@ -2142,6 +2156,7 @@ def _register_classes() -> None:
         OptimizationSessionAgent,
     )
     from CoScientist.microfluidics.route_selection import RouteSelectionSessionAgent
+    from CoScientist.microfluidics.design import MoleculeSelectionAgent
     from CoScientist.context_init.agent import ContextInitSessionAgent
     from CoScientist.experiments.review import ExperimentReviewSessionAgent
 
@@ -2154,6 +2169,9 @@ def _register_classes() -> None:
     REGISTRY.register_agent_class("optimization_session", OptimizationSessionAgent)
     REGISTRY.register_agent_class("campaign_session", CampaignSessionAgent)
     REGISTRY.register_agent_class("route_selection_session", RouteSelectionSessionAgent)
+    # Microfluidics stage 7 without a model: the ТЗ's molecule or the chosen
+    # route's product (microfluidics/design.py).
+    REGISTRY.register_agent_class("molecule_selection", MoleculeSelectionAgent)
     # Context-init pre-stage: the review shows a STRUCTURED FORM (research frame)
     # and seeds the confirmed frame into the research graph.
     REGISTRY.register_agent_class("context_init_session", ContextInitSessionAgent)

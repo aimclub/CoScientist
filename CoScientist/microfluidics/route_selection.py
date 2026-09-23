@@ -24,11 +24,18 @@ from CoScientist.microfluidics.models import (
 )
 from CoScientist.microfluidics.requirements import REQUIREMENTS_KEY, compile_requirements
 from CoScientist.microfluidics.route_compliance import QUALIFIED_ROUTES_KEY, qualify_routes
-from CoScientist.hitl.session_agent import SessionAgent
+from CoScientist.graph.session_scope import session_key
+from CoScientist.hitl.models import HITLAction, HITLRequest, HITLResponse
+from CoScientist.hitl.session_agent import SessionAgent, render_review_yaml
 
 SELECTION_KEY = "route_selection"
 SELECTION_AUDIT_KEY = "route_selection_audit"
 ROUTE_CANDIDATES_AUDIT_KEY = "route_candidates_audit"
+# The operator's answer when the selection named no route:
+# {"decision": "select", "route_id": ...} | {"decision": "reject_all"} |
+# {"decision": "no_answer"}.
+OPERATOR_DECISION_KEY = "route_selection_operator"
+OPTION_REJECT_ALL = "Не выбирать маршрут"
 logger = logging.getLogger(__name__)
 
 _PERCENT = re.compile(r"(?<!\d)(\d+(?:[.,]\d+)?)\s*%")
@@ -146,6 +153,21 @@ def finalize_route_selection(callback_context: CallbackContext) -> types.Content
             "route selection decisions do not cover all routes: expected=%s actual=%s",
             sorted(by_id), sorted(decision_ids),
         )
+    operator = state.get(OPERATOR_DECISION_KEY) or {}
+    decision = operator.get("decision") if isinstance(operator, dict) else None
+    if decision == "select" and operator.get("route_id") in by_id:
+        route_id = operator["route_id"]
+        selection = selection.model_copy(update={
+            "selected_route_id": route_id,
+            "selection_reason": (
+                f"Маршрут {route_id} выбран оператором."
+                + (f" Рекомендация модели: {selection.selection_reason}" if selection.selection_reason else "")
+            ),
+        })
+        state[SELECTION_KEY] = selection.model_dump()
+    # The operator confirmed that no route goes on (or did not answer):
+    # nothing is forwarded, every candidate stays in the audit.
+    operator_rejected = decision in ("reject_all", "no_answer") and bool(by_id)
     selected_id = selection.selected_route_id.strip()
     narrowed = bool(selected_id) and selected_id in by_id
     if narrowed:
@@ -153,6 +175,9 @@ def finalize_route_selection(callback_context: CallbackContext) -> types.Content
         # for a second route decision), so it is also the transport filter.
         chosen = [by_id[selected_id]]
         dropped = [route for route in analysis.synthesis_routes if route.route_id != selected_id]
+    elif operator_rejected:
+        chosen = []
+        dropped = list(analysis.synthesis_routes)
     else:
         if selected_id:
             logger.warning(
@@ -170,17 +195,25 @@ def finalize_route_selection(callback_context: CallbackContext) -> types.Content
     if narrowed:
         analysis = analysis.model_copy(update={"synthesis_routes": chosen})
     from CoScientist.config import get_settings
-    operator_confirmed = bool(get_settings().web.hitl_enabled)
+    operator_confirmed = bool(get_settings().web.hitl_enabled) and decision != "no_answer"
     state[SELECTION_AUDIT_KEY] = {
         **selection.model_dump(),
         "approved_by_human": operator_confirmed,
         "review_mode": "human" if operator_confirmed else "headless",
+        "operator_decision": decision or "",
     }
     state["literature_analysis"] = analysis.model_dump()
 
+    if operator_rejected:
+        empty_reason = (
+            "Оператор отклонил все найденные маршруты." if decision == "reject_all"
+            else "Оператор не ответил на выбор маршрута — маршрут не передан дальше."
+        )
+    else:
+        empty_reason = "Литературные маршруты не найдены."
     routes = SynthesisRoutes(
         routes=[literature_route_to_synthesis(route) for route in chosen],
-        gaps=list(analysis.gaps) + ([] if chosen else ["Литературные маршруты не найдены."]),
+        gaps=list(analysis.gaps) + ([] if chosen else [empty_reason]),
     )
     state["synthesis_routes"] = routes.model_dump()
     spec = state.get(REQUIREMENTS_KEY) or compile_requirements(state.get("structured_tz"))
@@ -195,13 +228,22 @@ def finalize_route_selection(callback_context: CallbackContext) -> types.Content
             rejected=_rejected_decisions(selection, dropped, selected_id),
             gaps=list(routes.gaps),
         )
+    elif operator_rejected:
+        qualified = QualifiedRoutes(
+            status="no_compliant_routes",
+            rejected=_rejected_decisions(selection, dropped, ""),
+            gaps=list(routes.gaps),
+        )
     else:
         qualified = qualify_routes(routes, spec, analysis.source_records)
     state[QUALIFIED_ROUTES_KEY] = qualified.model_dump()
 
     payload = {
         "status": ("selected_route_forwarded" if narrowed
-                   else "candidates_forwarded" if chosen else "none_selected"),
+                   else "candidates_forwarded" if chosen
+                   else "operator_rejected_all" if decision == "reject_all"
+                   else "no_operator_answer" if decision == "no_answer"
+                   else "none_selected"),
         "selected_route_id": selection.selected_route_id,
         "active_route_ids": [route.route_id for route in chosen],
         "rejected_route_ids": [route.route_id for route in dropped],
@@ -232,8 +274,124 @@ def _commit_selection_output(state: dict[str, Any], output_text: Any) -> None:
         state[SELECTION_KEY] = payload
 
 
+def _selection_from(state: Any, output_text: Any) -> RouteSelection:
+    payload = output_text
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except json.JSONDecodeError:
+            payload = None
+    for candidate in (payload, state.get(SELECTION_KEY)):
+        if isinstance(candidate, dict):
+            try:
+                return RouteSelection.model_validate(candidate)
+            except Exception:  # noqa: BLE001 - try the next source
+                continue
+    return RouteSelection()
+
+
+def _code_findings(state: Any, routes: list[LiteratureRoute], sources: list[Any]) -> dict[str, list[str]]:
+    """Per route, the ТЗ checks code could not pass — so the operator sees the
+    code's verdict next to the model's recommendation."""
+    try:
+        spec = state.get(REQUIREMENTS_KEY) or compile_requirements(state.get("structured_tz"))
+        qualified = qualify_routes(
+            SynthesisRoutes(routes=[literature_route_to_synthesis(route) for route in routes]),
+            spec, sources,
+        )
+    except Exception as exc:  # noqa: BLE001 - the operator still decides without it
+        logger.warning("route selection: code screening for the operator failed: %s", exc)
+        return {}
+    findings: dict[str, list[str]] = {}
+    for route in [*qualified.routes, *qualified.experimental_routes]:
+        findings[route.route_id] = [
+            f"{check.status}: {check.reason}" for check in route.tz_compliance
+            if check.status in ("fail", "unknown")
+        ]
+    for item in [*qualified.rejected, *qualified.blocked]:
+        findings.setdefault(item.route_id, list(item.reasons))
+    return findings
+
+
+def _option_label(route: LiteratureRoute) -> str:
+    product = (route.product or "").split("(")[0].strip()
+    if len(product) > 40:
+        product = product[:39].rstrip() + "…"
+    return f"{route.route_id} — {product}" if product else route.route_id
+
+
 class RouteSelectionSessionAgent(SessionAgent):
-    """Finalize/filter the selected route and hand it to the next module."""
+    """Finalize/filter the selected route and hand it to the next module.
+
+    A selected route goes on without a stop. When the selection names no
+    route — every candidate rejected, or no decision — the operator decides:
+    pick one of the routes or confirm that none goes on.
+    """
+
+    async def _review_decision(self, ctx: InvocationContext, output_text) -> HITLResponse:
+        state = ctx.session.state
+        selection = _selection_from(state, output_text)
+        try:
+            analysis = LiteratureAnalysis.model_validate(state.get("literature_analysis") or {})
+        except Exception:  # noqa: BLE001
+            analysis = LiteratureAnalysis()
+        by_id = {route.route_id: route for route in analysis.synthesis_routes}
+        if selection.selected_route_id.strip() in by_id or not by_id:
+            # A route was chosen, or there is nothing to choose from.
+            return HITLResponse(action=HITLAction.APPROVE, approved=True)
+
+        findings = _code_findings(state, list(by_id.values()), analysis.source_records)
+        verdicts = {item.route_id: item for item in selection.decisions}
+        review = []
+        for route_id, route in by_id.items():
+            verdict = verdicts.get(route_id)
+            review.append({
+                "маршрут": route_id,
+                "продукт": route.product,
+                "рекомендация модели": verdict.recommendation if verdict else "нет решения",
+                "причина": verdict.reason if verdict else "",
+                "нарушения по мнению модели": list(verdict.hard_violations) if verdict else [],
+                "проверка ТЗ кодом": findings.get(route_id) or ["нарушений не найдено"],
+            })
+        options = {_option_label(route): route_id for route_id, route in by_id.items()}
+        user_id, session_id = session_key(ctx)
+        response = await self.hitl_handler.handle_request(HITLRequest(
+            agent_name=self.name,
+            action_type=HITLAction.SELECT,
+            message=(
+                "Модель не выбрала маршрут синтеза. Решение за вами: выберите "
+                "маршрут, который пойдёт дальше, или подтвердите, что ни один "
+                "маршрут не передаётся. Можно ответить текстом — модель "
+                "пересоберёт выбор с вашими указаниями."
+            ),
+            options=[*options, OPTION_REJECT_ALL],
+            context={
+                "output": render_review_yaml({
+                    "маршруты": review,
+                    "обоснование модели": selection.selection_reason,
+                }),
+                "_session": {"user_id": user_id, "session_id": session_id},
+            },
+            invoked_via="internal_loop",
+            # The route is the operator's call: wait for an answer instead of
+            # the global auto-approve timeout.
+            timeout_seconds=0,
+        ))
+        choice = (response.selected_option or "").strip()
+        text = (response.instructions or response.free_input or "").strip()
+        if response.timed_out or (response.approved and not choice and not text):
+            # Nobody chose (a handler's auto-approve carries no choice).
+            state[OPERATOR_DECISION_KEY] = {"decision": "no_answer"}
+            return HITLResponse(action=HITLAction.APPROVE, approved=True)
+        if choice in options:
+            state[OPERATOR_DECISION_KEY] = {"decision": "select", "route_id": options[choice]}
+            return HITLResponse(action=HITLAction.APPROVE, approved=True)
+        if choice == OPTION_REJECT_ALL:
+            state[OPERATOR_DECISION_KEY] = {"decision": "reject_all"}
+            return HITLResponse(action=HITLAction.APPROVE, approved=True)
+        # Free text: the model rewrites the selection with it, and the rewrite
+        # comes back here — auto-approved if it now names a route.
+        return response
 
     def _post_final_events(self, ctx: InvocationContext, output_text):
         # Wrap the entire post-final sequence in a try/except so a failure here
@@ -261,7 +419,7 @@ class RouteSelectionSessionAgent(SessionAgent):
         keys = (
             "literature_analysis", "synthesis_routes", QUALIFIED_ROUTES_KEY,
             REQUIREMENTS_KEY, SELECTION_AUDIT_KEY, ROUTE_CANDIDATES_AUDIT_KEY,
-            "research_record",
+            OPERATOR_DECISION_KEY, "research_record",
         )
         delta = {key: ctx.session.state.get(key) for key in keys}
 
@@ -275,15 +433,24 @@ class RouteSelectionSessionAgent(SessionAgent):
                 selection_reason="Ответ модели не удалось разобрать.",
             )
             ctx.session.state[SELECTION_KEY] = selection.model_dump()
-            delta[SELECTION_KEY] = selection.model_dump()
+        # The effective selection (an operator's choice included). This event
+        # comes after the model's final one, so its delta is what stays.
+        delta[SELECTION_KEY] = selection.model_dump()
 
         lines = ["## Решение по маршрутам", ""]
         for item in selection.decisions:
             lines.append(
                 f"- {item.route_id}: **{item.recommendation}** — {item.reason}"
             )
+        operator = ctx.session.state.get(OPERATOR_DECISION_KEY) or {}
+        decision = operator.get("decision") if isinstance(operator, dict) else None
         if selection.selected_route_id:
-            lines.extend(["", f"Выбран маршрут: **{selection.selected_route_id}**."])
+            who = " (выбор оператора)" if decision == "select" else ""
+            lines.extend(["", f"Выбран маршрут: **{selection.selected_route_id}**{who}."])
+        elif decision == "reject_all":
+            lines.extend(["", "Оператор отклонил все маршруты — дальше маршрут не передаётся."])
+        elif decision == "no_answer":
+            lines.extend(["", "Оператор не ответил — маршрут дальше не передаётся."])
         else:
             lines.extend(["", "Маршрут не выбран."])
 
@@ -319,6 +486,8 @@ class RouteSelectionSessionAgent(SessionAgent):
 
 
 __all__ = [
+    "OPERATOR_DECISION_KEY",
+    "OPTION_REJECT_ALL",
     "ROUTE_CANDIDATES_AUDIT_KEY",
     "SELECTION_AUDIT_KEY",
     "SELECTION_KEY",

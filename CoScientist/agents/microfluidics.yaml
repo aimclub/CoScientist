@@ -321,7 +321,7 @@ agents:
     callbacks:
       before_agent: [begin_evidence_verification]
       # Up to 10 calls per tool: verification needs several full-text lookups.
-      before_tool: [EvidenceVerifierToolLimiter]
+      before_tool: [unwrap_model_response_args, EvidenceVerifierToolLimiter]
       after_tool: [capture_evidence_verification]
       after_model: [sanitize_json_output]
       after_agent: [authenticate_evidence_verification, pin_target_molecule,
@@ -332,8 +332,17 @@ agents:
     title: Выбор маршрута синтеза
     description: >-
       формирует выбор единственного активного маршрута из найденных, сохраняет
-      обоснование и передаёт результат следующему модулю без отдельного HITL.
+      обоснование и передаёт результат следующему модулю. Если модель не
+      выбрала ни одного маршрута, решение принимает оператор.
+    # Judges only the routes injected into its prompt, not the chat history
+    # (the verifier's narration there once passed for route facts).
+    include_contents: none
     prompt: microfluidics_route_selection
+    # A selected route goes on without a stop. No route selected (all rejected
+    # or no decision) → the operator picks a route or confirms that none goes
+    # on; the request waits for an answer (route_selection.py). Needs
+    # HITL__ENABLED=true — headless runs forward every candidate as before.
+    hitl: true
     output_key: route_selection
     output_schema: route_selection
     callbacks:
@@ -356,25 +365,16 @@ agents:
       - EconomicsAgent
 
   MolDesignAgent:
-    class: llm
+    # Deterministic, no model: the molecule is already decided — by the ТЗ
+    # (target_molecule.fixed) or by the route chosen in module A — and this
+    # stage only records it (design_candidates + research-graph Hypotheses).
+    # No route handed on → a gap for the operator, never an invented
+    # molecule that no route makes (microfluidics/design.py).
+    class: custom:molecule_selection
     title: Подбор молекулы
     description: >-
-      молекулярный дизайн — предлагает молекулы-кандидаты (SMILES + свойства)
-      под требования ТЗ, опираясь на аналоги из литературы.
-    reasoning: medium
-    prompt: microfluidics_mol_design
-    tools: [molecular_design]
-    output_key: design_candidates
-    # Structured hand-off (DesignCandidates): who to synthesise, with SMILES.
-    output_schema: design_candidates
-    callbacks:
-      # A molecule the customer fixed in the ТЗ is handed on as the only
-      # candidate — no LLM call, no design.
-      before_agent: [compile_requirements, use_fixed_target_molecule,
-                     use_selected_route_product]
-      after_model: [sanitize_json_output]
-      # Candidates → research graph Hypotheses (motivated by the ТЗ question).
-      after_agent: [record_design_hypotheses]
+      фиксирует целевую молекулу без обращения к модели: молекула из ТЗ, иначе
+      продукт выбранного маршрута синтеза (SMILES как в источнике).
 
   SynthRouteAgent:
     class: llm

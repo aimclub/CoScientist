@@ -951,6 +951,68 @@ def capture_mcp_artifacts(
         logger.error("capture_mcp_artifacts failed: %s", e)
 
 
+# A dropped MCP session is the transport failing, not the agent using up an
+# attempt: ADK turns it into {"error": "... MCP session connection lost: ..."}.
+_TRANSIENT_TOOL_ERROR_MARKERS = ("mcp session connection lost",)
+_TOOL_CALL_CHARGES_KEY = "_tool_call_charges"
+
+
+def is_transient_tool_error(tool_response: Any) -> bool:
+    if isinstance(tool_response, dict):
+        tool_response = tool_response.get("error")
+    if not isinstance(tool_response, str):
+        return False
+    text = tool_response.lower()
+    return any(marker in text for marker in _TRANSIENT_TOOL_ERROR_MARKERS)
+
+
+def charge_tool_call(
+    tool_context: ToolContext, state_key: str, subkey: Optional[str] = None
+) -> None:
+    """Remember which counter a before_tool limiter bumped for this call, so
+    ``refund_transient_tool_error`` can undo it if the call never reached the
+    server. ``subkey`` addresses a counter inside a dict-valued state entry."""
+    call_id = getattr(tool_context, "function_call_id", None)
+    if not call_id:
+        return
+    charges = dict(tool_context.state.get(_TOOL_CALL_CHARGES_KEY) or {})
+    charges[call_id] = list(charges.get(call_id, [])) + [[state_key, subkey]]
+    tool_context.state[_TOOL_CALL_CHARGES_KEY] = charges
+
+
+def refund_transient_tool_error(
+    tool: BaseTool,
+    args: Dict[str, Any],
+    tool_context: ToolContext,
+    tool_response: Any,
+) -> None:
+    """after_tool: return the attempt to every limiter that charged this call
+    when the MCP session dropped mid-call."""
+    del args
+    call_id = getattr(tool_context, "function_call_id", None)
+    charges = tool_context.state.get(_TOOL_CALL_CHARGES_KEY) or {}
+    if not call_id or call_id not in charges:
+        return None
+    charges = dict(charges)
+    entries = charges.pop(call_id)
+    tool_context.state[_TOOL_CALL_CHARGES_KEY] = charges
+    if not is_transient_tool_error(tool_response):
+        return None
+    for state_key, subkey in entries:
+        if subkey is None:
+            count = int(tool_context.state.get(state_key, 0) or 0)
+            tool_context.state[state_key] = max(0, count - 1)
+        else:
+            counts = dict(tool_context.state.get(state_key) or {})
+            counts[subkey] = max(0, int(counts.get(subkey, 0) or 0) - 1)
+            tool_context.state[state_key] = counts
+    logger.info(
+        "[%s] %s: MCP session dropped, attempt not counted",
+        getattr(tool_context, "agent_name", "?"), getattr(tool, "name", "?"),
+    )
+    return None
+
+
 class SearchLimiter:
 
     _STATE_KEY = "_search_limiter_count"
@@ -984,7 +1046,7 @@ class SearchLimiter:
 
     @staticmethod
     def is_failed_search_response(tool_response: Any) -> bool:
-        if tool_response is None:
+        if tool_response is None or is_transient_tool_error(tool_response):
             return True
         blob = tool_response
         if isinstance(tool_response, dict):
@@ -1058,6 +1120,7 @@ class TavilySearchLimiter:
         count = int(counts.get(agent, 0)) + 1
         counts[agent] = count
         tool_context.state[self._STATE_KEY] = counts
+        charge_tool_call(tool_context, self._STATE_KEY, agent)
         if count > self.max_searches:
             return {
                 "result": (
@@ -1079,10 +1142,12 @@ class PerToolCallLimiter:
 
     _STATE_KEY_PREFIX = "_per_tool_call_limiter"
 
-    def __init__(self, max_calls: int = 2):
-        if max_calls < 1:
+    def __init__(self, max_calls: int = 2, per_tool: Optional[Dict[str, int]] = None):
+        limits = [max_calls, *(per_tool or {}).values()]
+        if min(limits) < 1:
             raise ValueError("max_calls must be at least 1")
         self.max_calls = max_calls
+        self.per_tool = dict(per_tool or {})
 
     def limit_tool_calls(
         self, tool: BaseTool, args: dict, tool_context: ToolContext
@@ -1096,19 +1161,21 @@ class PerToolCallLimiter:
             f"{self._STATE_KEY_PREFIX}:{invocation_id}:{branch}:{agent_name}:{tool_name}"
         )
 
+        limit = self.per_tool.get(tool_name, self.max_calls)
         count = int(tool_context.state.get(state_key, 0)) + 1
         tool_context.state[state_key] = count
-        if count <= self.max_calls:
+        if count <= limit:
+            charge_tool_call(tool_context, state_key)
             return None
 
         return {
             "status": "blocked",
             "blocked_by": "per_tool_call_limiter",
             "tool": tool_name,
-            "limit": self.max_calls,
+            "limit": limit,
             "message": (
                 f"Tool call limit reached: `{tool_name}` may be used at most "
-                f"{self.max_calls} times in this research task. Synthesize the "
+                f"{limit} times in this research task. Synthesize the "
                 "answer from existing results or use a different tool."
             ),
         }
