@@ -12,31 +12,48 @@ import hashlib
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
 
-_TRACE_LIMIT = 14_000          # characters of trace handed to the model
-_ARGS, _RESULT, _REPORT = 300, 400, 1_500
+_TRACE_LIMIT = 60_000          # characters of trace handed to the model
+_ARGS, _RESULT, _REPORT = 800, 1_500, 6_000
+_MAX_TOKENS = 1_400
 _CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 _CACHE_SIZE = 256
 
 _LANGUAGE = {"ru": "Russian", "en": "English"}
 
 _SYSTEM = (
-    "You summarize one agent's run inside a multi-agent research system for a "
-    "human reader. You are given the agent's task, the tool calls it made in "
-    "order (with arguments and results, cut for length), the files and links "
-    "it produced, and its final report. Write in {language}, at most 160 words, "
-    "as a short markdown document:\n"
-    "- first line: one bold sentence saying what this run achieved;\n"
-    "- then '### {h_done}' with 2-4 bullets on what was done;\n"
-    "- then '### {h_tools}' with one bullet per tool used, saying what for;\n"
-    "- then '### {h_result}' with the outcome: numbers, files, links;\n"
-    "- then '### {h_issues}' only if something failed or was left undone.\n"
-    "State only what the trace shows; do not guess or pad. Use inline code "
-    "for tool names, file names and commands. No preamble, no closing line."
+    "You write, for a domain specialist, an account of what one agent did "
+    "during its run inside a multi-agent research system. You are given the "
+    "agent's task, the tool calls it made in order (with arguments and results, "
+    "cut for length), the files and links it produced, and its final report.\n"
+    "Write in {language} as a markdown document. Be as concrete and detailed as "
+    "the trace allows — up to about 350 words: name the methods, models, "
+    "parameters, datasets, queries, commands, metrics and numbers that appear "
+    "in the trace, and say why each step was taken when the trace shows it. "
+    "If the agent did little, say so in a few lines instead of padding.\n"
+    "Structure:\n"
+    "- first line: one bold sentence with the outcome of this run;\n"
+    "- '### {h_task}': the task in the domain's own terms;\n"
+    "- '### {h_done}': the steps, in order, with their parameters and the "
+    "reasoning behind them;\n"
+    "- '### {h_tools}': one bullet per tool used, what it was used for and "
+    "what it returned;\n"
+    "- '### {h_result}': the results — numbers, metrics, tables, and each file "
+    "or link produced with what it contains;\n"
+    "- '### {h_issues}': failures, retries, limits and anything left undone "
+    "(omit the section if there were none);\n"
+    "- '### {h_check}': two or three points a specialist should verify.\n"
+    "State only what the trace shows; never invent numbers or files. Use "
+    "inline code for tool names, file names, commands and parameters; keep "
+    "file and link URLs exactly as they appear. No preamble, no closing line."
 )
 
 _HEADINGS = {
-    "ru": {"h_done": "Что сделано", "h_tools": "Инструменты", "h_result": "Результат", "h_issues": "Проблемы"},
-    "en": {"h_done": "What was done", "h_tools": "Tools", "h_result": "Outcome", "h_issues": "Issues"},
+    "ru": {"h_task": "Задача", "h_done": "Что сделано", "h_tools": "Инструменты",
+           "h_result": "Результаты", "h_issues": "Проблемы и ограничения",
+           "h_check": "На что обратить внимание"},
+    "en": {"h_task": "Task", "h_done": "What was done", "h_tools": "Tools",
+           "h_result": "Results", "h_issues": "Issues and limits",
+           "h_check": "What to check"},
 }
 
 
@@ -116,7 +133,7 @@ async def _complete(system: str, user: str) -> Tuple[str, str]:
         model=model, api_base=base, api_key=s.openai_api_key,
         messages=[{"role": "system", "content": system},
                   {"role": "user", "content": user}],
-        temperature=0, timeout=s.request_timeout,
+        temperature=0, timeout=s.request_timeout, max_tokens=_MAX_TOKENS,
     )
     try:
         from CoScientist.logging.metrics import record_completion

@@ -11,7 +11,7 @@ def _node():
         "id": "agent:CoderAgent@inv#2", "kind": "agent", "executor_agent": "CoderAgent",
         "status": "success", "run": 2, "runs": 3, "t_start": 0.0, "t_end": 75.0,
         "input": "request: train the CVAE",
-        "output": "## done\n\nTrained for 10 epochs, loss 0.22. " + "x" * 3000,
+        "output": "## done\n\nTrained for 10 epochs, loss 0.22. " + "x" * 9000,
         "calls": [
             {"tool": "execute_bash", "status": "success", "duration": 40.0,
              "input": "command: python train.py", "output": "epoch 10/10 loss=0.22",
@@ -39,7 +39,7 @@ def test_trace_reads_top_down_and_is_cut_for_length():
     assert "   files: s3://b/fig.png" in lines
     assert "ARTIFACTS: s3://b/fig.png" in lines
     report = next(l for l in lines if l.startswith("FINAL REPORT: "))
-    assert report.endswith("…") and len(report) < 1_600, "the report is cut, not dumped"
+    assert report.endswith("…") and len(report) < 6_100, "the report is cut, not dumped"
     # A cut value is one line; the model reads a list, not a document.
     assert "\n\n" not in trace
 
