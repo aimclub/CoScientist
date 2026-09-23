@@ -181,6 +181,7 @@ const i18n = {
     en: 'Not used: nobody is asked, so there is nothing to wait for.',
     ru: 'Не действует: подтверждение не запрашивается, ждать нечего.'
   },
+  'settings.inactive.lightOnly': { en: 'Applies to the light theme only.', ru: 'Действует только в светлой теме.' },
   'settings.inactive.parentOff': {
     en: 'Works only while "{parent}" is on.',
     ru: 'Действует, только когда включено «{parent}».'
@@ -399,6 +400,25 @@ const i18n = {
   },
   'settings.f.theme.opt.dark': { en: 'Dark', ru: 'Тёмная' },
   'settings.f.theme.opt.light': { en: 'Light', ru: 'Светлая' },
+  'settings.f.lightDim.label': { en: 'Light theme brightness', ru: 'Яркость светлой темы' },
+  'settings.f.lightDim.desc': {
+    en: 'Lower it if the light theme feels glaring: backgrounds turn a muted grey and text darkens with them, so contrast is kept.',
+    ru: 'Уменьшите, если светлая тема слепит: фон становится приглушённо-серым, текст темнеет вместе с ним, контраст сохраняется.'
+  },
+  'settings.f.accent.label': { en: 'Accent colour', ru: 'Акцентный цвет' },
+  'settings.f.accent.desc': {
+    en: 'Buttons, switches, links and highlights. Text shades are adjusted per theme to stay readable.',
+    ru: 'Кнопки, переключатели, ссылки и выделения. Оттенок для текста подбирается под каждую тему, чтобы оставаться читаемым.'
+  },
+  'settings.f.accent.default': { en: 'Theme default', ru: 'Как в теме' },
+  'settings.f.accent.custom': { en: 'Custom colour…', ru: 'Свой цвет…' },
+  'settings.f.font.label': { en: 'Font', ru: 'Шрифт' },
+  'settings.f.font.desc': {
+    en: 'Interface text; code and numbers stay monospaced. Fonts other than the default load from Google Fonts.',
+    ru: 'Текст интерфейса; код и числа остаются моноширинными. Шрифты, кроме стандартного, загружаются из Google Fonts.'
+  },
+  'settings.f.font.default': { en: 'default', ru: 'по умолчанию' },
+  'settings.f.font.system': { en: 'System font', ru: 'Системный шрифт' },
   'settings.f.autoNaming.label': { en: 'Auto-name sessions', ru: 'Автоназвание сессий' },
   'settings.f.autoNaming.desc': {
     en: 'Title a new session after its first request.',

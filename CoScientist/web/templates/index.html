@@ -8,14 +8,8 @@
   <link rel="stylesheet" href="/static/css/fonts.css" />
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
     rel="stylesheet" />
-  <script>
-    // Apply the stored theme before the first paint (no dark flash on reload).
-    try {
-      if (localStorage.getItem('cos-theme') === 'light') {
-        document.documentElement.classList.replace('dark', 'light');
-      }
-    } catch (_) { }
-  </script>
+  <!-- Theme, accent colour and UI font: applied before the first paint. -->
+  <script src="/static/js/appearance.js"></script>
   <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
@@ -62,8 +56,9 @@
           // theme gives text-primary a deeper shade of the same hue.
           textColor: { "primary": "rgb(var(--c-primary-text) / <alpha-value>)" },
           fontFamily: {
-            headline: ["Source Sans 3", "sans-serif"], body: ["Source Sans 3", "sans-serif"],
-            label: ["Source Sans 3", "sans-serif"], mono: ["UI Mono", "IBM Plex Mono", "monospace"]
+            // --font-ui: Interface → Font in the settings (appearance.js).
+            headline: ["var(--font-ui)"], body: ["var(--font-ui)"],
+            label: ["var(--font-ui)"], mono: ["UI Mono", "IBM Plex Mono", "monospace"]
           }
         },
       },

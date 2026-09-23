@@ -77,6 +77,12 @@
           fields: [
             { id: 'language', type: 'language', scope: 'browser' },
             { id: 'theme', type: 'theme', scope: 'browser' },
+            {
+              id: 'lightDim', type: 'lightDim', scope: 'browser',
+              inactive: () => currentTheme === 'light' ? null : { key: 'settings.inactive.lightOnly' },
+            },
+            { id: 'accent', type: 'accent', scope: 'browser' },
+            { id: 'font', type: 'font', scope: 'browser' },
             { id: 'autoNaming', path: 'general.autoNamingEnabled', type: 'toggle', scope: 'instant', env: 'AUTO_NAMING__ENABLED' },
             { id: 'showInternal', type: 'browserToggle', scope: 'browser', env: 'SHOW_INTERNAL__ENABLED' },
           ],
@@ -394,6 +400,8 @@
     }
 
     function resetSettingsSection(sectionId) {
+      // The appearance lives in this browser, not in the server defaults.
+      if (sectionId === 'interface') resetAppearance();
       if (!settingsDefaults || !settingsDraft) return;
       EDITABLE_FIELDS.filter(f => f.section === sectionId).forEach(f => {
         const value = getSettingPath(settingsDefaults, f.path);
@@ -689,6 +697,44 @@
                   <span class="material-symbols-outlined text-sm">${theme === 'dark' ? 'dark_mode' : 'light_mode'}</span>${escHtml(t(`settings.f.theme.opt.${theme}`))}
                 </button>`).join('')}
             </div>`;
+        case 'lightDim':
+          // 0 = brightest, 100 = most muted; shown as brightness, so reversed.
+          return `
+            <div class="flex items-center gap-3">
+              <span class="material-symbols-outlined text-sm text-outline-variant">brightness_low</span>
+              <input id="sf-${field.id}" type="range" min="0" max="100" step="5" value="${100 - currentLightDim}" data-appearance="lightDim" ${dis}
+                class="w-36 accent-primary cursor-pointer disabled:cursor-not-allowed" />
+              <span class="material-symbols-outlined text-sm text-outline-variant">brightness_high</span>
+              <span data-light-dim-value class="w-9 text-right text-[11px] font-mono text-on-surface-variant">${100 - currentLightDim}%</span>
+            </div>`;
+        case 'accent': {
+          // "Theme" swatch = no override: each theme keeps its own cyan.
+          const swatch = (value, color, label) => `
+            <button type="button" role="radio" aria-checked="${currentAccent === value}" aria-label="${escHtml(label)}" title="${escHtml(label)}"
+              data-action="accent" data-accent="${value || ''}"
+              class="w-6 h-6 rounded-full border border-outline-variant/30 transition-shadow ${currentAccent === value ? 'ring-2 ring-offset-2 ring-offset-surface-container-lowest ring-on-surface' : 'hover:ring-2 hover:ring-outline-variant/40'}"
+              style="background:${color}"></button>`;
+          const custom = currentAccent && !ACCENT_PRESETS.includes(currentAccent);
+          return `
+            <div role="radiogroup" class="flex items-center gap-2 flex-wrap justify-end">
+              ${swatch(null, `rgb(${currentTheme === 'light' ? '0 200 212' : '0 218 243'})`, t('settings.f.accent.default'))}
+              ${ACCENT_PRESETS.map(hex => swatch(hex, hex, hex)).join('')}
+              <label title="${escHtml(t('settings.f.accent.custom'))}"
+                class="relative w-6 h-6 rounded-full cursor-pointer border border-outline-variant/30 flex items-center justify-center overflow-hidden ${custom ? 'ring-2 ring-offset-2 ring-offset-surface-container-lowest ring-on-surface' : ''}"
+                style="background:${custom ? currentAccent : 'conic-gradient(#f43f5e, #f59e0b, #10b981, #06b6d4, #3b82f6, #8b5cf6, #f43f5e)'}">
+                <input id="sf-${field.id}" type="color" data-appearance="accent" value="${currentAccent || '#00D9E5'}"
+                  aria-label="${escHtml(t('settings.f.accent.custom'))}" class="absolute inset-0 opacity-0 cursor-pointer" />
+              </label>
+            </div>`;
+        }
+        case 'font':
+          return `
+            <select id="sf-${field.id}" data-appearance="font" class="${inputCls} min-w-[11rem]">
+              ${Object.entries(UI_FONTS).map(([id, font]) => `
+                <option value="${id}" ${currentFont === id ? 'selected' : ''} style="font-family:${escHtml(font.stack)}">
+                  ${escHtml(id === 'system' ? t('settings.f.font.system') : font.name)}${id === DEFAULT_FONT ? ` · ${escHtml(t('settings.f.font.default'))}` : ''}
+                </option>`).join('')}
+            </select>`;
         case 'env':
           return `
             <div class="text-right">
@@ -826,6 +872,7 @@
           }
           case 'language': applyLanguage(btn.dataset.lang); break;
           case 'theme': setTheme(btn.dataset.theme); renderSettings(); break;
+          case 'accent': setAccent(btn.dataset.accent || null); renderSettings(); break;
           case 'danger-ask': settingsDanger.pending = btn.dataset.target; settingsDanger.message = ''; renderSettings(); break;
           case 'danger-cancel': settingsDanger.pending = null; renderSettings(); break;
           case 'danger-confirm':
@@ -842,12 +889,21 @@
           setShowInternal(e.target.checked);
           return;
         }
+        // The colour picker previews on `input`; redraw once it is closed.
+        if (e.target.dataset.appearance === 'accent') { setAccent(e.target.value); renderSettings(); return; }
+        if (e.target.dataset.appearance === 'font') { setFont(e.target.value); return; }
         const field = SETTINGS_FIELD_BY_ID[e.target.dataset.field];
         if (field && field.type === 'toggle') updateSettingDraft(field, e.target.checked, true);
       });
 
       body.addEventListener('input', (e) => {
         const el = e.target;
+        if (el.dataset.appearance === 'accent') { setAccent(el.value); return; }
+        if (el.dataset.appearance === 'lightDim') {
+          setLightDim(100 - Number(el.value));
+          el.parentElement.querySelector('[data-light-dim-value]').textContent = `${el.value}%`;
+          return;
+        }
         const field = SETTINGS_FIELD_BY_ID[el.dataset.field];
         if (!field) return;
         if (field.type === 'number' || field.type === 'timeout') updateSettingDraft(field, parseSettingNumber(el.value), false);
