@@ -329,6 +329,7 @@
         });
       });
       if (data.defaults) settingsDefaults = data.defaults;
+      refreshPlanGate();
     }
 
     async function loadSettings() {

@@ -173,6 +173,16 @@
                   transform .25s ease, visibility 0s linear .25s;
     }
 
+    /* Start mode "planner": until the plan is approved there is no Usage &
+       Cost card; afterwards the plan tracker sits above it. */
+    body.plan-gated #usage-panel {
+      display: none;
+    }
+
+    body.plan-first #plan-tracker {
+      order: -1;
+    }
+
     /* Chat composer: wraps text and grows with the content up to a ceiling. */
     #chat-input {
       resize: none;

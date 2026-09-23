@@ -83,6 +83,7 @@
             break;
           case 'agent_event':
             activityTouchAgent(data.author, data.timestamp);
+            if (isPostPlanAgent(data.author)) releasePlanGate();
             if (hasText(data.content) && isChatNoise(data)) {
               addTelemetry('NOTE :: ' + data.author + ' :: ' + stripThinking(data.content).slice(0, 200));
             } else if (hasText(data.content)) {
@@ -148,6 +149,7 @@
             addTelemetry('HITL :: ' + data.agent_name + ' requests ' + data.action_type);
             break;
           case 'hitl_timeout':
+            if (data.agent_name === 'PlannerAgent' && !data.paused) releasePlanGate();
             disableHitlControls(data.request_id);
             document.getElementById('hitl-panel').classList.add('hidden');
             currentPlannerHitlRequest = null;

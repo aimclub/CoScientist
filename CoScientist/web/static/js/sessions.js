@@ -366,6 +366,7 @@
         }
       }
       if (!messages.length) clearChat();
+      resetPlanGate(messages);
       eventCount = messages.length;
       renderEventCount();
 
