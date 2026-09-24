@@ -1102,6 +1102,29 @@ def _own_artifact(nid: str, attrs: Dict[str, Any],
     }
 
 
+def _node_report_body(attrs: Dict[str, Any],
+                      scope: Optional[Tuple[str, str]] = None) -> str:
+    """The node's write-up, read back from the store and made openable.
+
+    References are resolved HERE rather than when the report was written, for
+    the reason `_readable_body` gives about a Report: the document keeps the
+    session-free form, so an imported bundle resolves its files under whatever
+    scope is reading.
+    """
+    aid = attrs.get("report_artifact_id")
+    if not isinstance(aid, str) or not aid.strip() or not scope:
+        return ""
+    try:
+        from CoScientist.reporting import session_files
+
+        path = session_files.resolve_path(scope, aid.strip())
+        if path is None:
+            return ""
+        return _readable_body(path.read_text(encoding="utf-8"), scope)
+    except Exception:  # noqa: BLE001 — a missing write-up is not a failed render
+        return ""
+
+
 def _contributors_view(attrs: Dict[str, Any]) -> List[Dict[str, Any]]:
     """The participation record as the panel reads it.
 
@@ -2129,6 +2152,13 @@ class ResearchGraphStore:
                 "output": (_readable_body(attrs.get("content"), self._scope)
                            if kind == "Report" else headline),
                 "provenance": attrs.get("_provenance") or [],
+                # A node's own write-up, inlined the way a Report's body is:
+                # the browser has no way to fetch an artifact's TEXT. Read from
+                # the store by id rather than kept on the node — `_truncate_attrs`
+                # caps an ordinary attribute at 2 000 characters, and every card
+                # rides along on a 1.5-second poll.
+                "report": _node_report_body(attrs, self._scope),
+                "report_stamp": str(attrs.get("report_stamp") or ""),
                 # Who took part, and on what basis we say so. Observed first,
                 # planned last: a plan's assignee is an intention, and drawing
                 # it as an executor is the confusion this record exists to end.

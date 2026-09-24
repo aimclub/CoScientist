@@ -418,6 +418,11 @@ class WebSettings(BaseModel):
     coder_mode: str = _os.getenv("CODER__MODE", "local")        # "local" | "openhands"
     merge_tasks_enabled: bool = _os.getenv("PLANNER__MERGE_TASKS", "true").lower() in ("true", "1", "yes")
     max_active_hypotheses: int = int(_os.getenv("HYPOTHESES__MAX_ACTIVE", "1"))
+    # A node's write-up is offered by a button on every reportable card; this
+    # decides whether a settled card also asks for one on its own. On by
+    # default, and the browser may overrule it for one reader.
+    node_report_auto: bool = _os.getenv(
+        "NODE_REPORT__AUTO", "true").lower() in ("true", "1", "yes")
     use_proxy: bool = _os.getenv("USE_PROXY", "True").lower() in ("true", "1", "yes")
     opik_enabled: bool = _os.getenv("OPIK__ENABLED", "false").lower() in ("true", "1", "yes")
     auto_naming_enabled: bool = _os.getenv("AUTO_NAMING__ENABLED", "true").lower() in ("true", "1", "yes")

@@ -518,6 +518,8 @@ def _apply_frontend_settings(frontend: dict) -> None:
         val = int(hypotheses["maxActiveHypotheses"])
         if 1 <= val <= 5:
             web.max_active_hypotheses = val
+    if "nodeReportAuto" in hypotheses:
+        web.node_report_auto = bool(hypotheses["nodeReportAuto"])
 
     # Settings → Agents: per-agent on/off, reasoning and model over system.yaml.
     # Read when the next session's agent tree is assembled.
@@ -613,6 +615,7 @@ def _current_settings() -> dict:
         },
         "hypothesesAgent": {
             "maxActiveHypotheses": web.max_active_hypotheses,
+            "nodeReportAuto": web.node_report_auto,
         },
         "taskExecutorAgent": {
             "keepScore": web.executor_tool_keep_score,
@@ -2339,10 +2342,16 @@ def create_app() -> FastAPI:
             if view == "research":
                 # One study at a time, and the session's others listed beside
                 # it — the same shape the execution log uses for requests.
-                return get_research_graph(
+                payload = get_research_graph(
                     user_id=user_id,
                     session_id=session_id,
                 ).view_of(turn)
+                # The graph page is a self-contained monolith: it loads none of
+                # the chat page's scripts and so cannot read the settings the
+                # usual way. A setting it must honour rides along with the data
+                # it already asks for.
+                payload["auto_node_reports"] = get_settings().web.node_report_auto
+                return payload
             execution = get_knowledge_graph(
                 user_id=user_id,
                 session_id=session_id,
@@ -2442,6 +2451,43 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404,
                                 detail=f"no summary written for {node_id!r}")
         return JSONResponse(kept)
+
+    @app.post("/api/users/{user_id}/sessions/{session_id}/graph/node_report")
+    async def api_node_report(user_id: str, session_id: str, request: Request):
+        """Write, or return, the account of one RESEARCH-graph node.
+
+        A sibling of the agent summary and deliberately not the same route: the
+        two graphs have separate id namespaces, and a route that accepted either
+        would answer about whichever node happened to match.
+        """
+        runtime.registry.require_session(user_id, session_id)
+        body = await request.json() if await request.body() else {}
+        node_id = str(body.get("node_id") or "")
+        if not node_id:
+            raise HTTPException(status_code=422, detail="node_id is required")
+
+        from CoScientist.graph.research.store import get_research_graph
+        from CoScientist.graph.summary_store import for_session
+        from CoScientist.reporting import node_report
+
+        store = get_research_graph(user_id=user_id, session_id=session_id)
+        view = store.view_of(body.get("turn") or None)
+        if not node_report._reportable(view, node_id):
+            raise HTTPException(
+                status_code=404,
+                detail=f"{node_id!r} is not a node a report is written for")
+        try:
+            written = await node_report.write_report(
+                view, node_id, scope=(user_id, session_id), store=store,
+                summaries=for_session((user_id, session_id)),
+                lang=str(body.get("lang") or "ru"),
+                force=bool(body.get("again")))
+        except Exception as exc:  # noqa: BLE001 — the model is an outside service
+            raise HTTPException(status_code=502,
+                                detail=f"node report failed: {exc}") from exc
+        if written is None:
+            raise HTTPException(status_code=404, detail=f"no node {node_id!r}")
+        return JSONResponse(written)
 
     @app.get("/api/users/{user_id}/sessions/{session_id}/graph.svg")
     async def api_session_graph_svg(user_id: str, session_id: str):

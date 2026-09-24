@@ -842,6 +842,25 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         transitions=frozenset(),
         edges=_edges("derived_from"),
     ),
+    # NOT an agent: the deterministic writer behind a node's own write-up. It
+    # stamps ONE attribute family onto the node it summarised and nothing else —
+    # no status, no edges, no new nodes — so its rights are stated a (type,
+    # attribute) pair at a time rather than by owning the type. The body lives
+    # in the session's artifact store; only its id is on the node, because
+    # `_truncate_attrs` caps an ordinary attribute at 2 000 characters and a
+    # write-up would reach the page as its first two paragraphs.
+    "node-report": AgentPerm(
+        create=frozenset(),
+        update_attrs=frozenset(),
+        transitions=frozenset(),
+        edges=frozenset(),
+        update_fields=frozenset(
+            (node_type, attribute)
+            for node_type in ("Evidence", "PlanStep", "ExperimentTask",
+                              "VerificationMethod")
+            for attribute in ("report_artifact_id", "report_stamp", "report_lang")
+        ),
+    ),
     # NOT an agent: the code that turns a DOI or a PMC id an agent cited into
     # the file this session holds. It stamps the citation's own attributes onto
     # the Evidence that carried it and nothing else — no status, no edges, no
