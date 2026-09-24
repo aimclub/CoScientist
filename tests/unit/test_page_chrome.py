@@ -297,3 +297,46 @@ def test_a_tool_that_reads_is_told_from_a_tool_that_draws():
     assert is_reading_tool("tavily_extract")
     assert not is_reading_tool("chemical_space_tsne")
     assert not is_reading_tool(None)
+
+
+def test_the_state_list_the_plugin_writes_is_filtered_too(monkeypatch, tmp_path):
+    """The SECOND door into the report, and the one the filter missed.
+
+    `mcp_artifacts` in session state is swept by the collector independently of
+    the durable index. The guard was written for it and landed after the early
+    `return`, where it could never run — so the index beside it was clean and
+    this list went out carrying the publisher's letterhead.
+    """
+    import asyncio
+
+    import requests
+
+    from CoScientist.tools.mcp_artifact_plugin import McpArtifactCapturePlugin
+
+    class _Answer:
+        status_code = 200
+        headers = {"Content-Type": "image/png", "Content-Length": "72"}
+
+        def iter_content(self, _n):
+            yield b"\x89PNG\r\n\x1a\n" + b"z" * 64
+
+        def close(self):
+            pass
+
+    monkeypatch.setenv("GRAPH_SNAPSHOT_DIR", str(tmp_path))
+    monkeypatch.setenv("ARTIFACTS__MIRROR_TO_S3", "False")
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Answer())
+
+    logo = "https://pub.mdpi-res.com/img/journals/separations-logo.png"
+    figure = ("https://pub.mdpi-res.com/separations/separations-12-00175/"
+              "article_deploy/html/images/separations-12-00175-g001.png")
+    ctx = type("Ctx", (), {"state": {"graph_scope_user_id": "u",
+                                     "graph_scope_session_id": "s"}})()
+
+    asyncio.run(McpArtifactCapturePlugin().after_tool_callback(
+        tool=_Tool("tavily_extract"), tool_args={}, tool_context=ctx,
+        result={"images": [logo, figure]}))
+
+    kept = [a.get("url") for a in ctx.state.get("mcp_artifacts") or []]
+    assert figure in kept, "the paper's own figure is recorded"
+    assert logo not in kept, "the journal's letterhead is not"
