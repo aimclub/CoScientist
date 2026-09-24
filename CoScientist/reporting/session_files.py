@@ -82,7 +82,17 @@ STATE_FAILED = "failed"
 REASON_OVERSIZE = "oversize"
 REASON_SESSION_QUOTA = "session_quota"
 REASON_TOO_MANY = "too_many_files"
+#: A signed link that no longer verifies. Kept narrow on purpose: it used to
+#: cover every 4xx, so a host that simply refused us was recorded as an expiry
+#: — and that sentence is printed verbatim into the report's "not collected"
+#: section, where it tells the reader the wrong thing about why a paper is
+#: missing. NCBI answering 403 to a programmatic GET is the case that exposed it.
 REASON_LINK_EXPIRED = "link_expired"
+#: The host answered, and said no. Nothing about it will change on a retry with
+#: the same client.
+REASON_REFUSED = "refused"
+#: There is nothing at that address.
+REASON_NOT_FOUND = "not_found"
 REASON_UNREADABLE = "unreadable"
 REASON_EMPTY = "empty"
 REASON_DISABLED = "disabled"
@@ -524,7 +534,8 @@ __all__ = [
     "SCHEME",
     "STATE_STORED", "STATE_SKIPPED", "STATE_FAILED",
     "REASON_OVERSIZE", "REASON_SESSION_QUOTA", "REASON_TOO_MANY",
-    "REASON_LINK_EXPIRED", "REASON_UNREADABLE", "REASON_EMPTY", "REASON_DISABLED",
+    "REASON_LINK_EXPIRED", "REASON_REFUSED", "REASON_NOT_FOUND",
+    "REASON_UNREADABLE", "REASON_EMPTY", "REASON_DISABLED",
     "REASON_BUNDLE_QUOTA",
     "store_dir", "files_dir", "manifest_path",
     "ref", "parse_ref", "find_refs", "make_artifact_id",
