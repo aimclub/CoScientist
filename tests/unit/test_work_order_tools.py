@@ -92,14 +92,19 @@ def test_read_tier_declaration_still_asks_under_the_veto_window(hitl_on):
     assert request.context["_session"] == {"user_id": "u1", "session_id": "s1"}
 
 
-def test_read_tier_declaration_without_veto_window_waits_for_the_human(hitl_on, monkeypatch):
+def test_read_tier_declaration_without_veto_window_defers_to_the_run_mode(hitl_on, monkeypatch):
+    """No configured veto window means the WAIT is not this module's business:
+    `None` hands it to the run's HITL mode. It used to pass an explicit -1 here
+    and fall through to the global for side effects, which is how the tiers came
+    out inverted — read and compute waited for the human forever while the
+    riskiest tier was the only one a clock could sign off."""
     monkeypatch.setattr(hitl_on, "work_order_veto_seconds", -1)
     handler = _Handler()
     _declare(WorkOrderToolset(AGENT, TOOLS, handler), _context(),
              steps=[{"title": "Search", "tools": ["tavily_search"]}],
              planned_tools=["tavily_search"])
 
-    assert handler.requests[0].timeout_seconds == -1
+    assert handler.requests[0].timeout_seconds is None
 
 
 def test_compute_tier_gets_the_veto_window(hitl_on):
@@ -118,13 +123,25 @@ def test_compute_tier_gets_the_veto_window(hitl_on):
     assert [s["id"] for s in order["steps"]] == ["S1", "S2"]
 
 
-def test_compute_tier_without_veto_window_waits_for_the_human(hitl_on, monkeypatch):
+def test_every_tier_waits_the_same_way_when_no_veto_window_is_set(hitl_on, monkeypatch):
+    """The wait is one property of the run, not three properties of the tiers.
+    With no configured veto window all three pass `None` and the HITL mode
+    decides — which is what un-inverted them: `side_effect` was the only tier
+    with a countdown, and that countdown approved."""
     monkeypatch.setattr(hitl_on, "work_order_veto_seconds", -1)
-    handler = _Handler()
-    _declare(WorkOrderToolset(AGENT, TOOLS, handler), _context())
+    windows = {}
+    for tier, tools in (("read", ["tavily_search"]),
+                        ("compute", ["execute_bash"]),
+                        ("side_effect", ["execute_bash", "install_package"])):
+        handler = _Handler()
+        _declare(WorkOrderToolset(AGENT, TOOLS, handler), _context(),
+                 steps=[{"title": "Step", "tools": tools}],
+                 planned_tools=tools)
+        request = handler.requests[0]
+        windows[request.context["tier"]] = request.timeout_seconds
 
-    # A non-positive timeout means no deadline in the handler (not the global timeout).
-    assert handler.requests[0].timeout_seconds == -1
+    assert set(windows) == {"read", "compute", "side_effect"}, windows
+    assert set(windows.values()) == {None}, windows
 
 
 def test_side_effect_tier_blocks_under_the_global_timeout(hitl_on):

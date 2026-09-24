@@ -154,6 +154,13 @@ def _auto_approve(kind: str) -> bool:
     """
     if _headless_auto_approve():
         return True
+    try:
+        from CoScientist.hitl.mode import auto_approves
+
+        if auto_approves():
+            return True
+    except Exception:  # noqa: BLE001 — an unreadable mode still asks the human
+        pass
     cfg = get_settings().experiments
     return bool(cfg.plan_auto_approve if kind == "plan" else cfg.result_auto_approve)
 
@@ -523,6 +530,24 @@ def render_experiment_results(state: Any) -> str:
     return "\n".join(L)
 
 
+def _is_refusal(response: HITLResponse) -> bool:
+    """A human saying NO — as opposed to asking for a revision, or not answering.
+
+    The UI keeps these apart already: «Доработать» sends `edit`, «Отклонить»
+    sends `reject`. Downstream they were the same, because neither set
+    `stop_review_loop` and `SessionAgent` feeds anything unapproved back to the
+    author. A reject WITH a note is still a reject: the note is the reason, not
+    a request to try again.
+
+    A timeout is not a refusal by the operator even though it now arrives as
+    one — nobody decided anything — so it keeps its own branch and its own
+    pause reason.
+    """
+    if response.approved or response.timed_out or response.stop_review_loop:
+        return False
+    return response.action == HITLAction.REJECT
+
+
 def _plan_outcome(response: HITLResponse) -> str:
     """How the human left this round of the plan, in the record's vocabulary."""
     if response.approved:
@@ -646,32 +671,34 @@ class ExperimentReviewSessionAgent(SessionAgent):
         )
 
     def _review_window(self, configured: float) -> float | None:
-        """The deadline this review waits under, with the operator's switch on top.
+        """The deadline this review waits under, under the run's HITL mode.
 
-        The two review windows are deliberately their own: they fail CLOSED, so
-        a run is never approved because nobody was watching, and a bounded wait
-        is what keeps a missed card from parking the run forever.
+        These two windows are deliberately the reviews' own: they fail CLOSED,
+        so a bounded wait is a safety property of this stage rather than a
+        preference — and it was the one voice the operator's mode did not
+        reach. `handle_request` prefers a request's own window, so someone who
+        had turned every timeout off still had the plan review expire at 300 s
+        and the run skip execution.
 
-        But the operator's global switch (`HITL_AUTO_APPROVE_TIMEOUT`, and the
-        Approvals tab on top of it) is a statement about THEM — "I am at the
-        console, do not decide without me" — and it was the one voice this path
-        did not hear: `handle_request` prefers a request's own window, so an
-        operator who had turned every timeout off still had the plan review
-        expire at 300 s and the run skip execution.
-
-        `None` hands the decision back to the handler, whose own fallback IS
-        that global. So a positive global keeps the review's shorter, explicit
-        window; a non-positive one — "wait for me" — now reaches here too.
+        Now the mode decides and the shorter wait wins: `debug` waits for the
+        human (`None`), `basic` keeps whichever of the two is tighter, and
+        `auto` never gets here because `_auto_approve` answered first.
         """
         try:
-            window = getattr(self.hitl_handler, "hitl_timeout_seconds", None)
+            from CoScientist.hitl.mode import wait_seconds
+
+            window = wait_seconds()
             if window is None:
-                window = get_settings().web.hitl_auto_approve_timeout
-            if float(window) <= 0:
                 return None
+            if float(window) <= 0:
+                # `auto` never reaches a wait, and a zero window would mean an
+                # instant refusal — keep the review's own bounded one instead.
+                return configured
         except Exception:  # noqa: BLE001 — an unreadable switch keeps the window
             return configured
-        return configured
+        # The review's own window is the SHORTER of the two: it fails closed, so
+        # a bounded wait is a safety property of this stage, not a preference.
+        return min(float(configured), float(window))
 
     def _hitl(
         self, *, message: str, kind: str, plan_id: Any, output: str,
@@ -847,6 +874,24 @@ class ExperimentReviewSessionAgent(SessionAgent):
             _publish_approved_plan_to_graph(ctx, state)
             _audit(f"EXPERIMENT_REVIEW_APPROVED kind=plan mode=human plan_id={plan.plan_id} phase=execution")
             _audit("EXPERIMENT_DESIGN_MATRIX\n" + render_experiment_plan(plan, "en"))
+        elif _is_refusal(response):
+            # «Отклонить» and «Доработать» were the same thing: neither set
+            # `stop_review_loop`, so `SessionAgent` fed the note back and the
+            # planner wrote another plan. The operator pressed reject three
+            # revisions in a row and the module kept going — there was no way
+            # to say "stop", only "try again".
+            #
+            # A refusal is now terminal for this module. The run does not die:
+            # the executor is skipped for want of an approved runtime, and the
+            # report guard turns that into an honest note instead of a report.
+            state["experiment_plan_review_paused"] = True
+            state[PAUSE_REASON_STATE_KEY] = "plan_rejected_by_operator"
+            _audit(f"EXPERIMENT_REVIEW_REJECTED kind=plan plan_id={plan.plan_id} "
+                   f"reason={_clip(response.instructions) or 'no reason given'}")
+            view["status"] = "rejected"
+            close_plan_record(ctx, record_id, "rejected",
+                              reason=_clip(response.instructions))
+            return response.model_copy(update={"stop_review_loop": True})
         view["status"] = _plan_outcome(response)
         if response.timed_out:
             # The record has said "paused" all along (_plan_outcome); state

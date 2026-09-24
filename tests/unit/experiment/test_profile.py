@@ -347,7 +347,13 @@ def test_research_prompt_requires_both_literature_tools():
     assert "argument `keywords`" in prompt
 
 
-def test_web_hitl_timeout_is_fail_closed_only_for_experiment_review():
+def test_web_hitl_timeout_is_fail_closed_for_every_request():
+    """Silence is a refusal now, everywhere — not only on the two experiment
+    reviews. It used to approve for everything else, which is how thirty-four
+    decisions in the recorded sessions were taken by the clock, and the response
+    carried `timed_out=False` so nothing downstream could tell them from a human
+    saying yes. A run that must proceed unattended has `HITL__MODE=auto`, and
+    that is named out loud rather than inferred from nobody being there."""
     async def scenario():
         handler = WebHITLHandler()
         experiment = await handler.handle_request(
@@ -362,7 +368,7 @@ def test_web_hitl_timeout_is_fail_closed_only_for_experiment_review():
         assert experiment.approved is False
         assert experiment.timed_out is True
 
-        legacy = await handler.handle_request(
+        other = await handler.handle_request(
             HITLRequest(
                 agent_name="CoderAgent",
                 action_type=HITLAction.APPROVE,
@@ -370,8 +376,27 @@ def test_web_hitl_timeout_is_fail_closed_only_for_experiment_review():
                 timeout_seconds=0.001,
             )
         )
-        assert legacy.approved is True
-        assert legacy.timed_out is False
+        assert other.approved is False, "the clock does not approve a sandbox call"
+        assert other.timed_out is True, "and it says plainly that nobody answered"
+
+    asyncio.run(scenario())
+
+
+def test_auto_mode_answers_without_drawing_a_card(monkeypatch):
+    """`auto` is the mode for a run nobody is sitting with: no card, no wait."""
+    monkeypatch.setenv("HITL__MODE", "auto")
+
+    async def scenario():
+        handler = WebHITLHandler()
+        answered = await handler.handle_request(
+            HITLRequest(agent_name="CoderAgent", action_type=HITLAction.APPROVE,
+                        message="Approve outward action", timeout_seconds=600)
+        )
+        assert answered.approved is True
+        assert answered.timed_out is False
+        # Nothing was broadcast and nothing waited: the request never entered
+        # the pending table.
+        assert not handler._pending
 
     asyncio.run(scenario())
 
