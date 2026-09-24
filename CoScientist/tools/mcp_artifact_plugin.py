@@ -78,6 +78,12 @@ class McpArtifactCapturePlugin(BasePlugin):
 
         if not urls:
             return None
+            # The same filter as the durable index: this list is read by the
+            # report collector through its `*_artifacts` state sweep, so an icon
+            # left here reaches the reader by a second door.
+            from CoScientist.reporting.collect import _is_page_chrome
+
+            urls = [u for u in urls if not _is_page_chrome(u)]
         try:
             existing = list(tool_context.state.get(_STATE_KEY) or [])
             seen = {a.get("url") for a in existing if isinstance(a, dict)}
@@ -152,4 +158,13 @@ class McpArtifactCapturePlugin(BasePlugin):
             if mirror_record:
                 entry["artifact_id"] = mirror_record.get("artifact_id")
 
+        # Page furniture never enters the durable index. Written once, it is
+        # read by the report collector for the rest of the session — and there
+        # it carries no `source_kind`, so nothing downstream can tell an icon
+        # from a figure. 70 of the 219 rows recorded across real sessions are a
+        # publisher's letterhead.
+        from CoScientist.reporting.collect import _is_page_chrome
+
+        entries = [e for e in entries
+                   if not _is_page_chrome(str(e.get("url") or ""))]
         record(entries, tool_context)
