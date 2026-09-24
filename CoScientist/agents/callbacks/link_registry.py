@@ -838,7 +838,15 @@ def _redact_part(part: Any, ref_of: Dict[str, str]) -> bool:
     swapped = _map_strings(response, lambda value: _to_refs(value, ref_of))
     if swapped is response:
         return False
-    function_response.response = swapped
+    # REPLACE the response, never write into it. A request's parts are shallow
+    # copies whose payloads are shared with the session events
+    # (`flows/llm_flows/contents._copy_content_for_request`, whose docstring says
+    # so outright), so assigning `function_response.response` here would redact
+    # the stored record of what the tool actually returned — permanently, for
+    # every later reader. Setting a top-level Part field is the move ADK itself
+    # makes two lines below that docstring.
+    part.function_response = function_response.model_copy(
+        update={"response": swapped})
     return True
 
 
@@ -865,10 +873,12 @@ def redact_link_urls(
     (see `_redact_part`), since a search tool hands back a JSON body of result
     urls and that is where most of the raw links in a turn actually are.
 
-    Rewrites ONLY `llm_request.contents`, which ADK builds per call as
-    `copy.deepcopy(event.content)` (flows/llm_flows/contents.py). The session's
-    events, the registry and everything the egress callbacks read are
-    untouched, so what travels between agents is still the real URL.
+    Rewrites ONLY `llm_request.contents`. ADK no longer deep-copies those: since
+    1.25 `_copy_content_for_request` shallow-copies the Content and each Part and
+    SHARES the nested payloads with the session events. So the redaction replaces
+    each Part's function response with a copy rather than editing it, and the
+    session's events, the registry and everything the egress callbacks read stay
+    untouched — what travels between agents is still the real URL.
     """
     registry = callback_context.state.get(USER_LINKS_STATE_KEY) or {}
     if not registry:
