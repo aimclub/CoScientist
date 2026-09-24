@@ -256,8 +256,36 @@ def report_warnings(order: WorkOrder) -> List[Dict[str, Any]]:
     return warnings
 
 
-def render_work_report(order: WorkOrder, lang: str = "en") -> str:
-    """What the agent says it did, against the contract it signed."""
+def _artifact_line(artifact: Any, scope: Any = None) -> str:
+    """One artifact as a reader can use it: a link when we hold the bytes.
+
+    The rule `_href` and `resolve_ref` already follow — a link that opens
+    nothing is worse than a name — so the reference is printed as written
+    whenever this session does not hold the file. The agent writes `ref` in its
+    own words, and it is as often a workspace path as an artifact id.
+    """
+    desc = f" — {artifact.description}" if artifact.description else ""
+    citation = None
+    if scope:
+        try:
+            from CoScientist.utils.report_links import artifact_citation
+
+            citation = artifact_citation(scope, artifact.ref)
+        except Exception:  # noqa: BLE001 — a link is not worth a failed render
+            citation = None
+    if citation:
+        return f"- `{artifact.kind}` [{citation['name']}]({citation['ref']}){desc}"
+    return f"- `{artifact.kind}` {artifact.ref}{desc}"
+
+
+def render_work_report(order: WorkOrder, lang: str = "en",
+                       scope: Any = None) -> str:
+    """What the agent says it did, against the contract it signed.
+
+    `scope` is the session, and only with it can an artifact reference become a
+    link. Without one the output is byte-identical to what it was — which is
+    what the console HITL and every existing caller still get.
+    """
     w = _words(lang)
     report = order.report or WorkReport()
     lines = [
@@ -292,8 +320,7 @@ def render_work_report(order: WorkOrder, lang: str = "en") -> str:
     if report.artifacts:
         lines += ["", f"## {w['artifacts']}", ""]
         for a in report.artifacts:
-            desc = f" — {a.description}" if a.description else ""
-            lines.append(f"- `{a.kind}` {a.ref}{desc}")
+            lines.append(_artifact_line(a, scope))
     if order.tool_calls:
         lines += ["", f"## {w['calls']}", "",
                   ", ".join(f"`{t}` ×{n}" for t, n in order.tool_calls.items())]

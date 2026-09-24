@@ -424,6 +424,51 @@ _RESULT_WORDS = {
 }
 
 
+def _openable(state: Any, location: str) -> str:
+    """A URL a reader can press, or "" when this session does not hold the file.
+
+    Read-only on the state: the scope keys are taken directly rather than
+    through `session_key`, which WRITES the resolved pair back and must not run
+    from a renderer.
+    """
+    text = str(location or "").strip()
+    if not text:
+        return ""
+    try:
+        from CoScientist.graph.session_scope import (
+            GRAPH_SCOPE_SESSION_KEY,
+            GRAPH_SCOPE_USER_KEY,
+        )
+        from CoScientist.utils.report_links import resolve_ref
+
+        user = str((state or {}).get(GRAPH_SCOPE_USER_KEY) or "")
+        session = str((state or {}).get(GRAPH_SCOPE_SESSION_KEY) or "")
+        if not (user and session):
+            return ""
+        scope = (user, session)
+        from CoScientist.reporting import session_files
+
+        mirrored = session_files.artifact_id_for_url(scope, text)
+        if mirrored:
+            return resolve_ref(f"cos-artifact:{mirrored}", scope) or ""
+        return resolve_ref(text, scope) or ""
+    except Exception:  # noqa: BLE001 — a link is not worth a failed render
+        return ""
+
+
+def _located(state: Any, label: str, location: str) -> str:
+    """The canonical address, and a link beside it when there is one.
+
+    Beside, never instead. This section is headed "do not invent URLs" and the
+    backticked address is what stops a model doing exactly that — it is the
+    string the runtime will accept back. The link is for the human reading the
+    same page, who otherwise has to copy an S3 key by hand.
+    """
+    address = f"`{location}`"
+    href = _openable(state, location)
+    return f"{address} → [{label}]({href})" if href else address
+
+
 def render_experiment_results(state: Any) -> str:
     """The run's results. Reads its own language: it already has the state."""
     from CoScientist.agents.callbacks.report_language import normalize_report_language
@@ -442,7 +487,8 @@ def render_experiment_results(state: Any) -> str:
     if manifest:
         for m in manifest:
             L.append(
-                f"- `{m['task_id']}` / `{m['name']}` (`{m['artifact_id']}`): `{m['location']}`"
+                f"- `{m['task_id']}` / `{m['name']}` (`{m['artifact_id']}`): "
+                + _located(state, m["name"] or m["artifact_id"], m["location"])
             )
     else:
         L.append(f"- {w['none']}")
@@ -458,7 +504,8 @@ def render_experiment_results(state: Any) -> str:
                 continue
             L.append(
                 f"- {w['artifact']} `{a.get('artifact_id')}` ({a.get('name')}): "
-                f"`{_artifact_canonical_location(a)}`"
+                + _located(state, str(a.get("name") or a.get("artifact_id") or ""),
+                           _artifact_canonical_location(a))
             )
     if summary := state.get("experiment_summary"):
         L += ["", f"## {w['summary']}", str(summary)]
