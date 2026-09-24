@@ -297,11 +297,15 @@ agents:
     # figures/tables collected by format_results, not from the raw transcript.
     include_contents: none
     callbacks:
+      # guard_report_without_execution comes FIRST: it is the one hook that can
+      # end this stage, and a callback that returns a response stops the chain,
+      # so running it ahead of the graph digest and the NIR question saves both
+      # when there is nothing to report on.
       # ask_nir_report asks the operator whether to also produce a GOST report
       # and writes the {nir_block?} the prompt reads; with the feature off it
       # writes an empty block and the prompt is unchanged. It sits before
       # user_links because user_links must stay last (see the profile test).
-      before_agent: [inject_research_context, inject_report_language, ask_nir_report, user_links]
+      before_agent: [guard_report_without_execution, inject_research_context, inject_report_language, ask_nir_report, user_links]
       before_model: [redact_link_urls]
       after_model: [expand_link_refs]
       before_tool: [resolve_link_refs]

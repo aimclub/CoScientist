@@ -1383,6 +1383,21 @@ def _brief_hypotheses_regime():
 # none it spends the effort on judging the candidates instead.
 _cb("brief_hypotheses_regime", "before_agent",
     factory=lambda ctx: _brief_hypotheses_regime())
+
+
+def _guard_report_without_execution():
+    from CoScientist.agents.callbacks.report_guard import (
+        guard_report_without_execution,
+    )
+    return guard_report_without_execution
+
+
+# The aggregator is a `pipeline.post` stage, so it runs whether or not anything
+# was executed — and the experiment module has a branch that stops quietly. This
+# is what stops a full scientific report being written over a plan that never
+# ran, and what stages `{report_unexecuted_note?}` when only part of it did.
+_cb("guard_report_without_execution", "before_agent",
+    factory=lambda ctx: _guard_report_without_execution())
 # ── Experiment Module callbacks ──────────────────────────────────────────────
 # Every EM callback is a plain (context-independent) function, so they are
 # registered table-driven: (registry key, hook, "package:attr"), one lazy

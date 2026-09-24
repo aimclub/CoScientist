@@ -263,3 +263,78 @@ def test_the_two_experiment_switches_are_offered_in_the_approvals_tab():
         row = approvals[approvals.index(f"id: '{fid}'"):]
         row = row[:row.index("},")]
         assert "parent:" not in row, f"{fid} was tied to the global switch"
+
+
+# ── the window itself, and whose switch owns it ──────────────────────────────
+# The docstring at the top of this file is the incident. Auto-approval was one
+# answer to it; this is the other. The operator had already set
+# HITL_AUTO_APPROVE_TIMEOUT=-1 — "I am at the console, do not decide without
+# me" — and this was the one path that did not hear it: `handle_request` prefers
+# a request's own window, and the review always set one.
+
+def _reviewer(window):
+    """A stub `self` carrying just what `_review_window` reads."""
+    return SimpleNamespace(hitl_handler=SimpleNamespace(hitl_timeout_seconds=window))
+
+
+def test_a_positive_global_leaves_the_review_its_own_window():
+    """The two review windows are deliberately their own: they fail closed, and
+    a bounded wait is what stops a missed card parking the run. An operator who
+    has NOT turned timeouts off keeps that."""
+    got = ExperimentReviewSessionAgent._review_window(_reviewer(300), 300.0)
+    assert got == 300.0
+
+
+def test_the_operator_s_no_timeout_switch_reaches_the_review():
+    """`None` hands the decision back to the handler, whose own fallback IS the
+    global — so «wait for me» finally applies here too."""
+    assert ExperimentReviewSessionAgent._review_window(_reviewer(-1), 300.0) is None
+    assert ExperimentReviewSessionAgent._review_window(_reviewer(0), 300.0) is None
+
+
+def test_the_global_is_read_from_settings_when_the_handler_has_none(monkeypatch):
+    """A console or A2A handler carries no window of its own."""
+    web = get_settings().web
+    monkeypatch.setattr(web, "hitl_auto_approve_timeout", -1, raising=False)
+    bare = SimpleNamespace(hitl_handler=SimpleNamespace())
+    assert ExperimentReviewSessionAgent._review_window(bare, 300.0) is None
+
+    monkeypatch.setattr(web, "hitl_auto_approve_timeout", 300, raising=False)
+    assert ExperimentReviewSessionAgent._review_window(bare, 300.0) == 300.0
+
+
+def test_an_unreadable_switch_keeps_the_bounded_window():
+    """Fail safe, not fail open: if the switch cannot be read, the review keeps
+    its deadline rather than silently becoming an indefinite wait."""
+    class Exploding:
+        @property
+        def hitl_timeout_seconds(self):
+            raise RuntimeError("настройки недоступны")
+
+    broken = SimpleNamespace(hitl_handler=Exploding())
+    assert ExperimentReviewSessionAgent._review_window(broken, 300.0) == 300.0
+
+
+def test_the_window_reaches_the_request_the_handler_reads():
+    """`_hitl` is the only place a window becomes a request, and the handler
+    treats a non-positive one as no deadline at all."""
+    stub = SimpleNamespace(name="ExperimentPlannerAgent")
+    built = ExperimentReviewSessionAgent._hitl(
+        stub, message="m", kind="plan", plan_id="PLAN-1", output="o",
+        user_id="u", session_id="s", timeout_seconds=None)
+    assert built.timeout_seconds is None
+    assert built.context["experiment_review_kind"] == "plan"
+
+
+def test_a_timed_out_review_with_no_deadline_still_audits():
+    """`None` is a real window now, and `timed_out` can still come back under
+    it: `FailClosedExperimentHITLHandler` answers that whenever no interactive
+    reviewer is connected — a console run, an A2A call, a closed tab. The audit
+    line formatted the window as a number and brought the whole review down
+    with a TypeError.
+    """
+    from CoScientist.experiments.review import _window_word
+
+    assert _window_word(None) == "none"
+    assert _window_word(0) == "none"
+    assert _window_word(300.0) == "300"
