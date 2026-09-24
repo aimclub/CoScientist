@@ -283,6 +283,16 @@
       inconclusive:{c:ORANGE,g:'≈'},
       under_verification:{c:WARN,g:'⧗'}, running:{c:WARN,g:'⧗'}, obtained:{c:WARN,g:'●'}, draft:{c:WARN,g:'✎'},
       formulated:{c:INFO,g:'○'}, open:{c:INFO,g:'○'}, planned:{c:INFO,g:'○'}, not_met:{c:INFO,g:'○'},
+      // The plan track's own vocabulary, which this table simply did not know:
+      // a step in progress and a step nobody had started both fell through to
+      // the default and drew as the same slate bullet, so the one question the
+      // plan column exists to answer — what is going on right now — had the
+      // same answer everywhere on it.
+      todo:{c:INFO,g:'○'}, in_progress:{c:WARN,g:'⧗'},
+      blocked:{c:CRIT,g:'⊗'}, skipped:{c:SLATE,g:'⊘'},
+      // A method's own three. It is the MEANS, never work: it is offered, the
+      // study leans on it, or it is left aside.
+      proposed:{c:INFO,g:'○'}, used:{c:GOOD,g:'✓'}, not_used:{c:SLATE,g:'⊘'},
       needs_adaptation:{c:ORANGE,g:'⚙'}, being_created:{c:ORANGE,g:'⚙'},
       postponed:{c:SLATE,g:'⏸'}, exhausted:{c:SLATE,g:'∅'}, decomposed:{c:SLATE,g:'⊟'}, closed:{c:SLATE,g:'●'},
       active:{c:VIOLET,g:'▮'}, created:{c:SLATE,g:'▢'},
@@ -350,10 +360,17 @@
     // neutral ink. `inconclusive` belongs there too: it is the honest "we
     // measured and it did not settle", not a failure.
     const STATUS_GOOD = new Set(["confirmed", "validated", "met", "approved",
-                                 "done", "available"]);
+                                 "done", "available", "used"]);
     const STATUS_BAD = new Set(["refuted", "rejected", "failed", "creation_failed"]);
+    // …and a third thing, which is neither: what is happening RIGHT NOW. Left
+    // in neutral ink it read exactly like a card nobody had touched, which is
+    // the complaint this whole table exists to answer — the study says which
+    // stage is going, and the reader could not see it.
+    const STATUS_LIVE = new Set(["in_progress", "running", "under_verification",
+                                 "obtained"]);
     const statusInk = st => STATUS_GOOD.has(st) ? GOOD
-                          : STATUS_BAD.has(st) ? CRIT : INK2;
+                          : STATUS_BAD.has(st) ? CRIT
+                          : STATUS_LIVE.has(st) ? WARN : INK2;
 
     const R_ICON = { researchquestion:'❓', hypothesis:'💡', evidence:'🔬', conclusion:'✅',
       verificationmethod:'⚙️', confirmationcriteria:'🎯', tool:'🔧', resource:'🔋',
@@ -362,6 +379,11 @@
       costmodel:'💰', efficiencymetric:'📊', framing:'🧩', outcome:'▣' };
     const R_LEVEL = { researchquestion:0, constraint:0, hypothesis:1, empiricalbase:1,
       verificationmethod:2, confirmationcriteria:2, tool:2,
+      // The plan track. Absent from this table the two of them were not in
+      // `RESEARCH_KINDS` either, and the tooltip of the very cards a reader
+      // watches for progress printed the raw code — "experimenttask",
+      // "in_progress" — instead of the words on the card beside it.
+      planstep:2, experimenttask:2,
       evidence:3, resource:3, generateddata:3, codeartifact:3, conclusion:4,
       report:5, publication:5, spec:5, efficiencyjustification:5, costmodel:5, efficiencymetric:5,
       framing:0, outcome:5 };
@@ -542,8 +564,13 @@
     // it was built with, and who recorded it. A step that ended badly says WHY
     // on the card itself — that answer used to live in the store and never
     // reach the page, so a failed method drew as "не удался" and stopped there.
+    // No pictograms on the canvas. A method card carried five or six of them —
+    // ⚙️ for the type, 🎯 twice, 📎, 🛠️ — on a box 230 px wide, and none of
+    // them said anything the words beside them did not. The status glyph stays:
+    // ✓ ✗ ⧗ ○ is a typographic mark that carries the verdict, and it is the
+    // one thing on the card that is read at a glance rather than word by word.
     function researchLabel(n){
-      const st = rStatus(n.status), icon = R_ICON[n.kind] || "•";
+      const st = rStatus(n.status);
       const idx = n.index && n.kind !== "researchquestion" ? " " + n.index : "";
       const sw = rStatusWord(n);
       const L = [];
@@ -551,7 +578,7 @@
       // the status word is wrapped in <b><i> so it lands on the `boldital`
       // class, which `researchNode` gives the status colour and a plain bold
       // weight — the only way to get two colours into one vis label.
-      const head = visSafe(st.g + " " + icon + " " + rTypeName(n) + idx);
+      const head = visSafe(st.g + " " + rTypeName(n) + idx);
       L.push(sw ? "<b>" + head + " · </b><b><i>" + visSafe(sw) + "</i></b>"
                 : "<b>" + head + "</b>");
       // A headline, still — but a wider one than the cramped column layout
@@ -568,7 +595,7 @@
       // that tells this card from its twin. Four look-alike method cards left
       // the reader no way to know why there were four.
       if (n.tests)
-        L.push(visSafe("🎯 " + t('graph.card.tests') + " "
+        L.push(visSafe(t('graph.card.tests') + " "
                        + firstSentence(n.tests, 80)));
       if (n.plan_step)
         L.push("<code>" + visSafe(String(n.plan_step).slice(0, 24)) + "</code>");
@@ -578,14 +605,17 @@
       // right on the method box, and that is what makes it answerable: a
       // reader can see the LD50 came out of ADMETlab and not out of a model's
       // recollection.
+      // No slice: the store decides how many instruments a card names
+      // (`_MAX_INSTRUMENTS`), and a second, smaller cap here meant the last of
+      // them were polled to the browser and drawn nowhere.
       if (n.instruments)
-        L.push(String(n.instruments).split(",").slice(0, 4)
+        L.push(String(n.instruments).split(",")
                .map(x => "<code>" + visSafe(x.trim().slice(0, 34)) + "</code>")
                .join(" "));
       // A detailed task names the general step it serves. Without it the two
       // lanes read as two unrelated lists.
       if (n.kind === "experimenttask" && n.elaborates)
-        L.push(visSafe("↳ " + t('graph.card.elaborates') + " " + n.elaborates));
+        L.push(visSafe(t('graph.card.elaborates') + " " + n.elaborates));
       if (n.kind === "experimenttask" && n.input && n.input.route)
         L.push("<code>" + visSafe(String(n.input.route).slice(0, 34)) + "</code>");
       if ((n.kind === "planstep" || n.kind === "experimenttask")
@@ -594,7 +624,7 @@
                .map(x => "<code>" + visSafe(x.trim().slice(0, 34)) + "</code>")
                .join(" "));
       if (n.criterion)
-        L.push(visSafe("🎯 " + t('graph.card.criterion') + " "
+        L.push(visSafe(t('graph.card.criterion') + " "
                        + firstSentence(n.criterion, 80)));
       else if (n.origin && n.origin.code !== "question")
         L.push("<i>" + visSafe(t('graph.origin.' + n.origin.code,
@@ -605,10 +635,10 @@
                .join(" "));
       const foot = [
         n.attachments && n.attachments.length
-          ? "📎 " + t('graph.count.attached', { count: n.attachments.length }) : "",
+          ? t('graph.count.attached', { count: n.attachments.length }) : "",
         n.executor_agent ? shortAgent(n.executor_agent) : "",
         (n.provenance || []).length
-          ? "🛠️ " + t('graph.count.calls', { count: n.provenance.length }) : "",
+          ? t('graph.count.calls', { count: n.provenance.length }) : "",
       ].filter(Boolean).join("  ·  ");
       if (foot) L.push("<i>" + visSafe(foot) + "</i>");
       return L.join("\n");
@@ -624,6 +654,86 @@
       Array.isArray(n.calls) && n.calls.length ? t('graph.tooltip.toolCalls', { count: n.calls.length }) : "",
       n.why ? t('graph.why.title') + ": " + String(n.why).slice(0, 200) : "",
       n.output?String(n.output).slice(0,300):"" ].filter(Boolean).join("\n");
+
+    // ── what is working right now ─────────────────────────────────────────────
+    // An ACTION card pulses; everything else in flight is coloured and still.
+    // The difference is the user's, and it is the right one: a plan step and an
+    // experiment task are work somebody is doing this minute, while a
+    // hypothesis under verification or an observation waiting to be weighed is
+    // a state, not an activity. On a canvas of sixty cards a reader finds the
+    // one that moves before they find the one that is merely yellow.
+    const PULSING_KINDS = new Set(["planstep", "experimenttask"]);
+    const PULSING_STATUS = new Set(["in_progress", "running"]);
+    const isPulsing = n => PULSING_KINDS.has(n.kind) && PULSING_STATUS.has(n.status);
+    //: Redraw rate while something is running. 20 is far below the 60 a plain
+    //: rAF loop would ask for, and a pulse this slow does not need the rest.
+    //: PULSE_CYCLE is the full breath in milliseconds — named as the period a
+    //: reader can time, not as the 1/ω the sine actually takes, because the
+    //: two differ by 2π and one of them is what somebody tuning this will mean.
+    const PULSE_FPS = 20, PULSE_MS = 1000 / PULSE_FPS, PULSE_CYCLE = 1200;
+    let pulsing = new Set(), pulseRunning = false, pulseLast = 0;
+
+    //: Which cards are working, recomputed from the payload the server just
+    //: sent. Held OUTSIDE the DataSet on purpose: `poll` rebuilds every node
+    //: object wholesale every 1.5 s, so a colour an animation wrote into a node
+    //: would be overwritten within the second — and each such write re-runs
+    //: vis's html-label parser over agent-written text, the one code path in
+    //: this file that can take the whole canvas down.
+    function setPulsing(next){
+      pulsing = next;
+      if (pulsing.size && !pulseRunning) {
+        pulseRunning = true;
+        requestAnimationFrame(pulseLoop);
+      }
+    }
+    function pulseLoop(ts){
+      // …and it stops when there is nothing to say. `pulsing` is recomputed
+      // only inside `poll`, so with the live feed switched off — or with every
+      // poll throwing — nothing would ever empty the set, and the loop would
+      // repaint the canvas twenty times a second for as long as the tab was
+      // open, animating a study that is no longer being updated.
+      const live = document.getElementById("auto");
+      if (!pulsing.size || !network || (live && !live.checked)) {
+        pulseRunning = false;
+        return;
+      }
+      if (ts - pulseLast >= PULSE_MS) { pulseLast = ts; network.redraw(); }
+      requestAnimationFrame(pulseLoop);
+    }
+    function roundPath(ctx, x, y, w, h, r){
+      const k = Math.min(r, w / 2, h / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + k, y);
+      ctx.arcTo(x + w, y, x + w, y + h, k);
+      ctx.arcTo(x + w, y + h, x, y + h, k);
+      ctx.arcTo(x, y + h, x, y, k);
+      ctx.arcTo(x, y, x + w, y, k);
+      ctx.closePath();
+    }
+    //: The halo itself, drawn UNDER the cards: `solid()` makes every card
+    //: background fully opaque, so a ring painted before them can never touch
+    //: the label — it reads as a glow escaping from behind the box, and the
+    //: text it surrounds stays exactly as legible as it was.
+    function drawPulse(ctx){
+      if (!pulsing.size || !network) return;
+      const phase = 0.5 + 0.5 * Math.sin(
+        performance.now() * 2 * Math.PI / PULSE_CYCLE);
+      ctx.save();
+      ctx.strokeStyle = WARN;
+      ctx.lineWidth = 3;
+      pulsing.forEach(id => {
+        let box = null;
+        try { box = network.getBoundingBox(id); } catch (err) { return; }
+        if (!box || box.right - box.left < 2 || box.bottom - box.top < 2) return;
+        ctx.globalAlpha = 0.22 + 0.62 * phase;
+        const pad = 4 + 5 * phase;
+        roundPath(ctx, box.left - pad, box.top - pad,
+                  box.right - box.left + pad * 2,
+                  box.bottom - box.top + pad * 2, 13);
+        ctx.stroke();
+      });
+      ctx.restore();
+    }
 
     // ══════════════════════════════════════════════════════════════════════════
     const nodes = new vis.DataSet([]);
@@ -661,7 +771,7 @@
       // just says where one stretch ended and the next began, which is the
       // thing you otherwise reconstruct by reading every name in order.
       network.on("beforeDrawing", ctx => {
-        if (isResearch()) return drawStageBands(ctx);
+        if (isResearch()) { drawStageBands(ctx); return drawPulse(ctx); }
         if (!lastPhases.length) return;
         const ys = Object.values(nodeData)
           .map(n => n.y).filter(v => typeof v === "number");
@@ -1442,11 +1552,14 @@
         // redraw behind it.
         const batchNodes = [], batchEdges = [];
         const liveNodes = new Set(), liveEdges = new Set();
+        const working = new Set();
         ordered.forEach(n => {
           try {
           nodeData[n.id] = n; liveNodes.add(n.id);
-          if (research) { batchNodes.push(researchNode(n, place)); }
-          else {
+          if (research) {
+            batchNodes.push(researchNode(n, place));
+            if (isPulsing(n)) working.add(n.id);
+          } else {
             // Cards, sized by what they are: the request opens the row, agents
             // carry it, calls are the detail. Status is the border, identity the
             // fill, so a failed call is visible without reading its label.
@@ -1598,6 +1711,9 @@
         // drawing when each node updated the DataSet on its own.
         if (batchNodes.length) nodes.update(batchNodes);
         if (batchEdges.length) edges.update(batchEdges);
+        // After the cards are in: `getBoundingBox` has nothing to report for a
+        // node vis has not drawn yet, and the halo is measured off the box.
+        setPulsing(working);
         // Reconciliation: what the server no longer sends must leave the canvas.
         // Nothing was ever removed, so a node that changed id, moved into
         // another card or belonged to a study the reader switched away from

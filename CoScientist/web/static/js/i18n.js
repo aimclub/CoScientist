@@ -1637,6 +1637,33 @@ const i18n = {
   'graph.field.failure_reason': { en: 'Why it failed', ru: 'Почему не удалось' },
   'graph.field.postponed_reason': { en: 'Why postponed', ru: 'Почему отложена' },
   'graph.field.inconclusive_reason': { en: 'What stayed unsettled', ru: 'Что осталось неясным' },
+  // The plan's own record, on a method and on an experiment task. Left
+  // uncaptioned the panel printed the bare storage key — a Russian reader met
+  // "analysis_artifacts" and "mcp_servers" in the middle of a Russian card,
+  // which is most of what made the method blocks heavy to read.
+  'graph.field.instruments': { en: 'Run with', ru: 'Чем выполняется' },
+  'graph.field.mcp_servers': { en: 'MCP tools', ru: 'Инструменты MCP' },
+  'graph.field.route': { en: 'Route', ru: 'Маршрут' },
+  'graph.field.experiment_question': { en: 'Experimental question', ru: 'Вопрос эксперимента' },
+  'graph.field.success_criteria': { en: 'Success criteria', ru: 'Критерии успеха' },
+  'graph.field.baselines': { en: 'Compared against', ru: 'С чем сравнивается' },
+  'graph.field.metrics': { en: 'Measured', ru: 'Что измеряется' },
+  'graph.field.analysis_artifacts': { en: 'Analysis artifacts', ru: 'Артефакты анализа' },
+  'graph.field.expected_artifacts': { en: 'Expected artifacts', ru: 'Ожидаемые артефакты' },
+  'graph.field.dataset': { en: 'Data', ru: 'Данные' },
+  'graph.field.depends_on': { en: 'Depends on', ru: 'Зависит от' },
+  'graph.field.hypothesis_refs': { en: 'Claims tested', ru: 'Проверяемые гипотезы' },
+  'graph.field.operation_ref': { en: 'Research task', ru: 'Задача исследования' },
+  'graph.field.task_id': { en: 'Task', ru: 'Задача' },
+  'graph.field.experiment_task_id': { en: 'Task', ru: 'Задача' },
+  'graph.field.experiment_run_id': { en: 'Run', ru: 'Прогон' },
+  'graph.field.plan_id': { en: 'Plan', ru: 'План' },
+  'graph.field.plan_revision': { en: 'Plan revision', ru: 'Редакция плана' },
+  'graph.field.result_id': { en: 'Result', ru: 'Результат' },
+  'graph.field.query': { en: 'Query', ru: 'Запрос' },
+  'graph.field.sources': { en: 'Sources', ru: 'Источники' },
+  'graph.field.label': { en: 'Name', ru: 'Название' },
+  'graph.field.notes': { en: 'Notes', ru: 'Примечания' },
   // The bands the research canvas is read down, top to bottom. A card sits in
   // the band of the stage that produced it, so the picture says where the study
   // has got to before any card is read. The hypothesis band holds the claim and

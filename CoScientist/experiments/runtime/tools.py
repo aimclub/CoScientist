@@ -49,6 +49,25 @@ def _mirror_result_to_graph(tool_context: ToolContext, task_id: str, stored: dic
         pass
 
 
+def _mirror_task_state_to_graph(tool_context: ToolContext, task_id: str) -> None:
+    """Best-effort: move the task's card to wherever the runtime just put it.
+
+    Called after every control tool that starts, retries, re-routes or skips a
+    task — the moments the graph never used to hear about. Reads the runtime's
+    own status rather than being handed one, so it cannot disagree with it.
+    Never raises.
+    """
+    try:
+        from CoScientist.experiments.runtime.graph_bridge import publish_task_state_to_graph
+        from CoScientist.graph.research.store import get_research_graph
+
+        publish_task_state_to_graph(
+            get_research_graph(tool_context), tool_context.state, task_id,
+        )
+    except Exception:  # noqa: BLE001 — the run always wins
+        pass
+
+
 class ExperimentControlToolset(BaseToolset):
     """The only write surface for experiment task/attempt lifecycle."""
 
@@ -72,10 +91,12 @@ class ExperimentControlToolset(BaseToolset):
 
     def start_task(self, task_id: str, tool_context: ToolContext) -> dict[str, Any]:
         """Start one ready task and create a fresh attempt/route envelope."""
-        return _call(
+        started = _call(
             state_machine.start_task, tool_context.state, task_id,
             route_agents=_route_agents(tool_context),
         )
+        _mirror_task_state_to_graph(tool_context, task_id)
+        return started
 
     def record_result(
         self,
@@ -118,18 +139,24 @@ class ExperimentControlToolset(BaseToolset):
 
     def retry_task(self, task_id: str, tool_context: ToolContext) -> dict[str, Any]:
         """Permit a retryable failure to create a new attempt on the same route."""
-        return _call(state_machine.retry_task, tool_context.state, task_id)
+        retried = _call(state_machine.retry_task, tool_context.state, task_id)
+        _mirror_task_state_to_graph(tool_context, task_id)
+        return retried
 
     def fallback_task(self, task_id: str, reason: str, tool_context: ToolContext) -> dict[str, Any]:
         """Move a failed task to the next route in its finite fallback chain."""
-        return _call(
+        moved = _call(
             state_machine.fallback_task, tool_context.state, task_id, reason,
             route_agents=_route_agents(tool_context),
         )
+        _mirror_task_state_to_graph(tool_context, task_id)
+        return moved
 
     def skip_task(self, task_id: str, reason: str, tool_context: ToolContext) -> dict[str, Any]:
         """Skip an optional task and create its terminal skipped TaskResult."""
-        return _call(state_machine.skip_task, tool_context.state, task_id, reason)
+        skipped = _call(state_machine.skip_task, tool_context.state, task_id, reason)
+        _mirror_task_state_to_graph(tool_context, task_id)
+        return skipped
 
     def amend_task(
         self,

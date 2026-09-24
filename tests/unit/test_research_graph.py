@@ -1968,17 +1968,15 @@ def test_a_root_written_by_a_plain_commit_still_names_its_archive(store, tmp_pat
 
 # ── why a step ended where it did ────────────────────────────────────────────
 
-def test_why_a_step_failed_reaches_the_reader(store):
+def test_why_a_method_settled_nothing_reaches_the_reader(store):
     """The reason was always recorded, and never left the store.
 
-    A failed method drew as its status word and stopped there, which is the one
-    question a reader of a failed step actually has.
+    A method the study did not lean on drew as its status word and stopped
+    there, which is the one question a reader of it actually has.
     """
     _build_verifiable(store)
-    store.commit(source="ExperimentAgent",
-                 status_updates=[{"id": "VM1", "status": "running"}])
     r = store.commit(source="ExperimentAgent",
-                     status_updates=[{"id": "VM1", "status": "failed",
+                     status_updates=[{"id": "VM1", "status": "not_used",
                                       "reason": "sandbox ran out of memory"}])
     assert r.ok, r.errors
 
@@ -1986,16 +1984,14 @@ def test_why_a_step_failed_reaches_the_reader(store):
     assert vm["why"] == "sandbox ran out of memory"
     assert vm["why_missing"] is False
     assert vm["status_history"][-1]["reason"] == "sandbox ran out of memory"
-    assert vm["status_history"][-1]["to_word"] == "не удался"
+    assert vm["status_history"][-1]["to_word"] == "не использован"
 
 
-def test_a_failure_can_also_explain_itself_in_its_attrs(store):
+def test_a_method_left_aside_can_also_explain_itself_in_its_attrs(store):
     """The executor that hit the error may name it on the node itself."""
     _build_verifiable(store)
     store.commit(source="ExperimentAgent",
-                 status_updates=[{"id": "VM1", "status": "running"}])
-    store.commit(source="ExperimentAgent",
-                 status_updates=[{"id": "VM1", "status": "failed"}],
+                 status_updates=[{"id": "VM1", "status": "not_used"}],
                  nodes=[{"id": "VM1", "attrs": {"failure_reason": "no CUDA device"}}])
     vm = next(n for n in store.to_view()["nodes"] if n["id"] == "VM1")
     assert vm["why"] == "no CUDA device"
@@ -2022,7 +2018,7 @@ def test_a_failure_with_no_reason_is_reported_as_a_gap(store):
     """A hole in the record is named, not quietly rendered as a colour."""
     _build_verifiable(store)
     store.commit(source="ExperimentAgent",
-                 status_updates=[{"id": "VM1", "status": "failed"}])
+                 status_updates=[{"id": "VM1", "status": "not_used"}])
     view = store.to_view()
     gaps = {g["code"]: g for g in view["gaps"]}
     assert "unreasoned_failures" in gaps
@@ -2425,17 +2421,16 @@ def test_a_study_with_no_hypothesis_says_so_as_an_instruction(store):
     assert q.trigger_report(store)["rendered"].startswith("NO HYPOTHESIS")
 
     # Methods already standing under the question is the aggravating case and is
-    # named — with their STATUS. The mirror creates them `planned`, the only
-    # creatable status, so calling them "running" was false on every graph that
-    # had just been planned and contradicted the PROGRESS line of the same
-    # digest.
+    # named — with their STATUS. A method is only ever created `proposed`, so
+    # calling them "running" was false on every graph that had just been
+    # planned and contradicted the PROGRESS line of the same digest.
     store.commit(source="ResearchAgent", nodes=[
         {"type": "VerificationMethod", "ref": "vm", "attrs": {
             "method_type": "literature_review", "procedure": "run it"}}],
         edges=[{"type": "tested_by", "from": store.root_id(), "to": "#vm"}])
     rendered = q.study_without_hypothesis(store)["rendered"]
     assert "nothing to test" in rendered
-    assert "VM1 (planned)" in rendered
+    assert "VM1 (proposed)" in rendered
     assert "are already running" not in rendered,         "do not assert a status the graph itself contradicts"
 
 

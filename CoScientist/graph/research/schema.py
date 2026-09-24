@@ -217,12 +217,27 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
     ),
     NodeTypeSpec(
         "VerificationMethod", "VM", 2,
-        statuses=("planned", "running", "done", "failed"), creatable=("planned",),
+        # A method is not work, and it cannot be "запланирован" or "выполнен":
+        # those are states of a TASK. A method is the MEANS — the list of
+        # instruments a claim is to be settled by — so the only thing that can
+        # be said about it is whether it was offered, whether the study
+        # actually leaned on it, and whether it was left aside. `not_used`
+        # covers both "nobody ran it" and "it was run and settled nothing":
+        # from the reader's side those are the same fact about the method, and
+        # `failure_reason` says which of the two it was.
+        statuses=("proposed", "used", "not_used"), creatable=("proposed",),
         attr_docs={
             "method_type": "computational / laboratory / analytical / statistical "
                            "/ expert / literature_review",
             "description": "WHAT this method is, in one line — it is the card's "
                            "headline, so two methods that differ must differ here",
+            # The point of the card. A method that names no instrument is a
+            # restated task: it says a thing will be checked and never says by
+            # what, which is precisely what a reader comes to a method for.
+            "instruments": "REQUIRED — WHAT IT IS RUN WITH, named exactly and "
+                           "listed one per entry, separated by ';': MCP tools "
+                           "as 'server:tool', agents by their name, libraries "
+                           "and services by theirs. Not a description — a list",
             "procedure": "HOW it is run: the concrete steps, tools and settings",
             "inputs": "what it needs",
             "outputs": "what it yields",
@@ -233,11 +248,12 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
             # not tell two methods mirrored from two plan steps apart.
             "plan_task_id": "the plan step this method mirrors (TASK-n)",
             "assignee": "the agent the plan assigned the step to",
-            # A failed step with no reason is indistinguishable from one nobody
-            # started, which is exactly how a run reads when it is over.
-            "failure_reason": "WHY the run failed — the error, the missing "
-                              "input, the limit hit. Required when you move it "
-                              "to `failed`",
+            # A method set aside with no reason is indistinguishable from one
+            # nobody got to, which is exactly how a run reads when it is over.
+            "failure_reason": "WHY it settled nothing — the error, the missing "
+                              "input, the limit hit, or plainly that the study "
+                              "never reached it. Required when you move it to "
+                              "`not_used`",
         },
     ),
     NodeTypeSpec(
@@ -339,9 +355,13 @@ STATUS_TRANSITIONS: Dict[str, FrozenSet[Tuple[str, str]]] = {
                              ("postponed", "formulated")}),
     "Evidence": frozenset({("obtained", "validated"), ("obtained", "rejected")}),
     "Conclusion": frozenset({("draft", "approved")}),
-    "VerificationMethod": frozenset({("planned", "running"), ("planned", "failed"),
-                                     ("running", "done"), ("running", "failed"),
-                                     ("failed", "planned")}),
+    # Offered → leaned on, or left aside. `not_used → used` is the retry: a
+    # method the study first gave up on can still turn out to be the one that
+    # settles the claim. There is no way back out of `used`, because a method
+    # that produced evidence stays a method the study was built on.
+    "VerificationMethod": frozenset({("proposed", "used"),
+                                     ("proposed", "not_used"),
+                                     ("not_used", "used")}),
     "ConfirmationCriteria": frozenset({("not_met", "met"), ("met", "not_met")}),
     # The tracker's own moves. A finished step can be reopened, because a
     # re-plan may put a step back in play, and a blocked one can be released.
@@ -491,6 +511,11 @@ RU_ALIASES: Dict[str, str] = {
     "черновик": "draft", "утверждено": "approved",
     "запланирован": "planned", "выполняется": "running",
     "выполнен": "done", "провален": "failed",
+    # A method's own words. Kept apart from the task vocabulary above on
+    # purpose: «выполнен» must keep meaning a task that ran, so a model that
+    # writes it about a method is refused rather than quietly understood.
+    "предложен": "proposed", "использован": "used",
+    "не_использован": "not_used", "неиспользован": "not_used",
     "не_выполнены": "not_met", "выполнены": "met",
     "доступен": "available", "нужна_адаптация": "needs_adaptation",
     "создаётся": "being_created", "создается": "being_created",
@@ -768,7 +793,17 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
     "experiment-plan-mirror": AgentPerm(
         create=frozenset({"ExperimentTask"}),
         update_attrs=frozenset({"ExperimentTask"}),
-        transitions=_transitions("ExperimentTask"),
+        # …and the one thing it may say about the step ABOVE its tasks: that
+        # work on it has begun, and only about a step nobody has started. The
+        # outer plan's own mirror only runs on an orchestrator tick, and by then
+        # the tracker has usually moved the step from «не начат» straight to
+        # «выполнен» — so a step that was being worked on for minutes was never
+        # once drawn as being worked on. The module knows the moment a task
+        # starts; this lets it say so, and nothing else about the step. `blocked`
+        # is deliberately not here: a blocked step was blocked by something that
+        # knows why, and the module is not it.
+        transitions=_transitions("ExperimentTask",
+                                 ("PlanStep", "todo", "in_progress")),
         edges=_edges("elaborates",
                      ("realises", "VerificationMethod", "ExperimentTask"),
                      ("realises", "Evidence", "ExperimentTask")),

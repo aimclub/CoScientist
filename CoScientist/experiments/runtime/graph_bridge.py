@@ -178,6 +178,15 @@ def _schedule_hypothesis_judgments(store: Any) -> int:
         return 0
 
 
+def _route_agent(route: Any) -> str:
+    """The agent a route is carried out by, by the runtime's own table."""
+    try:
+        from CoScientist.experiments.runtime.state_machine import ROUTE_AGENT_BY_ROUTE
+        return str(ROUTE_AGENT_BY_ROUTE.get(str(route or "").strip()) or "")
+    except Exception:  # noqa: BLE001 — a name on a card is never worth a raise
+        return ""
+
+
 def _vm_attrs(task: dict[str, Any], plan_id: str) -> dict[str, Any]:
     design = task.get("design") or {}
     dataset = design.get("dataset") or {}
@@ -244,6 +253,11 @@ def _vm_attrs(task: dict[str, Any], plan_id: str) -> dict[str, Any]:
         "mcp_servers": mcp_servers,
     }
     extra = {
+        # WHO runs it. A method whose route is `coder` or `research` names no
+        # MCP tool at all, and without this its card could answer "by what
+        # means" with nothing — while the plan had in fact assigned it to a
+        # named agent all along.
+        "assignee": _route_agent(task.get("route")),
         "name": _clean(task.get("name"), 200),
         "cost": f"≈{duration} min" if isinstance(duration, int) and duration > 0 else "",
         "limitations": "; ".join(_clean(w, 200) for w in (task.get("warnings") or []) if w),
@@ -505,6 +519,10 @@ _RU_STATUS = {
     "success": "успех", "partial": "частично", "failure": "неудача",
     "failed": "не удался", "skipped": "пропущена", "done": "выполнена",
     "running": "выполняется", "planned": "запланирована",
+    # A method's own words, so a reason about a method does not borrow a
+    # task's — see NODE_TYPES["VerificationMethod"].
+    "proposed": "предложен", "used": "использован",
+    "not_used": "не использован",
 }
 
 
@@ -684,7 +702,7 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
     task are postponed; a postponed hypothesis a task now lists is revived to
     formulated. Re-approval / replan updates the existing VM (attrs merge)
     instead of creating a duplicate; VMs whose tasks disappeared from the plan
-    are marked ``failed`` (reason=replanned) when still non-terminal.
+    are marked ``not_used`` (reason=replanned) while they are still only offered.
     """
     try:
         if not _enabled() or store is None:
@@ -774,14 +792,15 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
         if tool_ids:
             state[_TOOL_IDS_KEY] = tool_ids
 
-        # Tasks dropped by a replan: mark their still-live VMs as failed.
+        # Tasks dropped by a replan: the method they belonged to is one the
+        # study will not lean on after all.
         current = {str(t.get("id") or "") for t in tasks}
         stale = [
-            {"id": vm, "status": "failed",
+            {"id": vm, "status": "not_used",
              "reason": "перепланировано: задача убрана из плана"}
             for task_id, vm in vm_ids.items()
             if task_id not in current
-            and graph_nodes.get(vm, {}).get("status") in ("planned", "running")
+            and graph_nodes.get(vm, {}).get("status") == "proposed"
         ]
         if stale:
             store.commit(source=_SOURCE, status_updates=stale, enforce_permissions=False)
@@ -908,6 +927,102 @@ def _advance_task_card(store: Any, state: MutableMapping[str, Any],
         logger.warning("advancing the experiment task card failed: %s", exc)
 
 
+def _may_move(node_type: str, current: Any, want: str) -> bool:
+    """Whether the graph would accept this card moving there.
+
+    Asked before committing rather than after being refused: a commit is
+    all-or-nothing, and this one carries nothing else worth losing.
+    """
+    cur = str(current or "").strip()
+    if not cur or cur == want:
+        return False
+    try:
+        from CoScientist.graph.research import schema
+        allowed = schema.STATUS_TRANSITIONS.get(node_type) or ()
+    except Exception:  # noqa: BLE001
+        return True
+    return (cur, want) in {tuple(pair) for pair in allowed}
+
+
+def _begin_plan_step(store: Any, xt_id: str, task_id: str) -> None:
+    """Say that the outer plan step holding this task is under way.
+
+    Its own commit, under its own source: the step belongs to the outer plan,
+    and a refusal here must not cost the task card that has just moved.
+    """
+    steps = [e.get("to") for e in (_graph_full(store).get("edges") or [])
+             if isinstance(e, dict) and e.get("type") == "elaborates"
+             and e.get("from") == xt_id]
+    if not steps:
+        return
+    nodes = _graph_nodes(store)
+    # ONLY from a step nobody has started. Three moves this deliberately does
+    # not make: `done → in_progress`, because a finished step is the outer
+    # plan's own record and re-opening it because one late task started would
+    # have the module overwrite a verdict it does not own; `blocked →
+    # in_progress`, because a step is blocked by something that knows why — a
+    # replan retired it, or a work report was rejected — and quietly releasing
+    # it here left it in_progress permanently, since the retirement sweep only
+    # ever looks at steps that are still `todo`; and any move at all on a step
+    # already in_progress, which would be pure history churn.
+    updates = [{"id": sid, "status": "in_progress",
+                "reason": f"задача {task_id} выполняется"}
+               for sid in steps
+               if (nodes.get(sid) or {}).get("type") == "PlanStep"
+               and (nodes.get(sid) or {}).get("status") == "todo"]
+    if updates:
+        store.commit(source=_PLAN_SOURCE, status_updates=updates)
+
+
+def publish_task_state_to_graph(store: Any, state: MutableMapping[str, Any],
+                                task_id: str) -> None:
+    """Move this task's card — and the step above it — to where the runtime is.
+
+    The graph used to learn about a task at exactly two moments: when the plan
+    was approved, and when the result was recorded. ``start_task`` wrote
+    nothing, and ``start_task`` is the only producer of the runtime's
+    ``running`` — so a card read «запланирован» for the whole of a run that
+    took minutes and then jumped straight to «выполнен». A reader asking which
+    stage is going on right now could not be told, because nothing was writing
+    it down. Called from every control tool that moves a task, and it reads the
+    runtime's own status rather than being told one, so a route that changes
+    the status in a way nobody anticipated still reaches the card.
+
+    Best-effort by this module's contract: never raises.
+    """
+    try:
+        if not _enabled() or store is None:
+            return
+        xt_id = _xt_ids(state).get(str(task_id))
+        if not xt_id:
+            return
+        want = _task_status(state, task_id)
+        current = _graph_nodes(store).get(xt_id) or {}
+        if current.get("type") != "ExperimentTask":
+            return
+        if not _may_move("ExperimentTask", current.get("status"), want):
+            return
+        result = store.commit(
+            source=_PLAN_SOURCE,
+            status_updates=[{"id": xt_id, "status": want,
+                             "reason": f"задача {task_id}: {_ru_status(want)}"}],
+        )
+        ok = bool(getattr(result, "ok", None) if not isinstance(result, dict)
+                  else result.get("ok"))
+        if not ok:
+            errors = (result.get("errors") if isinstance(result, dict)
+                      else getattr(result, "errors", None))
+            audit(logger, f"EXPERIMENT_GRAPH_TASK_STATE_REFUSED task_id={task_id} "
+                          f"status={want} errors={errors}", level=logging.WARNING)
+            return
+        if want == "running":
+            _begin_plan_step(store, xt_id, task_id)
+        audit(logger, f"EXPERIMENT_GRAPH_TASK_STATE task_id={task_id} "
+                      f"node={xt_id} status={want}")
+    except Exception as exc:  # noqa: BLE001 — never break the run
+        logger.warning("mirroring the experiment task state failed: %s", exc)
+
+
 def publish_result_to_graph(
     store: Any,
     state: MutableMapping[str, Any],
@@ -920,29 +1035,34 @@ def publish_result_to_graph(
     and ``Evidence —relates_to→`` every hypothesis the task covers (so the
     store moves those Hs to ``under_verification`` and the background
     validator can judge). File artifacts → ``GeneratedData —derived_from→ E``;
-    the task's VM status is advanced ``planned→running→done`` (or ``failed``).
-    Skips silently when no VM was published for this task.
+    the task's method is marked ``used`` — or ``not_used``, when the run
+    settled nothing. The task's own card is advanced either way, even when no
+    method was published for it.
     """
     try:
         if not _enabled() or store is None or not isinstance(task_result, dict):
             return
+        status = str(task_result.get("status") or "")
+        task_final = "done" if status in ("success", "partial") else "failed"
+        # FIRST, and not conditional on the method. The two records are
+        # independent — a run whose method never made it into the graph still
+        # finished — and since `start_task` began drawing the card as running,
+        # a task left un-advanced is no longer merely out of date: it is a card
+        # pulsing «выполняется» on a canvas for the rest of the session.
+        _advance_task_card(store, state, task_id, task_final, status, task_result)
         vm_id = _vm_ids(state).get(str(task_id))
         if not vm_id:
             return
         graph_nodes = _graph_nodes(store)
         if graph_nodes.get(vm_id, {}).get("type") != "VerificationMethod":
             return
-        status = str(task_result.get("status") or "")
-        final = "done" if status in ("success", "partial") else "failed"
-        # VM transitions are planned→running→done/failed; the intermediate hop
-        # needs its own commit so the second update validates against `running`.
-        if graph_nodes[vm_id].get("status") == "planned" and final == "done":
-            store.commit(
-                source=_SOURCE,
-                status_updates=[{"id": vm_id, "status": "running",
-                                 "reason": f"задача {task_id} запущена"}],
-                enforce_permissions=False,
-            )
+        # Two vocabularies, deliberately not one. A method is the MEANS, so the
+        # run says only whether the study leaned on it; the TASK is the work,
+        # and it finished or it did not. The `planned→running→done` pair of
+        # commits the method used to need is gone with the vocabulary that
+        # forced it: there is no state in between offering a method and using
+        # it.
+        final = "used" if status in ("success", "partial") else "not_used"
 
         nodes: list[dict[str, Any]] = []
         edges: list[dict[str, Any]] = []
@@ -986,7 +1106,12 @@ def publish_result_to_graph(
                 edges.append({"type": "derived_from", "from": f"#{ref}", "to": "#e_0"})
         status_updates = []
         current_vm_status = _graph_nodes(store).get(vm_id, {}).get("status")
-        if current_vm_status in ("planned", "running") and current_vm_status != final:
+        # `not_used → used` is the one move back: a method the study had given
+        # up on can still be the one that settles the claim on a later attempt.
+        # There is no way out of `used`, so a method that has already produced
+        # evidence is left alone.
+        if (current_vm_status == "proposed"
+                or (current_vm_status == "not_used" and final == "used")):
             status_updates.append({
                 "id": vm_id, "status": final,
                 "reason": f"задача {task_id}: {_ru_status(status)}",
@@ -996,10 +1121,6 @@ def publish_result_to_graph(
             status_updates=status_updates, enforce_permissions=False,
         )
         ok = bool(getattr(result, "ok", None) if not isinstance(result, dict) else result.get("ok"))
-        # The detailed plan's own card moves with the run. Its own commit, under
-        # its own source, so the ACL governs it and a failure here cannot cost
-        # the evidence that has just been written.
-        _advance_task_card(store, state, task_id, final, status, task_result)
         if not ok:
             errors = (
                 result.get("errors") if isinstance(result, dict)

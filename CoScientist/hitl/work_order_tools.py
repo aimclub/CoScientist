@@ -102,8 +102,45 @@ def _claim_plan_step(state: Any, agent: str, order: Any) -> None:
             order.plan_task_id = task_id
         set_task_status(state, task_id, "IN_PROGRESS",
                         notes="work order approved", agent=agent)
+        _show_the_step_started(state)
     except Exception as exc:  # noqa: BLE001
         logger.warning("claiming a plan step for %s failed: %s", agent, exc)
+
+
+def _show_the_step_started(state: Any) -> None:
+    """…and say so on the graph, now, rather than at the next orchestrator tick.
+
+    This is the moment a step actually begins, and it was the moment nothing
+    recorded. The plan mirror runs only on the orchestrator's own hooks, while
+    the tracker goes IN_PROGRESS → DONE inside a single sub-agent turn — so by
+    the time the mirror looked, the step had already finished and the graph
+    drew it «не начат» and then «выполнен», with nothing in between. That is
+    the whole of the operator's complaint that the graph never says which stage
+    is running, for every step that is not an experiment.
+
+    Best-effort, like everything else on this path: a bookkeeping failure must
+    not undo an order the human has already approved.
+    """
+    try:
+        from types import SimpleNamespace
+
+        from CoScientist.agents.callbacks.tool_callbacks import (
+            sync_plan_to_research_graph,
+        )
+        from CoScientist.graph.research.store import get_research_graph
+
+        tasks = state.get("_master_active_tasks") or []
+        if not tasks:
+            return
+        # The scope lives in the state itself, and `session_key` reads it off
+        # `context.state` — so a bare holder for it is the whole context this
+        # needs, and it resolves to the same store the agents commit to.
+        sync_plan_to_research_graph(
+            tasks, get_research_graph(SimpleNamespace(state=state)), state,
+            str(state.get("user_query", "")),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("mirroring the claimed plan step failed: %s", exc)
 
 
 def _close_plan_step(state: Any, agent: str, order: Any, status: str,
