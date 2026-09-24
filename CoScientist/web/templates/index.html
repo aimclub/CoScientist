@@ -424,6 +424,36 @@
   </div>
 
   <!-- Dataset Link Modal — attaches a .zip archive to the session context -->
+  <div id="artifacts-modal"
+    class="hidden fixed inset-0 z-[120] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+    <div class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-2xl shadow-2xl p-6 mx-4">
+      <div class="flex items-start justify-between mb-4">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+            <span class="material-symbols-outlined text-primary text-sm">inventory_2</span>
+          </div>
+          <div>
+            <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider">Артефакты песочницы</h3>
+            <p class="text-[10px] text-outline-variant mt-1">Что прогон оставил после себя. «Забрать» копирует файл в
+              хранилище и даёт ссылку, которая не протухает — её можно вставить в отчёт или открыть позже.</p>
+          </div>
+        </div>
+        <button onclick="closeArtifactsModal()" class="text-outline-variant hover:text-on-surface transition-colors">
+          <span class="material-symbols-outlined text-lg">close</span>
+        </button>
+      </div>
+      <div class="flex items-center gap-2 mb-2">
+        <span class="material-symbols-outlined text-sm text-outline-variant">folder_open</span>
+        <code id="artifacts-path" class="text-[11px] text-on-surface/80">/workspace</code>
+        <button onclick="loadArtifacts(artifactsPath)"
+          class="ml-auto text-[11px] text-primary hover:underline">обновить</button>
+      </div>
+      <div id="artifacts-body"
+        class="border border-outline-variant/20 rounded-lg divide-y divide-outline-variant/10 max-h-[52vh] overflow-y-auto"></div>
+      <div id="artifacts-note" class="hidden text-[11px] mt-3 text-outline-variant"></div>
+    </div>
+  </div>
+
   <div id="dataset-modal"
     class="hidden fixed inset-0 z-[120] flex items-center justify-center bg-black/70 backdrop-blur-sm">
     <div class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-lg shadow-2xl p-6 mx-4">
@@ -815,6 +845,7 @@
   <script src="/static/js/sessions.js"></script>
   <script src="/static/js/modals/settings.js"></script>
   <script src="/static/js/modals/dataset.js"></script>
+  <script src="/static/js/modals/artifacts.js"></script>
   <script src="/static/js/modals/roadmap.js"></script>
   <script src="/static/js/plan_tracker.js"></script>
   <script src="/static/js/modals/experiments.js"></script>

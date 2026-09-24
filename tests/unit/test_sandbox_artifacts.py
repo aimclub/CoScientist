@@ -111,3 +111,40 @@ def test_the_agents_are_given_the_tool_and_it_is_documented():
     # And actually attached, not merely described.
     attached = {getattr(t, "__name__", "") for t in get_sandbox_tools()}
     assert not attached or "fetch_sandbox_artifact" in attached
+
+
+def test_the_panel_is_wired_into_the_page():
+    """A person watching a run could not look inside the sandbox at all.
+
+    The panel is only useful if the page actually carries it: the markup, the
+    module that drives it, and a way in from the rail.
+    """
+    from starlette.testclient import TestClient
+
+    from CoScientist.web.app import create_app
+
+    with TestClient(create_app()) as client:
+        page = client.get("/").text
+        module = client.get("/static/js/modals/artifacts.js")
+        rail = client.get("/static/js/activity_rail.js").text
+
+    assert 'id="artifacts-modal"' in page
+    assert "modals/artifacts.js" in page, "the module must be loaded, not just present"
+    assert module.status_code == 200
+    assert "SandboxArtifacts" in rail, "and reachable from the rail"
+    # It talks to the endpoints that exist, not to invented ones. The URL is
+    # assembled from a session-scoped base, so check the parts.
+    assert "/sandbox" in module.text
+    assert "/files?path=" in module.text and "/fetch" in module.text
+
+
+def test_the_panel_asks_for_the_open_session_not_a_global_sandbox():
+    """A sandbox belongs to one session; listing another's would be a lie."""
+    from starlette.testclient import TestClient
+
+    from CoScientist.web.app import create_app
+
+    with TestClient(create_app()) as client:
+        module = client.get("/static/js/modals/artifacts.js").text
+
+    assert "activeSession" in module and "activeUser" in module

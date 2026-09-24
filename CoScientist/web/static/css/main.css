@@ -601,3 +601,17 @@
     html:not(.show-internal) .wo-internal {
       display: none !important;
     }
+
+/* Sandbox artifacts panel: a folder listing, not a table — the interesting
+   column is the name, and the row is a click target for a directory. */
+.art-row { display: flex; align-items: center; gap: 10px; padding: 7px 11px; font-size: 12px; }
+.art-row[onclick] { cursor: pointer; }
+.art-row:hover { background: rgba(255, 255, 255, .04); }
+.art-name { overflow-wrap: anywhere; }
+.art-size { margin-left: auto; color: #8b93a1; font-size: 11px; white-space: nowrap; }
+.art-get, .art-open { font-size: 11px; white-space: nowrap; }
+.art-get { color: #38bdf8; background: none; border: none; cursor: pointer; }
+.art-get:hover { text-decoration: underline; }
+.art-get:disabled { color: #6b7280; cursor: default; }
+.art-open { color: #22c55e; text-decoration: none; }
+.art-open:hover { text-decoration: underline; }
