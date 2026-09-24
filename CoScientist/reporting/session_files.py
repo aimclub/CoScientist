@@ -502,6 +502,40 @@ def artifact_id_for_url(key: SessionKey, url: str) -> Optional[str]:
     return _by_source_url(str(path), stamp).get(text)
 
 
+def retag(key: SessionKey, artifact_id: str, *, source_kind: str,
+          label: str = "") -> Optional[Dict[str, Any]]:
+    """Re-file an artifact this session already holds. Never raises.
+
+    The bytes are fetched once, by whoever got there first, and what a file IS
+    can be learned afterwards. A paper found through a web search arrives as an
+    ordinary mirrored URL; only once a citation is matched to it does anyone
+    know it is a paper — and being a paper decides whether it is offered as a
+    deliverable in the report or kept as the source it is.
+
+    Re-filing beats mirroring again: the store is content-addressed, so a second
+    fetch would produce the same id and the same bytes at the cost of another
+    download from someone else's server.
+    """
+    aid = str(artifact_id or "").strip()
+    if not aid:
+        return None
+    try:
+        path = manifest_path(key)
+        records = _read_manifest(path)
+        record = records.get(aid)
+        if not record or record.get("source_kind") == source_kind:
+            return record
+        updated = {**record, "source_kind": source_kind}
+        if label:
+            updated["label"] = label
+        records[aid] = updated
+        _write_manifest(path, records)
+        return updated
+    except Exception as exc:  # noqa: BLE001 — capture must never break a call
+        logger.warning("artifact store: cannot re-file %s (%s)", aid, exc)
+        return None
+
+
 @lru_cache(maxsize=32)
 def _by_source_url(path: str, _mtime_ns: int) -> Dict[str, str]:
     """``{source_url: artifact_id}`` for the stored records of one manifest."""
@@ -540,6 +574,6 @@ __all__ = [
     "store_dir", "files_dir", "manifest_path",
     "ref", "parse_ref", "find_refs", "make_artifact_id",
     "load_manifest", "record_entries", "note", "put_bytes",
-    "resolve_path", "has_artifact", "artifact_id_for_url",
+    "resolve_path", "has_artifact", "artifact_id_for_url", "retag",
     "stored_bytes", "stored_count",
 ]

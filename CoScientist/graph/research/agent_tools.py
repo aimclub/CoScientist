@@ -178,27 +178,38 @@ def _attach_paper(attrs: Dict[str, Any], tool_context: Any) -> None:
     """Give an Evidence citing a DOI the copy of the paper the session holds.
 
     The agent writes the citation it read — `source_ref: 10.1021/…` — and has no
-    way of knowing that `capture_paper_downloads` already fetched that paper.
+    way of knowing that `PaperCapturePlugin` already fetched that paper.
     Joining them here is what turns a DOI in the panel from a string into a file
     with a download beside it.
 
-    Matched on the normalized DOI and never on the title: two papers share a
-    title far more often than they share a DOI. Nothing the agent wrote is
-    overwritten — an attribute already present is its claim, not ours.
+    Matched on identifiers and never on the title: two papers share a title far
+    more often than they share a DOI. The WHOLE citation is read, not one field
+    — an agent writes `source_ref` as a semicolon-separated list in which the
+    only handle we hold may be a PMC id in third place. Nothing the agent wrote
+    is overwritten: an attribute already present is its claim, not ours.
     """
     if attrs.get("session_artifact_id"):
         return
     try:
         from CoScientist.reporting import paper_library as pl
 
-        cited = attrs.get("doi") or attrs.get("source_ref")
+        cited = " ".join(str(attrs.get(k) or "")
+                         for k in ("doi", "pmcid", "source_ref"))
         paper = pl.find(getattr(tool_context, "state", None), cited)
         if not paper or not paper.get("session_artifact_id"):
             return
         attrs["session_artifact_id"] = paper["session_artifact_id"]
-        for key, value in (("doi", paper.get("doi_raw") or paper.get("doi")),
-                           ("paper_title", paper.get("title")),
-                           ("paper_year", paper.get("year"))):
+        # The record's keys are already `kind:value`; re-parsing them as prose
+        # would not match, because `pmc:12610272` is not how a PMC id is written.
+        held = dict(k.split(":", 1) for k in (paper.get("refs") or []) if ":" in k)
+        stamps = {
+            "doi": paper.get("doi_raw") or paper.get("doi") or (
+                held.get("doi") or ""),
+            "pmcid": f"PMC{held['pmc']}" if held.get("pmc") else "",
+            "paper_title": paper.get("title"),
+            "paper_year": paper.get("year"),
+        }
+        for key, value in stamps.items():
             if value and not attrs.get(key):
                 attrs[key] = value
     except Exception:  # noqa: BLE001 — a missing paper must not refuse a commit

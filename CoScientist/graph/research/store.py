@@ -776,8 +776,12 @@ def _href(kind: str, attrs: Dict[str, Any], scope: Optional[Tuple[str, str]] = N
     """
     from CoScientist.utils.report_links import resolve_ref
 
+    # `doi` and `pmcid` sit before `source_ref`: they are the resolved citation
+    # the graph wrote, and `source_ref` is the prose the agent wrote — which may
+    # name three sources and open none of them.
     keys = ("session_artifact_id", "location", "path", "uri") if kind == "Tool" else (
-        "session_artifact_id", "path", "uri", "source_ref", "location")
+        "session_artifact_id", "path", "uri", "doi", "pmcid", "source_ref",
+        "location")
     for key in keys:
         value = attrs.get(key)
         if not isinstance(value, str) or not value.strip():

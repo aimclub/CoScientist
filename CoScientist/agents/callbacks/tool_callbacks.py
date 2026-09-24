@@ -945,98 +945,6 @@ def print_research_agent_tool_call(
     except Exception as e:
         logger.error("Failed to persist downloaded paper S3 keys: %s", e)
 
-#: The two tools that can tell us about a paper. `search_papers` only describes
-#: one; `download_papers_from_search` has already fetched it to S3.
-_PAPER_TOOLS = ("search_papers", "download_papers_from_search")
-
-
-def _mirror_papers(papers: List[Dict[str, Any]], scope: Any,
-                   agent: str) -> List[Dict[str, Any]]:
-    """Fetch each paper into the session store. One thread hop for the batch.
-
-    The presigned link is preferred over the publisher's: it points at the copy
-    the papers server already made, so it is the one that reliably answers.
-    """
-    from CoScientist.reporting import paper_library as pl
-    from CoScientist.reporting.mirror import mirror_artifact
-
-    out: List[Dict[str, Any]] = []
-    for paper in papers:
-        try:
-            out.append(mirror_artifact(
-                None, user_id=scope[0], session_id=scope[1],
-                url=(paper.get("presigned_url") or paper.get("pdf_url") or None),
-                bucket=paper.get("bucket"), s3_key=paper.get("s3_key"),
-                filename=pl.filename_for(paper),
-                label=str(paper.get("title") or "")[:120],
-                tool=str(paper.get("tool") or ""),
-                source_kind=pl.SOURCE_KIND, agent=agent,
-                # Stays in the session folder and nowhere else. A paper is
-                # someone else's work under someone else's licence, and the
-                # off-host copy would outlive the run that justified fetching it.
-                mirror_off_host=False,
-            ))
-        except Exception as exc:  # noqa: BLE001 — one bad paper is not the batch
-            logger.warning("capture_paper_downloads: %s failed (%s)",
-                           paper.get("doi") or paper.get("title"), exc)
-            out.append({"state": "failed", "reason": str(exc)[:200]})
-    return out
-
-
-async def capture_paper_downloads(
-    tool: BaseTool,
-    args: Dict[str, Any],
-    tool_context: ToolContext,
-    tool_response: Any,
-) -> None:
-    """after_tool: keep the citation, and bring the paper itself home.
-
-    `search_papers` returns a title, a DOI, a year and an address for the PDF,
-    and downloads nothing; `download_papers_from_search` puts the file in S3
-    under a prefix the bucket expires on its own. Either way the run was left
-    holding a bare string: `print_research_agent_tool_call` kept the S3 key and
-    threw the rest away, so an Evidence citing a paper showed a DOI with no way
-    to open it, and the bibliography had no metadata to be built from.
-
-    Both halves are fixed here. The citation goes to `paper_library`; the bytes
-    go to the session's own store, where they are addressed by content, served
-    inline, and carried by a session export.
-    """
-    name = getattr(tool, "name", None) or ""
-    if name not in _PAPER_TOOLS:
-        return
-    try:
-        import asyncio
-
-        from CoScientist.graph.session_scope import session_key
-        from CoScientist.reporting import paper_library as pl
-
-        records = pl.records_from_tool(name, tool_response)
-        if not records:
-            return
-        agent = getattr(tool_context, "agent_name", None) or "ResearchAgent"
-        wanted = pl.merge(tool_context.state, records, agent=agent)
-        if not wanted:
-            # Everything this call named is already in the library with a file.
-            return
-        capped = wanted[:pl.MAX_PER_CALL]
-        # Resolved on the loop — `session_key` writes the resolved pair back
-        # into ADK state, and the downloads run in a worker thread.
-        scope = session_key(tool_context)
-        mirrored = await asyncio.to_thread(_mirror_papers, capped, scope, agent)
-        for paper, outcome in zip(capped, mirrored):
-            pl.note_stored(tool_context.state, paper, outcome)
-        stored = sum(1 for m in mirrored if m.get("state") == "stored")
-        logger.info(
-            "capture_paper_downloads: %s → %d paper(s) known, %d fetched, %d stored%s",
-            name, len(pl.library(tool_context.state)), len(capped), stored,
-            f" ({len(wanted) - len(capped)} over the per-call cap)"
-            if len(wanted) > len(capped) else "",
-        )
-    except Exception as e:  # noqa: BLE001 — capture must never break a tool call
-        logger.error("capture_paper_downloads failed: %s", e)
-
-
 async def capture_mcp_artifacts(
     tool: BaseTool,
     args: Dict[str, Any],
@@ -1089,6 +997,12 @@ async def capture_mcp_artifacts(
             m["source_url"]: m for m in mirrored
             if isinstance(m, dict) and m.get("source_url")
         }
+        # The same filter as the durable index: this list is read by the
+        # report collector through its `*_artifacts` state sweep, so an icon
+        # left here reaches the reader by a second door.
+        from CoScientist.reporting.collect import _is_page_chrome
+
+        urls = [u for u in urls if not _is_page_chrome(u)]
         existing = list(tool_context.state.get("mcp_artifacts") or [])
         seen = {a.get("url") for a in existing if isinstance(a, dict)}
         entries = []
@@ -1112,6 +1026,15 @@ async def capture_mcp_artifacts(
         tool_context.state["mcp_artifacts"] = existing
         # The half this callback never did. State lives in an in-memory session
         # service; the file on disk is what survives a restart.
+        # Page furniture never enters the durable index. Written once, it is
+        # read by the report collector for the rest of the session — and there
+        # it carries no `source_kind`, so nothing downstream can tell an icon
+        # from a figure. 70 of the 219 rows recorded across real sessions are a
+        # publisher's letterhead.
+        from CoScientist.reporting.collect import _is_page_chrome
+
+        entries = [e for e in entries
+                   if not _is_page_chrome(str(e.get("url") or ""))]
         record(entries, tool_context)
         logger.info(
             "capture_mcp_artifacts: %s → +%d artifact URL(s), %d mirrored (%d total)",

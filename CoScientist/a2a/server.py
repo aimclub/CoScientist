@@ -126,6 +126,7 @@ def make_a2a_app(
     from CoScientist.logging.metrics import UsageMetricsPlugin
     from CoScientist.graph.emitter import GraphEmitterPlugin
     from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
+    from CoScientist.tools.paper_capture_plugin import PaperCapturePlugin
     from CoScientist.verify.gate_plugin import ArtifactGatePlugin
 
     runner = Runner(
@@ -135,13 +136,16 @@ def make_a2a_app(
         artifact_service=InMemoryArtifactService(),
         # ArtifactGatePlugin first: refuse training on a fabricated dataset here
         # too, so an agent served over A2A is held to the same standard as the
-        # in-process runner. Truncation MUST stay last (ADK early-exits on the
-        # first non-None after_tool).
+        # in-process runner. Truncation used to have to stay last, because ADK
+        # early-exits on the first non-None after_tool and it answered with the
+        # cut result — which silently skipped every agent's own after_tool
+        # chain. It answers None now and cuts at before_model instead.
         plugins=[
             ArtifactGatePlugin(),
             EventLoggerPlugin(),
             UsageMetricsPlugin(),
             GraphEmitterPlugin(),
+            PaperCapturePlugin(),
             ToolResultTruncationPlugin(),
         ],
     )

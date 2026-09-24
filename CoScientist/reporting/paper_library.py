@@ -14,11 +14,13 @@ research graph (an Evidence citing a DOI is given the stored copy), and the
 bibliography — ``finalize._extract_references`` has carried a TODO asking for
 exactly this list.
 
-Records are matched on the **normalized** DOI. Two sources spell the same DOI
-three ways (`10.1021/X`, `doi:10.1021/X`, `https://doi.org/10.1021/x`) and a DOI
-is case-insensitive by specification, so matching the raw string silently
-misses. The raw spelling is kept beside it, because that is what the agent
-wrote and what the reader will search for.
+Records are matched on every identifier a citation names, not on one — see
+`references.parse_references`. A paper is one work under several names, and a
+run meets it by a DOI in one turn and by a PMC id in the next; keying on the
+first alone produced a second record and orphaned the file attached to the
+first. On disk, eleven of twenty-five real citations carry a PMC id and fourteen
+carry no DOI at all, which is why not one literature Evidence in any recorded
+run was ever matched to a stored paper.
 """
 from __future__ import annotations
 
@@ -26,6 +28,8 @@ import logging
 import re
 import time
 from typing import Any, Dict, List, Optional
+
+from CoScientist.reporting import references as _refs
 
 from CoScientist.reporting import session_files as sf
 
@@ -44,35 +48,12 @@ SOURCE_KIND = "paper"
 #: are a backstop, not a pace.
 MAX_PER_CALL = 8
 
-_DOI_PREFIXES = (
-    "https://doi.org/", "http://doi.org/",
-    "https://dx.doi.org/", "http://dx.doi.org/",
-    "doi:", "doi ",
-)
-_DOI_RE = re.compile(r"(10\.\d{4,9}/\S+)", re.IGNORECASE)
 _SLUG_SPLIT = re.compile(r"[^0-9A-Za-z]+")
-_TRAILING = ".,;:)]}>'\"" + "«»"
 
-
-def normalize_doi(value: Any) -> str:
-    """A DOI reduced to the one spelling everything else matches on.
-
-    Lowercased because the specification says a DOI is case-insensitive, and
-    OpenAlex, Crossref and an agent's own prose disagree about case often
-    enough that matching without this loses real hits.
-    """
-    text = str(value or "").strip()
-    if not text:
-        return ""
-    lowered = text.lower()
-    for prefix in _DOI_PREFIXES:
-        if lowered.startswith(prefix):
-            text = text[len(prefix):]
-            break
-    match = _DOI_RE.search(text)
-    if not match:
-        return ""
-    return match.group(1).rstrip(_TRAILING).lower()
+#: Kept as a name of its own: callers and tests use it, and it is exactly
+#: `references.normalize_doi`. The wider vocabulary lives there, because a
+#: citation names works of several kinds and this module only holds records.
+normalize_doi = _refs.normalize_doi
 
 
 def filename_for(record: Dict[str, Any]) -> str:
@@ -90,17 +71,31 @@ def filename_for(record: Dict[str, Any]) -> str:
     return "paper.pdf"
 
 
-def _key(record: Dict[str, Any]) -> str:
-    """What makes two records the same paper.
+def _keys(record: Dict[str, Any]) -> List[str]:
+    """Every handle that identifies this paper.
 
-    The DOI when there is one. Failing that the address the bytes came from —
-    two results without a DOI and without a common address are, as far as
-    anything here can tell, two papers.
+    A paper is one work under several names — a DOI and a PMC id are the same
+    article, and a run meets it now by one and later by the other. Matching on a
+    single key meant the second meeting created a second record, and the file
+    attached to the first was never found again.
+
+    The address is a fallback, not an identifier: two results with no identifier
+    and no common address are, as far as anything here can tell, two papers.
     """
-    return (record.get("doi")
-            or str(record.get("s3_key") or "")
-            or str(record.get("pdf_url") or "")
-            or str(record.get("title") or "").strip().lower())
+    keys = list(record.get("refs") or [])
+    if not keys:
+        for value in (record.get("s3_key"), record.get("pdf_url"),
+                      str(record.get("title") or "").strip().lower()):
+            if value:
+                keys.append(str(value))
+                break
+    return keys
+
+
+def _key(record: Dict[str, Any]) -> str:
+    """The first handle, for logs and for the rare caller that wants just one."""
+    keys = _keys(record)
+    return keys[0] if keys else ""
 
 
 def _clean(value: Any, limit: int = 300) -> str:
@@ -128,6 +123,11 @@ def records_from_tool(tool_name: str, tool_response: Any) -> List[Dict[str, Any]
         raw_doi = item.get("doi") or ""
         record = {
             "doi": normalize_doi(raw_doi),
+            # Every handle this result gives us, from wherever it appears: the
+            # doi field, the title, the address. A PMC id hides in the URL far
+            # more often than in a field of its own.
+            "refs": _refs.keys_of(" ".join(str(item.get(k) or "") for k in (
+                "doi", "title", "paper_title", "pdf_url", "url", "id"))),
             "doi_raw": _clean(raw_doi, 200),
             "title": _clean(item.get("paper_title") or item.get("title"), 300),
             "year": item.get("publication_year") or None,
@@ -171,27 +171,36 @@ def merge(state: Any, records: List[Dict[str, Any]], *,
     citation IS returned once an address for it turns up.
     """
     existing = library(state)
-    by_key = {_key(p): p for p in existing if _key(p)}
+    by_key: Dict[str, Dict[str, Any]] = {}
+    for paper in existing:
+        for key in _keys(paper):
+            by_key.setdefault(key, paper)
     fetch: List[Dict[str, Any]] = []
     for record in records:
-        key = _key(record)
-        if not key:
+        keys = _keys(record)
+        if not keys:
             continue
-        known = by_key.get(key)
+        known = next((by_key[k] for k in keys if k in by_key), None)
         if known is None:
             record = dict(record, agent=agent, at=time.time(),
                           session_artifact_id="", artifact_state="")
             existing.append(record)
-            by_key[key] = record
             known = record
         else:
             # Learn the address without forgetting what we already knew: the
             # search tool knows the title and the year, the download tool knows
             # where the bytes are, and they arrive in either order.
             for field in ("doi", "doi_raw", "title", "year", "is_oa",
-                          "pdf_url", "presigned_url", "bucket", "s3_key"):
+                          "pdf_url", "presigned_url", "oa_url", "bucket", "s3_key"):
                 if not known.get(field) and record.get(field):
                     known[field] = record[field]
+            # A later meeting can name the work by a handle the first did not.
+            merged = list(known.get("refs") or [])
+            merged += [k for k in (record.get("refs") or []) if k not in merged]
+            if merged:
+                known["refs"] = merged
+        for key in _keys(known):
+            by_key.setdefault(key, known)
         if known.get("session_artifact_id"):
             continue
         if (known.get("presigned_url") or known.get("pdf_url")
@@ -207,10 +216,10 @@ def merge(state: Any, records: List[Dict[str, Any]], *,
 def note_stored(state: Any, record: Dict[str, Any],
                 mirror_record: Dict[str, Any]) -> None:
     """Record where a paper's bytes ended up (or why they did not)."""
-    key = _key(record)
+    keys = set(_keys(record))
     state_word = str(mirror_record.get("state") or "")
     for paper in library(state):
-        if _key(paper) != key:
+        if not keys.intersection(_keys(paper)):
             continue
         paper["artifact_state"] = state_word
         # Only a STORED record names a file. `session_files.note` mints an id
@@ -226,13 +235,18 @@ def note_stored(state: Any, record: Dict[str, Any],
         break
 
 
-def find(state: Any, doi: Any) -> Optional[Dict[str, Any]]:
-    """The recorded paper a DOI refers to, in whatever spelling it was written."""
-    wanted = normalize_doi(doi)
+def find(state: Any, citation: Any) -> Optional[Dict[str, Any]]:
+    """The recorded paper a citation names, by any identifier in it.
+
+    Takes the whole `source_ref` string, because that is what an agent writes:
+    a semicolon-separated list in which the DOI may be third and the only handle
+    we hold may be a PMC id.
+    """
+    wanted = set(_refs.keys_of(citation))
     if not wanted:
         return None
     for paper in library(state):
-        if paper.get("doi") == wanted:
+        if wanted.intersection(_keys(paper)):
             return paper
     return None
 

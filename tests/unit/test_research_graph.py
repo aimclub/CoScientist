@@ -75,15 +75,32 @@ def test_permission_agents_exist_in_system(request):
     the write source is the code), and 'report-writer', which records the final
     write-up — the aggregator that produced the text holds the read-only
     research surface, and `finalize_report` has the markdown already, so there
-    is nothing a model would add by being allowed to write it."""
+    is nothing a model would add by being allowed to write it. Last,
+    'paper-linker': the code that turns a DOI or PMC id an agent cited into the
+    file the session holds, and stamps the resolved citation back onto the
+    Evidence that carried it — a lookup, not a judgement."""
     from CoScientist.assembly.schema import get_config
     agents = set(get_config().agents)
     virtual = {"human", "ValidatorAgent", "plan-mirror",
-               "experiment-plan-mirror", "ExperimentModule", "report-writer"}
+               "experiment-plan-mirror", "ExperimentModule", "report-writer",
+               "paper-linker", "node-report"}
     for name in schema.AGENT_PERMISSIONS:
         if name in virtual:
             continue
         assert name in agents, f"AGENT_PERMISSIONS has unknown agent {name!r}"
+
+
+def test_every_granted_field_names_a_real_type():
+    """`update_fields` is how a non-owner writes one attribute on a node.
+
+    Two sources now depend on it and nothing validated it, so a typo in a type
+    name would have granted a right that silently never applies.
+    """
+    for source, perm in schema.AGENT_PERMISSIONS.items():
+        for node_type, attribute in perm.update_fields:
+            assert node_type in schema.NODE_TYPES, (
+                f"{source} is granted {attribute!r} on unknown type {node_type!r}")
+            assert attribute, f"{source} is granted an empty attribute name"
 
 
 # ── init + happy-path commit ────────────────────────────────────────────────────
