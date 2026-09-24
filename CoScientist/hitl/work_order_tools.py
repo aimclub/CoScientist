@@ -434,7 +434,10 @@ class WorkOrderToolset:
                     "amendments": list(order.amendments),
                     "deviations": list(order.deviations),
                 },
-                "output": render_work_report(order, lang),
+                # The session is what turns an artifact reference into a
+                # link; the renderer cannot ask for it on its own.
+                "output": render_work_report(
+                    order, lang, scope=session_key(tool_context)),
                 "_session": session_context(tool_context),
             },
             invoked_via="tool",
