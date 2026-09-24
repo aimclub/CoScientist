@@ -167,6 +167,27 @@ def test_revise_asks_for_a_new_declaration_and_records_nothing(hitl_on):
     assert load_order(ctx.state, AGENT) is None
 
 
+def test_a_rejected_assumption_reaches_the_agent_when_notes_send_it_back(hitl_on):
+    """Unticking an assumption and saying why is ONE act, not two.
+
+    The card's single approval button becomes "revise" the moment a note is
+    typed, and the untick used to be attached only to the approve action — so
+    the ordinary move of refusing a premise and explaining it sent the agent
+    back to the drawing board without telling it which premise had been refused.
+    """
+    handler = _Handler(HITLResponse(
+        action=HITLAction.EDIT, approved=False,
+        instructions="This assumption does not hold for mouse data",
+        form_values={"rejected_assumption_ids": ["A2"]},
+    ))
+    ctx = _context()
+    result = _declare(WorkOrderToolset(AGENT, TOOLS, handler), ctx)
+
+    assert result["status"] == "revise"
+    assert result["rejected_assumptions"] == ["Only human BTK (CHEMBL5251)"]
+    assert "REJECTED" in result["message"]
+
+
 def test_reject_records_a_rejected_order_that_cannot_be_redeclared(hitl_on):
     handler = _Handler(HITLResponse(action=HITLAction.REJECT, approved=False,
                                     instructions="Not needed"))

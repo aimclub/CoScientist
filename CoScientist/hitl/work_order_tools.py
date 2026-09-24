@@ -85,6 +85,28 @@ def session_context(tool_context: Any) -> Dict[str, str]:
     return {"user_id": user_id, "session_id": session_id}
 
 
+def _marked(response: Any, field: str) -> set:
+    """The ids the operator ticked, whatever action they ticked them with.
+
+    One reader for both fields and every path. They used to be read only on the
+    one action each was thought to belong to, so a mark made alongside anything
+    else was discarded without a word.
+    """
+    if response is None or not isinstance(getattr(response, "form_values", None), dict):
+        return set()
+    return {str(i) for i in (response.form_values.get(field) or [])}
+
+
+def _rejected_ids(response: Any) -> set:
+    """Assumptions the operator refused to accept."""
+    return _marked(response, "rejected_assumption_ids")
+
+
+def _disputed_ids(response: Any) -> set:
+    """Findings the operator marked as wrong."""
+    return _marked(response, "disputed_finding_ids")
+
+
 def _claim_plan_step(state: Any, agent: str, order: Any) -> None:
     """An approved order takes the agent's current plan step to in_progress.
 
@@ -557,12 +579,24 @@ class WorkOrderToolset:
         feedback = (response.instructions or response.free_input or "").strip() if response else ""
 
         if response is not None and response.action == HITLAction.EDIT:
-            return {
+            result: Dict[str, Any] = {
                 "status": "revise",
                 "feedback": feedback or "No feedback provided.",
                 "message": "The human asked for changes. Declare a revised work "
                            "order with declare_work_order before acting.",
             }
+            # An operator who unticks an assumption and writes a note is doing
+            # one thing, not two, and the note is what turns this into a revise.
+            # Only the approve path used to read the unticks, so on this path
+            # they reached nobody — the agent was sent back to the drawing board
+            # without being told which premise had been refused.
+            rejected = _rejected_ids(response)
+            named = [a.text for a in order.assumptions if a.id in rejected]
+            if named:
+                result["rejected_assumptions"] = named
+                result["message"] += (" The human REJECTED the listed assumptions: "
+                                      "the revised order must not rest on them.")
+            return result
         if response is not None and not response.approved:
             order.status = "rejected"
             order.operator_notes = feedback
@@ -574,9 +608,7 @@ class WorkOrderToolset:
                            "finish and report why the task was not carried out.",
             }
 
-        rejected_ids = set()
-        if response is not None and isinstance(response.form_values, dict):
-            rejected_ids = {str(i) for i in response.form_values.get("rejected_assumption_ids") or []}
+        rejected_ids = _rejected_ids(response)
         for assumption in order.assumptions:
             assumption.rejected = assumption.id in rejected_ids
         order.status = "approved"
@@ -914,10 +946,8 @@ class WorkOrderToolset:
         feedback = (response.instructions or response.free_input or "").strip() if response else ""
         report = order.report
 
+        disputed = sorted(_disputed_ids(response))
         if response is not None and response.action == HITLAction.EDIT:
-            disputed = []
-            if isinstance(response.form_values, dict):
-                disputed = [str(i) for i in response.form_values.get("disputed_finding_ids") or []]
             report.status = "revise"
             report.operator_notes = feedback
             report.disputed_finding_ids = disputed
@@ -955,6 +985,11 @@ class WorkOrderToolset:
 
         report.status = "accepted"
         report.operator_notes = feedback
+        # Accepting the result and doubting a particular finding are not the
+        # same act, and an operator may well do both. Only the rework path read
+        # these marks, so a finding ticked as wrong on an otherwise accepted
+        # report was recorded nowhere and mentioned to nobody.
+        report.disputed_finding_ids = disputed
         _close_plan_step(state, self.agent_name, order, "DONE",
                          "work report accepted")
         save_order(state, order)
@@ -966,6 +1001,14 @@ class WorkOrderToolset:
         if feedback:
             result["operator_notes"] = feedback
             result["message"] += " Take the operator notes into account."
+        if disputed:
+            result["disputed_findings"] = [
+                {"id": f.id, "text": f.text} for f in report.findings
+                if f.id in disputed
+            ]
+            result["message"] += (" The human accepted the report but marked the "
+                                  "listed findings as wrong: do not carry them "
+                                  "into the answer as established.")
         return result
 
 

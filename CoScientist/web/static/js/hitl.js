@@ -993,9 +993,18 @@ function respondWorkOrder(rid, action) {
     ? [...card.querySelectorAll('input[data-wr-finding]')].filter(el => el.checked).map(el => el.dataset.wrFinding)
     : [];
   if (card) card.querySelectorAll('input[data-wo-assumption], input[data-wr-finding]').forEach(el => { el.disabled = true; });
-  let formValues = null;
-  if (action === 'approve') formValues = { rejected_assumption_ids: rejectedIds };
-  else if (action === 'edit' && disputedIds.length) formValues = { disputed_finding_ids: disputedIds };
+  // What the operator marked travels with EVERY action, not with one of them.
+  //
+  // These two lists used to be attached per action — rejections only on
+  // `approve`, disputes only on `edit` — while the single button silently turns
+  // `approve` into `edit` the moment a note is typed (above). So the ordinary
+  // move of unticking an assumption AND saying why dropped the untick on the
+  // floor: the agent was asked to revise and never told which assumption the
+  // operator had rejected. Marking something and being ignored is worse than
+  // having no checkbox at all.
+  const formValues = {};
+  if (rejectedIds.length) formValues.rejected_assumption_ids = rejectedIds;
+  if (disputedIds.length) formValues.disputed_finding_ids = disputedIds;
   sendHitlResponse({
     type: 'hitl_response',
     request_id: rid,
@@ -1003,7 +1012,7 @@ function respondWorkOrder(rid, action) {
     approved: action === 'approve',
     instructions: feedback || null,
     free_input: feedback || null,
-    form_values: formValues,
+    form_values: Object.keys(formValues).length ? formValues : null,
   });
   disableHitlControls(rid);
   const box = document.getElementById('wo-countdown-' + rid);
