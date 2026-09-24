@@ -135,41 +135,41 @@
     ModuleC_Reactor: { ru: 'Эксперименты на реакторе', en: 'Reactor experiments' },
     ReactorAgent: { ru: 'Эксперименты на реакторе', en: 'Reactor experiments' },
     ReportAgent: { ru: 'Итоговый отчёт', en: 'Final report' },
-    OrchestratorAgent: { ru: 'агент-координатор', en: 'orchestrator agent' },
-    PlannerAgent: { ru: 'агент-планировщик', en: 'planner agent' },
-    PlanningPipelineAgent: { ru: 'агент-планировщик', en: 'planner agent' },
-    PlanCriticAgent: { ru: 'агент-критик', en: 'plan critic agent' },
-    ContextInitAgent: { ru: 'агент рамки исследования', en: 'research frame agent' },
-    ContextInitSessionAgent: { ru: 'агент рамки исследования', en: 'research frame agent' },
-    HypothesesAgent: { ru: 'агент генерации гипотез', en: 'hypotheses agent' },
-    ResearchAgent: { ru: 'агент-исследователь', en: 'researcher agent' },
-    PaperRetriever: { ru: 'агент анализа статей', en: 'paper retriever' },
-    TaskExecutorAgent: { ru: 'агент-исполнитель', en: 'executor agent' },
-    ToolPipelineAgent: { ru: 'агент подбора инструментов', en: 'tool pipeline agent' },
-    CoderAgent: { ru: 'агент-инженер', en: 'engineer agent' },
-    DatasetCollectorAgent: { ru: 'агент сбора данных', en: 'data collector agent' },
-    MedicalAgent: { ru: 'агент медицинского анализа', en: 'medical analyst agent' },
-    McpBuilderAgent: { ru: 'агент сборки инструментов', en: 'tool builder agent' },
-    ToolPreparerAgent: { ru: 'агент подготовки инструментов', en: 'tool preparer agent' },
+    OrchestratorAgent: { ru: 'Агент-координатор', en: 'Orchestrator agent' },
+    PlannerAgent: { ru: 'Агент-планировщик', en: 'Planner agent' },
+    PlanningPipelineAgent: { ru: 'Агент-планировщик', en: 'Planner agent' },
+    PlanCriticAgent: { ru: 'Агент-критик', en: 'Plan critic agent' },
+    ContextInitAgent: { ru: 'Агент рамки исследования', en: 'Research frame agent' },
+    ContextInitSessionAgent: { ru: 'Агент рамки исследования', en: 'Research frame agent' },
+    HypothesesAgent: { ru: 'Агент генерации гипотез', en: 'Hypotheses agent' },
+    ResearchAgent: { ru: 'Агент-исследователь', en: 'Researcher agent' },
+    PaperRetriever: { ru: 'Агент анализа статей', en: 'Paper retriever' },
+    TaskExecutorAgent: { ru: 'Агент-исполнитель', en: 'Executor agent' },
+    ToolPipelineAgent: { ru: 'Агент подбора инструментов', en: 'Tool pipeline agent' },
+    CoderAgent: { ru: 'Агент-инженер', en: 'Engineer agent' },
+    DatasetCollectorAgent: { ru: 'Агент сбора данных', en: 'Data collector agent' },
+    MedicalAgent: { ru: 'Агент медицинского анализа', en: 'Medical analyst agent' },
+    McpBuilderAgent: { ru: 'Агент сборки инструментов', en: 'Tool builder agent' },
+    ToolPreparerAgent: { ru: 'Агент подготовки инструментов', en: 'Tool preparer agent' },
     // The tool pipeline fans out into half a dozen internal agents. Naming each
     // one tells a user nothing — they are all the same activity to them.
-    ParallelToolSearcherAgent: { ru: 'агент подбора инструментов', en: 'tool search agent' },
-    LocalToolsExtractorAgent: { ru: 'агент подбора инструментов', en: 'tool search agent' },
-    ToolRetrieverAgent: { ru: 'агент подбора инструментов', en: 'tool search agent' },
-    ToolWebSearcherAgent: { ru: 'агент подбора инструментов', en: 'tool search agent' },
-    ToolReranker: { ru: 'агент подбора инструментов', en: 'tool search agent' },
-    FullSetToolReranker: { ru: 'агент подбора инструментов', en: 'tool search agent' },
-    WebToolsDeployerAgent: { ru: 'агент подключения инструментов', en: 'tool deployer agent' },
-    ResultAggregatorAgent: { ru: 'агент составления отчёта', en: 'report writer agent' },
-    ExperimentAgent: { ru: 'агент экспериментов', en: 'experiment agent' },
+    ParallelToolSearcherAgent: { ru: 'Агент подбора инструментов', en: 'Tool search agent' },
+    LocalToolsExtractorAgent: { ru: 'Агент подбора инструментов', en: 'Tool search agent' },
+    ToolRetrieverAgent: { ru: 'Агент подбора инструментов', en: 'Tool search agent' },
+    ToolWebSearcherAgent: { ru: 'Агент подбора инструментов', en: 'Tool search agent' },
+    ToolReranker: { ru: 'Агент подбора инструментов', en: 'Tool search agent' },
+    FullSetToolReranker: { ru: 'Агент подбора инструментов', en: 'Tool search agent' },
+    WebToolsDeployerAgent: { ru: 'Агент подключения инструментов', en: 'Tool deployer agent' },
+    ResultAggregatorAgent: { ru: 'Агент составления отчёта', en: 'Report writer agent' },
+    ExperimentAgent: { ru: 'Агент экспериментов', en: 'Experiment agent' },
     // The Experiment Module runs as four named stages, and a user watching the
     // rail should be able to tell planning from execution from acceptance.
-    ExperimentModuleAgent: { ru: 'модуль экспериментов', en: 'experiment module' },
-    ExperimentPlannerAgent: { ru: 'агент планирования эксперимента', en: 'experiment planner agent' },
-    ExperimentExecutorAgent: { ru: 'агент проведения эксперимента', en: 'experiment executor agent' },
-    ExperimentResultReviewAgent: { ru: 'агент приёмки результатов', en: 'result review agent' },
-    FedotAgent: { ru: 'агент AutoML', en: 'AutoML agent' },
-    system: { ru: 'система', en: 'system' },
+    ExperimentModuleAgent: { ru: 'Модуль экспериментов', en: 'Experiment module' },
+    ExperimentPlannerAgent: { ru: 'Агент планирования эксперимента', en: 'Experiment planner agent' },
+    ExperimentExecutorAgent: { ru: 'Агент проведения эксперимента', en: 'Experiment executor agent' },
+    ExperimentResultReviewAgent: { ru: 'Агент приёмки результатов', en: 'Result review agent' },
+    FedotAgent: { ru: 'Агент AutoML', en: 'AutoML agent' },
+    system: { ru: 'Система', en: 'System' },
   };
 
   // What the agent is doing with what just came back. The gap between a tool
@@ -348,7 +348,7 @@
     const known = AGENTS[candidate];
     let label = known ? (known.ru || known.en || '') : '';
     if (!label) {
-      label = 'агент-' + String(name).replace(/Agent$/, '').toLowerCase();
+      label = 'Агент-' + String(name).replace(/Agent$/, '').toLowerCase();
     }
     if (capitalize && label) {
       return label.charAt(0).toUpperCase() + label.slice(1);

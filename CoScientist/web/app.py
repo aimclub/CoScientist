@@ -222,7 +222,7 @@ _FEDOT_DEMO_OFFLINE_PAGE = """<!DOCTYPE html>
   </ol>
   <p>Живой прогон <code>fedot_tool</code> рисуется на этой же странице через
   <code>/api/fedot-live-stream</code> — поток работает и без демо, но рисовать
-  его пока нечему. Трасса прогонов доступна отдельно:
+  его пока нечему. Трассировка прогонов доступна отдельно:
   <a href="/fedot-trace">/fedot-trace</a>.</p>
   <p style="font-size:13px">FEDOT.MAS agent graph is a separate app served by
   its own process; start it as above or point <code>FEDOT_GUI_URL</code>

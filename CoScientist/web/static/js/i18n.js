@@ -35,7 +35,7 @@ const i18n = {
   'agent.KnowledgeGraph.desc': { en: 'Knowledge Graph', ru: 'Граф знаний' },
   'agent.SessionTrace.desc': { en: 'Session Trace', ru: 'Трассировка сессии' },
   'agent.MCPBuilder.desc': { en: 'MCP Builder', ru: 'Сборщик MCP' },
-  'agent.FedotTrace.desc': { en: 'FEDOT.MAS trace', ru: 'Трасса FEDOT.MAS' },
+  'agent.FedotTrace.desc': { en: 'FEDOT.MAS trace', ru: 'Трассировка FEDOT.MAS' },
   'agent.FedotDemo.desc': { en: 'FEDOT.MAS agent graph', ru: 'Граф агентов FEDOT.MAS' },
   'agent.PaperStatistics.desc': { en: 'Paper Statistics', ru: 'Статистика статей' },
   'agent.CoderSandbox.desc': { en: 'CoderSandbox', ru: 'Песочница кода' },
@@ -154,10 +154,18 @@ const i18n = {
     en: 'Shared by every user of this server and reset when it restarts. Permanent values live in .env.',
     ru: 'Настройки общие для всех пользователей сервера и сбрасываются при его перезапуске. Постоянные значения задаются в .env.'
   },
+  'settings.banner.browser': {
+    en: 'Stored in this browser only and applied at once — no need to press Save.',
+    ru: 'Хранится только в этом браузере и применяется сразу — «Сохранить» нажимать не нужно.'
+  },
   'settings.reset': { en: 'Reset to defaults', ru: 'По умолчанию' },
   'settings.resetHint': {
     en: 'Restore the values the server was started with (.env). Saved only after you press Save.',
     ru: 'Вернуть значения, с которыми запущен сервер (.env). Сохраняются только после нажатия «Сохранить».'
+  },
+  'settings.resetHint.browser': {
+    en: 'Restore the default accent colour, font and brightness. Applies at once.',
+    ru: 'Вернуть стандартные акцентный цвет, шрифт и яркость. Применяется сразу.'
   },
   'settings.advanced': { en: 'Advanced ({n})', ru: 'Расширенные ({n})' },
   'settings.differsDefault': { en: 'Differs from default: {value}', ru: 'Отличается от значения по умолчанию: {value}' },
@@ -295,7 +303,7 @@ const i18n = {
   'settings.agents.badge.pre': { en: 'before the orchestrator', ru: 'до оркестратора' },
   'settings.agents.badge.post': { en: 'after the orchestrator', ru: 'после оркестратора' },
   'settings.agents.badge.internal': { en: 'internal', ru: 'служебный' },
-  'settings.agents.calledBy': { en: 'called by {names}', ru: 'вызывает {names}' },
+  'settings.agents.calledBy': { en: 'called by {names}', ru: 'вызывается из {names}' },
   'settings.agents.lock.root': {
     en: 'The root agent: a run has no other entry point.',
     ru: 'Корневой агент: без него запуск невозможен.'
@@ -402,77 +410,9 @@ const i18n = {
     ru: 'Параметры сервера и значения, которые задаются только в .env.'
   },
 
-  // ── Experiment plan review card (CoScientist/experiments/plan_view.py) ──
-  'plan.title': { en: 'Experiment plan', ru: 'План эксперимента' },
-  'plan.sidebarTitle': { en: 'Experiment plan', ru: 'План эксперимента' },
-  'plan.sidebarHint': {
-    en: 'Read the plan in the chat: the design matrix, then each task. Revise sends your corrections back to the planner.',
-    ru: 'План — в карточке в чате: матрица плана, затем задачи. «Доработать» отправит ваши правки планировщику.'
-  },
-  'plan.revision': { en: 'revision {n}', ru: 'ревизия {n}' },
-  'plan.tasks': { en: '{n} task(s)', ru: 'задач: {n}' },
-  'plan.tasksTitle': { en: 'Tasks', ru: 'Задачи' },
-  'plan.min': { en: 'min', ru: 'мин' },
-  'plan.goal': { en: 'Goal', ru: 'Цель' },
-  'plan.hypothesis': { en: 'Hypothesis', ru: 'Гипотеза' },
-  'plan.hypotheses': { en: 'Hypotheses', ru: 'Гипотезы' },
-  'plan.methods': { en: 'Methods', ru: 'Методы' },
-  'plan.matrix': {
-    en: 'Design matrix — hypothesis → experiment → data → baseline → metrics',
-    ru: 'Матрица плана — гипотеза → эксперимент → данные → базлайн → метрики'
-  },
-  'plan.col.task': { en: 'Task', ru: 'Задача' },
-  'plan.col.hypothesis': { en: 'Hypothesis', ru: 'Гипотеза' },
-  'plan.col.question': { en: 'Question', ru: 'Вопрос' },
-  'plan.col.dataset': { en: 'Dataset', ru: 'Данные' },
-  'plan.col.baselines': { en: 'Baselines', ru: 'Базлайны' },
-  'plan.col.metrics': { en: 'Metrics', ru: 'Метрики' },
-  'plan.col.tools': { en: 'Tools', ru: 'Инструменты' },
-  'plan.col.artifacts': { en: 'Analysis', ru: 'Анализ' },
-  'plan.col.route': { en: 'Route', ru: 'Маршрут' },
-  'plan.task.question': { en: 'Question', ru: 'Вопрос' },
-  'plan.task.dataset': { en: 'Dataset', ru: 'Данные' },
-  'plan.task.baselines': { en: 'Baselines', ru: 'Базлайны' },
-  'plan.task.metrics': { en: 'Metrics', ru: 'Метрики' },
-  'plan.task.analysis': { en: 'Analysis', ru: 'Анализ' },
-  'plan.task.description': { en: 'What runs', ru: 'Что выполняется' },
-  'plan.task.rationale': { en: 'Why', ru: 'Зачем' },
-  'plan.task.tools': { en: 'MCP / tools', ru: 'MCP / инструменты' },
-  'plan.task.repo': { en: 'Repository', ru: 'Репозиторий' },
-  'plan.task.params': { en: 'Launch params', ru: 'Параметры запуска' },
-  'plan.task.inputs': { en: 'Inputs', ru: 'Входные данные' },
-  'plan.task.criteria': { en: 'Success criteria', ru: 'Критерии успеха' },
-  'plan.task.expected': { en: 'Expected artifacts', ru: 'Ожидаемые артефакты' },
-  'plan.task.warnings': { en: 'Warnings', ru: 'Предупреждения' },
-  'plan.task.optional': { en: 'optional', ru: 'необязательная' },
-  'plan.task.after': { en: 'after', ru: 'после' },
-  'plan.optionalTool': { en: 'optional', ru: 'необязательный' },
-  'plan.noInputs': { en: 'no inputs — the task starts from its own launch params', ru: 'входных данных нет — задача стартует со своих параметров' },
-  'plan.noTools': { en: 'no MCP tools — this route does not use them', ru: 'MCP-инструменты не используются этим маршрутом' },
-  'plan.risks': { en: 'Risks', ru: 'Риски' },
-  'plan.assumptions': { en: 'Assumptions', ru: 'Допущения' },
-  'plan.critique': { en: 'Automatic review', ru: 'Автоматическая проверка' },
-  'plan.critique.approve': {
-    en: 'The deterministic critic found no blocking issue.',
-    ru: 'Детерминированная проверка не нашла блокирующих проблем.'
-  },
-  'plan.critique.revise': {
-    en: 'The deterministic critic asked for a revision.',
-    ru: 'Детерминированная проверка потребовала доработки.'
-  },
-  'plan.expandAll': { en: 'Expand all', ru: 'Раскрыть все' },
-  'plan.collapseAll': { en: 'Collapse all', ru: 'Свернуть все' },
-  'plan.accept': { en: 'Approve', ru: 'Утвердить' },
-  'plan.revise': { en: 'Revise', ru: 'Доработать' },
-  'plan.reject': { en: 'Reject', ru: 'Отклонить' },
-  'plan.feedbackPlaceholder': {
-    en: 'Corrections for the planner — then Revise',
-    ru: 'Правки для планировщика — затем «Доработать»'
-  },
-
-
   // Groups inside sections
   'settings.group.planning': { en: 'Planning', ru: 'Планирование' },
+  'settings.group.modules': { en: 'Optional modules', ru: 'Дополнительные модули' },
   'settings.group.search': { en: 'Web search', ru: 'Поиск в сети' },
   'settings.group.code': { en: 'Code execution', ru: 'Выполнение кода' },
   'settings.group.toolSelection': { en: 'Tool selection', ru: 'Подбор инструментов' },
@@ -566,11 +506,6 @@ const i18n = {
   },
   'settings.f.font.default': { en: 'default', ru: 'по умолчанию' },
   'settings.f.font.system': { en: 'System font', ru: 'Системный шрифт' },
-  'settings.f.autoNaming.label': { en: 'Auto-name sessions', ru: 'Автоназвание сессий' },
-  'settings.f.autoNaming.desc': {
-    en: 'Title a new session after its first request.',
-    ru: 'Придумывать название новой сессии по первому запросу.'
-  },
   'settings.f.showInternal.label': { en: 'Show internal agents and tools', ru: 'Показывать служебных агентов и инструменты' },
   'settings.f.showInternal.desc': {
     en: 'Pipeline stages, wrappers and system tools (marked internal in the system config) appear in the activity rail, the trace tree and Work Order cards. Useful for debugging.',
@@ -652,6 +587,11 @@ const i18n = {
     en: 'The planner takes past runs into account and does not re-plan work that is already done.',
     ru: 'Планировщик учитывает прошлые запуски и не планирует заново уже сделанную работу.'
   },
+  'settings.f.autoNaming.label': { en: 'Auto-name sessions', ru: 'Автоназвание сессий' },
+  'settings.f.autoNaming.desc': {
+    en: 'Title a new session after its first request.',
+    ru: 'Придумывать название новой сессии по первому запросу.'
+  },
 
   // Fields — Approvals
   'settings.f.hitl.label': { en: 'Ask for my approval', ru: 'Спрашивать моё подтверждение' },
@@ -681,18 +621,6 @@ const i18n = {
   'settings.f.workOrderVeto.envValues': {
     en: '-1 — wait for a human (no auto-start)\nN > 0 — start automatically after N seconds',
     ru: '-1 — ждать решения человека (без автостарта)\nN > 0 — стартовать автоматически через N секунд'
-  },
-  'settings.f.experimentRouteFedot.label': {
-    en: 'Use FEDOT.MAS in experiments',
-    ru: 'Использовать FEDOT.MAS в экспериментах'
-  },
-  'settings.f.experimentRouteFedot.desc': {
-    en: 'Off: the experiment plan never offers FEDOT.MAS, and MCP tools are called directly by ExperimentAgent (ReAct). On: FEDOT.MAS is kept for the rare task that has to chain several tools in one search loop. Turning it on applies from the next session; turning it off also stops FEDOT.MAS in a session already running. An experiment module served as a separate A2A service reads only the environment variable.',
-    ru: 'Выключено: план эксперимента не предлагает FEDOT.MAS, и MCP-инструменты вызывает напрямую ExperimentAgent (ReAct). Включено: FEDOT.MAS остаётся для редкой задачи, которой нужно связать несколько инструментов в одном цикле поиска. Включение действует со следующей сессии, выключение останавливает FEDOT.MAS и в уже идущей. Модуль экспериментов, запущенный отдельным A2A-сервисом, читает только переменную окружения.'
-  },
-  'settings.f.experimentRouteFedot.scopeHint': {
-    en: 'Turning it on applies to sessions that first run after saving; turning it off also stops FEDOT.MAS in sessions already running.',
-    ru: 'Включение действует для сессий, впервые запущенных после сохранения; выключение останавливает FEDOT.MAS и в уже запущенных сессиях.'
   },
   'settings.f.experimentPlanAuto.label': {
     en: 'Approve the experiment plan for me',
@@ -760,6 +688,18 @@ const i18n = {
   'settings.f.abstainScore.desc': {
     en: 'If no tool reaches the keep threshold: the best is at least this value — the top two are used anyway; below it — the task goes to CoderAgent.',
     ru: 'Если ни один инструмент не прошёл порог отбора: лучший не ниже этого значения — берутся два лучших; ниже — задача передаётся CoderAgent.'
+  },
+  'settings.f.experimentRouteFedot.label': {
+    en: 'Use FEDOT.MAS in experiments',
+    ru: 'Использовать FEDOT.MAS в экспериментах'
+  },
+  'settings.f.experimentRouteFedot.desc': {
+    en: 'Off: the experiment plan never offers FEDOT.MAS, and MCP tools are called directly by ExperimentAgent (ReAct). On: FEDOT.MAS is kept for the rare task that has to chain several tools in one search loop. An experiment module served as a separate A2A service reads only the environment variable.',
+    ru: 'Выключено: план эксперимента не предлагает FEDOT.MAS, и MCP-инструменты вызывает напрямую ExperimentAgent (ReAct). Включено: FEDOT.MAS остаётся для редкой задачи, которой нужно связать несколько инструментов в одном цикле поиска. Модуль экспериментов, запущенный отдельным A2A-сервисом, читает только переменную окружения.'
+  },
+  'settings.f.experimentRouteFedot.scopeHint': {
+    en: 'Turning it on applies to sessions that first run after saving; turning it off also stops FEDOT.MAS in sessions already running.',
+    ru: 'Включение действует для сессий, впервые запущенных после сохранения; выключение останавливает FEDOT.MAS и в уже запущенных сессиях.'
   },
 
   // Fields — Models
@@ -853,6 +793,74 @@ const i18n = {
   'settings.f.autoClearGraph.desc': {
     en: "A session's graphs are cleared before its agents are first built.",
     ru: 'Графы сессии очищаются перед первой сборкой её агентов.'
+  },
+
+  // ── Experiment plan review card (CoScientist/experiments/plan_view.py) ──
+  'plan.title': { en: 'Experiment plan', ru: 'План эксперимента' },
+  'plan.sidebarTitle': { en: 'Experiment plan', ru: 'План эксперимента' },
+  'plan.sidebarHint': {
+    en: 'Read the plan in the chat: the design matrix, then each task. Revise sends your corrections back to the planner.',
+    ru: 'План — в карточке в чате: матрица плана, затем задачи. «Доработать» отправит ваши правки планировщику.'
+  },
+  'plan.revision': { en: 'revision {n}', ru: 'ревизия {n}' },
+  'plan.tasks': { en: '{n} task(s)', ru: 'задач: {n}' },
+  'plan.tasksTitle': { en: 'Tasks', ru: 'Задачи' },
+  'plan.min': { en: 'min', ru: 'мин' },
+  'plan.goal': { en: 'Goal', ru: 'Цель' },
+  'plan.hypothesis': { en: 'Hypothesis', ru: 'Гипотеза' },
+  'plan.hypotheses': { en: 'Hypotheses', ru: 'Гипотезы' },
+  'plan.methods': { en: 'Methods', ru: 'Методы' },
+  'plan.matrix': {
+    en: 'Design matrix — hypothesis → experiment → data → baseline → metrics',
+    ru: 'Матрица плана — гипотеза → эксперимент → данные → базлайн → метрики'
+  },
+  'plan.col.task': { en: 'Task', ru: 'Задача' },
+  'plan.col.hypothesis': { en: 'Hypothesis', ru: 'Гипотеза' },
+  'plan.col.question': { en: 'Question', ru: 'Вопрос' },
+  'plan.col.dataset': { en: 'Dataset', ru: 'Данные' },
+  'plan.col.baselines': { en: 'Baselines', ru: 'Базлайны' },
+  'plan.col.metrics': { en: 'Metrics', ru: 'Метрики' },
+  'plan.col.tools': { en: 'Tools', ru: 'Инструменты' },
+  'plan.col.artifacts': { en: 'Analysis', ru: 'Анализ' },
+  'plan.col.route': { en: 'Route', ru: 'Маршрут' },
+  'plan.task.question': { en: 'Question', ru: 'Вопрос' },
+  'plan.task.dataset': { en: 'Dataset', ru: 'Данные' },
+  'plan.task.baselines': { en: 'Baselines', ru: 'Базлайны' },
+  'plan.task.metrics': { en: 'Metrics', ru: 'Метрики' },
+  'plan.task.analysis': { en: 'Analysis', ru: 'Анализ' },
+  'plan.task.description': { en: 'What runs', ru: 'Что выполняется' },
+  'plan.task.rationale': { en: 'Why', ru: 'Зачем' },
+  'plan.task.tools': { en: 'MCP / tools', ru: 'MCP / инструменты' },
+  'plan.task.repo': { en: 'Repository', ru: 'Репозиторий' },
+  'plan.task.params': { en: 'Launch params', ru: 'Параметры запуска' },
+  'plan.task.inputs': { en: 'Inputs', ru: 'Входные данные' },
+  'plan.task.criteria': { en: 'Success criteria', ru: 'Критерии успеха' },
+  'plan.task.expected': { en: 'Expected artifacts', ru: 'Ожидаемые артефакты' },
+  'plan.task.warnings': { en: 'Warnings', ru: 'Предупреждения' },
+  'plan.task.optional': { en: 'optional', ru: 'необязательная' },
+  'plan.task.after': { en: 'after', ru: 'после' },
+  'plan.optionalTool': { en: 'optional', ru: 'необязательный' },
+  'plan.noInputs': { en: 'no inputs — the task starts from its own launch params', ru: 'входных данных нет — задача стартует со своих параметров' },
+  'plan.noTools': { en: 'no MCP tools — this route does not use them', ru: 'MCP-инструменты не используются этим маршрутом' },
+  'plan.risks': { en: 'Risks', ru: 'Риски' },
+  'plan.assumptions': { en: 'Assumptions', ru: 'Допущения' },
+  'plan.critique': { en: 'Automatic review', ru: 'Автоматическая проверка' },
+  'plan.critique.approve': {
+    en: 'The deterministic critic found no blocking issue.',
+    ru: 'Детерминированная проверка не нашла блокирующих проблем.'
+  },
+  'plan.critique.revise': {
+    en: 'The deterministic critic asked for a revision.',
+    ru: 'Детерминированная проверка потребовала доработки.'
+  },
+  'plan.expandAll': { en: 'Expand all', ru: 'Раскрыть все' },
+  'plan.collapseAll': { en: 'Collapse all', ru: 'Свернуть все' },
+  'plan.accept': { en: 'Approve', ru: 'Утвердить' },
+  'plan.revise': { en: 'Revise', ru: 'Доработать' },
+  'plan.reject': { en: 'Reject', ru: 'Отклонить' },
+  'plan.feedbackPlaceholder': {
+    en: 'Corrections for the planner — then Revise',
+    ru: 'Правки для планировщика — затем «Доработать»'
   },
 
   // ── Work Order cards (hitl.js) ──
@@ -1094,204 +1102,8 @@ const i18n = {
   'hitl.ph.reply': { en: 'Your answer to the question…', ru: 'Ваш ответ на вопрос…' },
   'hitl.ph.revise': { en: 'For example: add a source to every conclusion…', ru: 'Например: добавь источник к каждому выводу…' },
 
-  // ── Keys from feat/report-links-artifacts-i18n (unified language switch,
-  //    graph pages, dataset upload, saved sessions, roadmaps) ──
-  'settings.language.label': { en: 'Language (interface and report)', ru: 'Язык (интерфейс и отчёт)' },
-
-  // ── General section ──
-  'settings.general': { en: 'General', ru: 'Общие' },
-  'settings.general.hint': {
-    en: '(Default values are set in .env or settings.py)',
-    ru: '(Значения по умолчанию задаются в .env или settings.py)'
-  },
-  'settings.startMode.label': { en: 'Session Start Mode', ru: 'Режим запуска сессии' },
-  'settings.startMode.desc': {
-    en: 'Choose which agent starts the session. <strong>PlannerAgent</strong> runs PlannerAgent first, then OrchestratorAgent. <strong>OrchestratorAgent</strong> starts directly with the orchestrator. <strong>Orchestrator as a planner</strong> gives Orchestrator the plan tool and disables PlannerAgent.',
-    ru: 'Выберите, какой агент запускает сессию. <strong>PlannerAgent</strong> сначала запускает PlannerAgent, затем OrchestratorAgent. <strong>OrchestratorAgent</strong> запускает оркестратор напрямую. <strong>Orchestrator as a planner</strong> даёт оркестратору инструмент планирования и отключает PlannerAgent.'
-  },
-  'settings.startMode.planner': { en: 'PlannerAgent', ru: 'PlannerAgent' },
-  'settings.startMode.orchestrator': { en: 'OrchestratorAgent', ru: 'OrchestratorAgent' },
-  'settings.startMode.orchestratorPlanner': { en: 'Orchestrator as a planner', ru: 'Orchestrator в роли планировщика' },
-  'settings.maxRetries.label': { en: 'Max LLM Retries', ru: 'Макс. повторов LLM' },
-  'settings.maxRetries.desc': {
-    en: 'Number of LLM call retry attempts on transient network or upstream API errors.',
-    ru: 'Количество повторных попыток вызова LLM при временных сбоях сети или API.'
-  },
-  'settings.hitl.label': { en: 'HITL Enabled', ru: 'Включить HITL (подтверждения)' },
-  'settings.hitl.desc': {
-    en: 'Toggle Human-in-the-Loop approval for dangerous or outward-facing actions.',
-    ru: 'Включить подтверждение человеком (Human-in-the-Loop) для опасных или внешних действий.'
-  },
-  'settings.hitlTimeout.label': { en: 'HITL Auto-Approve Timeout (s)', ru: 'Автоподтверждение HITL (сек)' },
-  'settings.hitlTimeout.desc': {
-    en: 'Seconds before auto-approving HITL requests (-1 for no timeout / wait for human).',
-    ru: 'Секунды до автоподтверждения HITL (-1 — без тайм-аута, ждать человека).'
-  },
-
-  // ── HITL research-frame form (rendered at runtime, keyed by currentLang) ──
-  'settings.usePlanner.label': { en: 'Use Planner', ru: 'Использовать планировщик' },
-  'settings.usePlanner.note': {
-    en: '(disabled when using PlannerAgent mode)',
-    ru: '(отключено в режиме PlannerAgent)'
-  },
-  'settings.usePlanner.desc': {
-    en: 'Whether the orchestrator delegates to PlannerAgent for task decomposition.',
-    ru: 'Делегирует ли оркестратор декомпозицию задач компоненту PlannerAgent.'
-  },
-  'settings.contextInit.label': { en: 'Research Frame', ru: 'Рамка исследования' },
-  'settings.contextInit.desc': {
-    en: 'Draft research frame and seed it into the research graph before the orchestrator runs.',
-    ru: 'Формировать фрейм исследования и добавлять его в граф исследований до запуска оркестратора.'
-  },
-  'settings.useProxy.label': { en: 'Use Corporate Proxy', ru: 'Корпоративный прокси' },
-  'settings.useProxy.note': { en: '(set only in env)', ru: '(задаётся в .env)' },
-  'settings.useProxy.desc': {
-    en: 'Route LLM model calls through corporate proxy (SERVICES__PROXY_URL).',
-    ru: 'Маршрутизировать вызовы моделей LLM через корпоративный прокси (SERVICES__PROXY_URL).'
-  },
-  'settings.opik.label': { en: 'Enable Opik Tracing', ru: 'Включить трассировку Opik' },
-  'settings.opik.desc': {
-    en: 'Send execution logs and agent traces to your Opik dashboard.',
-    ru: 'Отправлять логи выполнения и трассировки агентов в дашборд Opik.'
-  },
-  'settings.autoNaming.label': { en: 'Auto-name Sessions', ru: 'Авто-наименование сессий' },
-  'settings.autoNaming.desc': {
-    en: 'Automatically generate session titles based on the first prompt.',
-    ru: 'Автоматически генерировать названия сессий на основе первого запроса.'
-  },
-  'settings.defaultUsername.label': { en: 'Default Username', ru: 'Имя пользователя по умолчанию' },
-  'settings.defaultUsername.desc': {
-    en: 'Auto-selects user on startup (can also be set via COSCIENTIST_USERNAME in .env).',
-    ru: 'Автоматически выбирает пользователя при старте (задаётся также через COSCIENTIST_USERNAME в .env).'
-  },
-  'settings.defaultUsername.placeholder': {
-    en: 'e.g. COSCIENTIST_USERNAME in .env',
-    ru: 'например COSCIENTIST_USERNAME в .env'
-  },
-
-  // ── Graphs section ──
-  'settings.graphs': { en: 'Graphs', ru: 'Графы' },
-  'settings.knowledgeGraph.label': { en: 'Knowledge Graph', ru: 'Граф знаний' },
-  'settings.knowledgeGraph.desc': {
-    en: 'Records the execution graph of every run and lets agents read it (<span class="font-mono">get_graph_history</span>, <span class="font-mono">get_agents_info</span>, <span class="font-mono">search_knowledge_memory</span>). When off, nothing is recorded, the Graph view stays empty, and the tools disappear from every agent and from their prompts.',
-    ru: 'Записывает граф выполнения каждого запуска и позволяет агентам читать его (<span class="font-mono">get_graph_history</span>, <span class="font-mono">get_agents_info</span>, <span class="font-mono">search_knowledge_memory</span>). Когда выключен, ничего не записывается, вкладка графа пуста, а инструменты убираются у всех агентов.'
-  },
-  'settings.researchGraph.label': { en: 'Research Graph', ru: 'Граф исследований' },
-  'settings.researchGraph.desc': {
-    en: 'The typed research blackboard agents commit findings to (<span class="font-mono">research_commit</span>, <span class="font-mono">research_context_slice</span>, orchestrator triggers). When off, the whole feature — tools and prompt sections — drops out and agents pass context through their answers only.',
-    ru: 'Доска исследований, куда агенты записывают результаты (<span class="font-mono">research_commit</span>, <span class="font-mono">research_context_slice</span>, триггеры оркестратора). Когда выключен, инструменты и секции промптов отключаются, контекст передается только в ответах.'
-  },
-  'settings.graphs.sessionNote': {
-    en: 'Applies to new sessions — the agent system is built once per session.',
-    ru: 'Применяется к новым сессиям — система агентов инициализируется при создании сессии.'
-  },
-  'settings.deleteGraph.label': { en: 'Delete Graph Data', ru: 'Удалить данные графов' },
-  'settings.deleteGraph.desc': {
-    en: 'Wipe what the graphs have recorded. The execution and research graphs belong to the <strong>current session</strong>; the knowledge memory is installation-wide and disappears for every session at once. The research graph and the knowledge memory are archived next to their files first; the execution graph keeps only the agent roster.',
-    ru: 'Очистить записанные данными графов. Графы выполнения и исследований относятся к <strong>текущей сессии</strong>; память знаний распространяется на всю систему. Граф исследований и память знаний архивируются; граф выполнения сохраняет только список агентов.'
-  },
-  'settings.deleteGraph.optExecution': { en: 'Execution (session)', ru: 'Выполнение (сессия)' },
-  'settings.deleteGraph.optResearch': { en: 'Research (session)', ru: 'Исследования (сессия)' },
-  'settings.deleteGraph.optMemory': { en: 'Knowledge memory (global)', ru: 'Память знаний (глобальная)' },
-  'settings.deleteGraph.optAll': { en: 'All of the above', ru: 'Всё вышеперечисленное' },
-  'settings.deleteGraph.btn': { en: 'Delete', ru: 'Удалить' },
-  'settings.autoClearGraph.label': { en: 'Auto-clear Graph Before Session', ru: 'Автоочистка графов перед сессией' },
-  'settings.autoClearGraph.note': { en: '(set only in env)', ru: '(задаётся в .env)' },
-  'settings.autoClearGraph.desc': {
-    en: 'Automatically clear graph data before each session starts.',
-    ru: 'Автоматически очищать данные графов перед началом каждой сессии.'
-  },
-
-  // ── PlannerAgent section ──
-  'settings.planner.retrieval.label': { en: 'Retrieval Tools', ru: 'Инструменты поиска' },
-  'settings.planner.retrieval.desc': {
-    en: 'Let the planner search the MCP registry (<span class="font-mono">retrieve_tools</span>, <span class="font-mono">get_server_info</span>) before writing the roadmap. When off, it plans by outcome and never names concrete tools or server ids.',
-    ru: 'Разрешить планировщику искать в реестре MCP (<span class="font-mono">retrieve_tools</span>, <span class="font-mono">get_server_info</span>) перед созданием плана. Когда выключено, планирование происходит без указания конкретных инструментов.'
-  },
-  'settings.planner.graph.label': { en: 'Graph Tools', ru: 'Инструменты графа' },
-  'settings.planner.graph.note': { en: '(disabled — Knowledge Graph is off)', ru: '(отключено — Граф знаний выключен)' },
-  'settings.planner.graph.desc': {
-    en: 'Let the planner read the shared knowledge graph (history, agent roster, knowledge memory) so it does not re-plan finished work.',
-    ru: 'Разрешить планировщику читать общий граф знаний (историю, список агентов, память знаний), чтобы не планировать заново выполненную работу.'
-  },
-  'settings.planner.critic.label': { en: 'Plan Critic', ru: 'Критик плана' },
-  'settings.planner.critic.desc': {
-    en: 'Have an LLM critic review the registered roadmap (assignees, coverage, dependencies) before it is executed, and send it back to the planner if it objects. Runs whether or not HITL is on, before a human sees the plan. Costs one extra LLM call per planning run.',
-    ru: 'Проверять созданный план с помощью LLM-критика (исполнители, покрытие, зависимости) перед выполнением и возвращать планировщику при наличии замечаний. Добавляет 1 вызов LLM на запуск планирования.'
-  },
-  'settings.planner.rounds.label': { en: 'Revision Rounds', ru: 'Раунды доработки' },
-  'settings.planner.rounds.desc': {
-    en: 'How many times the critic may send the roadmap back. <span class="font-mono">1</span> — it gets a single say and the rewrite then stands. Each extra round is a full replan, and a critic that never approves would otherwise keep the planner going.',
-    ru: 'Сколько раз критик может возвращать план на доработку. <span class="font-mono">1</span> — одна проверка, после чего версия утверждается. Каждый доп. раунд — полный переутверждённый план.'
-  },
-  'settings.planner.mergeTasks.label': { en: 'Merge Tasks', ru: 'Объединение задач' },
-  'settings.planner.mergeTasks.desc': {
-    en: 'Automatically merge consecutive tasks assigned to the same executor (CoderAgent / TaskExecutorAgent) into a single task. Turn off to keep every task the planner wrote as a separate unit of work.',
-    ru: 'Автоматически объединять последовательные задачи, назначенные одному исполнителю (CoderAgent / TaskExecutorAgent), в одну задачу.'
-  },
-
-  // ── ResearchAgent section ──
-  'settings.research.maxSearches.label': { en: 'Per-turn — max searches', ru: 'Макс. поисков за ход' },
-  'settings.research.maxSearches.desc': {
-    en: 'Maximum number of web search tool calls per agent turn. After this limit, the agent must synthesize from existing results.',
-    ru: 'Максимальное количество вызовов поиска в сети за один ход агента. После превышения лимита агент должен отвечать из имеющихся данных.'
-  },
-
-  // ── HypothesesAgent section ──
-  'settings.hypotheses.maxActive.label': { en: 'Max Active Hypotheses', ru: 'Макс. активных гипотез' },
-  'settings.hypotheses.maxActive.desc': {
-    en: 'How many hypotheses are kept as active (<span class="font-mono">formulated</span>) simultaneously for parallel verification. <span class="font-mono">1</span> — the classic "one at a time" mode: the agent picks the single best hypothesis and postpones the rest. Higher values let the orchestrator verify several branches in parallel.',
-    ru: 'Сколько гипотез одновременно сохраняются активными (<span class="font-mono">formulated</span>) для параллельной проверки. <span class="font-mono">1</span> — режим "по одной": выбирается 1 лучшая гипотеза. Более высокие значения позволяют проверять несколько веток параллельно.'
-  },
-
-  // ── CoderAgent section ──
-  'settings.coder.mode.label': { en: 'Coder Execution Mode', ru: 'Режим выполнения Coder' },
-  'settings.coder.mode.note': { en: '(no Sandbox URL set — OpenHands mode requires a Sandbox URL)', ru: '(не задан URL песочницы — для режима OpenHands требуется URL песочницы)' },
-  'settings.coder.mode.desc': {
-    en: 'Choose execution mode: <strong>local</strong> uses in-process tools (<span class="font-mono">execute_bash</span>, file edits, git); <strong>openhands</strong> relays tasks to the remote OpenHands sandbox agent.',
-    ru: 'Выберите режим выполнения: <strong>local</strong> использует локальные инструменты (<span class="font-mono">execute_bash</span>, правка файлов, git); <strong>openhands</strong> передаёт задачи удалённому агенту в песочнице OpenHands.'
-  },
-  'settings.coder.sandboxUrl.label': { en: 'Sandbox Remote URL', ru: 'Удалённый URL песочницы' },
-  'settings.coder.sandboxUrl.desc': {
-    en: 'The endpoint URL of the isolated code-execution sandbox server.',
-    ru: 'URL-адрес изолированного сервера-песочницы для выполнения кода.'
-  },
-  'settings.coder.workspaceId.label': { en: 'Coder Workspace ID', ru: 'ID рабочей области Coder' },
-  'settings.coder.workspaceId.desc': {
-    en: 'Pin a custom persistent workspace folder name to save code state across delegations. Leave empty to auto-generate.',
-    ru: 'Указать имя папки рабочей области для сохранения состояния кода между вызовами. Оставьте пустым для автогенерации.'
-  },
-  'settings.coder.workspaceId.placeholder': { en: 'e.g. workspace_1', ru: 'например workspace_1' },
-
-  // ── TaskExecutorAgent section ──
-  'settings.taskExec.keepScore.label': { en: 'Tool Keep Threshold', ru: 'Порог релевантности инструментов' },
-  'settings.taskExec.keepScore.desc': {
-    en: 'Minimum relevance score (0.0 to 1.0) for a retrieved MCP tool to be loaded into context.',
-    ru: 'Минимальный балл релевантности (от 0.0 до 1.0) для загрузки найденного инструмента MCP в контекст.'
-  },
-  'settings.taskExec.abstainScore.label': { en: 'Tool Abstain Threshold', ru: 'Порог отказа от инструментов' },
-  'settings.taskExec.abstainScore.desc': {
-    en: 'Threshold below which the tool pipeline completely abstains, so the executor re-routes the task to the CoderAgent.',
-    ru: 'Порог, ниже которого пайплайн инструментов отказывается от выполнения, и исполнитель перенаправляет задачу в CoderAgent.'
-  },
-
-  // ── Empty / Common sections ──
-  'settings.noConfig': { en: 'No configurable parameters yet.', ru: 'Пока нет настраиваемых параметров.' },
-  'settings.cancel': { en: 'Cancel', ru: 'Отмена' },
-  'settings.saving': { en: 'Saving…', ru: 'Сохранение…' },
-  'settings.saved': { en: 'Settings saved.', ru: 'Настройки сохранены.' },
-  'settings.saveError': { en: 'Error saving settings: {error}', ru: 'Ошибка сохранения настроек: {error}' },
-  'settings.deleteGraph.targetExecution': { en: "this session's execution graph", ru: 'граф выполнения этой сессии' },
-  'settings.deleteGraph.targetResearch': { en: "this session's research graph", ru: 'граф исследований этой сессии' },
-  'settings.deleteGraph.targetMemory': { en: 'the GLOBAL knowledge memory (shared by every session)', ru: 'ГЛОБАЛЬНУЮ память знаний (общую для всех сессий)' },
-  'settings.deleteGraph.targetAll': { en: "this session's execution and research graphs AND the GLOBAL knowledge memory", ru: 'графы выполнения и исследований этой сессии И ГЛОБАЛЬНУЮ память знаний' },
-  'settings.deleteGraph.confirm': { en: 'Delete {target}?\n\nThis cannot be undone from the UI.', ru: 'Удалить {target}?\n\nЭто действие нельзя отменить из интерфейса.' },
-  'settings.deleteGraph.deleting': { en: 'Deleting…', ru: 'Удаление…' },
-  'settings.deleteGraph.nothing': { en: 'nothing', ru: 'ничего' },
-  'settings.deleteGraph.deleted': { en: 'Deleted {details}.', ru: 'Удалено: {details}.' },
-  'settings.deleteGraph.error': { en: 'Error deleting graphs: {error}', ru: 'Ошибка удаления графов: {error}' },
-
   // ── Common ──
+  'common.cancel': { en: 'Cancel', ru: 'Отмена' },
   'common.close': { en: 'Close', ru: 'Закрыть' },
   'common.loading': { en: 'Loading…', ru: 'Загрузка…' },
   'common.showMore': { en: 'Show more', ru: 'Показать больше' },
@@ -1563,7 +1375,7 @@ const i18n = {
   'graph.connecting': { en: 'connecting…', ru: 'подключение…' },
   'graph.live': { en: 'live', ru: 'live' },
   'graph.refresh': { en: 'refresh', ru: 'обновить' },
-  'graph.backTrace': { en: '← session trace', ru: '← трасса сессии' },
+  'graph.backTrace': { en: '← session trace', ru: '← трассировка сессии' },
   'graph.view.label': { en: 'view', ru: 'вид' },
   'graph.view.research': { en: 'research', ru: 'исследования' },
   'graph.view.execution': { en: 'execution log', ru: 'лог выполнения' },
@@ -1655,7 +1467,7 @@ const i18n = {
   'graph.basis.status': { en: 'moved its status', ru: 'сменил статус' },
   'graph.basis.delegation': { en: 'delegated the work', ru: 'делегировал работу' },
   'graph.basis.provenance': { en: 'made the call behind it', ru: 'сделал вызов, давший это' },
-  'graph.basis.work_order': { en: 'took the step (work order)', ru: 'взял шаг (наряд)' },
+  'graph.basis.work_order': { en: 'took the step (work order)', ru: 'взял шаг (план работы)' },
   'graph.basis.route': { en: 'ran it', ru: 'выполнил' },
   'graph.basis.assignee': { en: 'planned to — not observed', ru: 'назначен планом — не подтверждено' },
   'graph.detail.openInLog': { en: 'open this call in the execution log', ru: 'открыть этот вызов в логе выполнения' },
@@ -1704,7 +1516,7 @@ const i18n = {
   'graph.summary.loading': { en: 'writing the summary…', ru: 'готовлю сводку…' },
   'graph.summary.waiting': { en: 'the agent is still running; the summary is written once it finishes', ru: 'агент ещё работает; сводка появится, когда он закончит' },
   'graph.summary.now': { en: 'write it now', ru: 'написать сейчас' },
-  'graph.summary.stale': { en: 'the trace has changed since this summary was written', ru: 'трасса изменилась после того, как сводка была написана' },
+  'graph.summary.stale': { en: 'the trace has changed since this summary was written', ru: 'трассировка изменилась после того, как сводка была написана' },
   'graph.summary.again': { en: 'regenerate', ru: 'заново' },
   'graph.summary.by': { en: 'by {model}', ru: 'модель: {model}' },
   'graph.summary.failed': { en: 'could not write the summary: {error}', ru: 'не удалось подготовить сводку: {error}' },
@@ -1737,7 +1549,7 @@ const i18n = {
   'graph.chips.tools': { en: 'tools', ru: 'инструменты' },
   'graph.attach.title': { en: 'attached', ru: 'вложения' },
   'graph.history.title': { en: 'how it got here', ru: 'как дошло до этого' },
-  'graph.history.initial': { en: 'created as {status}', ru: 'создан(а) как {status}' },
+  'graph.history.initial': { en: 'created as {status}', ru: 'создан как {status}' },
   'graph.history.entry': { en: '{from} → {to} · {source}', ru: '{from} → {to} · {source}' },
   'graph.links.title': { en: 'connections', ru: 'связи' },
   'graph.edge.realises': { en: 'carries out', ru: 'выполняет шаг' },

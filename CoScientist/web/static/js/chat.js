@@ -148,7 +148,7 @@
       const title = doc.title || '';
       return `
         <div class="flex flex-col gap-2.5">
-          ${summary ? `<p class="doc-summary break-words">${escHtml(summary)}</p>` : ''}
+          ${summary ? `<div class="doc-summary break-words">${mdBlock(summary)}</div>` : ''}
           <button type="button" class="doc-btn self-start" aria-pressed="false"
             data-doc-id="${escHtml(doc.artifact_id)}"
             onclick="openDocument('${escJs(doc.artifact_id)}', '${escJs(title)}')">
@@ -230,6 +230,23 @@
             + ' class="mt-2 max-w-full rounded-lg border border-outline-variant/20 cursor-zoom-in" loading="lazy"></a>';
         });
       return withPreviews.replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" class="text-primary underline" ');
+    }
+
+    // Agent-written fields inside cards (a goal, a step, a finding) are
+    // markdown too, but they sit in the card's own type size: `md-fit` drops
+    // the message-body size `.md-body` sets. A block field may hold lists
+    // and paragraphs; an inline one sits in a <span>/<p>/<h3> and must not
+    // open block elements there.
+    function mdBlock(text) {
+      if (text == null || text === '') return '';
+      return `<div class="md-body md-fit">${renderMarkdown(String(text))}</div>`;
+    }
+
+    function mdInline(text) {
+      if (text == null || text === '') return '';
+      const html = DOMPurify.sanitize(marked.parseInline(String(text)), { ADD_ATTR: ['target'] })
+        .replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" class="text-primary underline" ');
+      return `<span class="md-body md-fit">${html}</span>`;
     }
 
     function getBaseSandboxUrl() {
@@ -405,7 +422,7 @@
           <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">${t('chat.you')}</span>
         </div>
         <div class="bg-primary/5 p-4 rounded-xl rounded-tr-none border border-primary/20">
-          <p class="text-sm text-on-surface leading-relaxed whitespace-pre-wrap break-words">${escHtml(text)}</p>
+          <div class="text-sm text-on-surface leading-relaxed break-words">${mdBlock(text)}</div>
         </div>
       </div>
     </div>`);

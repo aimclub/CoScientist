@@ -43,19 +43,7 @@
               },
               { id: 'contextInit', path: 'general.contextInitEnabled', type: 'toggle', scope: 'session', env: 'RESEARCH_FRAME', envAliases: ['CONTEXT_INIT__ENABLED'] },
               { id: 'maxHypotheses', path: 'hypothesesAgent.maxActiveHypotheses', type: 'number', min: 1, max: 5, scope: 'session', env: 'HYPOTHESES__MAX_ACTIVE' },
-              // The agent is attached when a session's tree is built; off also
-              // takes the medical route out of running experiments, hence the
-              // field's own scope hint.
-              { id: 'medicalAgent', path: 'medicalAgent.enabled', type: 'toggle', scope: 'session', scopeHintKey: 'settings.f.medicalAgent.scopeHint', env: 'MEDICAL__ENABLED' },
-              // Purely a runtime gate: NirReportAgent is attached whenever a
-              // normcontrol server is configured, and this decides whether the
-              // operator is offered the GOST report at the end of a run. Greyed
-              // out where there is no server to submit the document to.
-              {
-                id: 'nirReport', path: 'nirReport.enabled', type: 'toggle', scope: 'instant',
-                env: 'NIR__ENABLED',
-                inactive: d => !getSettingPath(d, 'nirReport.available'),
-              },
+              { id: 'autoNaming', path: 'general.autoNamingEnabled', type: 'toggle', scope: 'instant', env: 'AUTO_NAMING__ENABLED' },
             ],
           },
           {
@@ -72,45 +60,26 @@
               },
             ],
           },
-        ],
-      },
-      {
-        // Per-agent switches over system.yaml; the list is drawn from
-        // /api/agents/catalog, the values live in appSettings.agents.
-        id: 'agents', icon: 'smart_toy',
-        groups: [
           {
+            // Agents and stages a study may or may not need.
+            heading: 'modules',
             fields: [
+              // The agent is attached when a session's tree is built; off also
+              // takes the medical route out of running experiments, hence the
+              // field's own scope hint.
+              { id: 'medicalAgent', path: 'medicalAgent.enabled', type: 'toggle', scope: 'session', scopeHintKey: 'settings.f.medicalAgent.scopeHint', env: 'MEDICAL__ENABLED' },
+              // Purely a runtime gate: NirReportAgent is attached whenever a
+              // normcontrol server is configured, and this decides whether the
+              // operator is offered the GOST report at the end of a run. Greyed
+              // out where there is no server to submit the document to.
               {
-                id: 'defaultReasoning', path: 'agents.defaultReasoning', type: 'select', scope: 'session',
-                options: ['', ...REASONING_LEVELS], env: 'AGENTS__DEFAULT_REASONING',
+                id: 'nirReport', path: 'nirReport.enabled', type: 'toggle', scope: 'instant',
+                env: 'NIR__ENABLED',
+                inactive: d => !getSettingPath(d, 'nirReport.available'),
               },
             ],
           },
-          {
-            heading: 'agentList',
-            fields: [
-              { id: 'agentOverrides', path: 'agents.overrides', type: 'agents', scope: 'session', env: 'AGENTS__OVERRIDES' },
-            ],
-          },
         ],
-      },
-      {
-        id: 'interface', icon: 'palette',
-        groups: [{
-          fields: [
-            { id: 'language', type: 'language', scope: 'browser' },
-            { id: 'theme', type: 'theme', scope: 'browser' },
-            {
-              id: 'lightDim', type: 'lightDim', scope: 'browser',
-              inactive: () => currentTheme === 'light' ? null : { key: 'settings.inactive.lightOnly' },
-            },
-            { id: 'accent', type: 'accent', scope: 'browser' },
-            { id: 'font', type: 'font', scope: 'browser' },
-            { id: 'autoNaming', path: 'general.autoNamingEnabled', type: 'toggle', scope: 'instant', env: 'AUTO_NAMING__ENABLED' },
-            { id: 'showInternal', type: 'browserToggle', scope: 'browser', env: 'SHOW_INTERNAL__ENABLED' },
-          ],
-        }],
       },
       {
         id: 'approvals', icon: 'verified_user',
@@ -146,6 +115,37 @@
             ],
           },
         ],
+      },
+      {
+        // Per-agent switches over system.yaml; the list is drawn from
+        // /api/agents/catalog, the values live in appSettings.agents.
+        id: 'agents', icon: 'smart_toy',
+        groups: [
+          {
+            fields: [
+              {
+                id: 'defaultReasoning', path: 'agents.defaultReasoning', type: 'select', scope: 'session',
+                options: ['', ...REASONING_LEVELS], env: 'AGENTS__DEFAULT_REASONING',
+              },
+            ],
+          },
+          {
+            heading: 'agentList',
+            fields: [
+              { id: 'agentOverrides', path: 'agents.overrides', type: 'agents', scope: 'session', env: 'AGENTS__OVERRIDES' },
+            ],
+          },
+        ],
+      },
+      {
+        id: 'models', icon: 'memory',
+        groups: [{
+          fields: [
+            { id: 'providerSort', path: 'general.openrouterProviderSort', type: 'segmented', options: ['default', 'price', 'latency', 'throughput'], scope: 'session', env: 'OPENROUTER_PROVIDER_SORT', envAliases: ['LLM__OPENROUTER_PROVIDER_SORT'] },
+            { id: 'providerOrder', path: 'general.openrouterProviderOrder', type: 'chips', suggestions: OPENROUTER_POPULAR_PROVIDERS, scope: 'session', env: 'OPENROUTER_PROVIDER_ORDER', envAliases: ['LLM__OPENROUTER_PROVIDER_ORDER'] },
+            { id: 'maxRetries', path: 'general.maxRetries', type: 'number', min: 0, max: 10, scope: 'instant', advanced: true, env: 'LLM_MAX_RETRIES' },
+          ],
+        }],
       },
       {
         id: 'tools', icon: 'construction',
@@ -201,16 +201,6 @@
         ],
       },
       {
-        id: 'models', icon: 'memory',
-        groups: [{
-          fields: [
-            { id: 'providerSort', path: 'general.openrouterProviderSort', type: 'segmented', options: ['default', 'price', 'latency', 'throughput'], scope: 'session', env: 'OPENROUTER_PROVIDER_SORT', envAliases: ['LLM__OPENROUTER_PROVIDER_SORT'] },
-            { id: 'providerOrder', path: 'general.openrouterProviderOrder', type: 'chips', suggestions: OPENROUTER_POPULAR_PROVIDERS, scope: 'session', env: 'OPENROUTER_PROVIDER_ORDER', envAliases: ['LLM__OPENROUTER_PROVIDER_ORDER'] },
-            { id: 'maxRetries', path: 'general.maxRetries', type: 'number', min: 0, max: 10, scope: 'instant', advanced: true, env: 'LLM_MAX_RETRIES' },
-          ],
-        }],
-      },
-      {
         id: 'graphs', icon: 'hub',
         groups: [
           {
@@ -221,6 +211,22 @@
           },
           { heading: 'danger', fields: [{ id: 'dangerZone', type: 'danger' }] },
         ],
+      },
+      {
+        id: 'interface', icon: 'palette',
+        groups: [{
+          fields: [
+            { id: 'language', type: 'language', scope: 'browser' },
+            { id: 'theme', type: 'theme', scope: 'browser' },
+            {
+              id: 'lightDim', type: 'lightDim', scope: 'browser',
+              inactive: () => currentTheme === 'light' ? null : { key: 'settings.inactive.lightOnly' },
+            },
+            { id: 'accent', type: 'accent', scope: 'browser' },
+            { id: 'font', type: 'font', scope: 'browser' },
+            { id: 'showInternal', type: 'browserToggle', scope: 'browser', env: 'SHOW_INTERNAL__ENABLED' },
+          ],
+        }],
       },
       {
         id: 'system', icon: 'dns',
@@ -432,7 +438,7 @@
 
     function resetSettingsSection(sectionId) {
       // The appearance lives in this browser, not in the server defaults.
-      if (sectionId === 'interface') resetAppearance();
+      if (sectionId === 'interface') { resetAppearance(); renderSettings(); return; }
       if (!settingsDefaults || !settingsDraft) return;
       EDITABLE_FIELDS.filter(f => f.section === sectionId).forEach(f => {
         const value = getSettingPath(settingsDefaults, f.path);
@@ -493,8 +499,12 @@
 
     function renderSettingsSection(section) {
       const hasEditable = EDITABLE_FIELDS.some(f => f.section === section.id);
-      const resetBtn = hasEditable && settingsDefaults ? `
-        <button type="button" data-action="reset-section" data-section="${section.id}" title="${escHtml(t('settings.resetHint'))}"
+      // A section of browser-only fields: nothing goes through Save, and its
+      // reset puts back the appearance at once.
+      const browserOnly = section.groups.every(g => g.fields.every(f => f.scope === 'browser'));
+      const resetHint = t(browserOnly ? 'settings.resetHint.browser' : 'settings.resetHint');
+      const resetBtn = (hasEditable && settingsDefaults) || browserOnly ? `
+        <button type="button" data-action="reset-section" data-section="${section.id}" title="${escHtml(resetHint)}"
           class="shrink-0 flex items-center gap-1 px-2.5 py-1.5 rounded-md text-[11px] text-on-surface-variant border border-outline-variant/20 hover:text-on-surface hover:bg-surface-container-high transition-colors">
           <span class="material-symbols-outlined text-sm">settings_backup_restore</span>${escHtml(t('settings.reset'))}
         </button>` : '';
@@ -507,7 +517,7 @@
           ${resetBtn}
         </div>
         <p class="flex items-center gap-1.5 text-[11px] text-outline-variant/80 mb-5">
-          <span class="material-symbols-outlined text-sm">info</span>${escHtml(t('settings.banner'))}
+          <span class="material-symbols-outlined text-sm">info</span>${escHtml(t(browserOnly ? 'settings.banner.browser' : 'settings.banner'))}
         </p>
         <div class="space-y-6">
           ${section.groups.map((group, i) => renderSettingsGroup(group, `${section.id}:${i}`)).join('')}
@@ -612,18 +622,23 @@
         </div>`;
     }
 
+    // On/off switch; `attrs` are the checkbox's own attributes (id, data-*).
+    function renderSwitch(attrs, checked, disabled, extraCls = '') {
+      return `
+        <label class="relative inline-flex items-center ${disabled ? 'cursor-not-allowed' : 'cursor-pointer'} ${extraCls}">
+          <input type="checkbox" ${attrs} class="sr-only peer" ${checked ? 'checked' : ''} ${disabled ? 'disabled' : ''} />
+          <span class="w-10 h-6 rounded-full bg-surface-variant border border-outline-variant/30 peer-checked:bg-primary peer-checked:border-primary transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-primary/50"></span>
+          <span class="absolute left-1 top-1 w-4 h-4 rounded-full bg-on-surface-variant peer-checked:bg-on-primary peer-checked:translate-x-4 transition-transform"></span>
+        </label>`;
+    }
+
     function renderSettingControl(field, disabled) {
       const value = field.path ? getSettingPath(settingsDraft, field.path) : undefined;
       const dis = disabled ? 'disabled' : '';
       const inputCls = 'bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs rounded-md px-3 py-2 focus:ring-1 focus:ring-primary/40 focus:border-primary/40 disabled:cursor-not-allowed';
       switch (field.type) {
         case 'toggle':
-          return `
-            <label class="relative inline-flex items-center cursor-pointer">
-              <input id="sf-${field.id}" type="checkbox" data-field="${field.id}" class="sr-only peer" ${value ? 'checked' : ''} ${dis} />
-              <span class="w-10 h-6 rounded-full bg-surface-variant border border-outline-variant/30 peer-checked:bg-primary peer-checked:border-primary transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-primary/50"></span>
-              <span class="absolute left-1 top-1 w-4 h-4 rounded-full bg-on-surface-variant peer-checked:bg-on-primary peer-checked:translate-x-4 transition-transform"></span>
-            </label>`;
+          return renderSwitch(`id="sf-${field.id}" data-field="${field.id}"`, value, disabled);
         case 'timeout': {
           const auto = value !== -1;
           return `
@@ -699,12 +714,7 @@
             </div>`;
         }
         case 'browserToggle':
-          return `
-            <label class="relative inline-flex items-center cursor-pointer">
-              <input id="sf-${field.id}" type="checkbox" data-browser-toggle="${field.id}" class="sr-only peer" ${showInternal ? 'checked' : ''} />
-              <span class="w-10 h-6 rounded-full bg-surface-variant border border-outline-variant/30 peer-checked:bg-primary peer-checked:border-primary transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-primary/50"></span>
-              <span class="absolute left-1 top-1 w-4 h-4 rounded-full bg-on-surface-variant peer-checked:bg-on-primary peer-checked:translate-x-4 transition-transform"></span>
-            </label>`;
+          return renderSwitch(`id="sf-${field.id}" data-browser-toggle="${field.id}"`, showInternal, false);
         case 'language': {
           // The one language control sets the interface and the report. The
           // server rejects a change while a run is active; lock the radio too.
@@ -830,7 +840,12 @@
       const status = document.getElementById('settings-status');
       let message;
       let kind;
-      if (errors.length) {
+      // A failed load or save outranks the counters: the draft is still dirty
+      // after a failed save, and the count alone would hide why.
+      if (settingsStatus && settingsStatus.kind === 'error') {
+        message = tf(settingsStatus.key, settingsStatus.vars);
+        kind = 'error';
+      } else if (errors.length) {
         message = tf('settings.status.errors', { n: errors.length });
         kind = 'error';
       } else if (dirty.length) {
@@ -1189,13 +1204,8 @@
       return `
         <div data-agent-row="${escHtml(agent.name)}" class="px-4 py-3 border-l-2 ${changed ? 'border-l-primary bg-primary/[0.03]' : 'border-l-transparent'}">
           <div class="flex items-start gap-3">
-            <label class="relative inline-flex items-center shrink-0 mt-0.5 ${locked ? 'cursor-not-allowed opacity-50' : 'cursor-pointer'}">
-              <input id="${escHtml(id)}" type="checkbox" data-agent-enabled="${escHtml(agent.name)}" class="sr-only peer"
-                ${enabled ? 'checked' : ''} ${locked ? 'disabled' : ''}
-                aria-label="${escHtml(tf('settings.agents.toggle', { name: agent.name }))}" />
-              <span class="w-10 h-6 rounded-full bg-surface-variant border border-outline-variant/30 peer-checked:bg-primary peer-checked:border-primary transition-colors peer-focus-visible:ring-2 peer-focus-visible:ring-primary/50"></span>
-              <span class="absolute left-1 top-1 w-4 h-4 rounded-full bg-on-surface-variant peer-checked:bg-on-primary peer-checked:translate-x-4 transition-transform"></span>
-            </label>
+            ${renderSwitch(`id="${escHtml(id)}" data-agent-enabled="${escHtml(agent.name)}"
+              aria-label="${escHtml(tf('settings.agents.toggle', { name: agent.name }))}"`, enabled, locked, `shrink-0 mt-0.5 ${locked ? 'opacity-50' : ''}`)}
             <div class="min-w-0 flex-1 ${enabled ? '' : 'opacity-70'}">
               <div class="flex items-center gap-2 flex-wrap">
                 <label for="${escHtml(id)}" class="font-mono text-[12px] text-on-surface" translate="no">${escHtml(agent.name)}</label>
@@ -1502,11 +1512,6 @@
         settingsStatus = { key: 'settings.status.saveFailed', vars: { error: e.message || e }, kind: 'error' };
       }
       renderSettings();
-      // An error status would otherwise be hidden behind the unsaved-changes count.
-      if (settingsStatus.kind === 'error') {
-        status.textContent = tf(settingsStatus.key, settingsStatus.vars);
-        status.className = 'text-[11px] flex-1 min-w-0 truncate text-error';
-      }
     }
 
     // ── danger zone ─────────────────────────────────────────────────────────

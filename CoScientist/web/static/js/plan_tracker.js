@@ -339,7 +339,7 @@
               ${disclosure}
               <span class="material-symbols-outlined text-[15px] shrink-0 mt-px ${view.iconClass}">${view.icon}</span>
               <span class="text-[10px] text-outline-variant tabular-nums shrink-0 mt-0.5 w-4 text-right">${idx + 1}</span>
-              <span class="text-[12px] leading-snug break-words min-w-0 flex-1 ${view.textClass}">${escHtml(title)}</span>
+              <span class="text-[12px] leading-snug break-words min-w-0 flex-1 ${view.textClass}">${mdInline(title)}</span>
               ${counter}
             </div>
           </div>

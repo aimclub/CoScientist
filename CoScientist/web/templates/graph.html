@@ -1854,13 +1854,13 @@
         isWriteUp ? t('graph.type.report') : t('graph.detail.says'),
         n.output || n.label, isWriteUp);
       if (n.why)
-        body += `<div class="k">${t('graph.why.title')}</div><pre>${esc(n.why)}</pre>`;
+        body += `<div class="k">${t('graph.why.title')}</div>${proseBlock(n.why)}`;
       else if (n.why_missing)
         body += `<div class="k">${t('graph.why.title')}</div>`
               + `<div class="empty">${esc(t('graph.why.missing'))}</div>`;
       // The research card's own fields: these keys are attribute codes the
       // server sends for the browser to translate (i18n.js says so explicitly).
-      body += readable(t('graph.detail.details'), n.input, null, true);
+      body += readable(t('graph.detail.details'), n.input, null, true, true);
       body += historyBlock(n.status_history);
       body += attachmentsBlock(n.chips, t('graph.chips.tools'));
       body += attachmentsBlock(n.attachments, t('graph.attach.title'));
@@ -2122,6 +2122,9 @@
         }
         const text = String(v);
         const long = text.length > 90 || text.includes("\n");
+        // A card's long field is the agent's prose, and that is markdown.
+        const html = long && fields ? markdown(text) : null;
+        if (html) return `<div class="row">${key}<div class="val block report">${html}</div></div>`;
         return `<div class="row">${key}<span class="val${long ? " block" : ""}">${scalarValue(text, fields)}</span></div>`;
       }).join("") + `</div>`;
     }
@@ -2134,7 +2137,15 @@
     }
     // A titled block: labelled rows for a mapping, a list for a list, the text
     // itself for prose, and nothing at all when there is nothing to show.
-    function readable(title, value, ctx, fields){
+    // Prose from an agent or a person, rendered as markdown; plain text when
+    // the markdown libraries did not load.
+    function proseBlock(text){
+      const html = markdown(text);
+      return html ? `<div class="report">${html}</div>` : `<pre>${esc(String(text))}</pre>`;
+    }
+    // `prose`: a plain string here is words, not a tool's arguments or output,
+    // so it is rendered as markdown rather than kept verbatim.
+    function readable(title, value, ctx, fields, prose){
       const v = parseValue(value), repaired = salvaged;
       if (v === null) return "";
       let body;
@@ -2143,7 +2154,7 @@
         const t = tidy(v, ctx);
         if (!Object.keys(t).length) return "";
         body = kvRows(t, 0, fields);
-      } else body = `<pre>${esc(String(v))}</pre>`;
+      } else body = prose ? proseBlock(String(v)) : `<pre>${esc(String(v))}</pre>`;
       const raw = typeof value === "string" ? value.length : 0;
       const size = raw > 900 ? ` <span class="chars">${esc(t('graph.chars', { count: raw.toLocaleString() }))}</span>` : "";
       return `<div class="k">${title}${size}</div>${body}${truncationNote(value, repaired)}`;
@@ -2385,7 +2396,7 @@
         : n.kind === "goal" ? "❯ " + t('graph.detail.request') : n.kind === "result" ? "✔ " + t('graph.detail.answer')
         : String(n.label || n.kind || "");
       let body;
-      if (n.kind === "goal") body = readable(t('graph.detail.whatAsked'), n.label);
+      if (n.kind === "goal") body = readable(t('graph.detail.whatAsked'), n.label, null, false, true);
       else if (n.kind === "result") body = reportBlock(t('graph.detail.answer'), n.output || n.label);
       else if (isAgent && panelTab === "report") {
         // The summary alone: what a reader came for. Everything recorded is
@@ -2396,7 +2407,7 @@
           : n.io_source === "request" ? t('graph.detail.ioRequest') : "";
         body = reportBlock(t('graph.detail.report'), n.output)
           + artifactsBlock(n.artifacts)
-          + readable(t('graph.detail.task'), n.input, { agent: n.executor_agent })
+          + readable(t('graph.detail.task'), n.input, { agent: n.executor_agent }, false, true)
           + (where ? `<div class="note">${esc(where)}</div>` : "");
       } else if (n.kind === "decision") {
         // A decision carries the thing decided, not a call's arguments. The
@@ -2404,10 +2415,10 @@
         // the human gave it.
         body = readable(n.input && n.input.kind === "experiment_plan"
                           ? t('graph.detail.plan') : t('graph.detail.decision'),
-                        n.input)
+                        n.input, null, false, true)
           + (n.verdict ? `<div class="k">${t('graph.detail.outcome')}</div>`
                          + `<div class="attr">${esc(n.verdict)}</div>` : "")
-          + readable(t('graph.detail.note'), n.output);
+          + readable(t('graph.detail.note'), n.output, null, false, true);
       } else body = readable(t('graph.detail.arguments'), n.input) + readable(t('graph.detail.result'), n.output);
       if (isAgent && panelTab === "more") {
         // Older snapshots recorded nothing on the agent itself; say so, or

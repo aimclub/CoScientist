@@ -378,7 +378,7 @@
               <div class="flex items-center justify-end gap-2 pt-1 border-t border-outline-variant/10">
                 <button type="button" onclick="cancelEditTask('${escHtml(taskId)}')"
                   class="px-3 py-1 rounded-md text-[11px] font-medium text-outline-variant hover:text-on-surface hover:bg-surface-container-high transition-colors">
-                  ${t('settings.cancel')}
+                  ${t('common.cancel')}
                 </button>
                 <button type="button" onclick="saveEditTask('${escHtml(taskId)}')"
                   class="flex items-center gap-1 px-3.5 py-1 rounded-md text-[11px] font-semibold bg-primary text-on-primary shadow-sm hover:brightness-110 active:scale-95 transition-all">

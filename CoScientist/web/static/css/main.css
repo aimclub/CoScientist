@@ -723,6 +723,29 @@
       line-height: 1.6;
     }
 
+    /* Markdown inside a card field keeps the card's own size and alignment. */
+    .md-body.md-fit {
+      font-size: inherit;
+      line-height: inherit;
+    }
+
+    .md-body.md-fit p,
+    .md-body.md-fit li {
+      text-align: inherit;
+    }
+
+    .md-body.md-fit p {
+      margin: 0.25em 0;
+    }
+
+    .md-body.md-fit>*:first-child {
+      margin-top: 0;
+    }
+
+    .md-body.md-fit>*:last-child {
+      margin-bottom: 0;
+    }
+
     .md-body>*:first-child {
       margin-top: 0;
     }

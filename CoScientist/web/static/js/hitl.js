@@ -87,8 +87,13 @@ function hitlDetailBlock(data) {
   return null;
 }
 
+// The agent's message is markdown; the "via" line is ours and stays text.
+function hitlDynamicHtml(part, text) {
+  return part === 'message' ? mdInline(text) : escHtml(text);
+}
+
 function hitlDynamic(data, part, text) {
-  return `<span data-hitl-part="${part}" data-hitl-rid="${escHtml(data.request_id || '')}">${escHtml(text)}</span>`;
+  return `<span data-hitl-part="${part}" data-hitl-rid="${escHtml(data.request_id || '')}">${hitlDynamicHtml(part, text)}</span>`;
 }
 
 function hitlLabel(key) {
@@ -99,7 +104,8 @@ function relocalizeHitlCards() {
   document.querySelectorAll('[data-hitl-part]').forEach(el => {
     const data = hitlCards.get(el.dataset.hitlRid);
     if (!data) return;
-    el.textContent = el.dataset.hitlPart === 'via' ? describeHitlVia(data) : localizeHitlMessage(data);
+    const part = el.dataset.hitlPart;
+    el.innerHTML = hitlDynamicHtml(part, part === 'via' ? describeHitlVia(data) : localizeHitlMessage(data));
   });
   redrawPlanCards();
 }
@@ -588,7 +594,7 @@ function renderHitlForm(live, data) {
     return `
           <div class="mt-4 border border-outline-variant/15 rounded-lg p-4 bg-surface-container-high/30">
             <p class="text-[19px] font-bold text-on-surface leading-tight">${escHtml(blockTitle)}</p>
-            ${blockUsage ? `<p class="text-[13px] text-on-surface-variant/80 mb-2.5 mt-0.5">${escHtml(blockUsage)}</p>` : '<div class="mb-2"></div>'}
+            ${blockUsage ? `<div class="text-[13px] text-on-surface-variant/80 mb-2.5 mt-0.5">${mdBlock(blockUsage)}</div>` : '<div class="mb-2"></div>'}
             <div class="flex flex-col gap-2">${fieldsHtml}</div>
           </div>`;
   }).join('');
@@ -611,7 +617,7 @@ function renderHitlForm(live, data) {
               </div>
               <h3 class="font-headline font-bold text-base text-on-surface uppercase tracking-tight">${escHtml(formTitle)}</h3>
             </div>
-            <p class="text-sm text-on-surface-variant leading-relaxed">${escHtml(formIntro)}</p>
+            <div class="text-sm text-on-surface-variant leading-relaxed">${mdBlock(formIntro)}</div>
             ${blocksBlock}
             <div class="flex flex-wrap gap-3 mt-4">
               <button onclick="respondHITLForm('${rid}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
@@ -712,13 +718,13 @@ function woStepRow(step, compact) {
           <div class="flex items-baseline gap-2">
             <span data-wo-mark class="font-mono text-primary w-4 text-center">${WO_STEP_MARK[status] || '○'}</span>
             <span class="font-mono text-[11px] text-outline-variant shrink-0">${escHtml(step.id)}</span>
-            <span class="text-on-surface">${escHtml(step.title || '')}</span>
+            <span class="text-on-surface">${mdInline(step.title || '')}</span>
             <span class="flex flex-wrap gap-1">${tools}</span>
           </div>
-          ${step.inputs ? `<p class="pl-6 text-[12px] text-on-surface-variant">↑ ${escHtml(t('workStep.sends'))}: ${escHtml(step.inputs)}</p>` : ''}
-          ${step.expected_outcome ? `<p class="pl-6 text-[12px] text-on-surface-variant">→ ${escHtml(step.expected_outcome)}</p>` : ''}
-          ${step.result ? `<p class="pl-6 text-[12px] text-on-surface">✓ ${escHtml(t('workStep.found'))}: ${escHtml(step.result)}</p>` : ''}
-          <p data-wo-note class="pl-6 text-[12px] text-on-surface-variant italic">${escHtml(step.note || '')}</p>
+          ${step.inputs ? `<p class="pl-6 text-[12px] text-on-surface-variant">↑ ${escHtml(t('workStep.sends'))}: ${mdInline(step.inputs)}</p>` : ''}
+          ${step.expected_outcome ? `<p class="pl-6 text-[12px] text-on-surface-variant">→ ${mdInline(step.expected_outcome)}</p>` : ''}
+          ${step.result ? `<p class="pl-6 text-[12px] text-on-surface">✓ ${escHtml(t('workStep.found'))}: ${mdInline(step.result)}</p>` : ''}
+          <p data-wo-note class="pl-6 text-[12px] text-on-surface-variant italic">${mdInline(step.note || '')}</p>
           ${woStepReviewBadge(step.review)}
         </li>`;
 }
@@ -731,7 +737,7 @@ const WS_REVIEW_STYLE = {
 
 function woStepReviewBadge(review) {
   if (!review || !review.status || review.status === 'pending') return '';
-  const notes = review.notes ? ` <span class="text-[11px] text-outline-variant">${escHtml(review.notes)}</span>` : '';
+  const notes = review.notes ? ` <span class="text-[11px] text-outline-variant">${mdInline(review.notes)}</span>` : '';
   return `<p class="pl-6">${woChip(t('workStep.review.' + review.status, review.status), WS_REVIEW_STYLE[review.status])}${notes}</p>`;
 }
 
@@ -742,11 +748,11 @@ function workOrderBody(order, rid, interactive, compact) {
       return `
             <label class="flex items-start gap-2 cursor-pointer">
               <input type="checkbox" checked data-wo-assumption="${escHtml(a.id)}" class="mt-0.5 accent-primary" />
-              <span><span class="font-mono text-[10px] text-outline-variant">${escHtml(a.id)}</span> ${escHtml(a.text)}</span>
+              <span><span class="font-mono text-[10px] text-outline-variant">${escHtml(a.id)}</span> ${mdInline(a.text)}</span>
             </label>`;
     }
     const struck = a.rejected ? 'line-through text-outline-variant' : '';
-    return `<p class="${struck}"><span class="font-mono text-[10px] text-outline-variant">${escHtml(a.id)}</span> ${escHtml(a.text)}</p>`;
+    return `<p class="${struck}"><span class="font-mono text-[10px] text-outline-variant">${escHtml(a.id)}</span> ${mdInline(a.text)}</p>`;
   }).join('');
   const effects = (order.side_effects || []).map(e =>
     woChip((e.kind || e) + (e.detail ? ': ' + e.detail : ''), WO_TIER_STYLE.side_effect)).join(' ');
@@ -785,12 +791,12 @@ function workOrderBody(order, rid, interactive, compact) {
 
   const body = `
         <div class="text-xs text-on-surface-variant leading-relaxed">
-          ${woSection('workOrder.goal', `<p class="text-on-surface">${escHtml(order.goal || '')}</p>`)}
-          ${woSection('workOrder.done', order.done_criteria ? `<p>${escHtml(order.done_criteria)}</p>` : '')}
+          ${woSection('workOrder.goal', `<div class="text-on-surface">${mdBlock(order.goal || '')}</div>`)}
+          ${woSection('workOrder.done', order.done_criteria ? mdBlock(order.done_criteria) : '')}
           ${tools ? `<div class="${toolsOnlyInternal ? 'wo-internal' : ''}">${woSection('workOrder.tools', `<div class="flex flex-wrap gap-1">${tools}</div>`)}</div>` : ''}
           ${woSection('workOrder.sideEffects', effects ? `<div class="flex flex-wrap gap-1">${effects}</div>` : '')}
-          ${woSection('workOrder.expected', order.expected_outcome ? `<p>${escHtml(order.expected_outcome)}</p>` : '')}
-          ${woSection('workOrder.fallback', order.fallback ? `<p>${escHtml(order.fallback)}</p>` : '')}
+          ${woSection('workOrder.expected', order.expected_outcome ? mdBlock(order.expected_outcome) : '')}
+          ${woSection('workOrder.fallback', order.fallback ? mdBlock(order.fallback) : '')}
         </div>`;
   // The prose folds; the controls under it do not. `.fold-body` clips with
   // `overflow: hidden`, so anything inside it that has to be clicked — or
@@ -840,7 +846,7 @@ function workOrderDiff(ctx) {
   (diff.added_tools || []).forEach(tn => rows.push('+ ' + tn));
   (diff.added_side_effects || []).forEach(e => rows.push('+ ' + e.kind + (e.detail ? ': ' + e.detail : '')));
   (diff.added_steps || []).forEach(st => rows.push('+ ' + st.id + '. ' + st.title));
-  const reason = ctx.reason ? woSection('workOrder.reason', `<p class="text-on-surface">${escHtml(ctx.reason)}</p>`) : '';
+  const reason = ctx.reason ? woSection('workOrder.reason', `<div class="text-on-surface">${mdBlock(ctx.reason)}</div>`) : '';
   const changes = rows.length ? woSection('workOrder.added',
     `<pre class="font-mono text-[12px] text-secondary whitespace-pre-wrap bg-surface-container-high px-2.5 py-2 rounded border border-outline-variant/20">${escHtml(rows.join('\n'))}</pre>`) : '';
   return reason + changes;
@@ -1029,7 +1035,7 @@ function wrWarning(w) {
 function wrFindingRow(f, interactive) {
   const head = `
             <span class="font-mono text-[10px] text-outline-variant">${escHtml(f.id)}</span>
-            <span class="text-on-surface">${escHtml(f.text || '')}</span>
+            <span class="text-on-surface">${mdInline(f.text || '')}</span>
             ${woChip(t('workReport.confidence.' + f.confidence, f.confidence || ''), WR_CONFIDENCE_STYLE[f.confidence] || WR_CONFIDENCE_STYLE.medium)}
             ${f.step_id ? `<span class="font-mono text-[10px] text-outline-variant">${escHtml(f.step_id)}</span>` : ''}`;
   const evidence = f.evidence
@@ -1069,21 +1075,21 @@ function workReportBody(order, report, extra, interactive, compact) {
     t('workReport.verdict.' + report.done_verdict, report.done_verdict || ''),
     WR_VERDICT_STYLE[report.done_verdict] || WR_VERDICT_STYLE.partial);
   const done = order.done_criteria || verdict ? `
-            <p>${escHtml(order.done_criteria || '')} ${verdict}</p>
-            ${report.done_evidence ? `<p class="text-[11px] text-outline-variant">${escHtml(report.done_evidence)}</p>` : ''}` : '';
+            <p>${mdInline(order.done_criteria || '')} ${verdict}</p>
+            ${report.done_evidence ? `<div class="text-[11px] text-outline-variant">${mdBlock(report.done_evidence)}</div>` : ''}` : '';
   const outcome = order.expected_outcome || report.actual_outcome ? `
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              <div><p class="text-[10px] text-outline-variant">${hitlLabel('workOrder.expected')}</p><p>${escHtml(order.expected_outcome || '—')}</p></div>
-              <div><p class="text-[10px] text-outline-variant">${hitlLabel('workReport.actual')}</p><p class="text-on-surface">${escHtml(report.actual_outcome || '—')}</p></div>
+              <div><p class="text-[10px] text-outline-variant">${hitlLabel('workOrder.expected')}</p>${mdBlock(order.expected_outcome || '—')}</div>
+              <div><p class="text-[10px] text-outline-variant">${hitlLabel('workReport.actual')}</p><div class="text-on-surface">${mdBlock(report.actual_outcome || '—')}</div></div>
             </div>` : '';
   const artifacts = (report.artifacts || []).map(a => `
             <p class="flex items-baseline gap-2 flex-wrap">${woChip(t('workReport.kind.' + a.kind, a.kind || 'other'))}
               <span class="font-mono text-[11px] text-on-surface break-all">${escHtml(a.ref || '')}</span>
-              ${a.description ? `<span class="text-[11px] text-outline-variant">${escHtml(a.description)}</span>` : ''}</p>`).join('');
+              ${a.description ? `<span class="text-[11px] text-outline-variant">${mdInline(a.description)}</span>` : ''}</p>`).join('');
   const calls = Object.entries(journal.tool_calls || {}).map(([tn, n]) => woChip(`${tn} ×${n}`)).join(' ');
   const effects = (journal.side_effects || []).map(k => woChip(k, WO_TIER_STYLE.side_effect)).join(' ');
   const amendments = (journal.amendments || []).map(a =>
-    `<p class="text-[11px]"><span class="font-mono text-outline-variant">rev ${escHtml(String(a.revision || '?'))}</span> ${escHtml(a.reason || '')}</p>`).join('');
+    `<p class="text-[11px]"><span class="font-mono text-outline-variant">rev ${escHtml(String(a.revision || '?'))}</span> ${mdInline(a.reason || '')}</p>`).join('');
   const deviations = (journal.deviations || []).map(d =>
     `<p class="text-[11px] text-tertiary font-mono">⚠ ${escHtml(d.tool || '?')} — ${escHtml(t('workOrder.reason.' + d.reason, d.reason || ''))}</p>`).join('');
   const journalHtml = calls || effects || amendments || deviations ? `
@@ -1097,7 +1103,7 @@ function workReportBody(order, report, extra, interactive, compact) {
     ? `<p class="text-[10px] text-outline-variant mb-1">${hitlLabel('workReport.finalAnswer')}</p>
        ${foldable(`<div class="md-body hitl-prose text-on-surface border-l-2 border-primary/40 pl-4 pr-1">`
          + `${renderMarkdown(report.summary || '—')}</div>`, report.summary || '', { bg: 'rgb(var(--c-surface-container-low))' })}`
-    : `<p class="text-on-surface">${escHtml(report.summary || '')}</p>`;
+    : `<div class="text-on-surface">${mdBlock(report.summary || '')}</div>`;
   const findingsBlock = woSection('workReport.findings', findings
     ? (interactive ? `<p class="text-[12px] text-on-surface-variant mb-1.5">${hitlLabel('workReport.findingsHint')}</p>` : '')
       + `<ol class="flex flex-col gap-1.5">${findings}</ol>`
@@ -1119,7 +1125,7 @@ function workReportBody(order, report, extra, interactive, compact) {
   const body = `
         <div class="text-xs text-on-surface-variant leading-relaxed">
           ${warningsBlock}
-          ${woSection('workOrder.goal', `<p>${escHtml(order.goal || '')}</p>`)}
+          ${woSection('workOrder.goal', mdBlock(order.goal || ''))}
           ${woSection('workReport.summary', summary)}
           ${findingsBlock}
           ${woSection('workOrder.done', done)}
@@ -1190,18 +1196,18 @@ function workStepBody(order, step, calls) {
   const review = step.review || {};
   const history = (review.history || []).map(h => `
             <p class="text-[11px] text-outline-variant"><span class="font-mono">${escHtml(t('workReport.round').replace('{n}', h.round || '?'))}</span>
-              ${escHtml(h.result || '—')}${h.notes ? ` — <span class="text-tertiary">${escHtml(h.notes)}</span>` : ''}</p>`).join('');
+              ${mdInline(h.result || '—')}${h.notes ? ` — <span class="text-tertiary">${mdInline(h.notes)}</span>` : ''}</p>`).join('');
   const callRows = (calls || []).map(wsCallRow).join('');
   return `
         <div class="text-xs text-on-surface-variant leading-relaxed">
-          ${woSection('workOrder.goal', `<p>${escHtml(order.goal || '')}</p>`)}
-          ${woSection('workStep.step', `<p class="text-on-surface"><span class="font-mono text-[10px] text-outline-variant">${escHtml(step.id || '')}</span> ${escHtml(step.title || '')}</p>
+          ${woSection('workOrder.goal', mdBlock(order.goal || ''))}
+          ${woSection('workStep.step', `<p class="text-on-surface"><span class="font-mono text-[10px] text-outline-variant">${escHtml(step.id || '')}</span> ${mdInline(step.title || '')}</p>
             <div class="flex flex-wrap gap-1 mt-1">${woToolChips(step.tools, step.internal_tools)}</div>`)}
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
-            <div><p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${hitlLabel('workStep.sent')}</p><p>${escHtml(step.inputs || '—')}</p></div>
-            <div><p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${hitlLabel('workStep.expected')}</p><p>${escHtml(step.expected_outcome || '—')}</p></div>
-            <div><p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${hitlLabel('workStep.foundTitle')}</p><p class="text-on-surface">${escHtml(step.result || '—')}</p>
-              ${step.note ? `<p class="text-[11px] text-outline-variant italic mt-1">${escHtml(step.note)}</p>` : ''}</div>
+            <div><p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${hitlLabel('workStep.sent')}</p>${mdBlock(step.inputs || '—')}</div>
+            <div><p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${hitlLabel('workStep.expected')}</p>${mdBlock(step.expected_outcome || '—')}</div>
+            <div><p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${hitlLabel('workStep.foundTitle')}</p><div class="text-on-surface">${mdBlock(step.result || '—')}</div>
+              ${step.note ? `<div class="text-[11px] text-outline-variant italic mt-1">${mdBlock(step.note)}</div>` : ''}</div>
           </div>
           ${woSection('workStep.calls', callRows
     ? `<ol class="flex flex-col gap-2">${callRows}</ol>`
@@ -1359,9 +1365,10 @@ const PLAN_CHIP_TONE = 'text-on-surface-variant border-outline-variant/30 bg-sur
 // text ("unspecified", "n/a") made an unfilled design look filled in.
 function planDash() { return '<span class="text-outline-variant/60">—</span>'; }
 
+// Planner prose (a question, a description, a rationale) is markdown.
 function planText(value) {
   const text = (value === 0 || value) ? String(value).trim() : '';
-  return text ? escHtml(text) : planDash();
+  return text ? mdInline(text) : planDash();
 }
 
 // A list reads as a list, not as one comma-glued line: a task's metrics,
@@ -1443,7 +1450,7 @@ function planCriteria(task) {
     <span class="text-[11px] uppercase tracking-wider text-outline-variant ml-1">${escHtml(c.kind || '')}</span>
     ${c.threshold ? `<span class="ml-1 font-mono text-[10px] text-tertiary">${escHtml(c.threshold)}</span>` : ''}
     <div class="text-[11px]">${planText(c.description)}</div>
-    ${c.verification ? `<div class="text-[10px] text-outline-variant">${escHtml(c.verification)}</div>` : ''}
+    ${c.verification ? `<div class="text-[10px] text-outline-variant">${mdInline(c.verification)}</div>` : ''}
   </div>`).join('');
 }
 
@@ -1454,14 +1461,14 @@ function planInputs(task) {
     <span class="font-mono text-[10px] text-on-surface">${escHtml(d.data_id || '')}</span>
     <span class="text-[11px] uppercase tracking-wider text-outline-variant ml-1">${escHtml(d.kind || '')}</span>
     ${d.location ? `<div class="font-mono text-[10px] text-outline-variant break-all">${escHtml(d.location)}</div>` : ''}
-    ${d.description ? `<div class="text-[11px]">${escHtml(d.description)}</div>` : ''}
+    ${d.description ? `<div class="text-[11px]">${mdInline(d.description)}</div>` : ''}
   </div>`).join('');
 }
 
 function planDatasetCell(dataset) {
   if (!dataset || !dataset.name) return planDash();
   const ref = dataset.ref ? ` <span class="font-mono text-[10px] text-outline-variant break-all">${escHtml(dataset.ref)}</span>` : '';
-  const notes = dataset.notes ? `<div class="text-[10px] text-outline-variant">${escHtml(dataset.notes)}</div>` : '';
+  const notes = dataset.notes ? `<div class="text-[10px] text-outline-variant">${mdInline(dataset.notes)}</div>` : '';
   return escHtml(dataset.name) + ref + notes;
 }
 
@@ -1540,7 +1547,7 @@ function planCritiqueBlock(plan) {
     <span class="text-[11px] uppercase tracking-wider text-outline-variant ml-1">${escHtml(i.category || '')}</span>
     ${i.task_id ? `<span class="font-mono text-[11px] text-primary ml-1">${escHtml(i.task_id)}</span>` : ''}
     <div class="text-[11px]">${planText(i.message)}</div>
-    ${i.suggestion ? `<div class="text-[10px] text-outline-variant">${escHtml(i.suggestion)}</div>` : ''}
+    ${i.suggestion ? `<div class="text-[10px] text-outline-variant">${mdInline(i.suggestion)}</div>` : ''}
   </div>`).join('');
   return planSection(t('plan.critique'),
     `<p class="text-[11px] ${approved ? 'text-secondary' : 'text-tertiary'} mb-1">${escHtml(approved ? t('plan.critique.approve') : t('plan.critique.revise'))}</p>${issues}`);
@@ -1548,7 +1555,7 @@ function planCritiqueBlock(plan) {
 
 function planBullets(list) {
   return (list || []).length
-    ? `<ul class="list-disc list-inside text-[11px] text-on-surface-variant space-y-0.5">${list.map(x => `<li>${escHtml(x)}</li>`).join('')}</ul>`
+    ? `<ul class="list-disc list-inside text-[11px] text-on-surface-variant space-y-0.5">${list.map(x => `<li>${mdInline(x)}</li>`).join('')}</ul>`
     : '';
 }
 
