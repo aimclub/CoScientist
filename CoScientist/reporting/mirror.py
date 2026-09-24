@@ -73,9 +73,19 @@ def _fetch(url: str, *, limit: int, timeout: int) -> tuple[Optional[bytes], Opti
         return None, None, sf.REASON_UNREADABLE
 
     try:
-        if response.status_code in (401, 403, 404, 410):
-            # The usual shape of an expired signature, not a broken server.
-            return None, None, sf.REASON_LINK_EXPIRED
+        if response.status_code in (404, 410):
+            return None, None, sf.REASON_NOT_FOUND
+        if response.status_code in (401, 403):
+            # A 403 has two quite different meanings and they used to be
+            # recorded as one. On a SIGNED link it is the usual shape of an
+            # expired signature — the reason this code existed. On an ordinary
+            # link it is the host refusing us, which is what NCBI does to a
+            # programmatic GET of its article tree; two papers in a live session
+            # were filed as expired links when nothing had expired.
+            #
+            # The signature is the discriminator, and it is in the URL.
+            return None, None, (sf.REASON_LINK_EXPIRED if _is_signed(url)
+                                else sf.REASON_REFUSED)
         if response.status_code >= 400:
             return None, None, f"download_failed:{response.status_code}"
 
@@ -99,6 +109,18 @@ def _fetch(url: str, *, limit: int, timeout: int) -> tuple[Optional[bytes], Opti
         return None, None, sf.REASON_UNREADABLE
     finally:
         response.close()
+
+
+#: What a capability-with-an-expiry looks like, across the storage services this
+#: system meets. `collect._is_artifact_url` recognises the same two markers.
+_SIGNED_MARKERS = ("x-amz-signature=", "x-amz-credential=", "x-goog-signature=",
+                   "signature=", "&expires=", "?expires=", "se=", "sig=")
+
+
+def _is_signed(url: Optional[str]) -> bool:
+    """Whether this address carries a signature that can expire."""
+    query = str(url or "").split("?", 1)[-1].lower() if "?" in str(url or "") else ""
+    return any(marker in query for marker in _SIGNED_MARKERS)
 
 
 def _read_local(path: Path, *, limit: int) -> tuple[Optional[bytes], Optional[str]]:
@@ -150,7 +172,8 @@ def mirror_artifact(
     reason = _blocked(key, cfg)
     if reason:
         return sf.note(key, state=sf.STATE_SKIPPED, reason=reason, filename=name,
-                       label=label, source_tool=tool, source_url=url)
+                       label=label, source_tool=tool, source_kind=source_kind,
+                       source_url=url)
 
     limit = cfg.max_file_mb * _MB
     media_type: Optional[str] = None
@@ -164,19 +187,22 @@ def mirror_artifact(
         payload, reason = _read_local(Path(path), limit=limit)
         if reason:
             return sf.note(key, state=_outcome(reason), reason=reason, filename=name,
-                           label=label, source_tool=tool, source_url=url)
+                           label=label, source_tool=tool,
+                           source_kind=source_kind, source_url=url)
 
     if payload is None:
         target = url or _vault_url(bucket, s3_key)
         if not target:
             return sf.note(key, state=sf.STATE_FAILED, reason=sf.REASON_UNREADABLE,
-                           filename=name, label=label, source_tool=tool)
+                           filename=name, label=label, source_tool=tool,
+                           source_kind=source_kind)
         payload, media_type, reason = _fetch(
             target, limit=limit, timeout=cfg.download_timeout
         )
         if reason:
             return sf.note(key, state=_outcome(reason), reason=reason, filename=name,
-                           label=label, source_tool=tool, source_url=url)
+                           label=label, source_tool=tool,
+                           source_kind=source_kind, source_url=url)
 
     record = sf.put_bytes(
         key, payload,
