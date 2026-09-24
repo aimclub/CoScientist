@@ -12,4 +12,4 @@ agents:
       before_model: [save_uploaded_artifacts, seed_coder_workspace, redact_link_urls, require_pilot_tool]
       before_tool: [resolve_link_refs]
       after_tool: [register_tool_result_links]
-      after_model: [require_pilot_tool_call, expand_link_refs, guard_unknown_tools]
+      after_model: [require_pilot_tool_call, expand_link_refs]

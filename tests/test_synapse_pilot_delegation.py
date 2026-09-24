@@ -151,6 +151,7 @@ def test_pilot_profile_wires_contract_without_changing_regular_demo():
 
     assert "require_pilot_tool" in pilot_callbacks.before_model
     assert pilot_callbacks.after_model[0] == "require_pilot_tool_call"
+    assert "guard_unknown_tools" not in pilot_callbacks.after_model
     assert "require_pilot_tool" not in regular_callbacks.before_model
 
     orchestrator = build_system(pilot, remote_subagents=True).root
@@ -172,3 +173,26 @@ def test_pilot_reasoning_matches_gpt_oss_gateway_without_changing_regular_demo()
     assert pilot.agent("HypothesesAgent").reasoning == "medium"
     assert regular.defaults.reasoning is False
     assert regular.agent("HypothesesAgent").reasoning == "high"
+
+
+def test_pilot_rejects_out_of_order_registered_tool():
+    context = _context(_event("retrieve_tools"))
+    context._invocation_context.canonical_tools_cache = [
+        SimpleNamespace(name=name)
+        for name in ("retrieve_tools", "ResearchAgent", "TaskExecutorAgent")
+    ]
+
+    with pytest.raises(RuntimeError, match="expected ResearchAgent"):
+        require_pilot_tool_call(
+            context,
+            LlmResponse(
+                content=types.Content(
+                    role="model",
+                    parts=[
+                        types.Part.from_function_call(
+                            name="TaskExecutorAgent", args={}
+                        )
+                    ],
+                )
+            ),
+        )

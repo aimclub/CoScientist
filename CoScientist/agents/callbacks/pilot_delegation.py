@@ -67,6 +67,14 @@ def require_pilot_tool_call(callback_context, llm_response):
     parts = getattr(llm_response.content, "parts", None) or []
     calls = [part.function_call.name for part in parts if part.function_call]
     if calls != [name]:
+        # An unregistered name must reach ADK so it can return a tool error and
+        # let the model retry. Registered calls out of order still fail closed.
+        tools = getattr(
+            callback_context._invocation_context, "canonical_tools_cache", None
+        )
+        if len(calls) == 1 and tools is not None:
+            if calls[0] not in {tool.name for tool in tools}:
+                return None
         raise RuntimeError(
             f"Pilot delegation contract: expected {name} call, got {calls or 'prose'}"
         )
