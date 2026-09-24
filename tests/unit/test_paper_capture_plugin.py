@@ -32,6 +32,22 @@ def key(tmp_path, monkeypatch):
     return ("u", "s")
 
 
+@pytest.fixture(autouse=True)
+def _no_leaked_lookups():
+    """`pmc` remembers a failed lookup for ten minutes, in a process global.
+
+    Without this, one test's failed resolution silences the next test's — which
+    is exactly what happened: the dedupe case below passed in file order and
+    failed run on its own, because an earlier test had already filled the
+    negative cache and the second lookup never left the process.
+    """
+    from CoScientist.reporting import pmc
+
+    pmc.forget()
+    yield
+    pmc.forget()
+
+
 def _tavily(*items):
     """The envelope Tavily actually returns."""
     return {"content": [{"type": "text", "text": json.dumps({
@@ -182,20 +198,112 @@ def test_a_pdf_already_mirrored_is_re_filed_not_re_fetched(key, monkeypatch):
 
 
 def test_a_second_search_does_not_fetch_the_same_paper_again(key, monkeypatch):
+    """The bytes are bought once.
+
+    Counted over the PAPER's own address, not over every request the capture
+    makes: an open-access lookup asks two services about the id, and counting
+    those made this assertion depend on whether an earlier test had already
+    filled the lookup cache — it passed in file order and failed alone.
+    """
     import requests
 
-    calls = []
+    fetched = []
 
-    def _once(*a, **k):
-        calls.append(a)
+    def _get(url, *a, **k):
+        if str(url).startswith(PMC["url"]):
+            fetched.append(url)
         return _Response()
 
-    monkeypatch.setattr(requests, "get", _once)
+    monkeypatch.setattr(requests, "get", _get)
     ctx = _Ctx(key)
     _run(PaperCapturePlugin(), "tavily_search", _tavily(PMC), ctx)
     _run(PaperCapturePlugin(), "tavily_search", _tavily(PMC), ctx)
-    assert len(calls) == 1
+    assert len(fetched) == 1, fetched
     assert len(pl.library(ctx.state)) == 1
+
+
+def test_a_work_cited_in_the_snippet_is_not_taken_for_the_page_itself(key):
+    """The identity of a result is what its ADDRESS says, not what it mentions.
+
+    An abstract cites other works by DOI and by PMC id as a matter of course.
+    Read as this page's own handles, they made `merge` fold the cited work into
+    this record on the shared key, `_attach_paper` stamp an Evidence with a DOI
+    belonging to neither, and the bibliography print the pair. One wrong
+    attribution of someone else's work is worse than a hundred left unmatched.
+    """
+    mdpi = dict(MDPI, content=("Phototoxicity was reported in PMC12610272 and "
+                               "the dose data come from doi:10.3390/jox16010006"))
+    found = papers_in(_tavily(mdpi, PMC), "tavily_search")
+
+    by_url = {r["pdf_url"]: r for r in found}
+    assert by_url[MDPI["url"]]["refs"] == [], "the MDPI page named neither of them"
+    assert by_url[MDPI["url"]]["doi"] == ""
+    assert by_url[PMC["url"]]["refs"] == ["pmc:12821576"], (
+        "and the PMC article keeps the id its own address carries")
+
+    # The two stay two works, and the PMC article is still fetched.
+    state = {}
+    queued = pl.merge(state, found)
+    assert len(pl.library(state)) == 2
+    assert len(queued) == 2
+
+
+def test_the_only_work_a_page_names_is_taken_as_its_own(key):
+    """The case the rule must not throw away: a landing page with no identifier
+    in its address whose citation header carries exactly one DOI."""
+    mdpi = dict(MDPI, content="Plants 2025, 15(3), 346. doi:10.3390/plants15030346")
+    record = papers_in(_tavily(mdpi), "tavily_search")[0]
+    assert record["refs"] == ["doi:10.3390/plants15030346"]
+    assert record["doi"] == "10.3390/plants15030346"
+
+
+def test_one_work_named_twice_in_a_result_is_queued_once(key, monkeypatch):
+    """`merge` returns the STORED record, and several hits reach the same one.
+
+    Queued twice, the same PDF was bought twice — and `_take` mapped the
+    outcomes back with `list.index`, which answers with the first match for
+    both, so one slot was overwritten and the other stayed empty.
+    """
+    import requests
+
+    fetched = []
+
+    def _get(url, *a, **k):
+        fetched.append(str(url))
+        return _Response()
+
+    monkeypatch.setattr(requests, "get", _get)
+    same = dict(PMC, url="https://europepmc.org/article/PMC/PMC12821576",
+                title="The same work, met at another address")
+    ctx = _Ctx(key)
+    _run(PaperCapturePlugin(), "tavily_search", _tavily(PMC, same), ctx)
+
+    library = pl.library(ctx.state)
+    assert len(library) == 1, "one work"
+    assert len([u for u in fetched if "PMC12821576" in u and "articles" in u]) == 1
+    assert library[0]["session_artifact_id"], "and its outcome was recorded"
+
+
+def test_every_paper_gets_its_own_outcome_slot(key, monkeypatch):
+    """`list.index` answers with the FIRST match, and it matches by value.
+
+    Two records that look alike then write into one slot and leave the other
+    empty, so `note_stored` is told a paper failed when it was fetched.
+    """
+    import requests
+
+    from CoScientist.tools.paper_capture_plugin import _take
+
+    monkeypatch.setattr(requests, "get", lambda *a, **k: _Response())
+    record = {"doi": "10.3390/plants15030346", "doi_raw": "", "title": "Twin",
+              "year": 2025, "is_oa": True, "refs": ["doi:10.3390/plants15030346"],
+              "pdf_url": "https://example.org/twin.pdf", "presigned_url": "",
+              "bucket": None, "s3_key": None, "tool": "tavily_search"}
+
+    outcomes = _take([dict(record), dict(record)], key, "ResearchAgent")
+
+    assert len(outcomes) == 2
+    assert all(o.get("artifact_id") for o in outcomes), outcomes
 
 
 def test_a_tool_we_do_not_watch_is_ignored(key):

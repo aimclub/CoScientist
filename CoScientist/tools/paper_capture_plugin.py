@@ -152,6 +152,34 @@ def result_items(result: Any, _depth: int = 0) -> List[Dict[str, str]]:
     return out
 
 
+def _identity_of(url: str, title: Any, text: Any) -> List[Any]:
+    """Which identifiers are THIS result's own — not ones it merely mentions.
+
+    The address is authoritative: a doi.org, PMC or arXiv URL *is* the work's
+    name, and when it carries one nothing else is read. The page's prose is not
+    authoritative at all. A scientific abstract cites other works by DOI and by
+    PMC id as a matter of course, and those were being recorded as this record's
+    own handles — after which `paper_library.merge` folded the cited work into
+    this one on the shared key, `_attach_paper` stamped an Evidence with a DOI
+    belonging to neither, and the bibliography printed the pair. One wrong
+    attribution of someone else's work is worse than a hundred papers left
+    unmatched, which is why this errs the other way.
+
+    So the text is read only when the address names nothing, and only when it
+    names exactly ONE work: a page whose prose mentions two identifiers cannot
+    tell us which of them it is about. That leaves the common case — a landing
+    page whose citation header carries its own DOI — and refuses the ambiguous
+    one.
+    """
+    from CoScientist.reporting import references as refs
+
+    by_address = refs.refs_of(url)
+    if by_address:
+        return by_address
+    named = refs.refs_of(title, text)
+    return named if len(named) == 1 else []
+
+
 def papers_in(result: Any, tool_name: str) -> List[Dict[str, Any]]:
     """The paper records one tool result is telling us about."""
     from CoScientist.reporting import paper_library as pl
@@ -166,9 +194,7 @@ def papers_in(result: Any, tool_name: str) -> List[Dict[str, Any]]:
         if url in seen or not is_paper_link(url):
             continue
         seen.add(url)
-        from CoScientist.reporting import references as refs
-
-        found = refs.refs_of(url, item["title"], item["snippet"])
+        found = _identity_of(url, item["title"], item["snippet"])
         records.append({
             "doi": next((r.value for r in found if r.kind == "doi"), ""),
             # Every handle the result names. A PMC id lives in the URL far more
@@ -265,6 +291,12 @@ def _take(papers: List[Dict[str, Any]], scope, agent: str) -> List[Dict[str, Any
 
     outcomes: List[Dict[str, Any]] = []
     fetch: List[Dict[str, Any]] = []
+    #: The slot in `outcomes` each queued paper answers for. Kept explicitly
+    #: rather than looked up with `papers.index(paper)`: `index` compares by
+    #: VALUE and returns the first match, so two records that are equal — or
+    #: literally the same object, which `merge` can hand us — would both write
+    #: into one slot and leave the other empty for the whole batch.
+    slots: List[int] = []
     for paper in papers:
         _open_copy(paper)
         address = (paper.get("oa_url") or paper.get("presigned_url")
@@ -278,13 +310,14 @@ def _take(papers: List[Dict[str, Any]], scope, agent: str) -> List[Dict[str, Any
             outcomes.append(record or {"state": sf.STATE_STORED,
                                        "artifact_id": known})
         else:
+            slots.append(len(outcomes))
             fetch.append(paper)
             outcomes.append(None)
 
     if fetch:
         fetched = mirror_papers(fetch, scope, agent)
-        for paper, record in zip(fetch, fetched):
-            outcomes[papers.index(paper)] = record
+        for slot, record in zip(slots, fetched):
+            outcomes[slot] = record
     return [o or {} for o in outcomes]
 
 
