@@ -1453,6 +1453,15 @@ const i18n = {
   // plan intended and every other basis is something the system watched happen,
   // so the wording has to keep a reader from reading an intention as a fact.
   'graph.contrib.title': { en: 'participants', ru: 'участники' },
+  // A node's own write-up: what it establishes, what it rests on, who took
+  // part. Distinct from `graph.summary.*`, which is one AGENT's account of one
+  // run — the two are different documents about different things.
+  'graph.nodeReport.title': { en: 'report on this node', ru: 'отчёт по узлу' },
+  'graph.nodeReport.ask': { en: 'write the report', ru: 'составить отчёт' },
+  'graph.nodeReport.writing': { en: 'writing…', ru: 'пишется…' },
+  'graph.nodeReport.again': { en: 'rewrite', ru: 'переписать' },
+  'graph.nodeReport.stale': { en: 'the node has moved since', ru: 'узел с тех пор изменился' },
+  'graph.nodeReport.auto': { en: 'write node reports', ru: 'писать отчёты по узлам' },
   'graph.basis.commit': { en: 'wrote this', ru: 'записал' },
   'graph.basis.status': { en: 'moved its status', ru: 'сменил статус' },
   'graph.basis.delegation': { en: 'delegated the work', ru: 'делегировал работу' },

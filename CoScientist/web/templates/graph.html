@@ -247,6 +247,8 @@
       <select id="turn" style="max-width:340px"></select>
     </label>
     <label><input type="checkbox" id="auto" checked /> <span data-i18n="graph.live">live</span></label>
+    <label id="autoReportWrap" style="display:none"><input type="checkbox" id="autoReport"
+      onchange="toggleAutoNodeReports(this)" /> <span data-i18n="graph.nodeReport.auto">write node reports</span></label>
     <button id="refresh" data-i18n-title="graph.refresh">↻</button>
     <span class="spacer"></span>
     <span id="status" data-i18n="graph.connecting">connecting…</span>
@@ -1533,6 +1535,13 @@
         if (g.error) throw new Error(t('graph.error.server', { error: g.error }));
         const research = isResearch();
         lastPhases = research ? [] : (g.phases || []);
+        // Node reports belong to the research graph; the execution log has the
+        // agent summaries instead, and they have their own button.
+        const autoWrap = document.getElementById("autoReportWrap");
+        if (autoWrap) {
+          autoWrap.style.display = research ? "" : "none";
+          document.getElementById("autoReport").checked = autoNodeReports();
+        }
         // The log is drawn one request at a time; the payload lists the rest.
         const turnWrap = document.getElementById("turnWrap"),
               turnSel = document.getElementById("turn"),
@@ -2007,6 +2016,7 @@
       // The research card's own fields: these keys are attribute codes the
       // server sends for the browser to translate (i18n.js says so explicitly).
       body += readable(t('graph.detail.details'), n.input, null, true);
+      body += nodeReportBlock(n);
       body += historyBlock(n.status_history);
       body += attachmentsBlock(n.chips, t('graph.chips.tools'));
       body += attachmentsBlock(n.attachments, t('graph.attach.title'));
@@ -2500,6 +2510,112 @@
       }
       return `<div class="sumbox">${inner}</div>`;
     }
+    // ── a research node's own write-up ───────────────────────────────────────
+    // What the execution log's summary is to an agent, this is to a node: what
+    // it establishes, what it rests on, who took part and where the files are.
+    // The body arrives inlined in the payload (the browser cannot fetch an
+    // artifact's text), so this map only holds what is in flight.
+    const nodeReports = {};
+    const REPORTABLE = new Set(["evidence", "planstep", "experimenttask",
+                                "verificationmethod"]);
+
+    function nodeReportBlock(n){
+      if (!REPORTABLE.has(String(n.kind || ""))) return "";
+      const st = nodeReports[n.id] || {};
+      const again = `<a onclick="requestNodeReport('${esc(n.id)}', true)">↻ ${esc(t('graph.nodeReport.again'))}</a>`;
+      const title = `<div class="k">${esc(t('graph.nodeReport.title'))}</div>`;
+      if (st.loading)
+        return title + `<div class="sumbox"><div class="ask"><button class="sumbtn" disabled>⏳ ${esc(t('graph.nodeReport.writing'))}</button></div></div>`;
+      if (st.error)
+        return title + `<div class="sumbox"><div class="err">${esc(st.error)}</div><div class="meta">${again}</div></div>`;
+      if (n.report) {
+        const html = markdown(n.report);
+        // Stale is worth saying, never worth hiding the report over: what it
+        // records still happened.
+        const stale = (st.stamp && n.report_stamp && st.stamp !== n.report_stamp)
+          ? `<span class="stale">${esc(t('graph.nodeReport.stale'))}</span>` : "";
+        return title + `<div class="sumbox">`
+          + (html ? `<div class="mdoc">${html}</div>` : `<pre>${esc(n.report)}</pre>`)
+          + `<div class="meta">${stale}${again}</div></div>`;
+      }
+      if (autoNodeReports() && isSettled(n) && worthReporting(n)) {
+        queueNodeReport(n.id);
+        return title + `<div class="sumbox"><div class="ask"><button class="sumbtn" disabled>⏳ ${esc(t('graph.nodeReport.writing'))}</button></div></div>`;
+      }
+      return title + `<div class="sumbox"><div class="ask">`
+        + `<button class="sumbtn" onclick="requestNodeReport('${esc(n.id)}')">${esc(t('graph.nodeReport.ask'))}</button></div></div>`;
+    }
+
+    // A node still moving will be described wrongly, and a node with nothing
+    // recorded on it has nothing to describe — asking the model either way
+    // spends a call to say so.
+    const UNSETTLED = new Set(["todo", "in_progress", "formulated",
+                               "under_verification", "draft", "planned",
+                               // A method that has only been offered is the
+                               // same case as a `planned` task: nothing has
+                               // been done with it yet to describe.
+                               "proposed"]);
+    function isSettled(n){ return !UNSETTLED.has(String(n.status || "")); }
+    function worthReporting(n){
+      return (n.contributors || []).length > 0
+        || (n.attachments || []).length > 0
+        || (n.chips || []).length > 0;
+    }
+
+    // One at a time. A study has forty cards and the toggle defaults to on, so
+    // an unqueued auto-run would open the page with forty model calls at once.
+    const reportQueue = [];
+    let reportRunning = false;
+    function queueNodeReport(nodeId){
+      if (nodeReports[nodeId] || reportQueue.includes(nodeId)) return;
+      reportQueue.push(nodeId);
+      drainReportQueue();
+    }
+    async function drainReportQueue(){
+      if (reportRunning) return;
+      reportRunning = true;
+      try {
+        while (reportQueue.length) await requestNodeReport(reportQueue.shift());
+      } finally { reportRunning = false; }
+    }
+
+    async function requestNodeReport(nodeId, again){
+      const n = nodeData[nodeId];
+      if (!n || (nodeReports[nodeId] && nodeReports[nodeId].loading)) return;
+      nodeReports[nodeId] = { loading: true };
+      if (selectedId === nodeId) showDetail(n);
+      const q = new URLSearchParams(location.search);
+      const url = `/api/users/${encodeURIComponent(q.get("user_id") || "")}/sessions/${encodeURIComponent(q.get("session_id") || "")}/graph/node_report`;
+      try {
+        const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ node_id: nodeId, turn: document.getElementById("turn").value || null,
+                                 lang: (typeof currentLang === "string" ? currentLang : "ru"), again: !!again }) });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.detail || data.error || ("HTTP " + r.status));
+        nodeReports[nodeId] = { stamp: data.stamp || "" };
+        // The body comes back on the node itself with the next poll; show it now.
+        if (nodeData[nodeId]) nodeData[nodeId].report = String(data.report || "");
+      } catch (e) {
+        nodeReports[nodeId] = { error: String(e.message || e) };
+      }
+      if (selectedId === nodeId && nodeData[nodeId]) showDetail(nodeData[nodeId]);
+    }
+
+    // The setting decides, and the reader may overrule it for this browser.
+    function autoNodeReports(){
+      try {
+        const own = localStorage.getItem("graph.autoNodeReports");
+        if (own === "0") return false;
+        if (own === "1") return true;
+      } catch (err) { /* private window */ }
+      return lastGraph && lastGraph.auto_node_reports !== false;
+    }
+    function toggleAutoNodeReports(el){
+      try { localStorage.setItem("graph.autoNodeReports", el.checked ? "1" : "0"); }
+      catch (err) { /* nothing to remember it with */ }
+      if (el.checked && selectedId && nodeData[selectedId]) showDetail(nodeData[selectedId]);
+    }
+
     async function requestSummary(nodeId, again){
       const n = nodeData[nodeId];
       if (!n || (summaries[nodeId] && summaries[nodeId].loading)) return;

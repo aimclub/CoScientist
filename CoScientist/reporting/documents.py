@@ -60,7 +60,15 @@ _FILENAMES = {
     "frame": "research-frame.md",
     "review": "review.md",
     "answer": "agent-answer.md",
+    "node_report": "node-report.md",
 }
+
+#: Kinds published WITHOUT the `doc:` prefix, so they stay out of the chat
+#: page's "session documents" list. A node's write-up belongs to the node — it
+#: is opened from the graph, beside the card it describes — and a study with
+#: forty nodes would otherwise bury the plan and the work reports under forty
+#: rows the reader did not ask for.
+UNLISTED_KINDS = frozenset({"node_report"})
 
 #: Markdown that carries no prose: a heading rule, a table row, a fence.
 _NOT_PROSE = re.compile(r"^\s*(?:[-=]{3,}|\|.*\||```|~~~|<!--)")
@@ -202,7 +210,8 @@ def publish_document(
             filename=filename or _FILENAMES.get(kind, f"{kind}.md"),
             label=_cut(title, TITLE_LIMIT),
             source_tool=agent,
-            source_kind=f"{KIND_PREFIX}{kind}",
+            source_kind=(kind if kind in UNLISTED_KINDS
+                         else f"{KIND_PREFIX}{kind}"),
             media_type=MARKDOWN_MEDIA_TYPE,
             agent=agent or None,
         )
