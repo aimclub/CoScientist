@@ -176,6 +176,11 @@ def merge(state: Any, records: List[Dict[str, Any]], *,
         for key in _keys(paper):
             by_key.setdefault(key, paper)
     fetch: List[Dict[str, Any]] = []
+    #: Identity, not equality: the value in `fetch` is the stored record itself,
+    #: and one work is reached by several of its names. Two hits of a search that
+    #: mention the same PMC id resolve to ONE record, and queueing it twice buys
+    #: the same PDF twice and spends the per-call cap on a duplicate.
+    queued: set = set()
     for record in records:
         keys = _keys(record)
         if not keys:
@@ -201,10 +206,11 @@ def merge(state: Any, records: List[Dict[str, Any]], *,
                 known["refs"] = merged
         for key in _keys(known):
             by_key.setdefault(key, known)
-        if known.get("session_artifact_id"):
+        if known.get("session_artifact_id") or id(known) in queued:
             continue
         if (known.get("presigned_url") or known.get("pdf_url")
                 or (known.get("bucket") and known.get("s3_key"))):
+            queued.add(id(known))
             fetch.append(known)
     try:
         state[STATE_KEY] = existing
