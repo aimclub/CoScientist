@@ -15,6 +15,11 @@ How a contract is confirmed depends on its risk tier (work_order_risk.py):
 The Work Report is confirmed at the tier of the order it reports on. Sent back
 for rework, the agent keeps working in the same run and reports again.
 
+In step-review mode (``step_review=True``) every step also names what it will
+SEND to its tools, and each finished step goes before the human with what was
+sent, what was expected and what was found, plus the calls the system recorded
+for it. The human accepts the step, sends it back, or stops the order.
+
 With HITL or Work Orders switched off, the contract is still recorded (the guard
 keeps working as a scope check) and approved without asking anyone.
 """
@@ -35,6 +40,7 @@ from CoScientist.hitl.work_order import (
     Assumption,
     Finding,
     SideEffect,
+    StepReview,
     WorkOrder,
     WorkReport,
     WorkStep,
@@ -43,6 +49,7 @@ from CoScientist.hitl.work_order import (
     performed_side_effects,
     render_work_order,
     render_work_report,
+    render_work_step_review,
     report_warnings,
     save_order,
 )
@@ -135,8 +142,10 @@ class WorkOrderToolset:
         valid_tool_names: Optional[Iterable[str]] = None,
         handler: Any = None,
         internal_tools: Iterable[str] = (),
+        step_review: bool = False,
     ) -> None:
         self.agent_name = agent_name
+        self.step_review = step_review
         # Allowed without declaring and kept apart from the contract's tools, so
         # they neither raise its tier nor show on the card unless the viewer
         # asks. The agent may still name them — that is no error.
@@ -181,11 +190,20 @@ class WorkOrderToolset:
             if isinstance(tools, str):
                 tools = [tools]
             tools = [str(t) for t in tools]
+            external = [t for t in tools if t not in self.exempt]
+            inputs = str(item.get("inputs") or "").strip()
+            if self.step_review and external and not inputs:
+                return (
+                    f"Step at index {offset} ('{str(item['title']).strip()}') calls "
+                    f"{external} but has no 'inputs': state what you will send to "
+                    f"these tools (queries, names, SMILES, parameters)."
+                )
             steps.append(WorkStep(
                 id=f"S{start + offset}",
                 title=str(item["title"]).strip(),
-                tools=[t for t in tools if t not in self.exempt],
+                tools=external,
                 internal_tools=self._internal_named(tools),
+                inputs=inputs,
                 expected_outcome=str(item.get("expected_outcome") or ""),
             ))
         return steps
@@ -281,6 +299,47 @@ class WorkOrderToolset:
             invoked_via="tool",
             trigger=trigger,
             timeout_seconds=veto_timeout if veto else None,
+        )
+        return await self.handler.handle_request(request)
+
+    @staticmethod
+    def _review_timeout(tier: Tier) -> Optional[float]:
+        """Veto window for read/compute (-1: wait for the human); None — the
+        global HITL timeout — for side effects."""
+        if tier not in (Tier.READ, Tier.COMPUTE):
+            return None
+        veto_seconds = get_settings().web.work_order_veto_seconds
+        return float(veto_seconds) if veto_seconds > 0 else -1.0
+
+    async def review_step(
+        self, order: WorkOrder, step: WorkStep, tool_context: Any
+    ) -> Optional[HITLResponse]:
+        """Put one finished step before the human: sent / expected / found.
+
+        Returns None when Work Orders are off: the caller treats that as accepted.
+        """
+        if not work_order_active():
+            return None
+        review = step.review or StepReview()
+        request = HITLRequest(
+            agent_name=self.agent_name,
+            action_type=HITLAction.APPROVE,
+            message=(
+                f"Agent '{self.agent_name}' finished step {step.id} of its work order "
+                f"(rev {order.revision}, round {review.round}). Please check what it "
+                f"sent and what it found."
+            ),
+            context={
+                "work_order": order.model_dump(mode="json"),
+                "step": step.model_dump(mode="json"),
+                "step_calls": list(step.calls),
+                "tier": order.tier.value,
+                "output": render_work_step_review(order, step),
+                "_session": session_context(tool_context),
+            },
+            invoked_via="tool",
+            trigger="work_step",
+            timeout_seconds=self._review_timeout(order.tier),
         )
         return await self.handler.handle_request(request)
 
@@ -387,7 +446,9 @@ class WorkOrderToolset:
             assumptions: Every assumption your plan relies on, one string per
                 item. Keep assumptions atomic (one condition per item) and non-trivial.
             steps: Ordered steps, each {"title", "tools": [tool names],
-                "expected_outcome"}.
+                "inputs", "expected_outcome"}. "inputs" is what you will send
+                to the step's tools (queries, names, SMILES, parameters);
+                "expected_outcome" is what you expect to get back.
             planned_tools: All tool names you intend to call.
             expected_outcome: What result you expect (be concrete: counts,
                 ranges, metrics).
@@ -446,6 +507,7 @@ class WorkOrderToolset:
             side_effects=effects,
             expected_outcome=str(expected_outcome or ""),
             fallback=str(fallback or ""),
+            step_review=self.step_review,
         )
         tier = order.recompute_tier()
 
@@ -519,7 +581,7 @@ class WorkOrderToolset:
         Args:
             reason: Why the amendment is needed (what you learned).
             add_tools: Tool names to add to the plan.
-            add_steps: Steps to append, each {"title", "tools",
+            add_steps: Steps to append, each {"title", "tools", "inputs",
                 "expected_outcome"}.
 
         Returns:
@@ -620,16 +682,23 @@ class WorkOrderToolset:
         status: str,
         tool_context: ToolContext,
         note: str = "",
+        result: str = "",
     ) -> Dict[str, Any]:
         """Report progress on a step of your approved work order.
+
+        Mark a step in_progress BEFORE calling its tools, and done (or skipped)
+        when it is finished. With step review on, a finished step goes before
+        the human, who sees what you sent, what you expected and what you found.
 
         Args:
             step_id: The step id from the approved order (e.g. "S1").
             status: One of pending, in_progress, done, skipped.
             note: Short note: what came out, or why it was skipped.
+            result: For done: what the step actually produced — concrete
+                values, counts, ids — to set against its expected outcome.
 
         Returns:
-            {"status": "ok" | "error", ...}.
+            {"status": "ok" | "accepted" | "revise" | "rejected" | "error", ...}.
         """
         state = tool_context.state
         order = load_order(state, self.agent_name)
@@ -640,22 +709,108 @@ class WorkOrderToolset:
         step = order.step(step_id)
         if step is None:
             return _error(f"Unknown step {step_id!r}; steps are {[s.id for s in order.steps]}.")
+        reviewed = order.step_review and status in ("done", "skipped")
+        if reviewed and status == "done" and not str(result or "").strip():
+            return _error(
+                f"Step {step_id} is reviewed by the human: pass 'result' — what the "
+                f"step actually produced (values, counts, ids)."
+            )
         step.status = status  # type: ignore[assignment]
         step.note = str(note or "")
+        if result or status == "done":
+            step.result = str(result or "")
         save_order(state, order)
-        if work_order_active():
-            try:
-                await self.handler.notify({
-                    "kind": "progress",
-                    "agent_name": self.agent_name,
-                    "revision": order.revision,
-                    "step": step.model_dump(mode="json"),
-                    "_session": session_context(tool_context),
-                })
-            except Exception:  # noqa: BLE001 - a notice must never fail the run
-                logger.exception("%s: work step notice failed", self.agent_name)
-        return {"status": "ok", "step": step.id, "step_status": step.status}
 
+        if not reviewed:
+            await self._notify_progress(order, step, tool_context)
+            return {"status": "ok", "step": step.id, "step_status": step.status}
+
+        if step.review is None:
+            step.review = StepReview()
+        response = await self.review_step(order, step, tool_context)
+        settled = self._settle_step(state, order, step, response)
+        # The order card shows the step row too: refresh it with the verdict.
+        await self._notify_progress(order, step, tool_context)
+        return settled
+
+    async def _notify_progress(self, order: WorkOrder, step: WorkStep, tool_context: Any) -> None:
+        if not work_order_active():
+            return
+        try:
+            await self.handler.notify({
+                "kind": "progress",
+                "agent_name": self.agent_name,
+                "revision": order.revision,
+                "step": step.model_dump(mode="json"),
+                "_session": session_context(tool_context),
+            })
+        except Exception:  # noqa: BLE001 - a notice must never fail the run
+            logger.exception("%s: work step notice failed", self.agent_name)
+
+    @staticmethod
+    def _settle_step(
+        state: Any, order: WorkOrder, step: WorkStep, response: Optional[HITLResponse]
+    ) -> Dict[str, Any]:
+        review = step.review or StepReview()
+        feedback = (response.instructions or response.free_input or "").strip() if response else ""
+
+        if response is not None and response.action == HITLAction.EDIT:
+            review.history.append({
+                "round": review.round,
+                "result": step.result,
+                "note": step.note,
+                "calls": list(step.calls),
+                "notes": feedback,
+            })
+            review.status = "revise"
+            review.notes = feedback
+            review.round += 1
+            step.status = "in_progress"
+            step.calls = []
+            step.review = review
+            save_order(state, order)
+            return {
+                "status": "revise",
+                "step_id": step.id,
+                "feedback": feedback or "No feedback provided.",
+                "message": (
+                    f"The human sent step {step.id} back. Redo it as the feedback "
+                    f"says, then mark it done again with the new result. If you "
+                    f"need tools beyond your work order, call update_work_order first."
+                ),
+            }
+
+        if response is not None and not response.approved:
+            review.status = "rejected"
+            review.notes = feedback
+            step.review = review
+            order.status = "rejected"
+            order.operator_notes = feedback
+            save_order(state, order)
+            return {
+                "status": "rejected",
+                "step_id": step.id,
+                "reason": feedback or "No reason given.",
+                "message": (
+                    "The human stopped your work order at this step. Do not call "
+                    "any more tools; finish and state plainly what was done, what "
+                    "was not, and why."
+                ),
+            }
+
+        review.status = "accepted"
+        review.notes = feedback
+        step.review = review
+        save_order(state, order)
+        result: Dict[str, Any] = {
+            "status": "accepted",
+            "step_id": step.id,
+            "message": "The human accepted this step. Go on to the next one.",
+        }
+        if feedback:
+            result["operator_notes"] = feedback
+            result["message"] += " Follow the operator notes."
+        return result
 
     async def submit_work_report(
         self,
@@ -781,5 +936,8 @@ def make_work_order_tools(
     agent_name: str,
     valid_tool_names: Optional[Iterable[str]] = None,
     internal_tools: Iterable[str] = (),
+    step_review: bool = False,
 ) -> List[FunctionTool]:
-    return WorkOrderToolset(agent_name, valid_tool_names, internal_tools=internal_tools).tools()
+    return WorkOrderToolset(
+        agent_name, valid_tool_names, internal_tools=internal_tools, step_review=step_review,
+    ).tools()

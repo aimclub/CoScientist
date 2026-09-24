@@ -655,6 +655,16 @@
       color: rgb(var(--c-secondary));
     }
 
+    /* JSON view of the same values (Tools Viewer YAML/JSON toggle). */
+    .tv-json {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .tv-json-string {
+      color: #fbbf24;
+    }
+
     .tv-null,
     .tv-empty {
       color: rgb(var(--c-outline-variant));

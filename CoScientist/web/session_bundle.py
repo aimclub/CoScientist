@@ -13,6 +13,7 @@ Bundle contents
     manifest.json                   — format version, export timestamp, original IDs, title
     adk_session.json                — ADK Session (state + events) via pydantic model_dump
     agent_events.json               — WebRuntime.agent_events log (chat + tool activity)
+    tool_full_values.json           — untruncated tool args/results behind the previews, by call_id
     metrics.json                    — WebRuntime.metrics (cost snapshot)
     dataset_url.json                — attached dataset URL
     report_language.json            — report language chosen for the session
@@ -52,6 +53,7 @@ BUNDLE_EXTENSION = ".cossession.zip"
 _MANIFEST = "manifest.json"
 _ADK_SESSION = "adk_session.json"
 _AGENT_EVENTS = "agent_events.json"
+_TOOL_FULL_VALUES = "tool_full_values.json"
 _METRICS = "metrics.json"
 _DATASET_URL = "dataset_url.json"
 _REPORT_LANGUAGE = "report_language.json"
@@ -223,8 +225,11 @@ async def export_session(
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not serialize ADK session: %s", exc)
 
-    # 3. Agent events log
+    # 3. Agent events log, plus the full values its tool previews were cut
+    # from — without them "Show more" in the imported session has nothing
+    # to fetch.
     agent_events = list(runtime.agent_events.get(key, []))
+    tool_full_values = dict(runtime.tool_full_values.get(key, {}))
 
     # 4. Metrics
     metrics = runtime.metrics.get(key)
@@ -336,6 +341,9 @@ async def export_session(
         if adk_session_data is not None:
             zf.writestr(_ADK_SESSION, _json_bytes(adk_session_data))
         zf.writestr(_AGENT_EVENTS, _json_bytes(agent_events))
+        # No BUNDLE_VERSION bump, same as report_language below.
+        if tool_full_values:
+            zf.writestr(_TOOL_FULL_VALUES, _json_bytes(tool_full_values))
         if metrics is not None:
             zf.writestr(_METRICS, _json_bytes(metrics))
         zf.writestr(_DATASET_URL, _json_bytes({"dataset_url": dataset_url}))
@@ -440,6 +448,7 @@ async def import_session(
 
     adk_session_data = _read_json(_ADK_SESSION)
     agent_events = _read_json(_AGENT_EVENTS) or []
+    tool_full_values = _read_json(_TOOL_FULL_VALUES) or {}
     metrics = _read_json(_METRICS)
     dataset_url_data = _read_json(_DATASET_URL) or {}
     report_language_data = _read_json(_REPORT_LANGUAGE) or {}
@@ -505,6 +514,12 @@ async def import_session(
         for event in agent_events:
             if isinstance(event, dict):
                 append_event(user_id, session_id, event)
+
+    if isinstance(tool_full_values, dict):
+        store = runtime.tool_full_values[key]
+        for call_id, entry in tool_full_values.items():
+            if isinstance(entry, dict):
+                store[str(call_id)] = entry
 
     # --- Restore metrics ---
     if metrics is not None:

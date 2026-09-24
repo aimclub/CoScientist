@@ -45,6 +45,11 @@
       });
     })();
 
+    // The agent's human name where the status indicator knows one.
+    function agentName(name) {
+      return (window.StatusIndicator && StatusIndicator.agentName) ? StatusIndicator.agentName(name) : name;
+    }
+
     function fmtUsd(value) {
       const n = Number(value) || 0;
       if (n && n < 0.0001) return '<$0.0001';
@@ -103,7 +108,7 @@
         return `
           <div>
             <div class="flex items-baseline gap-2">
-              <span class="flex-1 min-w-0 truncate text-on-surface-variant" title="${escHtml(agent.agent)}" translate="no">${escHtml(agent.agent)}</span>
+              <span class="flex-1 min-w-0 truncate text-on-surface-variant" title="${escHtml(agent.agent)}" translate="no">${escHtml(agentName(agent.agent))}</span>
               <span class="text-outline-variant tabular-nums whitespace-nowrap">${fmtTokens(agent.llm.total_tokens)}</span>
               <span class="w-16 text-right text-on-surface tabular-nums whitespace-nowrap">${fmtUsd(agent.cost_usd)}</span>
             </div>
@@ -371,4 +376,3 @@
       }
     };
     window.RunTimer = RunTimer;
-

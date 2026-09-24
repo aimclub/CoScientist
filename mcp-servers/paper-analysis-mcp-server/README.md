@@ -10,9 +10,27 @@ Create a `.env` file in this directory based on `.env.example`.
 
 Answer a general scientific question using retrieved and reranked body chunks, associated figures and an LLM. Use this for a synthesized answer; use `find_papers_in_db` for a list of publications.
 
+- Input:
+ 	- `task` (string): user question.
+ 	- `top_k` (int, default 60): body chunks returned by the initial search.
+ 	- `rerank_k` (int, default 20): body chunks retained after reranking.
+- Output:
+ 	- JSON with `answer` and supporting context/metadata.
+- Use when:
+ 	- you need database-backed answers not tied to a specific user-uploaded paper set.
+
 ### `explore_my_papers`
 
 Answer questions about specific uploaded PDFs, including figures, experimental details, conclusions, titles and authors. Downloads the PDFs from the configured upload bucket, extracts reactions and molecules through OpenChemIE, and sends the PDFs with that additional context to the LLM.
+
+- Input:
+ 	- `task` (string): user question about uploaded papers.
+ 	- `s3_keys` (list[str]): the uploaded PDFs to read.
+- Output:
+ 	- JSON with `answer` and metadata.
+ 	- Returns `{"answer": "No papers provided for search."}` if no PDFs are found.
+- Use when:
+ 	- the question is about the current uploaded paper set, specific document details, or cross-paper comparison.
 
 ### `find_papers_in_db`
 

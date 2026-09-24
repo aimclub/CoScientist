@@ -14,6 +14,7 @@
 
   const KNOWN_AGENTS = [
     'ResearchAgent',
+    'PaperRetriever',
     'PlannerAgent',
     'CoderAgent',
     'TaskExecutorAgent',
@@ -26,6 +27,10 @@
     'ResultAggregatorAgent',
     'FedotAgent',
     'OrchestratorAgent',
+    'PlanningPipelineAgent',
+    'ToolPipelineAgent',
+    'ToolPreparerAgent',
+    'system',
   ];
 
   const AGENT_ICONS = {
@@ -34,6 +39,7 @@
     ContextInitAgent: 'assignment',
     HypothesesAgent: 'lightbulb',
     ResearchAgent: 'travel_explore',
+    PaperRetriever: 'menu_book',
     TaskExecutorAgent: 'alt_route',
     CoderAgent: 'terminal',
     DatasetCollectorAgent: 'dataset',
@@ -46,6 +52,10 @@
     ExperimentResultReviewAgent: 'fact_check',
     ResultAggregatorAgent: 'summarize',
     FedotAgent: 'auto_graph',
+    PlanningPipelineAgent: 'map',
+    ToolPipelineAgent: 'checklist',
+    ToolPreparerAgent: 'precision_manufacturing',
+    system: 'settings_suggest',
   };
 
   const STATUS_CONFIG = {

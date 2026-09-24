@@ -160,7 +160,7 @@ class OpenAlexClient:
 
 
 if __name__ == "__main__":
-    client = OpenAlexClient(email=OPENALEX_EMAIL)
+    client = OpenAlexClient(email=OPENALEX_EMAIL, api_key=os.environ.get("OPENALEX_API_KEY"))
     # Example works search:
     result = client.search_works(
         institution_id="i173089394",  # Replace with a valid institution ID

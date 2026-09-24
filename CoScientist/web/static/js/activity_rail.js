@@ -13,6 +13,8 @@
     const AGENTS = [
       { name: "OrchestratorAgent", icon: "hub", desc: "Master Orchestrator" },
       { name: "PlannerAgent", icon: "map", desc: "Roadmap Planner" },
+      // The microfluidics pipeline plans through a ТЗ rather than a roadmap.
+      { name: "TZSpecAgent", icon: "assignment", desc: "Technical Spec" },
       { name: "ToolsViewer", icon: "handyman", desc: "Tools Viewer" },
       // The knowledge memory is gone; this graph is the research record.
       { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Research Graph", id: "graph-link", href: "/graph" },
@@ -88,6 +90,8 @@
         openSettings();
       } else if (name === "PlannerAgent") {
         openRoadmapEditor();
+      } else if (name === "TZSpecAgent") {
+        openTzPanel();
       } else if (name === "ToolsViewer") {
         openToolsViewer();
       } else if (name === "KnowledgeGraph" || name === "SessionTrace") {
@@ -152,8 +156,10 @@
       InitAgent: 'flag',
       PlannerAgent: 'map',
       PlanCriticAgent: 'rate_review',
+      TZSpecAgent: 'assignment',
       HypothesesAgent: 'lightbulb',
       ResearchAgent: 'travel_explore',
+      PaperRetriever: 'menu_book',
       TaskExecutorAgent: 'alt_route',
       ToolPipelineAgent: 'checklist',
       ToolPreparerAgent: 'precision_manufacturing',
@@ -173,6 +179,22 @@
       ContextInitAgent: 'assignment',
       ContextInitSessionAgent: 'assignment',
       ResultAggregatorAgent: 'summarize',
+      RootOrchestrator: 'hub',
+      ModuleA_TZLiterature: 'menu_book',
+      TZAgent: 'assignment',
+      TZQueryGenAgent: 'manage_search',
+      LiteratureOrchestrator: 'hub',
+      LiteratureSynthesisAgent: 'summarize',
+      EvidenceVerifierAgent: 'fact_check',
+      ModuleB_Design: 'science',
+      MolDesignAgent: 'biotech',
+      SynthRouteAgent: 'account_tree',
+      EconomicsAgent: 'payments',
+      ModuleC_Optimization: 'precision_manufacturing',
+      OptimizationAgent: 'precision_manufacturing',
+      ModuleC_Reactor: 'science',
+      ReactorAgent: 'tune',
+      ReportAgent: 'description',
     };
 
     const KNOWN_AGENTS = new Set(Object.keys(AGENT_ICONS));
@@ -456,8 +478,8 @@
         addExperimentToolCall(author, {
           name: tool, args: data.args, callId: data.call_id,
           truncated: !!data.args_truncated, timestamp: data.timestamp,
-          parent: data.parent, is_delegation: data.is_delegation,
-          target_agent: data.target_agent,
+          parent: data.parent, parentInstance: data.parent_instance, is_delegation: data.is_delegation,
+          target_agent: data.target_agent, agentInstance: data.agent_instance,
         });
         if (!quiet) addTelemetry('TOOL_CALL :: ' + author + ' → ' + tool);
         return;
@@ -473,12 +495,18 @@
       addExperimentToolResponse(author, {
         name: tool, response: response, callId: data.call_id,
         truncated: truncated, failed: failed, timestamp: data.timestamp,
+        agentInstance: data.agent_instance,
+        // Inputs the model did not write itself: its arguments as rewritten
+        // by before-tool callbacks, and the state keys the tool read.
+        effectiveArgs: data.effective_args, effectiveArgsTruncated: !!data.effective_args_truncated,
+        stateInputs: data.state_inputs, stateInputsTruncated: !!data.state_inputs_truncated,
       });
       if (!quiet) {
         addTelemetry((failed ? 'TOOL_ERROR :: ' : 'TOOL_RESULT :: ') + author
           + (failed ? ' ✖ ' : ' ← ') + tool);
       }
     }
+
 
     function activityResponseFailed(response) {
       if (!response) return false;
@@ -637,8 +665,11 @@
             ? `<span class="material-symbols-outlined text-[12px] text-outline-variant shrink-0" title="${escHtml(t('rail.delegatedTitle'))}" aria-hidden="true">alt_route</span>`
             : '';
 
-          const cleanName = escHtml(entry.name.replace(/Agent$/, ''));
-          let hint = entry.name;
+          const displayName = (window.StatusIndicator && StatusIndicator.agentName)
+            ? StatusIndicator.agentName(entry.name)
+            : entry.name.replace(/Agent$/, '');
+          const cleanName = escHtml(displayName);
+          let hint = displayName;
           if (entry.calls) hint += ' · ' + t('rail.hintCalls', { count: entry.calls });
           if (entry.transferred) hint += ' · ' + t('rail.hintDelegated');
           if (busy) hint += ' · ' + t('rail.hintRunning');
@@ -658,7 +689,9 @@
       const selected = activityAgents.get(activitySelected);
       const labelEl = document.getElementById('activity-selected-agent-label');
       if (labelEl) {
-        labelEl.textContent = selected ? `[${selected.name.replace(/Agent$/, '')}]` : '';
+          labelEl.textContent = selected
+            ? `[${(window.StatusIndicator && StatusIndicator.agentName) ? StatusIndicator.agentName(selected.name) : selected.name}]`
+            : '';
       }
 
       const tools = selected ? [...selected.tools.values()] : [];
@@ -808,60 +841,4 @@
         || RAIL_DEFAULT, false));
     }
 
-    // =========================================================================
-    // Layout — plan gate (start mode "planner")
-    // =========================================================================
-    // While the planner is still drafting, the right panel stays closed and
-    // Usage & Cost is left out. Once the plan is approved the panel opens with
-    // the plan on top and usage below it. planApproved is per session: set from
-    // the snapshot's history, then live by the approval (or by any non-planner
-    // agent starting, which covers runs with HITL off). Starts unapproved so a
-    // page load in planner mode does not flash the panel before the snapshot.
-    let planApproved = false;
-
-    function planGateActive() {
-      return appSettings.general.startMode === 'planner' && !planApproved;
-    }
-
-    function refreshPlanGate() {
-      const wasGated = document.body.classList.contains('plan-gated');
-      const gated = planGateActive();
-      document.body.classList.toggle('plan-gated', gated);
-      document.body.classList.toggle('plan-first', appSettings.general.startMode === 'planner');
-      if (gated) showSideRail(true);
-      else if (wasGated) applySideRailState();
-    }
-
-    // The session was (re)loaded: approved if its history already shows the
-    // planner's plan accepted or the work carried on past the planner.
-    function resetPlanGate(messages) {
-      const plannerRequests = new Set();
-      planApproved = (messages || []).some(message => {
-        if (message.type === 'hitl_request' && message.agent_name === 'PlannerAgent') {
-          plannerRequests.add(message.request_id);
-        } else if (message.type === 'hitl_response' || message.type === 'hitl_timeout') {
-          return plannerRequests.has(message.request_id)
-            && (message.type === 'hitl_timeout' ? !message.paused : message.action === 'approve');
-        } else if (message.type === 'agent_event' || message.type === 'agent_output') {
-          return isPostPlanAgent(message.author || message.agent);
-        }
-        return false;
-      });
-      refreshPlanGate();
-    }
-
-    function isPostPlanAgent(name) {
-      return !!name && name !== 'user' && !PLAN_AGENTS.includes(name);
-    }
-
-    // The plan was accepted in this session: open the panel for the user.
-    function releasePlanGate() {
-      if (planApproved) return;
-      planApproved = true;
-      const wasGated = document.body.classList.contains('plan-gated');
-      refreshPlanGate();
-      if (wasGated) {
-        localStorage.setItem(SIDE_RAIL_KEY, 'on');
-        applySideRailState();
-      }
-    }
+    // ==================================================================

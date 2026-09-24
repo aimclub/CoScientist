@@ -42,6 +42,10 @@ class WebHITLHandler(AbstractHITLHandler):
         # Writes HITL cards and their answers into the session transcript, so a
         # reload, an export or an import still shows decisions already taken.
         self._recorder = None
+        # Optional durable checkpoint hook.  It is called before every HITL
+        # wait, including callback/tool HITLs that never produce an ADK
+        # RequestInput interrupt.
+        self._checkpoint = None
 
     @property
     def hitl_timeout_seconds(self) -> float:
@@ -81,6 +85,10 @@ class WebHITLHandler(AbstractHITLHandler):
     def set_recorder(self, recorder) -> None:
         """Persist HITL events through ``recorder(session_key, event)``."""
         self._recorder = recorder
+
+    def set_checkpoint_sink(self, checkpoint) -> None:
+        """Persist a resumable boundary before a human decision is awaited."""
+        self._checkpoint = checkpoint
 
     def _record(self, session_key: SessionKey | None, event: dict) -> None:
         if self._recorder is None or session_key is None:
@@ -287,6 +295,11 @@ class WebHITLHandler(AbstractHITLHandler):
         # too, or a reopened session would show a card with no way in.
         await self._attach_document(payload, session_key)
         self._record(session_key, payload)
+        if self._checkpoint is not None and session_key is not None:
+            try:
+                await self._checkpoint(session_key, payload)
+            except Exception as exc:  # noqa: BLE001 - checkpointing is observer-only
+                logger.warning("HITL checkpoint could not be created: %s", exc)
 
         log_payload = dict(payload)
         log_payload["_session_key"] = session_key

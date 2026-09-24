@@ -14,6 +14,12 @@
 // under each step, one line per agent that worked on it, named by what that
 // agent does. That is live data, so a step from a session whose server has
 // since restarted shows no sub-steps rather than invented ones.
+//
+// A LINEAR pipeline (config `pipeline.linear`, e.g. microfluidics) is a plan
+// in itself: its stages are the lines, and the status indicator — which
+// tracks the stage the run is at — calls render() when a stage changes. The
+// roadmap's tasks then nest under the stage of their assignee (the LIT-xx
+// tasks under «Анализ литературы», whose members include ResearchAgent).
 // =========================================================================
 (function () {
   'use strict';
@@ -25,9 +31,9 @@
     todo: { icon: 'radio_button_unchecked', iconClass: 'text-outline-variant/60', textClass: 'text-outline-variant', label: 'plan.status.todo' },
   };
 
-  // The task last scrolled to: the list follows the work only when it moves
+  // The row last scrolled to: the list follows the work only when it moves
   // on, so a user reading further down is not yanked back on every update.
-  let followedTaskId = null;
+  let followedKey = null;
 
   // taskId -> Map(agent -> {agent, status, tools}) in arrival order.
   const subStepsByTask = new Map();
@@ -216,22 +222,67 @@
             <span class="w-full pl-[38px] text-[10px] font-mono text-outline-variant/70 truncate"
               title="${escHtml(step.agent)}">${escHtml(step.agent)}</span>
           </li>`;
+
+  }
+
+  // ── Linear pipeline: its stages are the plan ──────────────────────────
+
+  function currentStages() {
+    return (window.StatusIndicator && window.StatusIndicator.stages()) || [];
+  }
+
+  /** Rows of a plain roadmap: one per task. */
+  function taskRows(tasks, normalize) {
+    return tasks.map((task, idx) => ({
+      key: 'task:' + (task.id || idx),
+      id: task.id || idx + 1,
+      number: idx + 1,
+      title: task.title || t('plan.untitled', 'Untitled task'),
+      status: normalize(task.status),
+      nested: false,
+    }));
+  }
+
+  /** Rows of a linear pipeline: its stages, each followed by the roadmap
+   *  tasks its members execute. A task whose assignee is in no stage goes
+   *  with the others; if none is, the tasks follow the last stage. */
+  function stageRows(stages, tasks, normalize) {
+    const stageOf = name => (name ? window.StatusIndicator.stageOf(name) : -1);
+    const hosts = tasks.map(task => stageOf(task.assignee));
+    const fallback = hosts.find(host => host >= 0);
+    const host = i => (hosts[i] >= 0 ? hosts[i] : (fallback === undefined ? stages.length - 1 : fallback));
+    const subRows = taskRows(tasks, normalize).map(row => Object.assign(row, { nested: true }));
+
+    return stages.flatMap((stage, i) => [{
+      key: 'stage:' + stage.agent,
+      id: i + 1,
+      number: i + 1,
+      title: stage.title,
+      status: stage.status,
+      nested: false,
+    }].concat(subRows.filter((_, j) => host(j) === i)));
   }
 
   function render(tasks = currentTasks()) {
     const panel = document.getElementById('plan-tracker');
     const list = document.getElementById('plan-tracker-list');
     if (!panel || !list) return;
+    const stages = currentStages();
 
     // No plan yet: stay out of the layout entirely rather than reserving an
     // empty card, so the sidebar doesn't show a box with nothing in it.
-    if (!tasks.length) {
+    if (!tasks.length && !stages.length) {
       panel.classList.add('hidden');
-      followedTaskId = null;
+      followedKey = null;
       list.innerHTML = '';
       return;
     }
     panel.classList.remove('hidden');
+
+    if (stages.length) {
+      renderStages(list, stages, tasks);
+      return;
+    }
 
     const done = tasks.filter(task => normalize(task.status) === 'done').length;
     const percent = Math.round((done / tasks.length) * 100);
@@ -297,9 +348,42 @@
         </li>`;
     }).join('');
 
-    if (active && active.id !== followedTaskId) {
-      followedTaskId = active.id;
+    if (active && active.id !== followedKey) {
+      followedKey = active.id;
       const row = list.querySelector(`[data-task-id="${CSS.escape(active.id || '')}"]`);
+      if (row) list.scrollTop = Math.max(0, row.offsetTop - list.clientHeight / 3);
+    }
+  }
+
+  function renderStages(list, stages, tasks) {
+    // The count and the bar measure the stages: the roadmap is one stage's
+    // business.
+    const rows = stageRows(stages, tasks, normalize);
+    const top = rows.filter(row => !row.nested);
+    const done = top.filter(row => row.status === 'done').length;
+    const percent = Math.round((done / top.length) * 100);
+    document.getElementById('plan-tracker-count').textContent = t('plan.progress', { done: done, total: top.length });
+    document.getElementById('plan-tracker-bar').style.width = percent + '%';
+
+    list.innerHTML = rows.map(row => {
+      const view = STATUS_VIEW[row.status] || STATUS_VIEW.todo;
+      const tooltip = `${row.id} · ${t(view.label)}\n${row.title}`;
+      const rowClass = view === STATUS_VIEW.in_progress ? 'bg-primary/5 border-primary/60' : 'border-transparent';
+      const indent = row.nested ? 'ml-5' : '';
+      return `
+        <li data-row-key="${escHtml(row.key)}" title="${escHtml(tooltip)}"
+          class="flex items-center gap-2 pl-1.5 pr-1 py-1 rounded-r border-l-2 ${indent} ${rowClass}">
+          <span class="material-symbols-outlined text-[14px] shrink-0 ${view.iconClass}">${view.icon}</span>
+          <span class="text-[9px] font-mono text-outline-variant/70 w-4 text-right shrink-0">${row.number}</span>
+          <span class="text-[11px] leading-snug truncate ${view.textClass}">${escHtml(row.title)}</span>
+        </li>`;
+    }).join('');
+
+    // Follow the innermost work: a running task rather than its stage.
+    const active = rows.filter(row => row.status === 'in_progress').sort((a, b) => b.nested - a.nested)[0];
+    if (active && active.key !== followedKey) {
+      followedKey = active.key;
+      const row = list.querySelector(`[data-row-key="${CSS.escape(active.key)}"]`);
       if (row) list.scrollTop = Math.max(0, row.offsetTop - list.clientHeight / 3);
     }
   }

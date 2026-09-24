@@ -314,7 +314,7 @@
       </div>
       <div class="flex flex-col gap-1 flex-1 min-w-0">
         <div class="flex items-center gap-2">
-          <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">${escHtml(author)}</span>
+          <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">${escHtml((window.StatusIndicator && StatusIndicator.agentName) ? StatusIndicator.agentName(author) : author)}</span>
           <span class="text-[10px] text-outline-variant">${ts(timestamp)}</span>
         </div>
         <div class="bg-surface-container p-4 rounded-xl rounded-tl-none border border-outline-variant/15">
@@ -342,9 +342,9 @@
       </div>
       <div class="flex flex-col gap-1 flex-1 min-w-0">
         <div class="flex items-center gap-2 flex-wrap">
-          <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">${escHtml(agent || 'agent')}</span>
+          <span class="text-xs font-bold text-on-surface font-headline uppercase tracking-tight">${escHtml((window.StatusIndicator && StatusIndicator.agentName) ? StatusIndicator.agentName(agent) : (agent || 'agent'))}</span>
           <span class="text-[9px] font-mono uppercase tracking-widest text-secondary bg-secondary/10 border border-secondary/20 px-1.5 py-0.5 rounded">${t('chat.result')}</span>
-          ${caller ? `<span class="text-[9px] font-mono text-outline-variant">→ ${escHtml(caller)}</span>` : ''}
+          ${caller ? `<span class="text-[9px] font-mono text-outline-variant">→ ${escHtml((window.StatusIndicator && StatusIndicator.agentName) ? StatusIndicator.agentName(caller) : caller)}</span>` : ''}
           <span class="text-[10px] text-outline-variant">${ts(timestamp)}</span>
         </div>
         <div class="flex flex-col gap-2 bg-surface-container p-4 rounded-xl rounded-tl-none border border-secondary/25">
@@ -498,4 +498,3 @@
     </div>`;
       }
     }
-
