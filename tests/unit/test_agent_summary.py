@@ -65,7 +65,12 @@ def test_a_summary_is_remembered_until_the_trace_changes(monkeypatch):
         return first, again, other_lang, moved_on, forced
 
     first, again, other_lang, moved_on, forced = asyncio.run(scenario())
-    assert first == {"summary": "summary #1", "model": "tiny-model", "cached": False}
+    # `stamp` rides along now: it is the digest of the trace the account was
+    # written from, and it is what lets a reader be told an account is stale
+    # instead of being shown a stale one as current.
+    assert {k: first[k] for k in ("summary", "model", "cached")} == {
+        "summary": "summary #1", "model": "tiny-model", "cached": False}
+    assert first["stamp"], "the account says which trace it describes"
     assert again["summary"] == "summary #1" and again["cached"] is True
     assert other_lang["summary"] == "summary #2", "each language is its own summary"
     assert moved_on["summary"] == "summary #3", "a changed trace is summarized afresh"
@@ -130,7 +135,10 @@ def test_the_button_endpoint_summarizes_one_agent_of_one_request(tmp_path, monke
         url = f"/api/users/{user['id']}/sessions/{session['id']}/graph/agent_summary"
         r = client.post(url, json={"node_id": "agent:ResearchAgent@i1", "turn": "i1", "lang": "en"})
         assert r.status_code == 200, r.text
-        assert r.json() == {"summary": "- ran a search\n- found 3 papers", "model": "tiny-model", "cached": False}
+        body = r.json()
+        assert {k: body[k] for k in ("summary", "model", "cached")} == {
+            "summary": "- ran a search\n- found 3 papers",
+            "model": "tiny-model", "cached": False}
         # The model saw the folded trace: the agent's own call, not the whole graph.
         assert "1. search [success" in seen[0] and "args: query: cvae" in seen[0]
 

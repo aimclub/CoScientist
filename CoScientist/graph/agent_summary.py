@@ -9,8 +9,11 @@ the answer so a second click (or another reader) costs nothing.
 from __future__ import annotations
 
 import hashlib
+import logging
 from collections import OrderedDict
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 _TRACE_LIMIT = 60_000          # characters of trace handed to the model
 _ARGS, _RESULT, _REPORT = 800, 1_500, 6_000
@@ -181,23 +184,68 @@ def _key(scope: str, trace: str, lang: str) -> str:
     return hashlib.sha1(f"{scope}|{lang}|{trace}".encode("utf-8")).hexdigest()
 
 
+def _stamp(trace: str) -> str:
+    """A short digest of the trace an account was written from.
+
+    Deliberately not `_key`: that one is namespaced by scope, which is right for
+    an in-process cache shared by every session and wrong for a record that has
+    to survive an export into a different session id.
+    """
+    from CoScientist.graph.summary_store import stamp
+
+    return stamp(trace)
+
+
 async def summarize(node: Dict[str, Any], *, lang: str = "ru",
-                    scope: str = "", force: bool = False) -> Dict[str, Any]:
-    """``{"summary", "model", "cached"}`` for one agent node of the execution
-    tree. Cached on the trace itself, so a node that has not changed is never
-    sent twice and a running agent gets a fresh summary once it moved on;
-    ``force`` asks the model again regardless (the panel's "regenerate")."""
+                    scope: str = "", force: bool = False,
+                    store: Any = None) -> Dict[str, Any]:
+    """``{"summary", "model", "cached", "stamp"}`` for one agent node.
+
+    Cached on the trace itself, so a node that has not changed is never sent
+    twice and a running agent gets a fresh summary once it moved on; ``force``
+    asks the model again regardless (the panel's "regenerate").
+
+    Two layers of memory. The in-process LRU is the hot one. ``store`` — when a
+    caller passes one — is the durable one: without it every restart threw away
+    every account a study had paid a model to write, and an imported session
+    bundle arrived with none. It is injected rather than reached for, so this
+    module keeps no knowledge of where a session's files live.
+
+    ``stamp`` is returned so a caller can tell a stored account apart from a
+    current one instead of presenting a stale summary as fresh.
+    """
     lang = lang if lang in _LANGUAGE else "ru"
     trace = trace_of(node)
     key = _key(scope, trace, lang)
+    node_id = str(node.get("id") or "")
+    trace_stamp = _stamp(trace)
+
     hit = None if force else _CACHE.get(key)
     if hit is not None:
         _CACHE.move_to_end(key)
         return dict(hit, cached=True)
+
+    if store is not None and not force:
+        try:
+            kept = store.get(node_id, lang, trace_stamp)
+        except Exception:  # noqa: BLE001 — a saving must not fail the answer
+            kept = None
+        if kept and kept.get("summary"):
+            entry = {"summary": kept["summary"], "model": kept.get("model", ""),
+                     "cached": True, "stamp": trace_stamp}
+            _CACHE[key] = dict(entry, cached=False)
+            return entry
+
     system = _SYSTEM.format(language=_LANGUAGE[lang], **_HEADINGS[lang])
     summary, model = await _complete(system, trace)
-    entry = {"summary": summary, "model": model, "cached": False}
+    entry = {"summary": summary, "model": model, "cached": False,
+             "stamp": trace_stamp}
     _CACHE[key] = entry
     while len(_CACHE) > _CACHE_SIZE:
         _CACHE.popitem(last=False)
+    if store is not None:
+        try:
+            store.put(node_id, lang, trace_stamp, summary, model)
+        except Exception:  # noqa: BLE001
+            logger.debug("could not store the summary of %s", node_id, exc_info=True)
     return entry
