@@ -9,6 +9,17 @@ from datetime import datetime
 from CoScientist.hitl.handler import AbstractHITLHandler
 from CoScientist.hitl.models import HITLAction, HITLRequest, HITLResponse
 
+
+def _auto_approves() -> bool:
+    """Whether this run answers its own confirmations. Read per request, so the
+    Approvals tab applies to the next card rather than the next restart."""
+    try:
+        from CoScientist.hitl.mode import auto_approves
+
+        return auto_approves()
+    except Exception:  # noqa: BLE001 — an unreadable mode still asks the human
+        return False
+
 logger = logging.getLogger("CoScientist.web.hitl")
 SessionKey = tuple[str, str]
 
@@ -52,8 +63,13 @@ class WebHITLHandler(AbstractHITLHandler):
         if hasattr(self, "_hitl_timeout_seconds"):
             return self._hitl_timeout_seconds
         try:
-            from CoScientist.config import get_settings
-            return get_settings().web.hitl_auto_approve_timeout
+            from CoScientist.hitl.mode import wait_seconds
+
+            window = wait_seconds()
+            # `None` means "wait for the human". Callers of this property expect
+            # a number and read `<= 0` as exactly that, so it is spoken here in
+            # the vocabulary they already have.
+            return -1.0 if window is None else float(window)
         except Exception:
             return 300
 
@@ -270,6 +286,23 @@ class WebHITLHandler(AbstractHITLHandler):
         public_context = dict(request.context or {})
         public_context.pop("_session", None)
 
+        # `auto`: nobody is asked, so no card is drawn and nothing waits. The
+        # decision is still written to the transcript — a run that approved
+        # itself must be readable as such afterwards, not indistinguishable
+        # from one a human signed off.
+        if _auto_approves():
+            taken = {
+                "type": "hitl_response", "request_id": request_id,
+                "agent_name": request.agent_name, "action": "approve",
+                "approved": True, "instructions": None, "free_input": None,
+                "auto": "mode=auto", "timestamp": datetime.now().isoformat(),
+            }
+            self._record(session_key, taken)
+            logger.info("HITL %s approved without asking (HITL__MODE=auto): %s",
+                        request_id[:8], request.agent_name)
+            return HITLResponse(action=HITLAction.APPROVE, approved=True,
+                                instructions="")
+
         # A request may bring its own window (a Work Order veto window);
         # otherwise the operator's global auto-approve timeout applies.
         timeout_sec = (
@@ -350,15 +383,31 @@ class WebHITLHandler(AbstractHITLHandler):
                     ),
                 }
             else:
-                # The legacy timeout policy for every other HITL request,
-                # including the Coder's outward-facing actions.
-                response_data = {"action": "approve", "approved": True}
+                # Silence is a REFUSAL, everywhere. It used to approve for
+                # everything except the two experiment reviews, which is how
+                # thirty-four decisions in the recorded sessions came to be
+                # taken by the clock — and the response carried no `timed_out`,
+                # so nothing downstream could tell them from a human saying yes.
+                # A run that must proceed unattended has a mode of its own now
+                # (`HITL__MODE=auto`), and it is named out loud.
+                response_data = {
+                    "action": "reject",
+                    "approved": False,
+                    "timed_out": True,
+                    "instructions": (
+                        "Nobody answered within the review window; the action "
+                        "was not approved."
+                    ),
+                }
             timeout_event = {
                 "type": "hitl_timeout",
                 "request_id": request_id,
                 "agent_name": request.agent_name,
                 "timeout_seconds": timeout_sec,
-                "paused": self._is_experiment_review(request),
+                # Always true now: nothing is approved by silence, so every
+                # expiry leaves the work where it was. In transcripts recorded
+                # before this, `false` is the signature of an auto-approval.
+                "paused": True,
                 "timestamp": datetime.now().isoformat(),
             }
             self._record(session_key, timeout_event)

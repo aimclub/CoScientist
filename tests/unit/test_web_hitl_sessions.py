@@ -158,9 +158,11 @@ def _request(key, timeout_seconds=None):
     )
 
 
-def test_request_timeout_overrides_the_global_auto_approve_timeout():
-    """A Work Order veto window is shorter than the operator's global timeout:
-    the request's own timeout_seconds must win, and running out approves."""
+def test_request_timeout_overrides_the_global_wait():
+    """A configured veto window is shorter than the run's mode allows: the
+    request's own timeout_seconds must win. Running out no longer approves —
+    silence is a refusal everywhere, and a run that must proceed unattended
+    says so with HITL__MODE=auto instead."""
     async def scenario():
         handler = WebHITLHandler()
         handler.hitl_timeout_seconds = 300
@@ -171,7 +173,8 @@ def test_request_timeout_overrides_the_global_auto_approve_timeout():
         response = await asyncio.wait_for(
             handler.handle_request(_request(key, timeout_seconds=0.05)), timeout=2
         )
-        assert response.approved
+        assert response.approved is False
+        assert response.timed_out is True
         assert socket.messages[0]["timeout_seconds"] == 0.05
         assert socket.messages[-1]["type"] == "hitl_timeout"
 
@@ -275,8 +278,13 @@ def test_hitl_request_and_its_answer_are_recorded_in_the_session_transcript():
         timed_out = await asyncio.wait_for(
             handler.handle_request(_request(key, timeout_seconds=0.05)), timeout=2
         )
-        assert timed_out.approved
+        # Silence is a refusal, and the transcript says so: an expiry that used
+        # to be recorded as an approval was indistinguishable, on a reload, from
+        # a human having pressed the button.
+        assert timed_out.approved is False
+        assert timed_out.timed_out is True
         assert recorded[-1][1]["type"] == "hitl_timeout"
+        assert recorded[-1][1]["paused"] is True
 
     asyncio.run(scenario())
 

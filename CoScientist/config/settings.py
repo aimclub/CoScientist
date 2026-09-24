@@ -375,6 +375,12 @@ class WebSettings(BaseModel):
     max_searches: int = int(_os.getenv("RESEARCH_AGENT_SEARCHES", "2"))           # WebSearchLimiter per-turn cap
     max_retries: int = int(_os.getenv("LLM_MAX_RETRIES", "3"))
     hitl_enabled: bool = _os.getenv("HITL__ENABLED", "false").lower() in ("true", "1", "yes")
+    # One knob for every confirmation in the system: "auto" never asks, "basic"
+    # waits ten minutes and treats silence as a REFUSAL, "debug" waits for the
+    # human however long it takes. See CoScientist/hitl/mode.py for why silence
+    # approves in none of them. Empty means "derive it from the two settings
+    # below", so an existing stand keeps the behaviour it had.
+    hitl_mode: str = _os.getenv("HITL__MODE", "").strip().lower()
     hitl_auto_approve_timeout: int = int(_os.getenv("HITL_AUTO_APPROVE_TIMEOUT", _os.getenv("HITL__AUTO_APPROVE_TIMEOUT", _os.getenv("HITL_TIMEOUT_SECONDS", "300"))))
     scope_hitl: bool = _os.getenv("ORCHESTRATOR__SCOPE_HITL", "false").lower() in ("true", "1", "yes")
     # Work Order: executor agents declare a contract (goal, assumptions, steps,

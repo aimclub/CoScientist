@@ -8,9 +8,14 @@ How a contract is confirmed depends on its risk tier (work_order_risk.py):
 
   read         a declaration is reviewed like compute; an amendment that only
                adds read tools is a notice card and returns at once;
-  compute      a HITL request with a veto window — auto-approved when it runs out
-               (a window of -1 disables auto-approval: it waits for the human);
-  side_effect  a HITL request under the operator's global HITL timeout.
+  compute      a HITL request; a configured positive veto window auto-approves
+               it when that window runs out;
+  side_effect  a HITL request, never auto-approved by a veto window.
+
+How LONG any of them waits is the run's HITL mode (CoScientist/hitl/mode.py):
+`auto` answers without asking, `basic` waits ten minutes, `debug` waits for the
+human. Silence approves in none of them — it used to, for side effects only,
+which made the riskiest tier the one the clock could sign off.
 
 The Work Report is confirmed at the tier of the order it reports on. Sent back
 for rework, the agent keeps working in the same run and reports again.
@@ -338,9 +343,15 @@ class WorkOrderToolset:
             return None
 
         veto = tier in (Tier.READ, Tier.COMPUTE) and not force_blocking
-        # A non-positive window reaches the handler as-is: no deadline, wait for the human.
+        # `None` hands the wait to the run's HITL mode, and that is now the
+        # answer for every tier alike. The tiers used to come out inverted:
+        # read/compute passed an explicit -1 and waited for the human forever,
+        # while `side_effect` — the riskiest contract there is — fell through to
+        # the global window and was the only one with a countdown, and that
+        # countdown APPROVED. Only an explicitly configured positive veto window
+        # still overrides the mode. Silence approves in none of them.
         veto_seconds = get_settings().web.work_order_veto_seconds
-        veto_timeout = float(veto_seconds) if veto_seconds > 0 else -1.0
+        veto_timeout = float(veto_seconds) if veto_seconds > 0 else None
         request = HITLRequest(
             agent_name=self.agent_name,
             action_type=HITLAction.APPROVE,
@@ -411,11 +422,12 @@ class WorkOrderToolset:
             return None
         lang = session_report_language(tool_context)
         report = order.report or WorkReport()
-        # Same windows as the declaration: veto for read/compute (a non-positive
-        # window waits for the human), the global HITL timeout for side effects.
+        # Same wait as the declaration, and for the same reason: the run's HITL
+        # mode owns it for every tier, and only an explicitly configured
+        # positive veto window overrides that.
         veto_seconds = get_settings().web.work_order_veto_seconds
         veto = order.tier in (Tier.READ, Tier.COMPUTE)
-        veto_timeout = float(veto_seconds) if veto_seconds > 0 else -1.0
+        veto_timeout = float(veto_seconds) if veto_seconds > 0 else None
         request = HITLRequest(
             agent_name=self.agent_name,
             action_type=HITLAction.APPROVE,

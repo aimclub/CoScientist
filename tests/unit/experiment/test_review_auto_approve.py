@@ -272,47 +272,46 @@ def test_the_two_experiment_switches_are_offered_in_the_approvals_tab():
 # me" — and this was the one path that did not hear it: `handle_request` prefers
 # a request's own window, and the review always set one.
 
-def _reviewer(window):
-    """A stub `self` carrying just what `_review_window` reads."""
-    return SimpleNamespace(hitl_handler=SimpleNamespace(hitl_timeout_seconds=window))
+_ANY = SimpleNamespace(hitl_handler=SimpleNamespace())
 
 
-def test_a_positive_global_leaves_the_review_its_own_window():
-    """The two review windows are deliberately their own: they fail closed, and
-    a bounded wait is what stops a missed card parking the run. An operator who
-    has NOT turned timeouts off keeps that."""
-    got = ExperimentReviewSessionAgent._review_window(_reviewer(300), 300.0)
-    assert got == 300.0
+def test_basic_mode_keeps_the_reviews_own_bounded_window(monkeypatch):
+    """These two windows fail closed, so a bounded wait is a safety property of
+    the stage rather than a preference. In `basic` the tighter of the two wins,
+    and the review's 300 s is tighter than the mode's 600."""
+    monkeypatch.setenv("HITL__MODE", "basic")
+    assert ExperimentReviewSessionAgent._review_window(_ANY, 300.0) == 300.0
+    # …and where the review asks for longer than the mode allows, the mode wins.
+    assert ExperimentReviewSessionAgent._review_window(_ANY, 3600.0) == 600.0
 
 
-def test_the_operator_s_no_timeout_switch_reaches_the_review():
-    """`None` hands the decision back to the handler, whose own fallback IS the
-    global — so «wait for me» finally applies here too."""
-    assert ExperimentReviewSessionAgent._review_window(_reviewer(-1), 300.0) is None
-    assert ExperimentReviewSessionAgent._review_window(_reviewer(0), 300.0) is None
+def test_debug_mode_makes_the_review_wait_for_the_human(monkeypatch):
+    """This was the one voice the operator's switch did not reach:
+    `handle_request` prefers a request's own window, so someone who had turned
+    every timeout off still had the plan review expire at 300 s and the run skip
+    execution."""
+    monkeypatch.setenv("HITL__MODE", "debug")
+    assert ExperimentReviewSessionAgent._review_window(_ANY, 300.0) is None
 
 
-def test_the_global_is_read_from_settings_when_the_handler_has_none(monkeypatch):
-    """A console or A2A handler carries no window of its own."""
-    web = get_settings().web
-    monkeypatch.setattr(web, "hitl_auto_approve_timeout", -1, raising=False)
-    bare = SimpleNamespace(hitl_handler=SimpleNamespace())
-    assert ExperimentReviewSessionAgent._review_window(bare, 300.0) is None
-
-    monkeypatch.setattr(web, "hitl_auto_approve_timeout", 300, raising=False)
-    assert ExperimentReviewSessionAgent._review_window(bare, 300.0) == 300.0
+def test_auto_mode_never_reaches_a_wait(monkeypatch):
+    """`_auto_approve` answered first, so this is only about not returning
+    something that would mean "refuse immediately" if a path ever got here."""
+    monkeypatch.setenv("HITL__MODE", "auto")
+    assert _auto_approve("plan") is True
+    assert ExperimentReviewSessionAgent._review_window(_ANY, 300.0) == 300.0
 
 
-def test_an_unreadable_switch_keeps_the_bounded_window():
-    """Fail safe, not fail open: if the switch cannot be read, the review keeps
+def test_an_unreadable_mode_keeps_the_bounded_window(monkeypatch):
+    """Fail safe, not fail open: if the mode cannot be read, the review keeps
     its deadline rather than silently becoming an indefinite wait."""
-    class Exploding:
-        @property
-        def hitl_timeout_seconds(self):
-            raise RuntimeError("настройки недоступны")
+    import CoScientist.hitl.mode as mode_mod
 
-    broken = SimpleNamespace(hitl_handler=Exploding())
-    assert ExperimentReviewSessionAgent._review_window(broken, 300.0) == 300.0
+    def explode():
+        raise RuntimeError("настройки недоступны")
+
+    monkeypatch.setattr(mode_mod, "wait_seconds", explode)
+    assert ExperimentReviewSessionAgent._review_window(_ANY, 300.0) == 300.0
 
 
 def test_the_window_reaches_the_request_the_handler_reads():

@@ -500,6 +500,31 @@ function respondHITLInput(requestId) {
   }
 }
 
+// A positive answer APPROVES, notes and all. For cards that carry their own
+// «Доработать» button the shorthand below — approve + notes means revise — was
+// pure harm: the operator pressed Утвердить, wrote a clarification, and the
+// plan they had just approved was thrown away and written again from scratch.
+// The note travels with the approval as the operator's own instruction.
+function respondHITLApprove(requestId) {
+  const feedbackEl = document.getElementById('hitl-feedback-' + requestId);
+  const feedback = feedbackEl ? feedbackEl.value.trim() : '';
+  sendHitlResponse({
+    type: 'hitl_response',
+    request_id: requestId,
+    action: 'approve',
+    approved: true,
+    instructions: feedback || null,
+    free_input: null,
+  });
+  disableHitlControls(requestId);
+
+  if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
+    currentPlannerHitlRequest = null;
+    updateRoadmapModalButtons();
+  }
+}
+window.respondHITLApprove = respondHITLApprove;
+
 function respondHITL(requestId, approved) {
   const feedbackEl = document.getElementById('hitl-feedback-' + requestId);
   const feedback = feedbackEl ? feedbackEl.value.trim() : '';
@@ -1623,7 +1648,7 @@ function renderExperimentPlanReview(live, data) {
       <textarea id="hitl-feedback-${escHtml(rid)}" rows="2" placeholder="${escHtml(t('plan.feedbackPlaceholder'))}"
         class="w-full bg-surface-container-high border border-outline-variant/25 rounded-md px-2.5 py-2 text-[13px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
       <div class="flex flex-wrap gap-3">
-        <button onclick="respondHITL('${escJs(rid)}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+        <button onclick="respondHITLApprove('${escJs(rid)}')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
           <span class="material-symbols-outlined text-base">check_circle</span> ${escHtml(t('plan.accept'))}
         </button>
         <button onclick="respondHITLEdit('${escJs(rid)}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] hover:bg-surface-container-highest transition-all">
