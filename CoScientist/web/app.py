@@ -1311,6 +1311,53 @@ def create_app() -> FastAPI:
             return JSONResponse({"status": "cancelled", "detail": str(exc)}, status_code=200)
 
     # --- Artifact delivery (report links) ---
+    @app.get("/api/users/{user_id}/sessions/{session_id}/sandbox/files")
+    async def list_session_sandbox_files(user_id: str, session_id: str,
+                                         path: str = "/workspace"):
+        """What the sandbox of this session actually holds, for a human to see.
+
+        The agents have had `list_sandbox_files` all along; the person watching
+        the run had no way to look, and no way to reach a file the agent never
+        mentioned.
+        """
+        from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
+
+        result = await asyncio.to_thread(
+            sandbox.list_sandbox_files, path, session_id=session_id,
+        )
+        if result.get("status") != "ok":
+            return JSONResponse(
+                {"status": "error",
+                 "message": result.get("error") or "Песочница не ответила.",
+                 "path": path, "entries": []},
+                status_code=502,
+            )
+        return JSONResponse({"status": "ok", "path": result.get("path", path),
+                             "entries": result.get("entries", [])})
+
+    @app.post("/api/users/{user_id}/sessions/{session_id}/sandbox/fetch")
+    async def fetch_session_sandbox_file(user_id: str, session_id: str,
+                                         request: Request):
+        """Copy one sandbox path into storage and answer with its durable link.
+
+        The same transfer the agents use, so a file a person pulls across and a
+        file an agent pulls across are the same object with the same link.
+        """
+        from CoScientist.tools.coder_tools.sandbox_artifacts import (
+            transfer_sandbox_artifact,
+        )
+
+        body = await request.json()
+        path = str((body or {}).get("path") or "").strip()
+        if not path:
+            raise HTTPException(status_code=400, detail="path is required")
+
+        result = await asyncio.to_thread(
+            transfer_sandbox_artifact, path, session_id=session_id,
+        )
+        return JSONResponse(result,
+                            status_code=200 if result.get("status") == "success" else 502)
+
     @app.get("/api/artifact/{bucket}/{key:path}")
     async def get_artifact(bucket: str, key: str):
         """Redirect the browser to a fresh download URL for one S3 object.

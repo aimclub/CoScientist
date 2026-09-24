@@ -840,6 +840,17 @@ _SANDBOX_TAIL_DOCS = (
             "rely on them."
         ),
     ),
+    ToolDoc(
+        name="fetch_sandbox_artifact",
+        signature="fetch_sandbox_artifact(path)",
+        purpose=(
+            "Bring a file OUT of the sandbox into durable storage and get back "
+            "a link that keeps working. Listing only proves a file exists; this "
+            "is how a plot, a checkpoint, a results table or a generated "
+            "dataset reaches the report and the reader — including files the "
+            "sandbox agent never uploaded. A directory comes back as one ZIP."
+        ),
+    ),
 )
 
 

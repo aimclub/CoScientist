@@ -1,223 +1,113 @@
-"""Sandbox uploads as durable report artifacts.
+"""Getting a file out of the sandbox and into something a reader can open.
 
-A sandbox run reports its uploaded files in ``s3_uploads`` with a ``key`` but
-no bucket, and a presigned URL that dies in about an hour. These tests pin the
-two halves of the fix: the client adds the durable bucket/s3_key pair when it
-reads the uploads, and the report collector puts a non-media artifact — a
-checkpoint, an archive, a produced PDF — into the Files section with a
-download link.
+`list_sandbox_files` could say a file exists and nothing could reach it. The
+transfer is one hop — pull the bytes, put them in the bucket every other
+artifact lives in, answer with the durable link — so that everything
+downstream (the report, the chat, the S3 references the execution graph reads
+onto an agent's card) keeps working untouched.
 """
-from __future__ import annotations
-
-import json
-from pathlib import Path
+import types
 
 import pytest
 
-from CoScientist.reporting import artifact_index, collect
-from CoScientist.tools.coder_tools import openhands_sandbox as client
-from CoScientist.utils.s3_refs import find_s3_artifacts
+from CoScientist.tools.coder_tools import sandbox_artifacts
 
 
-def _upload(key="ephemeral/u1/s1/results/model.pt"):
-    """One s3_uploads entry, exactly as the sandbox server reports it."""
-    return {
-        "filename": "model.pt",
-        "url": f"http://minio:9000/agent-vault/{key}?X-Amz-Signature=abc",
-        "size": 4096,
-        "key": key,
-    }
+@pytest.fixture
+def sandbox(monkeypatch, tmp_path):
+    """A sandbox that hands over one small file."""
+    def download(remote, local, **_kwargs):
+        with open(local, "wb") as fh:
+            fh.write(b"loss,epoch\n0.1,3\n")
+        return {"status": "ok", "size_bytes": 17, "sandbox_id": "sbx-1"}
+
+    monkeypatch.setattr(
+        "CoScientist.tools.coder_tools.openhands_sandbox.download_sandbox_file",
+        download, raising=False)
+    return download
 
 
-# --- normalization at the client boundary ------------------------------------
-
-def test_an_upload_is_normalized_to_a_durable_reference():
-    entry, = client._normalize_uploads([_upload()])
-
-    assert entry["s3_key"] == "ephemeral/u1/s1/results/model.pt"
-    # The bucket comes from the presigned URL itself: <endpoint>/<bucket>/<key>.
-    assert entry["bucket"] == "agent-vault"
-    # The server contract keeps its field.
-    assert entry["key"] == "ephemeral/u1/s1/results/model.pt"
-    assert entry["filename"] == "model.pt"
-    assert entry["size"] == 4096
+def _stub_upload(monkeypatch, ref=("results", "sandbox-artifacts/s1/metrics.csv")):
+    monkeypatch.setattr("CoScientist.reporting.s3_upload.upload_and_ref",
+                        lambda *a, **k: ref, raising=False)
 
 
-def test_the_bucket_falls_back_to_the_deployment_config(monkeypatch):
-    """A virtual-hosted-style URL names no bucket in its path."""
-    monkeypatch.setenv("SANDBOX_S3_BUCKET", "cfg-bucket")
-    upload = _upload()
-    upload["url"] = "https://agent-vault.minio.example/ephemeral/u1/s1/results/model.pt?sig=1"
+def test_a_transferred_file_comes_back_as_a_link_that_keeps_working(sandbox, monkeypatch):
+    _stub_upload(monkeypatch)
 
-    entry, = client._normalize_uploads([upload])
+    out = sandbox_artifacts.transfer_sandbox_artifact(
+        "/workspace/metrics.csv", session_id="s1")
 
-    assert entry["bucket"] == "cfg-bucket"
-    assert entry["s3_key"] == upload["key"]
-
-
-def test_an_entry_that_names_no_object_passes_through():
-    assert client._normalize_uploads([{"filename": "x"}]) == [{"filename": "x"}]
-    assert client._normalize_uploads(None) == []
-    assert client._normalize_uploads("not a list") == []
+    assert out["status"] == "success"
+    # The durable form, not a presigned URL: a signature expires, the object does not.
+    assert out["url"] == "/api/artifact/results/sandbox-artifacts/s1/metrics.csv"
+    assert out["bucket"] == "results"
+    assert "?" not in out["url"], "a presigned URL would carry a signature"
 
 
-def test_a_normalized_upload_is_what_the_capture_plugin_looks_for():
-    """find_s3_artifacts requires bucket AND s3_key. The raw server entry fails
-    that check and its URL dies with the run. The normalized entry is the
-    durable record the artifact index stores."""
-    raw = [_upload()]
-    assert find_s3_artifacts({"s3_uploads": raw}) == []
+def test_the_object_is_filed_under_the_session_that_produced_it(sandbox, monkeypatch):
+    seen = {}
 
-    record, = find_s3_artifacts({"s3_uploads": client._normalize_uploads(raw)})
-    assert record["bucket"] == "agent-vault"
-    assert record["s3_key"] == "ephemeral/u1/s1/results/model.pt"
-    assert record["url"].startswith("http://minio:9000/")
+    def upload(local, prefix):
+        seen["prefix"] = prefix
+        return ("results", f"{prefix}/metrics.csv")
 
+    monkeypatch.setattr("CoScientist.reporting.s3_upload.upload_and_ref",
+                        upload, raising=False)
 
-def test_the_poll_result_carries_the_normalized_uploads():
-    state = client._PollState(timeout=None, verbose=False)
-    result = state.on_poll({
-        "status": "completed", "summary": "done", "s3_uploads": [_upload()],
-    })
-
-    entry, = result["s3_uploads"]
-    assert entry["bucket"] == "agent-vault"
-    assert entry["s3_key"] == "ephemeral/u1/s1/results/model.pt"
+    sandbox_artifacts.transfer_sandbox_artifact("/workspace/metrics.csv",
+                                                session_id="session-42")
+    assert "session-42" in seen["prefix"]
 
 
-# --- the report side ----------------------------------------------------------
+def test_a_sandbox_that_refuses_is_reported_not_swallowed(monkeypatch):
+    monkeypatch.setattr(
+        "CoScientist.tools.coder_tools.openhands_sandbox.download_sandbox_file",
+        lambda *a, **k: {"status": "error", "message": "No sandbox is bound."},
+        raising=False)
 
-@pytest.fixture()
-def index_root(tmp_path, monkeypatch):
-    monkeypatch.setenv("GRAPH_SNAPSHOT_DIR", str(tmp_path))
-    return tmp_path
-
-
-@pytest.fixture()
-def fake_download(monkeypatch):
-    seen = []
-
-    def download(url, dest):
-        seen.append(url)
-        dest.write_bytes(b"x")
-        return True
-
-    monkeypatch.setattr(collect, "_download", download)
-    return seen
+    out = sandbox_artifacts.transfer_sandbox_artifact("/workspace/x", session_id="s1")
+    assert out["status"] == "error"
+    assert "No sandbox is bound." in out["message"]
 
 
-def _collect(tmp_path, **kwargs):
-    return collect.collect_artifacts(
-        session_id="s1", state={}, reports_root=tmp_path / "reports",
-        workspace_root=tmp_path / "ws", index_key=("u1", "s1"), **kwargs,
-    )
+def test_storage_refusing_the_file_is_not_reported_as_success(sandbox, monkeypatch):
+    """The bytes arrived; nobody can open them. That is a failure, not a link."""
+    monkeypatch.setattr("CoScientist.reporting.s3_upload.upload_and_ref",
+                        lambda *a, **k: None, raising=False)
+
+    out = sandbox_artifacts.transfer_sandbox_artifact("/workspace/x", session_id="s1")
+    assert out["status"] == "error"
+    assert "S3" in out["message"]
 
 
-def _index_entry(key, url=None, tool="run_sandbox_task"):
-    return {
-        "bucket": "agent-vault", "s3_key": key, "tool": tool,
-        "label": key.rsplit("/", 1)[-1],
-        "url": url or f"http://minio/agent-vault/{key}?sig=1",
-    }
+def test_an_enormous_artifact_is_refused_rather_than_written_to_disk(monkeypatch):
+    """A training run leaves gigabytes behind; a directory arrives as one ZIP."""
+    def huge(remote, local, **_kwargs):
+        open(local, "wb").close()
+        return {"status": "ok", "size_bytes": 10 * 1024 ** 3}
+
+    monkeypatch.setattr(
+        "CoScientist.tools.coder_tools.openhands_sandbox.download_sandbox_file",
+        huge, raising=False)
+
+    out = sandbox_artifacts.transfer_sandbox_artifact("/workspace", session_id="s1")
+    assert out["status"] == "error"
+    assert "слишком велик" in out["message"]
 
 
-def test_a_checkpoint_lands_in_the_files_section(index_root, tmp_path, fake_download):
-    artifact_index.record(
-        [_index_entry("ephemeral/u1/s1/results/model.pt")], user_id="u1", session_id="s1",
-    )
-
-    result = _collect(tmp_path)
-
-    assert len(result["files"]) == 1
-    assert "## Files" in result["blocks_markdown"]
-    # The object is already in S3, so the link points at the artifact route
-    # for the original object instead of a local path that is dead in the UI.
-    assert (
-        "[download](/api/artifact/agent-vault/ephemeral/u1/s1/results/model.pt)"
-        in result["blocks_markdown"]
-    )
-    # The durable reference crosses into finalize's promotion input.
-    sources = json.loads(
-        (Path(result["report_dir"]) / collect.SOURCES_FILENAME).read_text()
-    )
-    assert sources == {
-        "files/run_sandbox_task_model.pt": {
-            "bucket": "agent-vault", "s3_key": "ephemeral/u1/s1/results/model.pt",
-        }
-    }
+def test_an_empty_path_is_refused_before_anything_is_contacted():
+    out = sandbox_artifacts.transfer_sandbox_artifact("   ")
+    assert out["status"] == "error"
 
 
-def test_the_figures_and_tables_sections_are_unchanged(index_root, tmp_path, fake_download):
-    artifact_index.record([
-        _index_entry("ephemeral/u1/s1/plot.png", tool="chem"),
-        _index_entry("ephemeral/u1/s1/data.csv", tool="chem"),
-        _index_entry("ephemeral/u1/s1/results.zip"),
-    ], user_id="u1", session_id="s1")
+def test_the_agents_are_given_the_tool_and_it_is_documented():
+    """Undocumented, guard_unknown_tools would refuse the call as hallucinated."""
+    from CoScientist.assembly import bindings
+    from CoScientist.tools.coder_tools.sandbox_tools import get_sandbox_tools
 
-    result = _collect(tmp_path)
-    md = result["blocks_markdown"]
-
-    assert "## Figures" in md
-    assert "## Data tables" in md
-    assert "## Files" in md
-    assert len(result["figures"]) == 1
-    assert len(result["tables"]) == 1
-    assert len(result["files"]) == 1
-
-
-def test_a_produced_pdf_is_a_file_not_source_material(index_root, tmp_path, fake_download):
-    """A PDF the run made is a deliverable. Only bulk search results stay out."""
-    artifact_index.record(
-        [_index_entry("ephemeral/u1/s1/report.pdf")], user_id="u1", session_id="s1",
-    )
-
-    result = _collect(tmp_path)
-
-    assert len(result["files"]) == 1
-    assert "## Files" in result["blocks_markdown"]
-
-
-def test_a_dead_file_url_is_reminted_from_the_key(index_root, tmp_path, monkeypatch):
-    """A file entry flows through the same resolve_url path as a figure."""
-    seen = []
-
-    def download(url, dest):
-        seen.append(url)
-        if "sig=old" in url:
-            return False  # the expired link 403s
-        dest.write_bytes(b"x")
-        return True
-
-    monkeypatch.setattr(collect, "_download", download)
-    key = "ephemeral/u1/s1/results/model.pt"
-    artifact_index.record(
-        [_index_entry(key, url=f"http://minio/agent-vault/{key}?sig=old")],
-        user_id="u1", session_id="s1",
-    )
-
-    result = _collect(tmp_path, resolve_url=lambda uri: f"http://minio/{uri.rsplit('/', 1)[-1]}?sig=new")
-
-    assert seen == [
-        f"http://minio/agent-vault/{key}?sig=old",
-        "http://minio/model.pt?sig=new",
-    ]
-    assert len(result["files"]) == 1
-
-
-def test_the_workspace_walk_collects_files_but_not_code(index_root, tmp_path, monkeypatch):
-    """The disk walk is uncurated, so only known deliverable types qualify."""
-    # Keep S3 off: the repo .env on a configured machine would really upload.
-    monkeypatch.setattr(collect, "upload_and_presign", lambda *a, **k: None)
-    ws = tmp_path / "ws" / "ws_s1"
-    ws.mkdir(parents=True)
-    (ws / "model.pt").write_bytes(b"x")
-    (ws / "results.tar.gz").write_bytes(b"x")
-    (ws / "train.py").write_bytes(b"x")
-    (ws / "notes.txt").write_bytes(b"x")
-
-    result = _collect(tmp_path)
-
-    assert sorted(Path(f).name for f in result["files"]) == ["model.pt", "results.tar.gz"]
-    assert "## Files" in result["blocks_markdown"]
-    # S3 is off in this test, so the link falls back to the local POSIX path.
-    assert "[download](files/model.pt)" in result["blocks_markdown"]
+    documented = {d.name for d in bindings._SANDBOX_TAIL_DOCS}
+    assert "fetch_sandbox_artifact" in documented
+    # And actually attached, not merely described.
+    attached = {getattr(t, "__name__", "") for t in get_sandbox_tools()}
+    assert not attached or "fetch_sandbox_artifact" in attached
