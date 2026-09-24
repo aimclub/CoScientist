@@ -7,9 +7,9 @@ DOI, as a bare string. No file, no link, nothing to click.
 
 Two halves. `paper_library` keeps the citation (title, year, DOI, address) that
 `print_research_agent_tool_call` used to throw away, keeping only an S3 key;
-`capture_paper_downloads` brings the bytes into the session store. The join
-between them is the **normalized** DOI, because three sources spell the same one
-three ways.
+`PaperCapturePlugin` brings the bytes into the session store. The join between
+them is any identifier the record holds — a DOI, a PMC id — and a DOI is
+**normalized** first, because three sources spell the same one three ways.
 """
 from __future__ import annotations
 
@@ -103,9 +103,9 @@ def test_a_found_paper_is_brought_home(key, monkeypatch):
     wanted = pl.merge(state, records, agent="ResearchAgent")
     assert len(wanted) == 1
 
-    from CoScientist.agents.callbacks.tool_callbacks import _mirror_papers
+    from CoScientist.tools.paper_capture_plugin import mirror_papers
 
-    outcome = _mirror_papers(wanted, key, "ResearchAgent")[0]
+    outcome = mirror_papers(wanted, key, "ResearchAgent")[0]
     pl.note_stored(state, wanted[0], outcome)
 
     assert outcome["state"] == sf.STATE_STORED
@@ -139,11 +139,11 @@ def test_the_same_paper_is_not_fetched_twice(key, monkeypatch):
     import requests
 
     monkeypatch.setattr(requests, "get", lambda *a, **k: _Response())
-    from CoScientist.agents.callbacks.tool_callbacks import _mirror_papers
+    from CoScientist.tools.paper_capture_plugin import mirror_papers
 
     state = {}
     wanted = pl.merge(state, pl.records_from_tool("search_papers", _search_result()))
-    pl.note_stored(state, wanted[0], _mirror_papers(wanted, key, "a")[0])
+    pl.note_stored(state, wanted[0], mirror_papers(wanted, key, "a")[0])
 
     again = pl.merge(state, pl.records_from_tool("search_papers", _search_result()))
     assert again == [], "already stored — nothing more to do"
@@ -264,12 +264,12 @@ def test_evidence_is_given_the_paper_it_cited(key, monkeypatch):
     import requests
 
     monkeypatch.setattr(requests, "get", lambda *a, **k: _Response())
-    from CoScientist.agents.callbacks.tool_callbacks import _mirror_papers
+    from CoScientist.tools.paper_capture_plugin import mirror_papers
     from CoScientist.graph.research.agent_tools import _enrich_evidence
 
     state = {}
     wanted = pl.merge(state, pl.records_from_tool("search_papers", _search_result()))
-    outcome = _mirror_papers(wanted, key, "ResearchAgent")[0]
+    outcome = mirror_papers(wanted, key, "ResearchAgent")[0]
     pl.note_stored(state, wanted[0], outcome)
 
     ctx = type("Ctx", (), {"state": state, "agent_name": "ResearchAgent"})()
@@ -282,6 +282,59 @@ def test_evidence_is_given_the_paper_it_cited(key, monkeypatch):
     assert attrs["session_artifact_id"] == outcome["artifact_id"]
     assert attrs["paper_title"] == "Furanocoumarin toxicity in citrus"
     assert attrs["paper_year"] == 2022
+
+
+def test_evidence_citing_a_pmc_id_finds_its_paper(key):
+    """The join that had never once fired in a recorded run.
+
+    Of the twenty-five distinct `source_ref` values on disk, eleven carry a PMC
+    id and fourteen carry no DOI at all — and the matcher only understood DOIs.
+    The citation is also a LIST, and the handle we hold may be third in it.
+    """
+    from CoScientist.graph.research.agent_tools import _enrich_evidence
+
+    state = {}
+    pl.merge(state, [{
+        "doi": "", "doi_raw": "", "title": "Heracleum sosnowskyi, a review",
+        "year": 2026, "is_oa": None,
+        "refs": ["pmc:12610272"],
+        "pdf_url": "https://pmc.ncbi.nlm.nih.gov/articles/PMC12610272",
+        "presigned_url": "", "bucket": None, "s3_key": None, "tool": "tavily_search"}])
+    pl.note_stored(state, pl.library(state)[0],
+                   {"state": sf.STATE_STORED, "artifact_id": "heracleum-ab12cd34.pdf"})
+
+    ctx = type("Ctx", (), {"state": state, "agent_name": "ResearchAgent"})()
+    nodes = _enrich_evidence([{"type": "Evidence", "attrs": {
+        "subtype": "literature", "content": "furanocoumarin profile",
+        # The exact shape a live run wrote, parenthetical title and all.
+        "source_ref": "PMC12610272 (Analysis of the Toxicological Profile of "
+                      "H. sosnowskyi metabolites using in silico methods), 2026"}}],
+        "ResearchAgent", ctx)
+
+    attrs = nodes[0]["attrs"]
+    assert attrs["session_artifact_id"] == "heracleum-ab12cd34.pdf"
+    assert attrs["pmcid"] == "PMC12610272"
+    assert attrs["paper_title"] == "Heracleum sosnowskyi, a review"
+
+
+def test_a_paper_met_twice_under_two_names_is_one_record(key):
+    """A run meets a work by its DOI in one turn and its PMC id in the next."""
+    state = {}
+    pl.merge(state, [{"doi": "10.3390/plants14213253", "doi_raw": "",
+                      "title": "Rassabina & Fedorov", "year": 2025, "is_oa": True,
+                      "refs": ["doi:10.3390/plants14213253"],
+                      "pdf_url": "https://example.org/a.pdf", "presigned_url": "",
+                      "bucket": None, "s3_key": None, "tool": "search_papers"}])
+    pl.merge(state, [{"doi": "10.3390/plants14213253", "doi_raw": "", "title": "",
+                      "year": None, "is_oa": None,
+                      "refs": ["doi:10.3390/plants14213253", "pmc:12610272"],
+                      "pdf_url": "https://example.org/a.pdf", "presigned_url": "",
+                      "bucket": None, "s3_key": None, "tool": "tavily_search"}])
+
+    assert len(pl.library(state)) == 1, "one work, one record"
+    assert set(pl.library(state)[0]["refs"]) == {
+        "doi:10.3390/plants14213253", "pmc:12610272"}, "and now known by both"
+    assert pl.find(state, "PMC12610272") is pl.find(state, "10.3390/plants14213253")
 
 
 def test_what_the_agent_wrote_is_never_overwritten(key):

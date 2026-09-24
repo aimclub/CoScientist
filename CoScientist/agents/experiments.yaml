@@ -82,7 +82,7 @@ agents:
       before_agent: [before_get_task, inject_research_context, reset_research_searches, user_links]
       before_model: [inject_uploaded_papers, redact_link_urls]
       before_tool: [WebSearchLimiter, resolve_link_refs]
-      after_tool: [log_research_tool_calls, capture_paper_downloads, count_research_searches, register_tool_result_links]
+      after_tool: [log_research_tool_calls, count_research_searches, register_tool_result_links]
       after_model: [expand_link_refs, guard_unknown_tools]
 
   CoderAgent:

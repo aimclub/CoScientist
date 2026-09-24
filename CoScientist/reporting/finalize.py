@@ -294,7 +294,7 @@ def _extract_references(state: Dict[str, Any]) -> List[str]:
 
     An explicit ``references`` list wins: something took the trouble to write
     it. Failing that, the papers the run actually looked up — title, year and
-    DOI per record, kept by ``capture_paper_downloads``. This is the metadata
+    DOI per record, kept by ``PaperCapturePlugin``. This is the metadata
     the long-standing TODO here was waiting for: paper research used to keep its
     results as free text (``search_results``), so there was nothing to build a
     bibliography from.

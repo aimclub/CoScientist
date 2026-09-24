@@ -87,7 +87,10 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
                            "here if it is a stand-in for what the hypothesis names "
                            "(e.g. 'local reimplementation; upstream repo 404')",
             "reliability": "weight / reliability estimate",
-            "source_ref": "paper DOI, dataset, run id, …",
+            "source_ref": "paper DOI, PMC id, dataset, run id, … — one per "
+                          "source, separated by ';' when there are several",
+            "doi": "set by the graph when a cited paper is matched to a stored file",
+            "pmcid": "same, for a PubMed Central id",
         },
         subtypes=("literature", "experimental", "computational", "expert", "meta"),
         subtype_required=True,
@@ -838,6 +841,23 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         update_attrs=frozenset({"Report"}),
         transitions=frozenset(),
         edges=_edges("derived_from"),
+    ),
+    # NOT an agent: the code that turns a DOI or a PMC id an agent cited into
+    # the file this session holds. It stamps the citation's own attributes onto
+    # the Evidence that carried it and nothing else — no status, no edges, no
+    # new nodes — so its rights are stated one (type, attribute) pair at a time
+    # rather than by owning the type. Matched on identifiers, never on a title:
+    # two papers share a title far more often than they share a DOI.
+    "paper-linker": AgentPerm(
+        create=frozenset(),
+        update_attrs=frozenset(),
+        transitions=frozenset(),
+        edges=frozenset(),
+        update_fields=frozenset({
+            ("Evidence", "session_artifact_id"), ("Evidence", "doi"),
+            ("Evidence", "pmcid"), ("Evidence", "paper_title"),
+            ("Evidence", "paper_year"),
+        }),
     ),
     # The pre-stage context-initialization agent seeds the framing frame at the
     # start of a run. It writes the whole context star through the PRIVILEGED

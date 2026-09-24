@@ -1028,11 +1028,6 @@ def _capture_mcp_artifacts():
     return capture_mcp_artifacts
 
 
-def _capture_paper_downloads():
-    from CoScientist.agents.callbacks import capture_paper_downloads
-    return capture_paper_downloads
-
-
 def _mirror_plan_after_create():
     from CoScientist.agents.callbacks import mirror_plan_after_create
     return mirror_plan_after_create
@@ -1282,8 +1277,6 @@ _cb("inject_medical_artifacts", "before_model", factory=lambda ctx: _inject_medi
 _cb("inject_uploaded_papers", "before_model", factory=lambda ctx: _inject_uploaded_papers())
 _cb("log_research_tool_calls", "after_tool", factory=lambda ctx: _log_research_tool_calls())
 _cb("capture_mcp_artifacts", "after_tool", factory=lambda ctx: _capture_mcp_artifacts())
-# A found paper becomes a file in the session, not a DOI in a sentence.
-_cb("capture_paper_downloads", "after_tool", factory=lambda ctx: _capture_paper_downloads())
 # The registered plan becomes the research graph's method column, deterministically.
 # Two hooks because either path can be the one that fires: `create_plan` belongs to
 # an agent that ships disabled, and an operator can register a roadmap from the web.
