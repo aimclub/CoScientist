@@ -20,6 +20,7 @@ Bundle contents
     settings_snapshot.json          — settings at export time (read-only, informational)
     graphs/execution.json           — execution graph snapshot
     graphs/research_active.json     — research graph snapshot
+    graphs/agent_summaries.json     — per-agent run accounts already written
     knowledge_memory_snapshot.json  — global memory snapshot (read-only, informational)
     sandbox_trajectory.json         — full OpenHands sandbox trace, if any (read-only, best-effort)
 
@@ -60,6 +61,10 @@ _REPORT_LANGUAGE = "report_language.json"
 _SETTINGS = "settings_snapshot.json"
 _GRAPH_EXECUTION = "graphs/execution.json"
 _GRAPH_RESEARCH = "graphs/research_active.json"
+#: What a small model already wrote about each agent's run. Carried so an
+#: imported study opens with its accounts intact instead of re-buying every
+#: one of them, card by card, from a model.
+_GRAPH_SUMMARIES = "graphs/agent_summaries.json"
 _KNOWLEDGE_MEMORY = "knowledge_memory_snapshot.json"
 _SANDBOX_TRAJECTORY = "sandbox_trajectory.json"
 _MCP_BUILDS_JOBS = "mcp_builds/jobs.json"
@@ -255,6 +260,14 @@ async def export_session(
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not read execution graph: %s", exc)
 
+    # 7b. Accounts already written about the agents of this run.
+    agent_summaries: Optional[Dict[str, Any]] = None
+    try:
+        from CoScientist.graph.summary_store import all_entries
+        agent_summaries = all_entries((user_id, session_id)) or None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not read agent summaries: %s", exc)
+
     # 8. Research graph
     research_graph: Optional[Dict[str, Any]] = None
     try:
@@ -355,6 +368,9 @@ async def export_session(
             zf.writestr(_GRAPH_EXECUTION, _json_bytes(execution_graph))
         if research_graph is not None:
             zf.writestr(_GRAPH_RESEARCH, _json_bytes(research_graph))
+        if agent_summaries:
+            zf.writestr(_GRAPH_SUMMARIES,
+                        _json_bytes({"version": 1, "entries": agent_summaries}))
         if knowledge_memory is not None:
             zf.writestr(_KNOWLEDGE_MEMORY, _json_bytes(knowledge_memory))
         if sandbox_trajectory is not None:
@@ -454,6 +470,8 @@ async def import_session(
     report_language_data = _read_json(_REPORT_LANGUAGE) or {}
     research_graph_data = _read_json(_GRAPH_RESEARCH)
     execution_graph_data = _read_json(_GRAPH_EXECUTION)
+    # Absent from a bundle written before this existed; reads back as {}.
+    agent_summaries_data = _read_json(_GRAPH_SUMMARIES)
 
     title = manifest.get("title", "Imported session")
     session_id = f"session_{uuid4().hex}"
@@ -542,7 +560,8 @@ async def import_session(
         )
 
     # --- Restore graphs ---
-    _restore_graph_files(user_id, session_id, execution_graph_data, research_graph_data)
+    _restore_graph_files(user_id, session_id, execution_graph_data,
+                         research_graph_data, agent_summaries_data)
 
     # --- Restore the run's own files, so the graph has something to show ---
     _restore_artifacts(zf, user_id, session_id)
@@ -560,6 +579,7 @@ def _restore_graph_files(
     session_id: str,
     execution_data: Optional[Dict[str, Any]],
     research_data: Optional[Dict[str, Any]],
+    summaries_data: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Write graph snapshots to the on-disk location the stores expect."""
     from CoScientist.graph.session_scope import storage_dir
@@ -573,6 +593,9 @@ def _restore_graph_files(
     if research_data is not None:
         from CoScientist.graph.research.store import _default_file
         _write_json(session_dir / _default_file(), research_data)
+    if summaries_data:
+        from CoScientist.graph.summary_store import STORE_FILENAME
+        _write_json(session_dir / STORE_FILENAME, summaries_data)
 
 
 def _restore_mcp_builds(zf: zipfile.ZipFile, rebuild: bool) -> None:

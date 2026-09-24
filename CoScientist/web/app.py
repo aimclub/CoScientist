@@ -2412,13 +2412,36 @@ def create_app() -> FastAPI:
         if node is None or node.get("kind") not in ("agent", "agent_call"):
             raise HTTPException(status_code=404, detail=f"agent {node_id!r} is not in this request")
         from CoScientist.graph.agent_summary import summarize
+        from CoScientist.graph.summary_store import for_session
         try:
             result = await summarize(node, lang=str(body.get("lang") or "ru"),
                                      scope=f"{user_id}/{session_id}",
-                                     force=bool(body.get("again")))
+                                     force=bool(body.get("again")),
+                                     # Durable: the in-process cache dies with
+                                     # the process, and re-opening a finished
+                                     # study used to re-buy every account.
+                                     store=for_session((user_id, session_id)))
         except Exception as exc:  # noqa: BLE001 — the model is an outside service
             raise HTTPException(status_code=502, detail=f"summary failed: {exc}") from exc
         return JSONResponse(result)
+
+    @app.get("/api/users/{user_id}/sessions/{session_id}/graph/agent_summary")
+    async def api_agent_summary_stored(user_id: str, session_id: str,
+                                       node_id: str, lang: str = "ru"):
+        """What has already been written about this agent's run, or 404.
+
+        Reads, never writes. The node report cites these accounts, and one
+        research node can have half a dozen contributors — generating them
+        inside that request would turn opening a card into six model calls.
+        """
+        runtime.registry.require_session(user_id, session_id)
+        from CoScientist.graph.summary_store import latest
+
+        kept = latest((user_id, session_id), node_id, lang=lang)
+        if not kept:
+            raise HTTPException(status_code=404,
+                                detail=f"no summary written for {node_id!r}")
+        return JSONResponse(kept)
 
     @app.get("/api/users/{user_id}/sessions/{session_id}/graph.svg")
     async def api_session_graph_svg(user_id: str, session_id: str):
