@@ -438,9 +438,39 @@
     // list that used to live here dropped those nodes AND every edge touching
     // one, which in a real session was every edge there was.
     // hex -> "r,g,b" for translucent fills
-    function rgba(hex, a){ const m = hex.replace('#',''); const v = m.length===3
-      ? m.split('').map(x=>parseInt(x+x,16)) : [0,2,4].map(i=>parseInt(m.slice(i,i+2),16));
+    function channels(hex){ const m = String(hex).replace('#','').trim();
+      return m.length===3 ? m.split('').map(x=>parseInt(x+x,16))
+                          : [0,2,4].map(i=>parseInt(m.slice(i,i+2),16)); }
+    function rgba(hex, a){ const v = channels(hex);
       return `rgba(${v[0]},${v[1]},${v[2]},${a})`; }
+
+    // A card on the canvas must be OPAQUE.
+    //
+    // vis draws every edge before it draws any node (`_drawEdges` then
+    // `_drawNodes`), so a card painted at 14% alpha lets the wires running
+    // beneath it straight through — across the label, which is what made the
+    // graph hard to read. Compositing the very same tint over the canvas colour
+    // keeps each card looking exactly as it did and gives its text something
+    // solid to sit on. The blend base is read from `--bg`, so a theme change
+    // moves the cards with it instead of leaving them a shade off.
+    let _canvasRgb = null;
+    function canvasRgb(){
+      if (!_canvasRgb) {
+        let v = null;
+        try {
+          const css = getComputedStyle(document.documentElement)
+            .getPropertyValue('--bg').trim();
+          if (/^#?[0-9a-f]{3}([0-9a-f]{3})?$/i.test(css)) v = channels(css);
+        } catch (err) { v = null; }
+        _canvasRgb = (v && v.every(x => Number.isFinite(x))) ? v : [0x14, 0x16, 0x1a];
+      }
+      return _canvasRgb;
+    }
+    function solid(hex, a){
+      const v = channels(hex), b = canvasRgb();
+      const mix = v.map((x, i) => Math.round(x * a + b[i] * (1 - a)));
+      return `rgb(${mix[0]},${mix[1]},${mix[2]})`;
+    }
 
     // ── execution view styling ────────────────────────────────────────────────
     // One tint per stretch of a run: enough to tell them apart behind the
@@ -1237,13 +1267,13 @@
       const slot = place && place[n.id];
       const node = {
         id: n.id, title: titleOf(n), shape: "box", label: researchLabel(n),
-        color: { background: rgba(c, 0.14), border: c,
-                 highlight: { background: rgba(c, 0.22), border: c },
+        color: { background: solid(c, 0.14), border: c,
+                 highlight: { background: solid(c, 0.22), border: c },
                  // Without an explicit hover vis falls back to its OWN default
                  // (#D2E5FF) and leaves the label at --ink #e8eaed: 1.07:1
                  // contrast, so the card went blank under the cursor and read as
                  // if the node had vanished.
-                 hover: { background: rgba(c, 0.26), border: c } },
+                 hover: { background: solid(c, 0.26), border: c } },
         font: { color: INK, size: 16, multi: "html",
                 face: "-apple-system, Segoe UI, sans-serif", align: "left",
                 // mod "bold" rather than the default "bold italic": the status
@@ -1573,12 +1603,12 @@
               // (projection._CARD_WIDTH). If the two disagree the cards overlap.
               widthConstraint: { minimum: (n.card_width || 190) - 26,
                                  maximum: (n.card_width || 190) - 26 },
-              color:{ background: rgba(c, isGoal || isResult ? 0.22 : 0.16),
+              color:{ background: solid(c, isGoal || isResult ? 0.22 : 0.16),
                       border: borderOf(n) === "#20232a" ? c : borderOf(n),
-                      highlight: { background: rgba(c, 0.32), border: c },
+                      highlight: { background: solid(c, 0.32), border: c },
                       // Same default-hover trap as the research card: without
                       // this the box turns pale blue under a near-white label.
-                      hover: { background: rgba(c, 0.30), border: c } },
+                      hover: { background: solid(c, 0.30), border: c } },
               borderWidth: 2,
               chosen: { node: true, label: false },
               font:{ color:"#e8eaed", multi:false, align:"left",
