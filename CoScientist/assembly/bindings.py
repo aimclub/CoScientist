@@ -1113,9 +1113,11 @@ _cb("guard_unknown_tools", "after_model", factory=_guard_unknown_tools)
 from CoScientist.agents.callbacks.pilot_delegation import (
     require_pilot_tool,
     require_pilot_tool_call,
+    require_pilot_expected_tool,
 )
 _cb("require_pilot_tool", "before_model", func=require_pilot_tool)
 _cb("require_pilot_tool_call", "after_model", func=require_pilot_tool_call)
+_cb("require_pilot_expected_tool", "before_tool", func=require_pilot_expected_tool)
 # End the planner's turn once its plan is registered, so it cannot loop
 # re-registering to undo create_plan's own normalisation.
 _cb("finish_after_plan_registered", "after_model",

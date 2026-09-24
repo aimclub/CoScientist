@@ -1,9 +1,9 @@
 """Require observed tool calls for the isolated Synapse scientific pilot.
 
 The pilot's model can answer in prose after tool discovery while merely saying
-it delegated work. Limit each model turn to the next required tool and fail the
-invocation if the provider ignores ``tool_choice=required``. Ordinary agent
-profiles do not install these callbacks.
+it delegated work. Offer only the next required tool. Prose or multiple calls
+fail the invocation; a wrong tool call receives an error without executing it,
+so the model can retry. Ordinary agent profiles do not install these callbacks.
 """
 
 from google.genai import types
@@ -58,7 +58,7 @@ def require_pilot_tool(callback_context, llm_request):
 
 
 def require_pilot_tool_call(callback_context, llm_response):
-    """Fail closed if a provider returns prose while a real call is required."""
+    """Require one call; before-tool checks its name before it can execute."""
     if llm_response.partial:
         return None
     name = _next_tool(callback_context)
@@ -66,16 +66,22 @@ def require_pilot_tool_call(callback_context, llm_response):
         return None
     parts = getattr(llm_response.content, "parts", None) or []
     calls = [part.function_call.name for part in parts if part.function_call]
-    if calls != [name]:
-        # An unregistered name must reach ADK so it can return a tool error and
-        # let the model retry. Registered calls out of order still fail closed.
-        tools = getattr(
-            callback_context._invocation_context, "canonical_tools_cache", None
-        )
-        if len(calls) == 1 and tools is not None:
-            if calls[0] not in {tool.name for tool in tools}:
-                return None
+    if len(calls) != 1:
         raise RuntimeError(
             f"Pilot delegation contract: expected {name} call, got {calls or 'prose'}"
         )
     return None
+
+
+def require_pilot_expected_tool(tool, args, tool_context):
+    """Return a tool error for an out-of-order call without executing it."""
+    del args
+    name = _next_tool(tool_context)
+    if name is None or tool.name == name:
+        return None
+    return {
+        "error": (
+            f"Pilot delegation contract: expected {name} call; "
+            f"{tool.name} is not available at this step"
+        )
+    }

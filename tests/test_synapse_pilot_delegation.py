@@ -8,6 +8,7 @@ from google.genai import types
 from CoScientist.agents.callbacks.pilot_delegation import (
     require_pilot_tool,
     require_pilot_tool_call,
+    require_pilot_expected_tool,
 )
 
 
@@ -151,6 +152,7 @@ def test_pilot_profile_wires_contract_without_changing_regular_demo():
 
     assert "require_pilot_tool" in pilot_callbacks.before_model
     assert pilot_callbacks.after_model[0] == "require_pilot_tool_call"
+    assert pilot_callbacks.before_tool[0] == "require_pilot_expected_tool"
     assert "guard_unknown_tools" not in pilot_callbacks.after_model
     assert "require_pilot_tool" not in regular_callbacks.before_model
 
@@ -161,6 +163,7 @@ def test_pilot_profile_wires_contract_without_changing_regular_demo():
     }
     assert require_pilot_tool in orchestrator.canonical_before_model_callbacks
     assert require_pilot_tool_call in orchestrator.canonical_after_model_callbacks
+    assert require_pilot_expected_tool in orchestrator.canonical_before_tool_callbacks
 
 
 def test_pilot_reasoning_matches_gpt_oss_gateway_without_changing_regular_demo():
@@ -176,23 +179,23 @@ def test_pilot_reasoning_matches_gpt_oss_gateway_without_changing_regular_demo()
 
 
 def test_pilot_rejects_out_of_order_registered_tool():
-    context = _context(_event("retrieve_tools"))
-    context._invocation_context.canonical_tools_cache = [
-        SimpleNamespace(name=name)
-        for name in ("retrieve_tools", "ResearchAgent", "TaskExecutorAgent")
-    ]
-
-    with pytest.raises(RuntimeError, match="expected ResearchAgent"):
-        require_pilot_tool_call(
-            context,
-            LlmResponse(
-                content=types.Content(
-                    role="model",
-                    parts=[
-                        types.Part.from_function_call(
-                            name="TaskExecutorAgent", args={}
-                        )
-                    ],
-                )
-            ),
+    context = _context(_event("retrieve_tools"), _event("ResearchAgent"))
+    response = LlmResponse(
+        content=types.Content(
+            role="model",
+            parts=[types.Part.from_function_call(name="get_server_info", args={})],
         )
+    )
+    assert require_pilot_tool_call(context, response) is None
+
+    blocked = require_pilot_expected_tool(
+        SimpleNamespace(name="get_server_info"), {}, context
+    )
+    assert "expected TaskExecutorAgent" in blocked["error"]
+    assert "get_server_info" in blocked["error"]
+    assert (
+        require_pilot_expected_tool(
+            SimpleNamespace(name="TaskExecutorAgent"), {}, context
+        )
+        is None
+    )
