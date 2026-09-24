@@ -876,6 +876,40 @@ def make_plan_registration_guard() -> Callable:
     return guard
 
 
+def _note_step_participants(graph: Any, tasks: List[Dict[str, Any]],
+                            matched: Dict[int, str],
+                            by_ref: Dict[str, str]) -> None:
+    """Carry the tracker's answer about a plan step onto the step's node.
+
+    Two different claims, and the difference is the point. `assignee` is who the
+    plan NAMED — an intention, and the only thing recorded until now. `executors`
+    is who the tracker watched move the step, which `set_task_status` began
+    keeping once it stopped discarding the agent it is handed.
+
+    Both are stored with their basis so the panel can say which is which. A run
+    where the plan named one agent and another did the work is ordinary; a
+    panel that shows only the first is how a reader ends up sure of the wrong
+    thing.
+    """
+    try:
+        rows = []
+        for i, task in enumerate(tasks):
+            nid = matched.get(i) or by_ref.get(f"ps_{i}")
+            if not nid:
+                continue
+            if assignee := str(task.get("assignee") or "").strip():
+                rows.append({"node_id": nid, "agent": assignee,
+                             "basis": "assignee"})
+            for worker in (task.get("executors") or [])[:8]:
+                if str(worker or "").strip():
+                    rows.append({"node_id": nid, "agent": str(worker).strip(),
+                                 "basis": "work_order"})
+        if rows:
+            graph.add_contributors(rows, source=_PLAN_SOURCE)
+    except Exception:  # noqa: BLE001 — bookkeeping never breaks the mirror
+        logger.debug("plan mirror: could not record participants", exc_info=True)
+
+
 def _agent_name(callback_context: CallbackContext) -> str:
     return getattr(callback_context, "agent_name", None) or "agent"
 
@@ -910,6 +944,98 @@ def print_research_agent_tool_call(
         )
     except Exception as e:
         logger.error("Failed to persist downloaded paper S3 keys: %s", e)
+
+#: The two tools that can tell us about a paper. `search_papers` only describes
+#: one; `download_papers_from_search` has already fetched it to S3.
+_PAPER_TOOLS = ("search_papers", "download_papers_from_search")
+
+
+def _mirror_papers(papers: List[Dict[str, Any]], scope: Any,
+                   agent: str) -> List[Dict[str, Any]]:
+    """Fetch each paper into the session store. One thread hop for the batch.
+
+    The presigned link is preferred over the publisher's: it points at the copy
+    the papers server already made, so it is the one that reliably answers.
+    """
+    from CoScientist.reporting import paper_library as pl
+    from CoScientist.reporting.mirror import mirror_artifact
+
+    out: List[Dict[str, Any]] = []
+    for paper in papers:
+        try:
+            out.append(mirror_artifact(
+                None, user_id=scope[0], session_id=scope[1],
+                url=(paper.get("presigned_url") or paper.get("pdf_url") or None),
+                bucket=paper.get("bucket"), s3_key=paper.get("s3_key"),
+                filename=pl.filename_for(paper),
+                label=str(paper.get("title") or "")[:120],
+                tool=str(paper.get("tool") or ""),
+                source_kind=pl.SOURCE_KIND, agent=agent,
+                # Stays in the session folder and nowhere else. A paper is
+                # someone else's work under someone else's licence, and the
+                # off-host copy would outlive the run that justified fetching it.
+                mirror_off_host=False,
+            ))
+        except Exception as exc:  # noqa: BLE001 — one bad paper is not the batch
+            logger.warning("capture_paper_downloads: %s failed (%s)",
+                           paper.get("doi") or paper.get("title"), exc)
+            out.append({"state": "failed", "reason": str(exc)[:200]})
+    return out
+
+
+async def capture_paper_downloads(
+    tool: BaseTool,
+    args: Dict[str, Any],
+    tool_context: ToolContext,
+    tool_response: Any,
+) -> None:
+    """after_tool: keep the citation, and bring the paper itself home.
+
+    `search_papers` returns a title, a DOI, a year and an address for the PDF,
+    and downloads nothing; `download_papers_from_search` puts the file in S3
+    under a prefix the bucket expires on its own. Either way the run was left
+    holding a bare string: `print_research_agent_tool_call` kept the S3 key and
+    threw the rest away, so an Evidence citing a paper showed a DOI with no way
+    to open it, and the bibliography had no metadata to be built from.
+
+    Both halves are fixed here. The citation goes to `paper_library`; the bytes
+    go to the session's own store, where they are addressed by content, served
+    inline, and carried by a session export.
+    """
+    name = getattr(tool, "name", None) or ""
+    if name not in _PAPER_TOOLS:
+        return
+    try:
+        import asyncio
+
+        from CoScientist.graph.session_scope import session_key
+        from CoScientist.reporting import paper_library as pl
+
+        records = pl.records_from_tool(name, tool_response)
+        if not records:
+            return
+        agent = getattr(tool_context, "agent_name", None) or "ResearchAgent"
+        wanted = pl.merge(tool_context.state, records, agent=agent)
+        if not wanted:
+            # Everything this call named is already in the library with a file.
+            return
+        capped = wanted[:pl.MAX_PER_CALL]
+        # Resolved on the loop — `session_key` writes the resolved pair back
+        # into ADK state, and the downloads run in a worker thread.
+        scope = session_key(tool_context)
+        mirrored = await asyncio.to_thread(_mirror_papers, capped, scope, agent)
+        for paper, outcome in zip(capped, mirrored):
+            pl.note_stored(tool_context.state, paper, outcome)
+        stored = sum(1 for m in mirrored if m.get("state") == "stored")
+        logger.info(
+            "capture_paper_downloads: %s → %d paper(s) known, %d fetched, %d stored%s",
+            name, len(pl.library(tool_context.state)), len(capped), stored,
+            f" ({len(wanted) - len(capped)} over the per-call cap)"
+            if len(wanted) > len(capped) else "",
+        )
+    except Exception as e:  # noqa: BLE001 — capture must never break a tool call
+        logger.error("capture_paper_downloads failed: %s", e)
+
 
 async def capture_mcp_artifacts(
     tool: BaseTool,
@@ -1685,6 +1811,7 @@ def sync_plan_to_research_graph(tasks: Iterable[Dict[str, Any]], graph: Any,
         for ref, key in keys:
             if nid := by_ref.get(ref):
                 seen[key] = nid
+        _note_step_participants(graph, tasks, matched, by_ref)
         try:
             state[_VM_BY_TASK_KEY] = {"gen": gen, "ids": seen}
         except Exception:  # noqa: BLE001

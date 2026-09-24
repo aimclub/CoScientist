@@ -1028,6 +1028,11 @@ def _capture_mcp_artifacts():
     return capture_mcp_artifacts
 
 
+def _capture_paper_downloads():
+    from CoScientist.agents.callbacks import capture_paper_downloads
+    return capture_paper_downloads
+
+
 def _mirror_plan_after_create():
     from CoScientist.agents.callbacks import mirror_plan_after_create
     return mirror_plan_after_create
@@ -1277,6 +1282,8 @@ _cb("inject_medical_artifacts", "before_model", factory=lambda ctx: _inject_medi
 _cb("inject_uploaded_papers", "before_model", factory=lambda ctx: _inject_uploaded_papers())
 _cb("log_research_tool_calls", "after_tool", factory=lambda ctx: _log_research_tool_calls())
 _cb("capture_mcp_artifacts", "after_tool", factory=lambda ctx: _capture_mcp_artifacts())
+# A found paper becomes a file in the session, not a DOI in a sentence.
+_cb("capture_paper_downloads", "after_tool", factory=lambda ctx: _capture_paper_downloads())
 # The registered plan becomes the research graph's method column, deterministically.
 # Two hooks because either path can be the one that fires: `create_plan` belongs to
 # an agent that ships disabled, and an operator can register a roadmap from the web.
@@ -1371,6 +1378,18 @@ _cb("stage_tz_draft", "before_agent", factory=lambda ctx: _stage_tz_draft())
 # validation does not silently turn it into an empty object.
 _cb("unwrap_model_response_args", "before_tool",
     factory=lambda ctx: _unwrap_model_response_args())
+
+
+def _brief_hypotheses_regime():
+    from CoScientist.agents.callbacks.hypothesis_brief import brief_hypotheses_regime
+    return brief_hypotheses_regime
+
+
+# What the run can already measure, staged where `{hypothesis_brief?}` reaches
+# the hypothesis generator: with tools in hand it aims the claim at them, with
+# none it spends the effort on judging the candidates instead.
+_cb("brief_hypotheses_regime", "before_agent",
+    factory=lambda ctx: _brief_hypotheses_regime())
 # ── Experiment Module callbacks ──────────────────────────────────────────────
 # Every EM callback is a plain (context-independent) function, so they are
 # registered table-driven: (registry key, hook, "package:attr"), one lazy

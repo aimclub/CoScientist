@@ -384,6 +384,16 @@ def set_task_status(state: Any, task_id: str, status: str,
         if notes:
             task["notes"] = task.get("notes", "") + (
                 f"\n[{datetime.now().isoformat()}] {notes}")
+        if agent:
+            # The one place that KNOWS who moved a step. `agent` was used only
+            # to redact the per-agent view and then thrown away, which is why
+            # `current_task_for_agent` below has to GUESS — "the agent's
+            # earliest unfinished task by PLANNED assignee" — and why nothing
+            # downstream could say who actually did a plan step.
+            seen = [a for a in (task.get("executors") or []) if a]
+            if agent not in seen:
+                task["executors"] = (seen + [agent])[:8]
+            task["last_executor"] = agent
         state["_master_active_tasks"] = master
         state["active_tasks"] = clean_tasks_for_agent(master, agent)
         return True
@@ -432,7 +442,12 @@ def clean_tasks_for_agent(
     for task in tasks:
         if not isinstance(task, dict):
             continue
-        cleaned = {k: v for k, v in task.items() if k not in ("created_at", "updated_at")}
+        # `executors`/`last_executor` are the record's bookkeeping, not the
+        # roadmap: an agent reading its task list has no use for who else
+        # touched it, and the column would only invite it to reason about that.
+        cleaned = {k: v for k, v in task.items()
+                   if k not in ("created_at", "updated_at",
+                                "executors", "last_executor")}
 
         if not cleaned.get("notes"):
             cleaned.pop("notes", None)

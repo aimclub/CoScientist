@@ -348,20 +348,21 @@ agents:
   HypothesesAgent:
     class: llm
     description: >-
-      generates candidate hypotheses and returns the selected hypothesis(es) to verify next 
-      the alternatives stay in the graph as postponed backlog).
+      generates the hypotheses this study will verify — as many as the run is
+      allowed to hold at once (HYPOTHESES__MAX_ACTIVE, default 1) and no more.
+      Everything it commits gets verified; it leaves no backlog behind.
     routing: >-
       when the study has no hypothesis yet — BEFORE any verification method
       runs, including when the route to an answer already looks obvious. An
       obvious route is still a claim that it will produce the result, and that
       claim is what the run is about to spend its budget on. It comes back with
-      selected hypothesis(es) — verify those; do not start the alternatives in
-      parallel unless they are among the selected set.
+      the hypotheses to verify — verify all of them; it does not hand over work
+      that is not meant to be started.
     planning: |-
       Use this FIRST on any study that has no hypothesis yet, procedural tasks included:
       one hypothesis stating what the planned pipeline will show is what makes the result
-      judgeable instead of merely delivered. It picks the single most relevant hypothesis
-      to test first, so plan ONE verification branch after it.
+      judgeable instead of merely delivered. It returns only what is to be verified now
+      — usually one hypothesis — so plan a verification branch for each one it returns.
       Decision-making and compatibility assessment based on gathered facts.
     # Ideation plus choosing what to test first: the most reasoning-bound job
     # in the system — so `high`, unless a run turns it down with
@@ -377,7 +378,11 @@ agents:
     # Declares a Work Order (what it will generate and commit) before acting.
     work_order: true
     callbacks:
-      before_agent: [before_get_task, inject_research_context, user_links]
+      # brief_hypotheses_regime reads the tool inventory the retriever/planner
+      # already collected and tells the generator which job it is doing: aim the
+      # claim at the tools in hand, or — with nothing in hand — spend the effort
+      # on judging the candidates. `{hypothesis_brief?}` in the prompt.
+      before_agent: [before_get_task, inject_research_context, brief_hypotheses_regime, user_links]
       before_model: [redact_link_urls]
       after_model: [expand_link_refs, guard_unknown_tools]
       before_tool: [resolve_link_refs]
@@ -426,7 +431,7 @@ agents:
       before_agent: [before_get_task, inject_research_context, user_links]
       before_model: [inject_uploaded_papers, redact_link_urls]
       before_tool: [WebSearchLimiter, resolve_link_refs]
-      after_tool: [log_research_tool_calls, register_tool_result_links]
+      after_tool: [log_research_tool_calls, capture_paper_downloads, register_tool_result_links]
       after_model: [expand_link_refs, guard_unknown_tools]
     # Every agent asks before acting on a decision; inert until HITL__ENABLED.
     hitl: true

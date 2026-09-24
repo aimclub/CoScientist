@@ -67,8 +67,10 @@ agents:
     include_contents: none
     callbacks:
       # bootstrap must precede inject_research_context, so a fresh graph is
-      # seeded before {research_context?} is rendered.
-      before_agent: [bootstrap_research_question_if_empty, before_get_task, inject_research_context, user_links]
+      # seeded before {research_context?} is rendered. brief_hypotheses_regime
+      # comes after them: by then the module's own retrieval has filled the
+      # inventory it reports on.
+      before_agent: [bootstrap_research_question_if_empty, before_get_task, inject_research_context, brief_hypotheses_regime, user_links]
       before_model: [seed_hypotheses_from_em_request, redact_link_urls]
       before_tool: [resolve_link_refs]
       after_tool: [capture_hypotheses_after_research_commit, register_tool_result_links]
@@ -80,7 +82,7 @@ agents:
       before_agent: [before_get_task, inject_research_context, reset_research_searches, user_links]
       before_model: [inject_uploaded_papers, redact_link_urls]
       before_tool: [WebSearchLimiter, resolve_link_refs]
-      after_tool: [log_research_tool_calls, count_research_searches, register_tool_result_links]
+      after_tool: [log_research_tool_calls, capture_paper_downloads, count_research_searches, register_tool_result_links]
       after_model: [expand_link_refs, guard_unknown_tools]
 
   CoderAgent:

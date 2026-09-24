@@ -590,6 +590,24 @@ INIT_SEED_TYPES = frozenset({"ResearchQuestion", "Tool", "Resource",
                              "EmpiricalBase", "Constraint",
                              "ConfirmationCriteria", "CostModel"})
 
+# Attributes the graph writes ABOUT a node, never accepts as a claim IN it.
+#
+# `research_commit` puts no whitelist on attribute names, and a worker sees a
+# node's attrs in its context slice — so an agent can, and in time will, send
+# one of these back. The attrs merge is a shallow `{**stored, **incoming}`
+# (`_commit_locked`), which replaces a key wholesale: one partial write and an
+# append-only participation record is down to whatever that agent happened to
+# say. The key is dropped rather than the commit refused, because the commit is
+# worth more than the key, and the caller is warned.
+#
+# `_provenance` is deliberately NOT here: `agent_tools._enrich_evidence` writes
+# it through the ordinary create path before the commit, so reserving it would
+# silently throw away every piece of evidence's provenance.
+RESERVED_ATTRS = frozenset({
+    "contributors", "contributors_more",
+    "report_artifact_id", "report_stamp", "report_lang",
+})
+
 
 # Spec §2 roles mapped onto the agents that actually exist in system.yaml:
 # init-agent + validator/critic duties → OrchestratorAgent; hypothesis

@@ -178,7 +178,57 @@ _FIELD_WORDS = {
 }
 
 #: Never shown: bookkeeping the reader has no use for.
-_HIDDEN_FIELDS = {"_provenance", "selected", "display"}
+_HIDDEN_FIELDS = {"_provenance", "selected", "display",
+                  "contributors", "contributors_more",
+                  "report_artifact_id", "report_stamp", "report_lang"}
+
+#: Never shipped to an AGENT either. `get_context_slice` renders each node as
+#: 240 characters of its attrs dict, which is the whole of what a worker is
+#: told about its neighbours; a participation list would eat that window and
+#: hide the node's actual content behind the names of who touched it.
+_AGENT_HIDDEN = {"contributors", "contributors_more", "_provenance",
+                 "report_artifact_id", "report_stamp", "report_lang"}
+
+
+#: One recorded act of participation. `assignee` is the only basis that is an
+#: INTENTION — the plan named someone — and every other is something the system
+#: watched happen. The panel is required to draw that difference, which is the
+#: whole reason a basis is stored instead of a bare list of names.
+CONTRIB_BASES = ("commit", "status", "delegation", "provenance",
+                 "work_order", "route", "assignee")
+#: Observed, as opposed to merely planned.
+CONTRIB_OBSERVED = frozenset(CONTRIB_BASES) - {"assignee"}
+_MAX_CONTRIBUTORS = 40
+
+#: Sources that write on someone's behalf rather than taking part. A mirror
+#: writes every node of its kind in the graph, so crediting it would say the
+#: same non-agent participated in everything — which is no information at all.
+#: `ExperimentModule` and `ValidatorAgent` are NOT here: they are real actors.
+_MACHINE_SOURCES = frozenset({
+    "plan-mirror", "experiment-plan-mirror", "graph-maintainer",
+    "report-writer", "node-report", "paper-linker",
+})
+
+
+def _strip_reserved(attrs: Dict[str, Any], where: str, warnings: List[str],
+                    allow: bool = False) -> Dict[str, Any]:
+    """Drop the attributes the graph writes about a node, not the ones it claims.
+
+    Dropped rather than refused: the rest of the commit is worth more than the
+    key, and an agent that echoes back a `contributors` list it saw in its
+    context slice should not lose its evidence over it. `schema.RESERVED_ATTRS`
+    says why each one is reserved.
+    """
+    if allow:
+        return attrs
+    taken = [k for k in attrs if k in schema.RESERVED_ATTRS]
+    if not taken:
+        return attrs
+    warnings.append(
+        f"{where}: {', '.join(sorted(taken))} "
+        f"{'is' if len(taken) == 1 else 'are'} written by the graph itself and "
+        f"cannot be set from a commit — the rest of this entry was applied.")
+    return {k: v for k, v in attrs.items() if k not in schema.RESERVED_ATTRS}
 
 
 def _headline(kind: str, attrs: Dict[str, Any]) -> str:
@@ -866,6 +916,67 @@ def _folded_view(nid: str, data: Dict[str, Any],
     }
 
 
+def _own_artifact(nid: str, attrs: Dict[str, Any],
+                  scope: Optional[Tuple[str, str]] = None) -> Optional[Dict[str, Any]]:
+    """The node's OWN file, when this session holds it.
+
+    `attachments` were only ever built from the nodes a card folds in, so an
+    Evidence citing a paper the run downloaded — or a Report whose markdown is
+    stored — offered no way to open it. `_href` already knew how; nothing was
+    asking it about the node itself.
+
+    Returns None when the bytes are not ours, on the rule `_href` follows: a
+    link that opens nothing is worse than no link.
+    """
+    aid = attrs.get("session_artifact_id")
+    if not isinstance(aid, str) or not aid.strip() or not scope:
+        return None
+    try:
+        from CoScientist.utils.report_links import artifact_citation
+
+        citation = artifact_citation(scope, aid.strip())
+    except Exception:  # noqa: BLE001 — an attachment is not worth a failed render
+        return None
+    if not citation or not citation.get("href"):
+        return None
+    return {
+        # Suffixed on purpose: the panel indexes attachments by id, and a folded
+        # child is keyed by its own node id. A bare `nid` would collide with the
+        # card that carries it.
+        "id": f"{nid}#file",
+        "kind": str(citation.get("kind") or "file"),
+        "type_word": "",
+        # The name of the file behind the link, for the reason `_folded_view`
+        # gives: a row that says one thing and downloads another is a trap.
+        "label": citation.get("name") or aid.strip(),
+        "href": citation["href"],
+        "fields": {},
+        "status": "",
+        "status_word": "",
+        "source": "",
+    }
+
+
+def _contributors_view(attrs: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The participation record as the panel reads it.
+
+    Observed rows first, then the merely planned, each group oldest first — the
+    order the work happened in. One row per agent per basis; the same agent
+    committing twice is one contributor, not two.
+    """
+    rows = [r for r in (attrs.get("contributors") or []) if isinstance(r, dict)]
+    if not rows:
+        return []
+    ordered = sorted(
+        rows, key=lambda r: (r.get("basis") not in CONTRIB_OBSERVED,
+                             float(r.get("at") or 0)))
+    return [{"agent": str(r.get("agent") or ""),
+             "basis": str(r.get("basis") or ""),
+             "observed": r.get("basis") in CONTRIB_OBSERVED,
+             "exec_id": str(r.get("exec_id") or "")}
+            for r in ordered if r.get("agent")]
+
+
 def _history_view(data: Dict[str, Any]) -> List[Dict[str, Any]]:
     """The status trail, in words, with the reason for every move."""
     return [{
@@ -1369,7 +1480,8 @@ class ResearchGraphStore:
                status_updates: Optional[List[Dict[str, Any]]] = None,
                autolink_focus: Optional[str] = None,
                partial_edges: bool = False,
-               enforce_permissions: bool = True) -> CommitResult:
+               enforce_permissions: bool = True,
+               allow_reserved: bool = False) -> CommitResult:
         """Transactional write: validate EVERYTHING, then apply all-or-nothing.
 
         `autolink_focus` (a Hypothesis id): any Evidence created in this commit
@@ -1398,9 +1510,11 @@ class ResearchGraphStore:
                                          list(edges or []), list(status_updates or []),
                                          enforce_permissions=enforce_permissions,
                                          autolink_focus=autolink_focus,
-                                         partial_edges=partial_edges)
+                                         partial_edges=partial_edges,
+                                         allow_reserved=allow_reserved)
             if result.ok:
                 self._rejected_commits = 0
+                self._note_authorship(source, result)
                 self._save()
             else:
                 # A refused commit writes NOTHING, and used to say so only to the
@@ -1431,6 +1545,118 @@ class ResearchGraphStore:
             if result.ok:
                 self._save()
             return result
+
+    def _note_authorship(self, source: str, result: "CommitResult") -> None:
+        """Who wrote this commit, recorded from the commit itself.
+
+        The two bases nothing else can supply: `commit` for a node created here,
+        `status` for one moved here. Called inside the commit's own lock and
+        before its `_save`, so the rows ride the same snapshot write.
+
+        A node created with a per-node `source` (an operator-set frame field
+        arrives as "human") is credited to that source, not to the caller.
+        """
+        if source in _MACHINE_SOURCES:
+            # A mirror is the pen, not the hand: `plan-mirror` writes every
+            # PlanStep in the graph, and crediting it would make the record say
+            # that the same non-agent took part in everything.
+            return
+        try:
+            committed = result.committed or {}
+            rows: List[Dict[str, Any]] = []
+            for e in committed.get("nodes") or []:
+                # An edit, or a draft that turned out to be a node already in
+                # the graph — neither is authorship of it.
+                if e.get("updated_attrs") or e.get("reused") or not e.get("id"):
+                    continue
+                nid = e["id"]
+                wrote = source
+                if self._g.has_node(nid):
+                    wrote = self._g.nodes[nid].get("source") or source
+                if wrote not in _MACHINE_SOURCES:
+                    rows.append({"node_id": nid, "agent": wrote,
+                                 "basis": "commit"})
+            for e in committed.get("status_updates") or []:
+                # `_auto_maintain` marks its own moves; the graph maintainer is
+                # not a participant.
+                if e.get("auto") or not e.get("id"):
+                    continue
+                rows.append({"node_id": e["id"], "agent": source,
+                             "basis": "status"})
+            if rows:
+                self.add_contributors(rows, source=source, save=False)
+        except Exception:  # noqa: BLE001 — bookkeeping never fails a commit
+            logger.debug("contributors: could not record authorship", exc_info=True)
+
+    def add_contributors(self, entries: List[Dict[str, Any]], *,
+                         source: str = "", save: bool = True) -> Dict[str, int]:
+        """Append who took part in a node, and on what basis we say so.
+
+        Deliberately NOT a commit. The attrs merge in `_commit_locked` is a
+        shallow `{**stored, **incoming}`, so a list routed through it keeps only
+        the last writer's rows — which is precisely the confusion between nodes
+        this record exists to prevent. It also validates nothing, moves no
+        status and writes no edge: participation is an observation about a node,
+        never a change to it.
+
+        `updated_at` is left alone on purpose. `to_view` maps it to the card's
+        end time and the study list sorts on it, so bookkeeping would make an
+        idle study look freshly worked on.
+
+        Each entry is `{node_id, agent, basis, exec_id?}`. Unknown ids and
+        unknown bases are skipped rather than raised: this is called from
+        callbacks and tool paths where nothing may break the run.
+        """
+        wanted = []
+        for e in entries or []:
+            nid = str((e or {}).get("node_id") or "").strip()
+            agent = str((e or {}).get("agent") or "").strip()
+            basis = str((e or {}).get("basis") or "").strip()
+            if not nid or not agent or basis not in CONTRIB_BASES:
+                continue
+            wanted.append((nid, agent, basis,
+                           str(e.get("exec_id") or "").strip()))
+        if not wanted:
+            return {"nodes": 0, "appended": 0}
+
+        touched, appended = set(), 0
+        with self._lock:
+            for nid, agent, basis, exec_id in wanted:
+                if not self._g.has_node(nid):
+                    continue
+                node = self._g.nodes[nid]
+                attrs = dict(node.get("attrs") or {})
+                rows = list(attrs.get("contributors") or [])
+                # The same act recorded twice is one act: a resolver may run
+                # again on the next commit, and an agent that writes forty
+                # times did not participate forty times.
+                seen = {(r.get("agent"), r.get("basis"), r.get("exec_id") or "")
+                        for r in rows if isinstance(r, dict)}
+                if (agent, basis, exec_id) in seen:
+                    continue
+                if len(rows) >= _MAX_CONTRIBUTORS:
+                    # The first ones are the meaningful ones; the rest become a
+                    # count, so a chatty run cannot grow the graph without bound.
+                    attrs["contributors_more"] = int(
+                        attrs.get("contributors_more") or 0) + 1
+                else:
+                    row = {"agent": agent, "basis": basis, "at": time.time()}
+                    if exec_id:
+                        row["exec_id"] = exec_id
+                    rows.append(row)
+                    attrs["contributors"] = rows
+                node["attrs"] = attrs
+                touched.add(nid)
+                appended += 1
+            if touched and save:
+                # One snapshot for the batch: `_save` rewrites the whole graph.
+                # `save=False` is for a caller inside a commit, which is about
+                # to write that snapshot anyway.
+                self._save()
+        if touched:
+            logger.debug("contributors: +%d row(s) on %s (source=%s)",
+                         appended, ", ".join(sorted(touched)), source or "?")
+        return {"nodes": len(touched), "appended": appended}
 
     # ── reads ─────────────────────────────────────────────────────────────────
 
@@ -1719,6 +1945,10 @@ class ResearchGraphStore:
                     attachments.append(view)
                 else:
                     attachments.append(view)
+            own = _own_artifact(nid, attrs, self._scope)
+            if own:
+                # First: it is this card's own file, not something it carries.
+                attachments.insert(0, own)
             node = {
                 "id": nid,
                 "run_id": research_id,
@@ -1741,6 +1971,10 @@ class ResearchGraphStore:
                 "output": (_readable_body(attrs.get("content"), self._scope)
                            if kind == "Report" else headline),
                 "provenance": attrs.get("_provenance") or [],
+                # Who took part, and on what basis we say so. Observed first,
+                # planned last: a plan's assignee is an intention, and drawing
+                # it as an executor is the confusion this record exists to end.
+                "contributors": _contributors_view(attrs),
                 "t_start": d.get("created_at"),
                 "t_end": d.get("updated_at"),
                 "status_history": history,
@@ -1894,7 +2128,8 @@ class ResearchGraphStore:
                        edge_drafts: List[Any], status_drafts: List[Any],
                        enforce_permissions: bool = True,
                        autolink_focus: Optional[str] = None,
-                       partial_edges: bool = False) -> CommitResult:
+                       partial_edges: bool = False,
+                       allow_reserved: bool = False) -> CommitResult:
         if not (node_drafts or edge_drafts or status_drafts):
             return CommitResult(ok=False, errors=[
                 "empty commit — provide nodes, edges and/or status_updates"],
@@ -1943,13 +2178,15 @@ class ResearchGraphStore:
                             f"nodes[{i}]: a status on an update of '{known}' is "
                             f"ignored — move a node through `status_updates`.")
                     errors.extend(self._stage_merge(
-                        source, i, d, merges, enforce_permissions))
+                        source, i, d, merges, enforce_permissions,
+                        warnings, allow_reserved))
                     continue
                 if not d.get("type"):
                     # No such node and nothing to create from: `_stage_merge`
                     # owns that message, and it lists the ids that do exist.
                     errors.extend(self._stage_merge(
-                        source, i, d, merges, enforce_permissions))
+                        source, i, d, merges, enforce_permissions,
+                        warnings, allow_reserved))
                     continue
                 # An id that names nothing, next to a type, is a model
                 # numbering its own draft. Create it — but say the id was not
@@ -1968,6 +2205,8 @@ class ResearchGraphStore:
             if not isinstance(attrs, dict):
                 errors.append(f"nodes[{i}]: attrs must be an object")
                 attrs = {}
+            attrs = _strip_reserved(attrs, f"nodes[{i}]", warnings,
+                                    allow_reserved)
             if "subtype" in attrs:
                 attrs["subtype"] = schema.normalize_token(str(attrs["subtype"]))
             errors.extend(f"nodes[{i}]: {e}" for e in
@@ -2022,7 +2261,7 @@ class ResearchGraphStore:
                             f'{{"id": "{named}", "attrs": {{…}}}} to say so.')
                         errors.extend(self._stage_merge(
                             source, i, {"id": named, "attrs": attrs}, merges,
-                            enforce_permissions))
+                            enforce_permissions, warnings, allow_reserved))
                         pinned[ref] = named
                         continue
                     errors.append(
@@ -2054,15 +2293,17 @@ class ResearchGraphStore:
                     f'write {{"id": "{twin}", "attrs": {{…}}}}.')
                 errors.extend(self._stage_merge(
                     source, i, {"id": twin, "attrs": attrs}, merges,
-                    enforce_permissions))
+                    enforce_permissions, warnings, allow_reserved))
             elif said:
                 staged[(ntype, said)] = (len(creates), i)
             creates.append({"ref": ref, "type": ntype, "status": status,
                             "attrs": attrs, "source": d.get("source"),
                             "twin": twin})
 
-        # -- one active hypothesis per commit --------------------------------
-        self._normalize_hypothesis_selection(creates, warnings)
+        # The hypothesis ceiling is applied further down, once the commit's
+        # status_updates are staged too: a commit that closes a branch AND
+        # proposes a new hypothesis is one move, and judging its halves apart
+        # made the new one wait for a slot the same commit had just freed.
 
         # -- edges: resolve endpoints against existing nodes + this commit ---
         staged_edges: List[Dict[str, Any]] = []
@@ -2205,7 +2446,17 @@ class ResearchGraphStore:
                 continue
             if not tr_errs:
                 staged_status.append({"id": nid, "type": ntype, "from": cur,
-                                      "to": new, "reason": d.get("reason")})
+                                      "to": new, "reason": d.get("reason"),
+                                      "index": k})
+
+        # -- verification slots: the whole commit at once ---------------------
+        # After the loop, not inside it. Inside, each update could only see the
+        # ones staged BEFORE it, so the same swap — close one branch, open
+        # another — passed or was refused depending on the order it was written
+        # in. `graph_bridge._sync_uncovered_hypotheses` builds its list in node
+        # id order and does not get to choose that order.
+        taken = self._charge_slots(staged_status, errors)
+        self._normalize_hypothesis_selection(creates, warnings, taken)
 
         if errors:
             return CommitResult(ok=False, errors=errors, warnings=warnings,
@@ -2497,58 +2748,146 @@ class ResearchGraphStore:
                 outstanding.append(src)
         return sorted(outstanding)
 
-    def _normalize_hypothesis_selection(self, creates: List[Dict[str, Any]],
-                                        warnings: List[str]) -> None:
-        """Store invariant: at most N hypotheses enter the run as active per commit.
+    def max_active_hypotheses(self) -> int:
+        """How many hypotheses the run may verify at once — the one ceiling.
 
-        N = ``settings.web.max_active_hypotheses`` (default 1).
-
-        A generator agent naturally proposes several hypotheses at once; if they
-        all land as ``formulated``, every one of them shows up as READY and the
-        orchestrator starts verifying them — which may not be desired. So
-        exactly N (the agent's own picks: ``attrs.selected``, else the highest
-        ``attrs.priority``, else the first N) stay ``formulated`` and the rest
-        are created as ``postponed``: they remain in the graph as the ranked
-        backlog, invisible to the READY trigger, and the orchestrator can revive
-        one (postponed→formulated) once an active branch has a verdict.
-
-        Deterministic and mechanical — it never drops or rewrites a hypothesis,
-        only decides which ones are offered for verification next.
+        `settings.web.max_active_hypotheses` (default 1) is the single place the
+        number is set: the generator's prompt asks for up to this many, this
+        store admits up to this many, and `queries.ready_hypotheses` offers up
+        to this many for verification. Three readers, one number — when they
+        disagreed, the graph filled with hypotheses nothing would ever test.
         """
         from CoScientist.config import get_settings
-        max_active = max(1, min(5, get_settings().web.max_active_hypotheses))
+
+        return max(1, min(5, get_settings().web.max_active_hypotheses))
+
+    #: A hypothesis in one of these states holds a verification slot: it is
+    #: either offered for verification or being verified. Every other state is
+    #: either a verdict or a shelf.
+    _BUSY = ("formulated", "under_verification")
+
+    def _active_hypotheses(self) -> List[str]:
+        """Hypotheses already occupying a verification slot in the graph."""
+        return [n for n, d in self._g.nodes(data=True)
+                if d.get("type") == "Hypothesis"
+                and d.get("status") in self._BUSY]
+
+    def _charge_slots(self, staged_status: List[Dict[str, Any]],
+                      errors: List[str]) -> int:
+        """Refuse the status updates that would put the run over its ceiling.
+
+        Returns how many slots are taken once the surviving updates apply —
+        the occupancy the newly created hypotheses then have to fit into.
+
+        Entering the busy set is what costs a slot, whichever door it comes
+        through. Charging only `postponed → formulated` left the other one
+        open: `inconclusive → under_verification` is an ordinary move (the
+        validator writes `inconclusive` on every verdict it refuses to
+        confirm, and reopening such a branch is the orchestrator's documented
+        scheduling step), and it walked straight past the ceiling.
+        """
+        max_active = self.max_active_hypotheses()
+        taken = len(self._active_hypotheses())
+        # One node, one outcome. `from` is read from the GRAPH for every update,
+        # so two verdicts naming the same hypothesis both saw it as busy and
+        # both were counted as freeing a slot: `taken` went negative and bought
+        # room that does not exist — two hypotheses went active under a ceiling
+        # of one, with no error and no warning. The apply loop runs the updates
+        # in order and the last one lands, so the last one is what may be
+        # counted; a dict keeps that value at the position the node first
+        # appeared, which is the order the refusals below are handed out in.
+        final: Dict[str, Dict[str, Any]] = {}
+        for s in staged_status:
+            if s["type"] == "Hypothesis":
+                final[s["id"]] = s
+        entering: List[Dict[str, Any]] = []
+        for s in final.values():
+            was, now = s["from"] in self._BUSY, s["to"] in self._BUSY
+            if was and not now:
+                taken -= 1        # this branch closes and frees its slot
+            elif now and not was:
+                entering.append(s)
+        room = max(0, max_active - taken)
+        for s in entering[room:]:
+            errors.append(
+                f"status_updates[{s['index']}]: {s['id']} cannot be made "
+                f"active — this commit would leave the run holding "
+                f"{taken + room} of {max_active} hypotheses under "
+                f"verification. Close a branch "
+                f"(confirmed/refuted/inconclusive) in the same commit, or "
+                f"raise the limit in the settings.")
+        return taken + min(len(entering), room)
+
+    def _normalize_hypothesis_selection(self, creates: List[Dict[str, Any]],
+                                        warnings: List[str],
+                                        taken: int = 0) -> None:
+        """Store invariant: the RUN never holds more than N active hypotheses.
+
+        N = ``settings.web.max_active_hypotheses`` (default 1). `taken` is what
+        `_charge_slots` worked out — the occupancy once this commit's own
+        status updates apply, so a commit that closes a branch leaves room for
+        the hypothesis it proposes in the same breath.
+
+        The slots already taken in the graph count. They did not use to: the
+        ceiling looked at one commit's drafts only, so an agent told to «commit
+        at most three per call, make more calls if you need more» produced one
+        active hypothesis per call and the run ended up verifying several at
+        once while the setting said one.
+
+        Surplus is created ``postponed``, never dropped — the agent's work is
+        its own, and the operator can see what was proposed. But postponed is a
+        dead end by the schema (there is no ``postponed → under_verification``),
+        so a hypothesis filed here will not be tested until something revives
+        it. That is why this is a guard rail and not a plan: the generator is
+        asked for at most N in the first place, and reaching this code means
+        something went past that.
+        """
+        max_active = self.max_active_hypotheses()
 
         active = [c for c in creates
                   if c["type"] == "Hypothesis" and c["status"] == "formulated"
                   and not c.get("twin")]
-        if len(active) <= max_active:
+        room = max(0, max_active - taken)
+        if len(active) <= room:
             return
-        # Sort by priority_rank (lower = higher priority) and keep top N.
+        # Sort by priority_rank (lower = higher priority) and keep the top ones
+        # that still fit.
         ranked = sorted(active, key=lambda c: priority_rank(c["attrs"]))
-        primary_set = set(id(c) for c in ranked[:max_active])
+        primary_set = set(id(c) for c in ranked[:room])
         for c in active:
             if id(c) in primary_set:
                 continue
             c["status"] = "postponed"
             c["attrs"].setdefault(
                 "postponed_reason",
-                "альтернативная гипотеза — отложена в очередь, пока "
-                "проверяются выбранные")
-        kept_labels = ", ".join(
-            f'"{self._label(c, 60) or c.get("ref") or "?"}"'
-            for c in ranked[:max_active])
+                "сверх предела одновременно проверяемых гипотез — отложена, "
+                "пока проверяются выбранные")
+        proposed = (f"{len(active)} hypotheses were proposed as active at once"
+                    if len(active) > 1 else "this hypothesis was proposed as active")
+        held = (f", and {taken} of the {max_active} slots "
+                f"{'is' if taken == 1 else 'are'} already taken in the graph"
+                if taken else "")
+        if room:
+            kept = ", ".join(f'"{self._label(c, 60) or c.get("ref") or "?"}"'
+                             for c in ranked[:room])
+            outcome = (f"so {kept} stay 'formulated' and the remaining "
+                       f"{len(active) - room} were created as 'postponed'")
+        else:
+            outcome = (f"so all {len(active)} were created as 'postponed' — the "
+                       f"run has no free slot right now")
         warnings.append(
-            f"{len(active)} hypotheses were proposed as active at once; only "
-            f"{max_active} may be verified at a time, so {kept_labels} "
-            f"stay 'formulated' and the other "
-            f"{len(active) - max_active} were created as 'postponed' (backlog). "
-            f"To choose which ones are verified, mark them with "
-            f"attrs.selected=true or a higher attrs.priority; the orchestrator "
-            f"can revive a postponed one later.")
+            f"{proposed}; only {max_active} may be verified at a time{held}, "
+            f"{outcome}. A postponed hypothesis is NOT verified: the graph gives "
+            f"it no route to a verdict until someone revives it "
+            f"(postponed→formulated), and the study stays open while it sits. "
+            f"Propose at most {max_active} so nothing is stranded, and mark your "
+            f"pick with attrs.selected=true or a higher attrs.priority.")
 
     def _stage_merge(self, source: str, i: int, draft: Dict[str, Any],
                      merges: List[Dict[str, Any]],
-                     enforce_permissions: bool = True) -> List[str]:
+                     enforce_permissions: bool = True,
+                     warnings: Optional[List[str]] = None,
+                     allow_reserved: bool = False) -> List[str]:
         """Validate an attrs-merge entry ({"id": …, "attrs": {…}}) — how e.g.
         the researcher enriches an existing EmpiricalBase (spec §2)."""
         nid = self._canon_node(draft["id"])
@@ -2561,6 +2900,10 @@ class ResearchGraphStore:
         if not isinstance(attrs, dict) or not attrs:
             return [f"nodes[{i}]: an attrs object with the fields to merge is "
                     f"required to update '{nid}'."]
+        attrs = _strip_reserved(attrs, f"nodes[{i}]", warnings, allow_reserved)
+        if not attrs:
+            return []
+        draft = dict(draft, attrs=attrs)
         # A role that does not own the node may still owe it one field — the
         # reason a branch was left untested, what the evidence failed to
         # settle. Those are granted one (type, attribute) at a time, and only
@@ -2743,7 +3086,11 @@ class ResearchGraphStore:
         for key in _LABEL_ATTRS:
             if attrs.get(key):
                 return _short(attrs[key], n)
-        return _short(json.dumps(attrs, ensure_ascii=False, default=str), n) if attrs else ""
+        # The last resort prints the record itself, so it must not print the
+        # bookkeeping: a node whose only attrs were a participation list would
+        # be labelled with the names of everyone who touched it.
+        said = {k: v for k, v in attrs.items() if k not in _HIDDEN_FIELDS}
+        return _short(json.dumps(said, ensure_ascii=False, default=str), n) if said else ""
 
     def _node_public(self, node_id: str) -> Dict[str, Any]:
         d = self._g.nodes[node_id]
@@ -2753,7 +3100,8 @@ class ResearchGraphStore:
             "status": d.get("status"),
             "source": d.get("source"),
             "attrs": {k: _short(v, 400) if isinstance(v, str) else v
-                      for k, v in (d.get("attrs") or {}).items()},
+                      for k, v in (d.get("attrs") or {}).items()
+                      if k not in _AGENT_HIDDEN},
         }
 
     @staticmethod

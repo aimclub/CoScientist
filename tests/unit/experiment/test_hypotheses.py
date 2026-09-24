@@ -93,7 +93,40 @@ def test_seed_hypotheses_instructs_small_commits():
     seed_hypotheses_from_em_request(SimpleNamespace(state=state, user_content=None), req)
     text = req.contents[0].parts[0].text
     assert "Hypothesis nodes ONLY" in text
-    assert "At most" in text
+    # One commit, not "at most three per call, make more calls if you need
+    # more": every extra call used to get its own full allowance of active
+    # hypotheses, which is how a run configured for one verified several.
+    assert "ONE research_commit" in text
+    assert "Extra calls do not raise the ceiling" in text
+
+
+def test_the_seed_does_not_decide_how_many_hypotheses_there_are():
+    """The count comes from one place — the operator's setting, via the agent's
+    own instruction. This user turn used to override it with «one hypothesis per
+    operation slot, do not skip a slot», and a six-step request became six
+    hypotheses whatever the setting said."""
+    from google.adk.models import LlmRequest
+    from google.genai import types
+
+    from CoScientist.experiments.hypotheses import seed_hypotheses_from_em_request
+
+    state = {
+        "experiment_source_request": "Profile the metabolites.",
+        "experiment_operations": [
+            {"operation_id": f"OP-{i}", "statement": f"step {i}"} for i in range(1, 7)
+        ],
+    }
+    req = LlmRequest(contents=[types.Content(role="user", parts=[types.Part(text="noise")])])
+    seed_hypotheses_from_em_request(SimpleNamespace(state=state, user_content=None), req)
+    text = req.contents[0].parts[0].text
+
+    assert "one hypothesis per slot" not in text
+    assert "H1 matches OP-1" not in text
+    assert "one distinct hypothesis per distinct operation" not in text
+    # The operations still reach the model — as the scope, which is what they are.
+    assert "OP-6: step 6" in text
+    assert "SCOPE" in text and "NOT a list of hypotheses" in text
+    assert "stated in your instructions" in text
 
 
 def test_seed_hypotheses_does_not_instruct_creating_research_question():

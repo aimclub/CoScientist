@@ -129,12 +129,19 @@ def mirror_artifact(
     tool: str = "",
     source_kind: str = "",
     agent: Optional[str] = None,
+    mirror_off_host: bool = True,
 ) -> Dict[str, Any]:
     """Copy one artifact into the session's store. Always returns a record.
 
     Sources, in the order they are tried: bytes already in hand, a local file, a
     live URL, or a ``bucket``/``s3_key`` pair whose link is minted through the
     vault first.
+
+    ``mirror_off_host=False`` keeps the copy in the session and nowhere else.
+    The second address is normally a kindness — the artifact outlives the
+    session — but for a file whose retention is a policy question, and a
+    downloaded paper is one, that decision belongs at the call site that judged
+    it, not in a global setting.
     """
     cfg = _settings()
     key = session_key(context, user_id=user_id, session_id=session_id)
@@ -181,7 +188,8 @@ def mirror_artifact(
     # A second, off-host address. The local copy is the home, so a failure here
     # is not a failure of the mirror.
     if (
-        cfg.mirror_to_s3
+        mirror_off_host
+        and cfg.mirror_to_s3
         and record.get("state") == sf.STATE_STORED
         and not record.get("bucket")
     ):

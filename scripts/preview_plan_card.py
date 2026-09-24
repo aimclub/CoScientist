@@ -340,7 +340,9 @@ def main() -> int:
                 '<div class="col"><h2>before — context.output in a &lt;pre&gt;</h2>'
                 + _BEFORE_PANEL.format(
                     message="Review and explicitly approve the experiment plan.",
-                    output=escape(render_experiment_plan(plan)))
+                    # The same language as the card beside it, or the
+                    # comparison is between two different things.
+                    output=escape(render_experiment_plan(plan, args.lang)))
                 + "</div>")
 
     rendered = _render_card(view, args.lang)

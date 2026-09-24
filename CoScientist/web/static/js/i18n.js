@@ -1647,6 +1647,17 @@ const i18n = {
   'graph.tooltip.toolCalls': { en: 'tool calls: {count}', ru: 'вызовов инструментов: {count}' },
   // Detail / inspector panel
   'graph.detail.provenance': { en: 'provenance — produced by', ru: 'происхождение — получено из' },
+  // Who took part in a node. A basis is not decoration: `assignee` is what the
+  // plan intended and every other basis is something the system watched happen,
+  // so the wording has to keep a reader from reading an intention as a fact.
+  'graph.contrib.title': { en: 'participants', ru: 'участники' },
+  'graph.basis.commit': { en: 'wrote this', ru: 'записал' },
+  'graph.basis.status': { en: 'moved its status', ru: 'сменил статус' },
+  'graph.basis.delegation': { en: 'delegated the work', ru: 'делегировал работу' },
+  'graph.basis.provenance': { en: 'made the call behind it', ru: 'сделал вызов, давший это' },
+  'graph.basis.work_order': { en: 'took the step (work order)', ru: 'взял шаг (наряд)' },
+  'graph.basis.route': { en: 'ran it', ru: 'выполнил' },
+  'graph.basis.assignee': { en: 'planned to — not observed', ru: 'назначен планом — не подтверждено' },
   'graph.detail.openInLog': { en: 'open this call in the execution log', ru: 'открыть этот вызов в логе выполнения' },
   'graph.detail.execLog': { en: '↗ execution log', ru: '↗ лог выполнения' },
   'graph.detail.says': { en: 'what this says', ru: 'содержание' },

@@ -1,13 +1,17 @@
 """Keep unit tests off state the developer actually uses.
 
-Two stores now persist to disk: the session registry (WEB_STATE_DIR, default
-graph_runs/web_state) and the sandbox bindings (SANDBOX_BINDINGS_FILE, default
-graph_runs/sandbox_bindings.json). Without isolation a test both pollutes real
-state and inherits from earlier runs — nickname-uniqueness tests failed with 409
-on a second run, and binding tests wrote fake container ids into the file the
-running system reads to decide which sandbox to continue in.
+Three stores persist to disk: the session registry (WEB_STATE_DIR, default
+graph_runs/web_state), the sandbox bindings (SANDBOX_BINDINGS_FILE, default
+graph_runs/sandbox_bindings.json) and the default research blackboard
+(RESEARCH_GRAPH__DIR, default graph_runs/research_active.json). Without
+isolation a test both pollutes real state and inherits from earlier runs —
+nickname-uniqueness tests failed with 409 on a second run, binding tests wrote
+fake container ids into the file the running system reads to decide which
+sandbox to continue in, and the hypothesis-commit tests read whatever
+hypotheses the developer's own session happened to hold that minute.
 """
 import os
+import tempfile
 
 import pytest
 
@@ -27,6 +31,15 @@ import pytest
 # would mean importing the app at configure time, which builds the whole agent
 # system before the isolation fixtures below have run.
 os.environ["COSCIENTIST_CONFIG"] = ""
+
+# Same reason, same timing: `research_graph` is a module-level singleton built
+# at import, so its directory has to be redirected before anything imports
+# CoScientist. A fixture would be too late — the store would already have read
+# the developer's live blackboard, and a test that commits a hypothesis would
+# read back whatever their running session holds.
+# A fresh directory per run, not a fixed name: a shared one would hand the next
+# run whatever this one committed, which is the same complaint one line up.
+os.environ["RESEARCH_GRAPH__DIR"] = tempfile.mkdtemp(prefix="coscientist_graph_")
 
 
 @pytest.fixture(autouse=True)
