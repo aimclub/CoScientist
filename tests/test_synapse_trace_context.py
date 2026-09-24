@@ -101,6 +101,36 @@ def test_unregistered_valid_distributed_context_is_accepted():
     provider.shutdown()
 
 
+def test_unregistered_trace_headers_do_not_authorize_checkpoint(monkeypatch):
+    from CoScientist.checkpoints import synapse, trace_context
+
+    synapse.clear_runs()
+    monkeypatch.setattr(trace_context, "_proof_secret", lambda: b"demo-secret")
+    headers = {
+        "traceparent": _traceparent(TRACE_2, SPAN_2),
+        "baggage": "run_id=known-run",
+    }
+    with trace_context.scope_for_request("unregistered", headers):
+        assert trace_context.active_run_id() == "known-run"
+        assert trace_context.trusted_active_run_id() is None
+
+
+def test_registered_parent_signs_child_run_context(monkeypatch):
+    from CoScientist.checkpoints import synapse, trace_context
+
+    synapse.clear_runs()
+    synapse.register_run("root-context", "run-registered", _traceparent(TRACE_1, SPAN_1))
+    monkeypatch.setattr(trace_context, "_proof_secret", lambda: b"demo-secret")
+    with trace_context.scope_for_request("root-context", {}):
+        headers = trace_context.outbound_carrier()
+    assert "x-coscientist-run-proof" in headers
+    with trace_context.scope_for_request("child-context", headers):
+        assert trace_context.trusted_active_run_id() == "run-registered"
+    headers["baggage"] = "run_id=other-run"
+    with trace_context.scope_for_request("forged-child", headers):
+        assert trace_context.trusted_active_run_id() is None
+
+
 def test_two_concurrent_scopes_do_not_mix_run_identity():
     from CoScientist.checkpoints import synapse, trace_context
 

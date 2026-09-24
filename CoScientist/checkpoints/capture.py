@@ -248,7 +248,8 @@ async def capture_checkpoint(
         state = _redact(raw_state)
 
         from CoScientist.checkpoints import synapse
-        rid = synapse.run_id_for(session.id) or run_key(session)
+        from CoScientist.checkpoints.trace_context import trusted_active_run_id
+        rid = synapse.run_id_for(session.id) or trusted_active_run_id() or run_key(session)
         manifest = CheckpointManifest(
             checkpoint_id=new_checkpoint_id(label),
             label=label,
