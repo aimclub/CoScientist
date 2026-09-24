@@ -97,7 +97,9 @@ _RESEARCH_EXAMPLES = {
         'research_commit(nodes=[{"type":"Hypothesis","ref":"h","attrs":'
         '{"formulation":"…","priority":"high","selected":"true",'
         '"rationale":"why THIS one first"}}, '
-        '{"type":"VerificationMethod","ref":"vm","attrs":{"method_type":"computational"}}, '
+        '{"type":"VerificationMethod","ref":"vm","attrs":{"method_type":"computational",'
+        '"description":"what the method IS, in one line",'
+        '"instruments":"NGS panel; scanpy; ExperimentAgent"}}, '
         '{"type":"ConfirmationCriteria","ref":"cc","attrs":{"threshold":"…"}}, '
         '{"type":"Tool","ref":"t","status":"needs_adaptation","attrs":{"name":"NGS panel"}}], '
         'edges=[{"type":"motivates","from":"Q1","to":"#h"}, '
@@ -109,17 +111,18 @@ _RESEARCH_EXAMPLES = {
     # that found a finding is named and closed in the same commit. The example
     # showed only `supports`/`relates_to`, and with no hypotheses in the graph
     # yet that left `relates_to` to the bare question as the single thing the
-    # agent ever wrote: the planned "collect the literature" method stayed
-    # `planned` and its own evidence floated unattached beside it.
+    # agent ever wrote: the "collect the literature" method stayed `proposed`
+    # and its own evidence floated unattached beside it.
     "ResearchAgent": (
         'research_commit(nodes=[{"type":"Evidence","ref":"e","attrs":'
         '{"subtype":"literature","content":"…","source_ref":"URL…"}}], '
         'edges=[{"type":"produces","from":"VM1","to":"#e"}, '
         '{"type":"supports","from":"#e","to":"H2"}], '
-        'status_updates=[{"id":"VM1","status":"done"}])   '
+        'status_updates=[{"id":"VM1","status":"used"}])   '
         '# VM1 = the literature-review method you ran. If the plan never wrote '
         'one, open it in the SAME commit — {"type":"VerificationMethod",'
-        '"ref":"vm","attrs":{"method_type":"literature_review"}} with '
+        '"ref":"vm","attrs":{"method_type":"literature_review",'
+        '"description":"…","instruments":"PubMed; Semantic Scholar"}} with '
         '{"type":"tested_by","from":"Q1","to":"#vm"} (or from the hypothesis) '
         'and produce your evidence from "#vm". Fall back to '
         '{"type":"relates_to","from":"#e","to":"Q1"} only when there is no '
@@ -130,7 +133,7 @@ _RESEARCH_EXAMPLES = {
         '{"subtype":"literature","content":"PubMed finding…"}}], '
         'edges=[{"type":"produces","from":"VM1","to":"#e"}, '
         '{"type":"supports","from":"#e","to":"H2"}], '
-        'status_updates=[{"id":"VM1","status":"done"}])   '
+        'status_updates=[{"id":"VM1","status":"used"}])   '
         '# VM1 = the review you ran; open one in the same commit if the plan '
         'never wrote it (see the ResearchAgent example).'
     ),
@@ -150,7 +153,7 @@ _RESEARCH_EXAMPLES = {
         '{"subtype":"computational","content":"AUC=0.91"}}], '
         'edges=[{"type":"produces","from":"VM1","to":"#e"}, '
         '{"type":"supports","from":"#e","to":"H2"}], '
-        'status_updates=[{"id":"VM1","status":"done"}])'
+        'status_updates=[{"id":"VM1","status":"used"}])'
     ),
     "ValidatorAgent": (
         'research_commit('
@@ -323,7 +326,8 @@ system cannot run it at all (see below).''' if has_graph else '')
                 '        {"type": "motivates", "from": "Q1", "to": "#h_rival"},')
         example_nodes += [
             '        {"type": "VerificationMethod", "ref": "vm_new", "attrs": '
-            '{"method_type": "computational", "description": "..."}},',
+            '{"method_type": "computational", "description": "...", '
+            '"instruments": "server:tool; library; Agent"}},',
             '        {"type": "ConfirmationCriteria", "ref": "cc_new", "attrs": '
             '{"threshold": "..."}}',
         ]

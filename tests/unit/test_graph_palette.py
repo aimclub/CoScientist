@@ -87,13 +87,24 @@ def test_a_settled_claim_is_green_a_rejected_one_red_and_the_rest_neutral(page):
     assert {"confirmed", "validated", "met", "approved"} <= positive
     assert {"refuted", "rejected", "failed"} <= negative
     assert not positive & negative
-    # Everything else is neither, and says so in neutral ink rather than in a
-    # third colour: a method still running is not bad news.
+    # A third thing that is neither, and is not neutral either: what is
+    # happening RIGHT NOW. Drawn in neutral ink it read exactly like a card
+    # nobody had touched, which is how a plan step that had been running for
+    # minutes came to look identical to one not yet started.
+    live = re.search(r"const STATUS_LIVE = new Set\(\[(.*?)\]\)", page, re.S)
+    assert live, "the page must say which statuses are work in flight"
+    working = set(re.findall(r'"(\w+)"', live.group(1)))
+    assert {"in_progress", "running", "under_verification"} <= working
+    assert not working & positive and not working & negative, (
+        "work in flight is not a verdict either way")
     assert re.search(r"statusInk = st => STATUS_GOOD\.has\(st\) \? GOOD\s*"
-                     r":\s*STATUS_BAD\.has\(st\) \? CRIT : INK2", page)
-    for status in ("inconclusive", "postponed", "under_verification", "planned"):
+                     r":\s*STATUS_BAD\.has\(st\) \? CRIT\s*"
+                     r":\s*STATUS_LIVE\.has\(st\) \? WARN : INK2", page)
+    # …and the rest stays neutral: a postponed branch is not bad news.
+    for status in ("inconclusive", "postponed", "planned", "proposed"):
         assert f'"{status}"' not in good.group(1)
         assert f'"{status}"' not in bad.group(1)
+        assert f'"{status}"' not in live.group(1)
 
 
 def test_the_status_word_is_the_one_thing_on_the_card_wearing_that_colour(page):
@@ -122,3 +133,78 @@ def test_an_edge_label_is_escaped_before_it_is_made_bold(page):
     # interpolates a model-written reason.
     assert "edge.label = edgeLabel(t('graph.edge.supersedes.'" in page
     assert "(research ? edgeLabel(rlabel) : rlabel)" in page
+
+
+# ── what is happening right now ───────────────────────────────────────────────
+# The second thing colour on this canvas has to answer, and the one it did not:
+# which stage is going on. The plan track had no entry in the status table at
+# all, so a step being worked on and a step nobody had started drew as the same
+# slate bullet — and the operator's complaint was exactly that.
+
+def test_the_canvas_knows_the_plan_track_s_own_statuses(page):
+    block = re.search(r"const R_STATUS = \{(.*?)\n    \};", page, re.S)
+    assert block, "the page must still declare R_STATUS"
+    known = set(re.findall(r"(\w+):\s*\{", block.group(1)))
+    for status in NODE_TYPES["PlanStep"].statuses:
+        assert status in known, f"a plan step drawn as {status} has no colour"
+    for status in NODE_TYPES["ExperimentTask"].statuses:
+        assert status in known, f"an experiment task drawn as {status} has no colour"
+    for status in NODE_TYPES["VerificationMethod"].statuses:
+        assert status in known, f"a method drawn as {status} has no colour"
+
+
+def test_the_two_node_types_a_reader_watches_are_research_nodes(page):
+    """`RESEARCH_KINDS` is built from `R_LEVEL`, and the tooltip of anything
+    outside it prints the raw code. The two kinds whose progress a reader
+    actually follows were the two that printed «experimenttask / in_progress»
+    while the card beside them said it in words."""
+    block = re.search(r"const R_LEVEL = \{(.*?)\n?\s*\};", page, re.S)
+    assert block, "the page must still declare R_LEVEL"
+    assert "planstep" in block.group(1) and "experimenttask" in block.group(1)
+
+
+def test_only_an_action_card_pulses(page):
+    """A plan step and an experiment task are work somebody is doing this
+    minute; a hypothesis under verification is a state. The first pair moves,
+    the second does not — that distinction is the operator's, and it is the
+    reason the pulse is keyed on the KIND and not on the status alone."""
+    kinds = re.search(r"const PULSING_KINDS = new Set\(\[(.*?)\]\)", page, re.S)
+    statuses = re.search(r"const PULSING_STATUS = new Set\(\[(.*?)\]\)", page, re.S)
+    assert kinds and statuses, "the page must say what pulses and when"
+    assert set(re.findall(r'"(\w+)"', kinds.group(1))) == {"planstep", "experimenttask"}
+    assert set(re.findall(r'"(\w+)"', statuses.group(1))) == {"in_progress", "running"}
+    assert "PULSING_KINDS.has(n.kind) && PULSING_STATUS.has(n.status)" in page
+
+
+def test_the_pulse_is_painted_not_written_into_the_cards(page):
+    """The poll rebuilds every node object wholesale every 1.5 s, so a colour
+    an animation wrote into the DataSet is overwritten within the second — and
+    each such write re-runs vis's html-label parser over agent-written text,
+    the one path in this file that can take the canvas down. The halo is drawn
+    on the canvas instead, and the loop stops when nothing is running."""
+    assert "function drawPulse(ctx)" in page
+    assert re.search(r'network\.on\("beforeDrawing".*?drawPulse\(ctx\)', page, re.S)
+    loop = re.search(r"function pulseLoop\(ts\)\{(.*?)\n    \}", page, re.S)
+    assert loop, "the page must still drive the pulse from its own loop"
+    body = loop.group(1)
+    # Nothing in the pulse touches the node store.
+    assert "nodes.update" not in body
+    # …and it has a way out. `pulsing` is recomputed only inside `poll`, so with
+    # the live feed switched off — or with every poll throwing — nothing would
+    # ever empty the set, and the loop would repaint the canvas twenty times a
+    # second for as long as the tab stayed open.
+    assert "pulseRunning = false" in body
+    assert "!pulsing.size" in body and "checked" in body
+
+
+def test_no_pictograms_on_a_card(page):
+    """A method card carried five or six of them on a box 230 px wide and none
+    said anything the words beside them did not. The status glyph is not one:
+    ✓ ✗ ⧗ ○ is a typographic mark, and it is the one thing on the card read at
+    a glance rather than word by word."""
+    label = re.search(r"function researchLabel\(n\)\{(.*?)\n    \}\n", page, re.S)
+    assert label, "the page must still build its card labels in researchLabel"
+    body = re.sub(r"^\s*//.*$", "", label.group(1), flags=re.M)
+    found = [ch for ch in body if ord(ch) >= 0x1F300 or 0x2600 <= ord(ch) <= 0x27BF]
+    assert not found, f"emoji left on the card: {found}"
+    assert "R_ICON" not in body, "the type icon is a pictogram too"

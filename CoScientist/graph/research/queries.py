@@ -429,10 +429,10 @@ def study_without_hypothesis(store: Optional[ResearchGraphStore] = None) -> Dict
                 f"none. Call the HypothesesAgent BEFORE any verification method, "
                 f"however obvious the route looks.")
     if methods:
-        # Their STATUS, not an assertion that they are running. The plan mirror
-        # creates methods as `planned`, which is the only creatable status, so
-        # "already running" was false on every graph that had just been planned
-        # — and it contradicted the PROGRESS line of the same digest.
+        # Their STATUS, not an assertion that they are running. A method is
+        # only ever created as `proposed`, so "already running" was false on
+        # every graph that had just been planned — and it contradicted the
+        # PROGRESS line of the same digest.
         head += (" " + str(len(methods)) + " method(s) already stand under the "
                  "question with nothing to test: "
                  + ", ".join(f"{m} ({_status(g, m)})" for m in methods) + ".")

@@ -146,16 +146,26 @@ _STATUS_WORDS = {
     "formulated": "предложена", "under_verification": "проверяется",
     "confirmed": "подтверждена", "refuted": "опровергнута",
     "inconclusive": "проверена — без ответа", "postponed": "отложена",
-    "obtained": "получено", "validated": "проверено", "rejected": "отклонено",
+    # An observation nobody has weighed yet is not a finished thing: it is
+    # waiting to be judged, and the card says so rather than announcing a
+    # result. Its verdicts keep their own words below.
+    "obtained": "проверяется", "validated": "проверено", "rejected": "отклонено",
     "planned": "запланирован", "running": "выполняется", "done": "выполнен",
     "failed": "не удался", "not_met": "ещё не выполнен", "met": "выполнен",
+    # A method's own words — see NODE_TYPES["VerificationMethod"] for why it
+    # has a vocabulary of its own rather than a task's.
+    "proposed": "предложен", "used": "использован",
+    "not_used": "не использован",
     "available": "доступен", "exhausted": "исчерпан",
     "needs_adaptation": "нужна доработка", "being_created": "создаётся",
     "creation_failed": "создать не удалось",
     "draft": "черновик", "approved": "утверждён", "created": "записан",
     "active": "действует", "derived": "сводка",
-    # A plan step's own states, from the task tracker.
-    "todo": "не начат", "in_progress": "в работе", "blocked": "заблокирован",
+    # A plan step's own states, from the task tracker. `in_progress` says the
+    # same thing an experiment task's `running` says, and is worded the same
+    # way: the reader is looking for what is happening NOW, and two words for
+    # one fact made them hunt for a difference that is not there.
+    "todo": "не начат", "in_progress": "выполняется", "blocked": "заблокирован",
 }
 
 _FIELD_WORDS = {
@@ -231,6 +241,127 @@ def _strip_reserved(attrs: Dict[str, Any], where: str, warnings: List[str],
     return {k: v for k, v in attrs.items() if k not in schema.RESERVED_ATTRS}
 
 
+#: How many instruments a method's card names. The one authority: the card
+#: renders the whole string it is sent, so a second, smaller cap in the page
+#: meant the tail was polled to the browser every 1.5 s and drawn nowhere. The
+#: Tools a method `uses` are folded onto it as chips as well, and the panel
+#: lists those in full — so nothing here is the only place a name appears.
+_MAX_INSTRUMENTS = 8
+
+#: What a method's status used to be called, and what it says now. A study
+#: written before the vocabulary changed does not hold unknown statuses — it
+#: holds statuses worded as a task's, and this is the reading of them.
+#: Re-spoken on LOAD rather than by a migration script: a graph arrives from
+#: three directions (the live session file, an imported bundle, an archived
+#: study) and the loader is the one place all three pass through. Without it
+#: every stored method freezes: `validate_transition` reads `from` off the
+#: node, and no pair starting at `planned` exists any more.
+_LEGACY_METHOD_STATUS = {"planned": "proposed", "running": "proposed",
+                         "done": "used", "failed": "not_used"}
+
+
+def _respeak_method_status(node: Dict[str, Any]) -> None:
+    """Re-word one stored method, and its trail, in today's vocabulary."""
+    if not isinstance(node, dict) or node.get("type") != "VerificationMethod":
+        return
+    node["status"] = _LEGACY_METHOD_STATUS.get(node.get("status"),
+                                               node.get("status"))
+    history = node.get("status_history")
+    if not isinstance(history, list):
+        return
+    trail: List[Dict[str, Any]] = []
+    for entry in history:
+        if not isinstance(entry, dict):
+            trail.append(entry)
+            continue
+        moved = dict(entry)
+        for side in ("from", "to"):
+            if moved.get(side) in _LEGACY_METHOD_STATUS:
+                moved[side] = _LEGACY_METHOD_STATUS[moved[side]]
+        trail.append(moved)
+    # Every entry kept, including the ones that now read as a move from a
+    # status to itself (`planned → running` becomes `proposed → proposed`).
+    # Dropping those was tidier to look at and wrong: the entry carries its own
+    # SOURCE and its own REASON, `_save` writes the shortened trail straight
+    # back over the file, and there is no second copy — so across the studies
+    # on disk it would have deleted 46 transitions, 41 of them with a written
+    # reason, and four that were the only record that a particular agent had
+    # touched the method at all. A row that says an agent noted something
+    # without moving the state is still the record of what it did.
+    node["status_history"] = trail
+
+
+def _named_instruments(value: Any) -> List[str]:
+    """Instrument names out of whatever an author wrote them as.
+
+    The same list reaches the graph as a list, as a comma string and as a
+    semicolon string depending on who wrote it, and a method that names its
+    instruments in the shape the other writer uses is not a method that names
+    none.
+    """
+    if value in (None, "", [], {}):
+        return []
+    if isinstance(value, (list, tuple, set)):
+        parts: List[str] = []
+        for item in value:
+            parts.extend(_named_instruments(item))
+        return parts
+    if isinstance(value, dict):
+        return _mcp_instruments([value])
+    return [p.strip() for p in re.split(r"[;,\n]", str(value)) if p.strip()]
+
+
+def _mcp_instruments(servers: Any) -> List[str]:
+    """`[{"name": "tox", "tools": ["predict_ld50"]}]` → `["tox:predict_ld50"]`.
+
+    This is where the approved experiment plan already records which tools a
+    method will call, and until now the card could not read it: the reader saw
+    a method with no instrument beside a run that had called two.
+    """
+    out: List[str] = []
+    if not isinstance(servers, (list, tuple)):
+        return out
+    for server in servers:
+        if not isinstance(server, dict):
+            out.extend(_named_instruments(server))
+            continue
+        name = str(server.get("name") or server.get("server") or "").strip()
+        tools = [str(t).strip() for t in (server.get("tools") or [])
+                 if str(t).strip()]
+        if name and tools:
+            out.extend(f"{name}:{tool}" for tool in tools)
+        elif name or tools:
+            out.extend([name] if name else tools)
+    return out
+
+
+def _one_name_each(names: List[str]) -> List[str]:
+    """One entry per instrument, whichever way each source named it.
+
+    The same tool arrives twice with two spellings — `uses` gives the Tool
+    node's bare name (`predict_ld50`) and the approved plan gives it qualified
+    (`heracleum-tox:predict_ld50`) — and a card listing both says the method
+    ran two instruments. The qualified form wins: it says which server, which
+    is the part a reader cannot reconstruct. Two servers offering a tool of the
+    same name stay two entries, because neither of them is bare.
+    """
+    out: List[str] = []
+    qualified = {n.split(":")[-1].strip().lower() for n in names
+                 if n and ":" in n}
+    taken: set = set()
+    for name in names:
+        clean = (name or "").strip()
+        key = clean.lower()
+        if not clean or key in taken:
+            continue
+        # A bare name the qualified list already accounts for is the same tool.
+        if ":" not in clean and key in qualified:
+            continue
+        taken.add(key)
+        out.append(clean)
+    return out
+
+
 def _headline(kind: str, attrs: Dict[str, Any]) -> str:
     """One line saying what this node is, in the reader's own words.
 
@@ -298,7 +429,13 @@ def _headline(kind: str, attrs: Dict[str, Any]) -> str:
         if named:
             return named
     elif kind == "VerificationMethod":
-        described = text("description", "procedure", "method_type")
+        # `name` before `procedure`, and both before `method_type`: the
+        # experiment module writes a title and no description, so with
+        # `method_type` standing second every method it published drew as the
+        # single word "computational" — twenty-three cards on one canvas, all
+        # with the same headline, none of them saying what it was a method OF.
+        described = text("description", "name", "label", "experiment_question",
+                         "procedure", "method_type")
         if described:
             return described
     elif kind == "Conclusion":
@@ -331,6 +468,10 @@ _CONSUMED_BY_HEADLINE = {
                              "confirmation_criteria", "confirm_refute_rule",
                              "success_metric", "rule", "description"},
     "Tool": {"name", "description"},
+    # Whichever of the two supplied the headline, the other is the same
+    # sentence: an agent writes `description` and the experiment module writes
+    # `name`, never both.
+    "VerificationMethod": {"description", "name", "label"},
     "Conclusion": {"synthesis", "content", "description"},
     "Evidence": {"content", "description", "finding", "summary"},
 }
@@ -595,7 +736,7 @@ _REASON_ATTRS = ("failure_reason", "inconclusive_reason", "not_tested_reason",
                  "postponed_reason")
 #: Outcomes a reader will ask "why" about, and deserves an answer to.
 _UNRESOLVED_STATUSES = {"failed", "refuted", "inconclusive", "rejected",
-                        "creation_failed", "postponed"}
+                        "creation_failed", "postponed", "not_used"}
 #: Verdict on the superseded hypothesis -> how the next one came about.
 _ORIGIN_BY_VERDICT = {"refuted": "modified", "confirmed": "refined",
                       "inconclusive": "retried"}
@@ -1878,13 +2019,14 @@ class ResearchGraphStore:
                 elaborated_by.setdefault(e.get("dst"), []).append(e.get("src"))
                 elaborates[e.get("src")] = e.get("dst")
 
-        # WITH WHAT a method was run — the part of "method" that was missing
+        # WITH WHAT a method is run — the part of "method" that was missing
         # altogether. A method is a method OF a claim, FOR settling it, BY some
-        # instrument; the card used to carry only the first two. Three sources,
-        # best first: the Tools the method declares it `uses`, the tools the
-        # PLAN already named for the step (the planner can read the tool list,
-        # so this is the one part of the method it can answer in advance), and
-        # the calls actually recorded against the method.
+        # instrument; the card used to carry only the first two. Five sources,
+        # best first: the instruments the method itself names, the Tools it
+        # declares it `uses`, the MCP servers and tools the approved experiment
+        # plan pinned to it, the tools the PLAN already named for the step (the
+        # planner can read the tool list, so this is the one part of the method
+        # it can answer in advance), and the calls actually recorded against it.
         step_tools: Dict[str, str] = {}
         for sid, sd in raw_nodes.items():
             if sd.get("type") != "PlanStep":
@@ -1908,23 +2050,23 @@ class ResearchGraphStore:
             if md.get("type") != "VerificationMethod":
                 continue
             ma = md.get("attrs") or {}
-            names = list(declared.get(mid, []))
-            names += [p.strip() for p in
-                      step_tools.get(str(ma.get("plan_task_id") or ""), "").split(",")
-                      if p.strip()]
+            names = _named_instruments(ma.get("instruments"))
+            names += declared.get(mid, [])
+            names += _mcp_instruments(ma.get("mcp_servers"))
+            names += _named_instruments(ma.get("tools"))
+            names += _named_instruments(
+                step_tools.get(str(ma.get("plan_task_id") or ""), ""))
+            # The agent the plan put on it is an instrument too: "by whom" is
+            # as much an answer to "by what means" as a library name is.
+            names += _named_instruments(ma.get("assignee"))
             names += [str(c.get("tool") or "").strip()
                       for c in (ma.get("_provenance") or [])
                       if isinstance(c, dict) and str(c.get("tool") or "").strip()]
-            ordered, seen_names = [], set()
-            for name in names:
-                if name.lower() in seen_names:
-                    continue
-                seen_names.add(name.lower())
-                ordered.append(name)
+            ordered = _one_name_each(names)
             if ordered:
                 # Capped: the card is a headline, and a method that called
                 # twenty tools is better read in the panel.
-                instruments[mid] = ", ".join(ordered[:6])
+                instruments[mid] = ", ".join(ordered[:_MAX_INSTRUMENTS])
 
         nodes: List[Dict[str, Any]] = []
         for nid in sorted(drawn_ids, key=_id_order):
@@ -3194,6 +3336,7 @@ class ResearchGraphStore:
             data = json.loads(self._path.read_text(encoding="utf-8"))
             g = nx.MultiDiGraph()
             for node in data.get("nodes", []):
+                _respeak_method_status(node)
                 g.add_node(node["id"], **node)
             for edge in data.get("edges", []):
                 e = dict(edge)
