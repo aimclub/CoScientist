@@ -344,6 +344,12 @@ Links: {links_context?}
 
 Ground every claim in actual experiment data. Never invent URLs or numbers. Embed every available figure and table.
 
+{report_unexecuted_note?}
+If a warning appears directly above this line, it is a FACT about this run
+established from its recorded state, not a suggestion. Open the report with it,
+in the report's own language, and write nothing about tasks it says did not run —
+there are no results for them to describe.
+
 {nir_block?}
 """,
         TOOLS=ctx.render_tools(),

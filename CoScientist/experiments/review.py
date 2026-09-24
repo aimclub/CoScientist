@@ -109,6 +109,17 @@ def result_tasks_ok(runtime: dict[str, Any] | None) -> bool:
 _audit = functools.partial(audit, logger)
 
 
+def _window_word(window: float | None) -> str:
+    """The window an audit line reports, when there may not be one.
+
+    `None` is a real outcome now — it is how the operator's "wait for me" is
+    passed down — and a handler can still answer `timed_out` under it: the
+    fail-closed handler does exactly that when no interactive reviewer is
+    connected. So the line has to be able to say there was no deadline.
+    """
+    return f"{window:g}" if window else "none"
+
+
 class FailClosedExperimentHITLHandler(AbstractHITLHandler):
     """Pause review when no interactive reviewer is connected."""
 
@@ -634,9 +645,37 @@ class ExperimentReviewSessionAgent(SessionAgent):
             instructions=f"{pause_prefix} {detail}",
         )
 
+    def _review_window(self, configured: float) -> float | None:
+        """The deadline this review waits under, with the operator's switch on top.
+
+        The two review windows are deliberately their own: they fail CLOSED, so
+        a run is never approved because nobody was watching, and a bounded wait
+        is what keeps a missed card from parking the run forever.
+
+        But the operator's global switch (`HITL_AUTO_APPROVE_TIMEOUT`, and the
+        Approvals tab on top of it) is a statement about THEM — "I am at the
+        console, do not decide without me" — and it was the one voice this path
+        did not hear: `handle_request` prefers a request's own window, so an
+        operator who had turned every timeout off still had the plan review
+        expire at 300 s and the run skip execution.
+
+        `None` hands the decision back to the handler, whose own fallback IS
+        that global. So a positive global keeps the review's shorter, explicit
+        window; a non-positive one — "wait for me" — now reaches here too.
+        """
+        try:
+            window = getattr(self.hitl_handler, "hitl_timeout_seconds", None)
+            if window is None:
+                window = get_settings().web.hitl_auto_approve_timeout
+            if float(window) <= 0:
+                return None
+        except Exception:  # noqa: BLE001 — an unreadable switch keeps the window
+            return configured
+        return configured
+
     def _hitl(
         self, *, message: str, kind: str, plan_id: Any, output: str,
-        user_id: str, session_id: str, timeout_seconds: float,
+        user_id: str, session_id: str, timeout_seconds: float | None,
         plan_view: dict[str, Any] | None = None,
     ) -> HITLRequest:
         context: dict[str, Any] = {
@@ -796,10 +835,11 @@ class ExperimentReviewSessionAgent(SessionAgent):
             _audit("EXPERIMENT_DESIGN_MATRIX\n" + render_experiment_plan(plan, "en"))
             return _auto_approve_response()
 
+        window = self._review_window(cfg.plan_review_timeout_s)
         response = await self.hitl_handler.handle_request(self._hitl(
             message="Review and explicitly approve the experiment plan.", kind="plan",
             plan_id=plan.plan_id, output=render_experiment_plan(plan, lang),
-            user_id=user_id, session_id=session_id, timeout_seconds=cfg.plan_review_timeout_s,
+            user_id=user_id, session_id=session_id, timeout_seconds=window,
             plan_view=view,
         ))
         if response.approved:
@@ -813,7 +853,7 @@ class ExperimentReviewSessionAgent(SessionAgent):
             # said nothing, so the orchestrator blamed its attempt budget.
             state[PAUSE_REASON_STATE_KEY] = "plan_review_timeout"
             _audit(f"EXPERIMENT_REVIEW_TIMEOUT kind=plan plan_id={plan.plan_id} "
-                   f"window_s={cfg.plan_review_timeout_s:g}")
+                   f"window_s={_window_word(window)}")
         close_plan_record(ctx, record_id, view["status"],
                           reason=_clip(response.instructions))
         return response
@@ -840,16 +880,17 @@ class ExperimentReviewSessionAgent(SessionAgent):
             )
             return _auto_approve_response()
 
+        window = self._review_window(cfg.result_review_timeout_s)
         response = await self.hitl_handler.handle_request(self._hitl(
             message="Accept the experiment results, or reject with feedback to request a redesigned experiment.",
             kind="result", plan_id=runtime.get("plan_id"), output=rendered,
-            user_id=user_id, session_id=session_id, timeout_seconds=cfg.result_review_timeout_s,
+            user_id=user_id, session_id=session_id, timeout_seconds=window,
         ))
         if response.timed_out:
             state[PAUSE_REASON_STATE_KEY] = "result_review_timeout"
             _audit(f"EXPERIMENT_REVIEW_TIMEOUT kind=result "
                    f"plan_id={runtime.get('plan_id')} "
-                   f"window_s={cfg.result_review_timeout_s:g}")
+                   f"window_s={_window_word(window)}")
             return response
         if response.approved:
             result = mark_result_review(state, approved=True)

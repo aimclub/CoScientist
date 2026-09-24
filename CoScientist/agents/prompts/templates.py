@@ -2613,6 +2613,12 @@ A starting digest of the graph:
 
 {links_context?}
 
+{report_unexecuted_note?}
+If a warning appears directly above this line, it is a FACT about this run
+established from its recorded state, not a suggestion. Open the report with it,
+in the report's own language, and write nothing about tasks it says did not run —
+there are no results for them to describe.
+
 ### Procedure
 1. **Read the graph.** Call `research_overview()` first to see every node (ids,
    types, statuses, labels). Then, for each Conclusion and the Evidence/Hypotheses
