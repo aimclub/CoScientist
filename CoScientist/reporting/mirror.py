@@ -310,6 +310,14 @@ def mirror_tool_result(
     if tool_name == "get_upload_link":
         return []
 
+    # What a tool READ is filed apart from what a tool MADE. Both arrive here as
+    # a URL in a result, and only the provenance tells them apart: a figure
+    # lifted off an article page is the journal's, not this study's, and the
+    # report must not offer it as an illustration of the work.
+    from CoScientist.reporting.collect import SOURCE_ASSET_KIND, is_reading_tool
+
+    read_kind = SOURCE_ASSET_KIND if is_reading_tool(tool_name) else ""
+
     records: List[Dict[str, Any]] = []
     claimed = set()
     for item in referenced[:MAX_PER_CALL]:
@@ -322,7 +330,7 @@ def mirror_tool_result(
             context, user_id=user_id, session_id=session_id,
             url=url, bucket=item.get("bucket"), s3_key=item.get("s3_key"),
             filename=Path(str(item.get("s3_key") or "")).name,
-            tool=tool_name, source_kind="mcp_ref",
+            tool=tool_name, source_kind=read_kind or "mcp_ref",
         ))
 
     for url in urls[:MAX_PER_CALL]:
@@ -330,7 +338,7 @@ def mirror_tool_result(
             continue
         records.append(mirror_artifact(
             context, user_id=user_id, session_id=session_id,
-            url=url, tool=tool_name, source_kind="mcp_url",
+            url=url, tool=tool_name, source_kind=read_kind or "mcp_url",
         ))
 
     stored = sum(1 for r in records if r.get("state") == sf.STATE_STORED)
@@ -351,10 +359,13 @@ def _skip(url: str, item: Dict[str, Any]) -> bool:
     never reached the user. The rule is now a deny-list: source documents a
     search step pulled in, and nothing else.
     """
-    from CoScientist.reporting.collect import _is_source_material
+    from CoScientist.reporting.collect import _is_page_chrome, _is_source_material
 
     try:
-        return _is_source_material(item, url)
+        # Page furniture is refused before the request, not after: an icon is
+        # never a result of a run, and downloading eighteen of them off one
+        # article page spends this session's file quota on a publisher's logo.
+        return _is_page_chrome(url) or _is_source_material(item, url)
     except Exception:  # noqa: BLE001
         return False
 

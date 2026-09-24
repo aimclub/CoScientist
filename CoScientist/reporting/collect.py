@@ -48,11 +48,76 @@ _SOURCE_EXTS = (".doc", ".docx")
 # Key markers of bulk source material. The papers server uploads every PDF it
 # finds under one prefix; those are inputs to the run, not results of it.
 _SOURCE_KEY_MARKERS = ("papers_search_results",)
-# Never a deliverable, however it was captured. The marker above catches the
-# papers server's own upload prefix; this catches the same PDF once the session
-# has mirrored a copy of its own, which is content-addressed and has no prefix
-# left to match on.
-_SOURCE_KINDS = frozenset({"paper"})
+#: Material that came off a page the run READ. A figure in someone else's
+#: article is not an illustration of this study, and putting it in the report's
+#: Figures says it is — a journal's own plate, uncredited, in a document the
+#: operator hands to someone else. `paper` is the same judgement about the
+#: article itself: the marker above catches the papers server's own upload
+#: prefix, and this catches the copy the session mirrored, which is
+#: content-addressed and has no prefix left to match on.
+SOURCE_ASSET_KIND = "source_asset"
+_SOURCE_KINDS = frozenset({"paper", SOURCE_ASSET_KIND})
+
+#: The tools that READ the web rather than produce anything. This is the honest
+#: discriminator, and it is provenance rather than the shape of a URL: measured
+#: over the recorded sessions, 101 of 111 mirrored web artifacts came from these
+#: two and 10 came from the analysis tools that actually drew something
+#: (`predict_ld50`, `chemical_space_tsne`, `logp_confounder_analysis`, …). No
+#: rule over hosts or file names separates those sets — the publisher's CDN
+#: serves a 22 007-byte journal banner and a 22 477-byte figure alike.
+WEB_READING_TOOLS = ("tavily_search", "tavily_extract", "tavily_crawl")
+
+
+def is_reading_tool(name: Any) -> bool:
+    """Whether this tool brings back what someone else published."""
+    return str(name or "") in WEB_READING_TOOLS
+
+# Furniture, not content. Reading one article page brought home eighteen viewer
+# icons of 141–720 bytes, two journal logos, a publisher logo, an avatar
+# placeholder and an author's photograph — and every one of them would have been
+# offered to the reader as an illustration of the run.
+#
+# The cut is by PATH SEGMENT, not by size, because size does not separate them:
+# in that same session a journal banner was 22 007 bytes and a real figure from
+# the paper was 22 477. What does separate them is where a publisher keeps each
+# — chrome under `/img/`, `/static/`, `/banners/`, `/bundles/`, `/profiles/`;
+# content under the article's own path. Note `img` and `images` are different
+# segments, and that difference is doing real work here:
+#
+#   pub.mdpi-res.com/img/journals/separations-logo.png              → chrome
+#   pub.mdpi-res.com/separations/…/html/images/separations-…-g001.png → a figure
+_CHROME_SEGMENTS = frozenset({
+    "img", "static", "banners", "bundles", "profiles", "thumb", "thumbs",
+    "icons", "icon", "logos", "assets", "design", "sprites", "avatars",
+})
+#: A second net, for hosts that do not sort their furniture into directories.
+#: Matched as WORDS, not as substrings: `logo` inside `logotype-analysis.png`
+#: is a figure's own name, and dropping it would lose real content to a rule
+#: meant for a site's letterhead.
+_CHROME_NAMES = ("favicon", "sprite", "placeholder", "unknown-user",
+                 "logo", "avatar", "banner", "watermark")
+_CHROME_NAME_RE = re.compile(
+    r"(?:^|[^a-z0-9])(?:" + "|".join(_CHROME_NAMES) + r")(?:[^a-z0-9]|$)")
+
+
+def _is_page_chrome(url: str) -> bool:
+    """A site's own furniture, pulled in with the page that was being read."""
+    from urllib.parse import unquote, urlsplit
+
+    try:
+        path = unquote(urlsplit(str(url or "")).path).lower()
+    except Exception:  # noqa: BLE001
+        return False
+    if not path:
+        return False
+    segments = [s for s in path.split("/") if s]
+    if not segments:
+        return False
+    if _CHROME_SEGMENTS.intersection(segments[:-1]):
+        return True
+    return bool(_CHROME_NAME_RE.search(segments[-1]))
+
+
 _MAX_TABLE_ROWS = 15
 
 # Workspace scan guards: dependency/VCS/cache dirs that carry bundled example
@@ -530,7 +595,15 @@ def collect_artifacts(
                     unresolved += 1
                 continue
         seen_urls.add(url)
-        if _is_source_material(art, url):
+        # Both rules, here at the boundary that decides what the reader sees.
+        # Refusing chrome at MIRROR time is not enough and was in fact worse
+        # than nothing: no mirror record means no entry in `mirrored_by_url`,
+        # and that entry is exactly what stops this pass fetching the file
+        # again. So the icons were declined once, downloaded a second time from
+        # the publisher during collection, and printed as illustrations of the
+        # run — while the paper's real figures, which DID mirror, were excluded
+        # as source material. The change inverted its own intent.
+        if _is_page_chrome(url) or _is_source_material(art, url):
             continue
         label = art.get("tool") or art.get("name") or "artifact"
         if _looks_like(url, _IMAGE_EXTS):
