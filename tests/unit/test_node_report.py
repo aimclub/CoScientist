@@ -216,6 +216,45 @@ def test_work_on_the_node_makes_its_report_stale(store, monkeypatch):
     assert node_report.stamp(_facts(store), "ru") != before
 
 
+def test_correcting_the_nodes_own_text_makes_its_report_stale(store):
+    """The bigger half of staleness, and the half left out at first.
+
+    The stamp covered what HAPPENED to a node — its status, its history, who
+    took part — and not what the node SAYS. So an Evidence whose text was
+    corrected kept its stamp, and `write_report` answered with the old write-up,
+    about the old text, marked current.
+    """
+    _evidence(store)
+    before = node_report.stamp(_facts(store), "ru")
+    store.commit(source="ResearchAgent",
+                 nodes=[{"id": "E1", "attrs": {"content": "toxic above 50 mg/kg"}}])
+    assert node_report.stamp(_facts(store), "ru") != before
+
+
+def test_the_view_says_when_a_report_no_longer_describes_its_node(store,
+                                                                  monkeypatch):
+    """The panel cannot work this out for itself, and never could.
+
+    The only stamp the browser ever held was the one the write RETURNED — the
+    same value the node carries — so its staleness test compared a value with
+    itself and could come out true only if publishing had failed.
+    """
+    _answers(monkeypatch)
+    _evidence(store)
+    asyncio.run(node_report.write_report(
+        store.to_view(), "E1", scope=("u", "s"), store=store, lang="ru"))
+
+    drawn = {n["id"]: n for n in store.to_view()["nodes"]}
+    assert drawn["E1"]["report"], "written"
+    assert drawn["E1"]["report_stale"] is False, "and current the moment it was"
+
+    store.commit(source="ResearchAgent",
+                 nodes=[{"id": "E1", "attrs": {"content": "toxic above 50 mg/kg"}}])
+    drawn = {n["id"]: n for n in store.to_view()["nodes"]}
+    assert drawn["E1"]["report_stale"] is True
+    assert drawn["E1"]["report"], "and the old account is still shown, not hidden"
+
+
 def test_each_language_is_its_own_report(store):
     _evidence(store)
     assert node_report.stamp(_facts(store), "ru") != \
@@ -223,6 +262,55 @@ def test_each_language_is_its_own_report(store):
 
 
 # ── which nodes get one ─────────────────────────────────────────────────────
+def test_the_write_up_follows_the_sessions_language_not_the_browsers(
+        tmp_path, monkeypatch):
+    """A study is written in one language, and a node holds ONE write-up.
+
+    The panel sends its own interface language. Two readers set differently
+    would take turns overwriting each other's copy in that single slot — each
+    paying for a model call to do it — and every other reader would meet
+    whichever of them wrote last.
+    """
+    import uuid
+
+    monkeypatch.setenv("GRAPH_SNAPSHOT_DIR", str(tmp_path / "graphs"))
+    monkeypatch.setenv("WEB_STATE_DIR", str(tmp_path / "web"))
+    monkeypatch.setenv("ARTIFACTS__MIRROR_TO_S3", "False")
+    from starlette.testclient import TestClient
+
+    from CoScientist.graph.research.store import get_research_graph
+    from CoScientist.web.app import create_app
+
+    asked = []
+
+    async def _fake(view, node_id, *, scope, store, summaries=None, lang="ru",
+                    force=False):
+        asked.append(lang)
+        return {"report": "…", "artifact_id": "", "stamp": "", "cached": False}
+
+    monkeypatch.setattr(node_report, "write_report", _fake)
+
+    with TestClient(create_app()) as client:
+        user = client.post("/api/users", json={
+            "nickname": f"t-{uuid.uuid4().hex[:8]}"}).json()["user"]
+        session = client.post(f"/api/users/{user['id']}/sessions",
+                              json={"title": "run"}).json()["session"]
+        graph = get_research_graph(user_id=user["id"], session_id=session["id"])
+        graph.init_research(source="OrchestratorAgent", question="Toxic?")
+        graph.commit(source="ResearchAgent", nodes=[{
+            "type": "Evidence", "ref": "e",
+            "attrs": {"subtype": "literature", "content": "toxic above 5 mg/kg"}}])
+        client.app.state.runtime.report_languages[
+            (user["id"], session["id"])] = "en"
+
+        r = client.post(
+            f"/api/users/{user['id']}/sessions/{session['id']}/graph/node_report",
+            json={"node_id": "E1", "lang": "ru"})
+        assert r.status_code == 200, r.text
+
+    assert asked == ["en"], "the session's choice, not the browser's"
+
+
 def test_a_kind_that_has_no_report_is_refused(store):
     _evidence(store)
     view = store.to_view()

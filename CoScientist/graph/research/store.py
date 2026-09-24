@@ -1125,6 +1125,37 @@ def _node_report_body(attrs: Dict[str, Any],
         return ""
 
 
+def _mark_stale_reports(view: Dict[str, Any]) -> None:
+    """Say, per node, whether its write-up still describes the node.
+
+    The panel cannot work this out for itself and was never able to: the only
+    stamp it ever held was the one the write returned, which is the same value
+    the node carries, so its comparison was of a value with itself and could
+    never come out true. A node that had moved went on presenting an account of
+    what it used to be, with nothing saying so.
+
+    Computed here, where the current facts are, and only for nodes that actually
+    hold a write-up — a handful per study, against a 1.5-second poll.
+    """
+    reported = [n for n in (view.get("nodes") or [])
+                if n.get("report") and n.get("report_stamp")]
+    if not reported:
+        return
+    try:
+        from CoScientist.reporting import node_report
+    except Exception:  # noqa: BLE001 — a missing verdict is not a failed render
+        return
+    for node in reported:
+        lang = node.get("report_lang") or "ru"
+        try:
+            facts = node_report.build_facts(view, node["id"], lang=lang)
+            node["report_stale"] = bool(
+                facts is not None
+                and node_report.stamp(facts, lang) != node["report_stamp"])
+        except Exception:  # noqa: BLE001
+            node["report_stale"] = False
+
+
 def _contributors_view(attrs: Dict[str, Any]) -> List[Dict[str, Any]]:
     """The participation record as the panel reads it.
 
@@ -1999,7 +2030,7 @@ class ResearchGraphStore:
         stamps = [d.get("updated_at") or d.get("created_at")
                   for d in raw_nodes.values()]
         stamps = [t for t in stamps if isinstance(t, (int, float))]
-        return {
+        view = {
             "run_id": research_id,
             "nodes": nodes,
             "edges": edges,
@@ -2015,6 +2046,8 @@ class ResearchGraphStore:
             # dictionary, so an English reader does not get a Russian banner.
             "gaps": _gaps(raw_nodes, raw_edges, root, rejected),
         }
+        _mark_stale_reports(view)
+        return view
 
     def _project_nodes(self, raw_nodes: Dict[str, Dict[str, Any]],
                        raw_edges: List[Dict[str, Any]],
@@ -2159,6 +2192,7 @@ class ResearchGraphStore:
                 # rides along on a 1.5-second poll.
                 "report": _node_report_body(attrs, self._scope),
                 "report_stamp": str(attrs.get("report_stamp") or ""),
+                "report_lang": str(attrs.get("report_lang") or ""),
                 # Who took part, and on what basis we say so. Observed first,
                 # planned last: a plan's assignee is an intention, and drawing
                 # it as an executor is the confusion this record exists to end.
