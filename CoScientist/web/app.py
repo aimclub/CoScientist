@@ -2114,11 +2114,18 @@ def create_app() -> FastAPI:
             raise HTTPException(
                 status_code=404,
                 detail=f"{node_id!r} is not a node a report is written for")
+        # A node's write-up is a document of the STUDY, and a study is written in
+        # one language. The panel sends its own interface language, and a node
+        # holds ONE write-up: two readers set differently would take turns
+        # overwriting each other's copy, each paying for a model call to do it,
+        # and every other reader would meet the loser's language. An explicit
+        # session choice therefore wins; absent one, the page's own is honoured.
+        lang = (runtime.report_languages.get((user_id, session_id), "")
+                or str(body.get("lang") or "") or "ru")
         try:
             written = await node_report.write_report(
                 view, node_id, scope=(user_id, session_id), store=store,
-                summaries=for_session((user_id, session_id)),
-                lang=str(body.get("lang") or "ru"),
+                summaries=for_session((user_id, session_id)), lang=lang,
                 force=bool(body.get("again")))
         except Exception as exc:  # noqa: BLE001 — the model is an outside service
             raise HTTPException(status_code=502,

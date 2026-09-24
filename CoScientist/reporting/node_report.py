@@ -267,6 +267,14 @@ def stamp(facts: Dict[str, Any], lang: str) -> str:
     """
     parts = [
         facts["id"], facts["status"], str(len(facts["history"])), lang,
+        # What the node SAYS, not only what happened to it. Left out at first,
+        # and that was the bigger half of the hole: an Evidence whose text was
+        # corrected kept the same stamp, so `write_report` returned the old
+        # write-up — about the old text — and called it current. The report
+        # attributes cannot leak in here: `_project_nodes` keeps them out of
+        # `input`, and a test holds that shut.
+        facts["label"],
+        ";".join(f"{k}={v}" for k, v in sorted(facts["fields"].items())),
         ";".join(sorted(f"{c.get('agent')}|{c.get('basis')}"
                         for c in facts["contributors"])),
         ";".join(sorted(str(a.get("href") or "") for a in facts["attachments"])),

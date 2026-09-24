@@ -2532,8 +2532,20 @@
         const html = markdown(n.report);
         // Stale is worth saying, never worth hiding the report over: what it
         // records still happened.
-        const stale = (st.stamp && n.report_stamp && st.stamp !== n.report_stamp)
+        //
+        // The verdict comes from the server (`report_stale`), which is the only
+        // side that can reach it. This compared `st.stamp` — the stamp the write
+        // RETURNED — against `n.report_stamp`, the stamp that same write stored
+        // on the node: one value against itself, true only if publishing had
+        // failed. A node that moved went on showing an account of what it used
+        // to be, silently.
+        const stale = n.report_stale
           ? `<span class="stale">${esc(t('graph.nodeReport.stale'))}</span>` : "";
+        // And with auto-writing on, a stale one is brought up to date — once:
+        // `nodeReports[id]` is set by the request itself, which is what stops a
+        // node that keeps moving buying a model call on every render.
+        if (n.report_stale && autoNodeReports() && isSettled(n))
+          queueNodeReport(n.id);
         return title + `<div class="sumbox">`
           + (html ? `<div class="mdoc">${html}</div>` : `<pre>${esc(n.report)}</pre>`)
           + `<div class="meta">${stale}${again}</div></div>`;
