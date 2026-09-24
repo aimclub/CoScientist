@@ -76,14 +76,17 @@ class McpArtifactCapturePlugin(BasePlugin):
         # afterwards.
         self._record_index(tool, tool_context, urls, artifacts, mirrored)
 
+        # The same filter as the durable index: this list is read by the report
+        # collector through its `*_artifacts` state sweep, so an icon left here
+        # reaches the reader by a second door. BEFORE the empty check, not after
+        # its `return` — where this stood until a reviewer's AST scan found it
+        # unreachable, and the state list went out unfiltered while the index
+        # beside it was clean.
+        from CoScientist.reporting.collect import _is_page_chrome
+
+        urls = [u for u in urls if not _is_page_chrome(u)]
         if not urls:
             return None
-            # The same filter as the durable index: this list is read by the
-            # report collector through its `*_artifacts` state sweep, so an icon
-            # left here reaches the reader by a second door.
-            from CoScientist.reporting.collect import _is_page_chrome
-
-            urls = [u for u in urls if not _is_page_chrome(u)]
         try:
             existing = list(tool_context.state.get(_STATE_KEY) or [])
             seen = {a.get("url") for a in existing if isinstance(a, dict)}
