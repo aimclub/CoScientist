@@ -1626,7 +1626,8 @@ class ResearchGraphStore:
                autolink_focus: Optional[str] = None,
                partial_edges: bool = False,
                enforce_permissions: bool = True,
-               allow_reserved: bool = False) -> CommitResult:
+               allow_reserved: bool = False,
+               exec_id: str = "") -> CommitResult:
         """Transactional write: validate EVERYTHING, then apply all-or-nothing.
 
         `autolink_focus` (a Hypothesis id): any Evidence created in this commit
@@ -1659,7 +1660,7 @@ class ResearchGraphStore:
                                          allow_reserved=allow_reserved)
             if result.ok:
                 self._rejected_commits = 0
-                self._note_authorship(source, result)
+                self._note_authorship(source, result, exec_id)
                 self._save()
             else:
                 # A refused commit writes NOTHING, and used to say so only to the
@@ -1671,7 +1672,8 @@ class ResearchGraphStore:
                                source, "; ".join(result.errors[:3]))
             return result
 
-    def _note_authorship(self, source: str, result: "CommitResult") -> None:
+    def _note_authorship(self, source: str, result: "CommitResult",
+                         exec_id: str = "") -> None:
         """Who wrote this commit, recorded from the commit itself.
 
         The two bases nothing else can supply: `commit` for a node created here,
@@ -1680,6 +1682,12 @@ class ResearchGraphStore:
 
         A node created with a per-node `source` (an operator-set frame field
         arrives as "human") is credited to that source, not to the caller.
+
+        `exec_id`, when the caller knows it, is the activation of the run that
+        made this commit — so the record points at ONE run of the agent rather
+        than at its name. An agent that worked on three nodes in a study is
+        three runs, and a reader following a row wants the one that produced
+        the node in front of them.
         """
         if source in _MACHINE_SOURCES:
             # A mirror is the pen, not the hand: `plan-mirror` writes every
@@ -1699,15 +1707,19 @@ class ResearchGraphStore:
                 if self._g.has_node(nid):
                     wrote = self._g.nodes[nid].get("source") or source
                 if wrote not in _MACHINE_SOURCES:
+                    # Only the caller's own activation. A per-node source such
+                    # as "human" was not that run, and saying it was would
+                    # point the reader at the wrong place in the log.
                     rows.append({"node_id": nid, "agent": wrote,
-                                 "basis": "commit"})
+                                 "basis": "commit",
+                                 "exec_id": exec_id if wrote == source else ""})
             for e in committed.get("status_updates") or []:
                 # `_auto_maintain` marks its own moves; the graph maintainer is
                 # not a participant.
                 if e.get("auto") or not e.get("id"):
                     continue
                 rows.append({"node_id": e["id"], "agent": source,
-                             "basis": "status"})
+                             "basis": "status", "exec_id": exec_id})
             if rows:
                 self.add_contributors(rows, source=source, save=False)
         except Exception:  # noqa: BLE001 — bookkeeping never fails a commit

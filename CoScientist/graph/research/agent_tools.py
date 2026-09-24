@@ -74,9 +74,14 @@ def _recent_tool_calls(tool_context: Any, agent: str,
     return out
 
 
-def _delegation_chain(tool_context: Any, agent: str,
-                      limit: int = 6) -> List[str]:
-    """The agents ABOVE this one, nearest first — read, not inferred.
+def _activations(tool_context: Any, agent: str,
+                 limit: int = 6) -> List[Dict[str, str]]:
+    """This agent's current activation and the ones above it, nearest first.
+
+    Each entry is ``{agent, exec_id}``. The id is what makes a participation row
+    point at a RUN rather than at a name: an agent that worked on three nodes in
+    one study is three activations, and a reader following the record wants the
+    one that produced this node, not the agent's whole history.
 
     `plugin._mint` gives every activation the id `agent:{Name}@{turn}[#n]`, and
     the before_tool hook draws a `delegated_to` edge from the caller's
@@ -102,17 +107,28 @@ def _delegation_chain(tool_context: Any, agent: str,
         by_id = {n["id"]: n for n in raw.get("nodes") or [] if n.get("id")}
         parent = {e["dst"]: e["src"] for e in raw.get("edges") or []
                   if e.get("type") == "delegated_to" and e.get("dst") and e.get("src")}
-        chain, seen = [], {here}
+        chain = [{"agent": agent, "exec_id": here}]
+        seen = {here}
         node = parent.get(here)
-        while node and node not in seen and len(chain) < limit:
+        while node and node not in seen and len(chain) <= limit:
             seen.add(node)
             name = (by_id.get(node) or {}).get("executor_agent")
             if name and name != agent:
-                chain.append(name)
+                chain.append({"agent": name, "exec_id": node})
             node = parent.get(node)
         return chain
     except Exception:  # noqa: BLE001
         return []
+
+
+def _own_activation(tool_context: Any, agent: str) -> str:
+    """The id of the run this agent is making right now, or "".
+
+    Read once per commit, so the authorship rows the store writes point at a
+    run rather than at a name.
+    """
+    chain = _activations(tool_context, agent, limit=0)
+    return chain[0]["exec_id"] if chain else ""
 
 
 def _note_participation(research_graph: Any, result: Any, agent: str,
@@ -137,8 +153,14 @@ def _note_participation(research_graph: Any, result: Any, agent: str,
                 if e.get("id") and not e.get("auto")]
         if not ids:
             return
-        rows = [{"node_id": nid, "agent": name, "basis": "delegation"}
-                for name in _delegation_chain(tool_context, agent)
+        # The first entry is this agent's own activation; the rest delegated to
+        # it. Each row carries the id of the RUN, so a reader can open the log
+        # at the activation that produced this node instead of at whatever that
+        # agent happened to do last.
+        chain = _activations(tool_context, agent)
+        rows = [{"node_id": nid, "agent": link["agent"],
+                 "basis": "delegation", "exec_id": link["exec_id"]}
+                for link in chain[1:]
                 for nid in ids]
         research_graph.add_contributors(rows, source=agent)
     except Exception:  # noqa: BLE001 — bookkeeping never breaks a write
@@ -481,6 +503,7 @@ class ResearchGraphToolset(BaseToolset):
                 source=agent, nodes=_enrich_evidence(nodes, agent, tool_context),
                 edges=edges,
                 status_updates=status_updates, autolink_focus=focus,
+                exec_id=_own_activation(tool_context, agent),
             )
         except Exception as exc:  # noqa: BLE001 — a bad payload must not end the run
             logger.exception("research_commit failed")

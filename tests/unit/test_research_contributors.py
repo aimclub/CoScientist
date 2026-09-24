@@ -116,6 +116,22 @@ def test_moving_a_node_is_recorded_too(store, monkeypatch):
         ("HypothesesAgent", "commit"), ("OrchestratorAgent", "status")}
 
 
+def test_a_row_points_at_the_run_not_only_at_the_name(store):
+    """An agent that worked on three nodes in one study is three runs.
+
+    Without the run's id a row says only "ResearchAgent took part", and a reader
+    following it lands on whatever that agent happened to do last — which for a
+    long study is almost never the run that produced the node in front of them.
+    """
+    nid = _seeded(store)
+    store.commit(source="ResearchAgent", exec_id="agent:ResearchAgent@turn-7",
+                 nodes=[{"type": "Evidence", "ref": "e",
+                         "attrs": {"subtype": "literature", "content": "a finding"}}])
+    rows = _rows(store, "E1")
+    assert [(r["agent"], r["basis"], r.get("exec_id")) for r in rows] == [
+        ("ResearchAgent", "commit", "agent:ResearchAgent@turn-7")]
+
+
 def test_the_same_participation_is_recorded_once(store):
     """A resolver may run again on the next commit; that is not a second act."""
     nid = _seeded(store)
