@@ -79,6 +79,42 @@
         </div>`;
     }
 
+    // The character count above only guesses at height; what is actually cut
+    // off depends on the width, the markup and the font. A fold that would
+    // hide a line or two costs the reader a click to save them nothing, so
+    // once a fold is on the page its real height is measured, and a block
+    // that overshoots the clip by less than half of it is simply shown whole.
+    // Re-measured on resize, since a narrower feed can push it back over.
+    const FOLD_SLACK = 1.5;
+
+    function settleFold(wrap) {
+      const body = wrap.querySelector(':scope > .fold-body');
+      if (!body) return;
+      wrap.classList.remove('fold-fits');
+      const clip = parseFloat(getComputedStyle(body).maxHeight);
+      if (!clip) return; // open, so max-height is `none` — measure is moot
+      wrap.classList.toggle('fold-fits', body.scrollHeight <= clip * FOLD_SLACK);
+    }
+
+    const foldResize = new ResizeObserver(entries => {
+      for (const entry of entries) settleFold(entry.target.parentElement);
+    });
+
+    function watchFolds(root) {
+      const folds = root.matches && root.matches('.fold') ? [root] : [];
+      if (root.querySelectorAll) folds.push(...root.querySelectorAll('.fold'));
+      for (const wrap of folds) {
+        const body = wrap.querySelector(':scope > .fold-body');
+        if (body) foldResize.observe(body);
+        settleFold(wrap);
+      }
+    }
+
+    new MutationObserver(records => {
+      for (const record of records) record.addedNodes.forEach(watchFolds);
+    }).observe(document.documentElement, { childList: true, subtree: true });
+    if (document.fonts) document.fonts.ready.then(() => watchFolds(document));
+
     // A card that has been answered has nothing left to act on, so it tidies
     // itself away instead of staying open for the rest of the conversation.
     function collapseFold(wrap) {

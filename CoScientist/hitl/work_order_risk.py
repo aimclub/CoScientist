@@ -75,38 +75,6 @@ TOOL_TIERS: dict[str, Tier] = {
     "get_download_link": Tier.READ,
     "install_package": Tier.SIDE_EFFECT,
     "get_upload_link": Tier.SIDE_EFFECT,
-    # microfluidics: economics server — price lists and name resolution, read only
-    "search_reagents_by_name": Tier.READ,
-    "get_price": Tier.READ,
-    "search_by_structure": Tier.READ,
-    "resolve_chemicals": Tier.READ,
-    "estimate_synthesis_cost": Tier.READ,
-    "rank_routes_by_cost": Tier.READ,
-    # A2A messages can start/resume the external system's physical equipment.
-    "optimization_start": Tier.SIDE_EFFECT,
-    "optimization_get_status": Tier.READ,
-    "optimization_provide_input": Tier.SIDE_EFFECT,
-    "optimization_approve": Tier.SIDE_EFFECT,
-    # The rig campaign block that runs before optimization — the same risk.
-    "campaign_start": Tier.SIDE_EFFECT,
-    "campaign_get_status": Tier.READ,
-    "campaign_provide_input": Tier.SIDE_EFFECT,
-    "campaign_approve": Tier.SIDE_EFFECT,
-    # Legacy CFD tools remain registered for other profiles, not microfluidics.
-    "cfd_list_reactors": Tier.READ,
-    "cfd_get_experiment_result": Tier.READ,
-    "cfd_list_artifacts": Tier.READ,
-    "cfd_run_reactor_experiment": Tier.COMPUTE,
-    "cfd_cancel_run": Tier.COMPUTE,
-    # microfluidics: retrosynthesis service — the tree search takes shared compute.
-    "molecular_design": Tier.COMPUTE,
-    "retrosynthesis_routes": Tier.COMPUTE,
-    "predict_reaction_products": Tier.READ,
-    "classify_reactions": Tier.READ,
-    # microfluidics: the chip simulation and the rig. The rig is a stub today,
-    # but it stands for physical hardware: its commands are reviewed as such.
-    "cfd_mcp_stub": Tier.COMPUTE,
-    "rig_mcp_stub": Tier.SIDE_EFFECT,
 }
 
 # Side effect a tool has by its very nature, whatever its arguments.
@@ -145,6 +113,12 @@ def exempt_tools(internal_tools: Iterable[str] = ()) -> frozenset:
     """Tools a Work Order neither blocks nor shows: the protocol plus the
     system's ``internal_tools``."""
     return EXEMPT_TOOLS | frozenset(internal_tools)
+
+
+def register_tool_tiers(tiers: dict[str, Tier]) -> None:
+    """Add the tiers of a profile's own tools (unlisted tools are COMPUTE)."""
+    TOOL_TIERS.update(tiers)
+
 
 def tool_tier(tool_name: str) -> Tier:
     return TOOL_TIERS.get(tool_name, Tier.COMPUTE)

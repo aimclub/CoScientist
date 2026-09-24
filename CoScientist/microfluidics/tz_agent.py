@@ -20,7 +20,7 @@
     agent (``fill_agent_fields``, «заполнено агентом») and the ТЗ comes back
     for another round with those fields highlighted — until the operator
     submits a form with nothing left empty;
-  * every change is pushed to the panel live (``tz_live.py``): the agent runs
+  * every change is pushed to the panel live (``CoScientist/hitl/tz_panel.py``): the agent runs
     in a nested AgentTool session the web session cannot see;
   * once the ТЗ is accepted (approved by the human, or produced directly in
     headless mode) the agent PUBLISHES the document: saves it to
@@ -84,7 +84,7 @@ from CoScientist.microfluidics.tz_builder import (
     unfinished_fill_groups,
     unfinished_groups,
 )
-from CoScientist.microfluidics.tz_live import publish_tz
+from CoScientist.hitl.tz_panel import publish_tz
 from CoScientist.microfluidics.tz_review import (
     agent_fill_message,
     apply_operator_values,
@@ -275,7 +275,7 @@ class TZSessionAgent(SessionAgent):
         """The worker filling ``group`` — same model, its own prompt and tool."""
         worker = self._workers.get(group.key)
         if worker is None:
-            from CoScientist.agents.prompts.templates import microfluidics_tz_worker
+            from CoScientist.microfluidics.prompts import microfluidics_tz_worker
 
             worker = LlmAgent(
                 name=f"{self.name}_{group.key}",
@@ -297,7 +297,7 @@ class TZSessionAgent(SessionAgent):
         key = f"{group.key}_fill"
         worker = self._workers.get(key)
         if worker is None:
-            from CoScientist.agents.prompts.templates import microfluidics_tz_fill_worker
+            from CoScientist.microfluidics.prompts import microfluidics_tz_fill_worker
 
             def instruction(context) -> str:
                 state = context.state

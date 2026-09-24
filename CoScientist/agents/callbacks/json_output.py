@@ -8,14 +8,17 @@ it, duplicated objects, or trailing text. Not every provider honours
 exactly the extracted JSON before ADK's strict validation sees it.
 
 Attach as ``after_model: [sanitize_json_output]`` on schema-constrained agents
-(see CoScientist/agents/microfluidics.yaml).
+(see CoScientist/microfluidics/microfluidics.yaml). Agent-specific repairs
+(schema, fallback, normalization) are registered with
+:func:`register_structured_answer`.
 """
 from __future__ import annotations
 
 import json
 import logging
 import re
-from typing import Any, Optional
+from dataclasses import dataclass
+from typing import Any, Callable, Mapping, Optional
 
 import yaml
 
@@ -138,147 +141,42 @@ def _maybe_apply_tool_rerank(callback_context: CallbackContext, payload: Any) ->
         len(items),
     )
 
-def _lift_route_selection_fields(payload: Any) -> Any:
-    """Recover two root fields commonly indented into the last decision.
+@dataclass(frozen=True)
+class StructuredAnswer:
+    """How one schema-constrained agent's answer is repaired.
 
-    Some models answer a JSON-schema request using YAML indentation.  In the
-    usual failure shape the final ``selected_route_id`` and
-    ``selection_reason`` wind up in the final member of ``decisions``.  YAML
-    can parse that response, but the route-selection schema cannot.  The two
-    fields are unambiguous root-only fields, so moving them back is lossless.
+    schema      pydantic model the payload is validated against (and dumped
+                through) when an ADK callback context is present
+    fallback    ``state -> payload``: a conservative schema-valid answer for
+                when the model's text cannot be parsed or fails the schema
+    normalize   ``payload -> payload``: fix-ups applied before validation
+    contextless the answer for unparseable text when no callback context is
+                given (older direct callers)
     """
-    if not isinstance(payload, dict) or not isinstance(payload.get("decisions"), list):
-        return payload
-    for field in ("selected_route_id", "selection_reason"):
-        if field in payload:
-            continue
-        for decision in reversed(payload["decisions"]):
-            if isinstance(decision, dict) and field in decision:
-                payload[field] = decision.pop(field)
-                break
-    return payload
+    schema: Optional[type] = None
+    fallback: Optional[Callable[[Mapping[str, Any]], Optional[dict]]] = None
+    normalize: Optional[Callable[[Any], Any]] = None
+    contextless: Optional[dict] = None
 
 
-def _normalize_route_selection(payload: Any) -> Any:
-    """Make a RouteSelection's duplicated choice fields internally coherent.
+# agent name -> StructuredAnswer. Profiles register their own agents (e.g.
+# CoScientist/microfluidics/json_answers.py); an agent with no entry gets the
+# generic extraction only.
+_STRUCTURED_ANSWERS: dict[str, StructuredAnswer] = {}
 
-    ``selected_route_id`` and ``recommendation`` describe the same decision,
-    but are generated independently by the model.  ADK validates the output
-    immediately after this callback, so an otherwise useful answer used to
-    abort the whole workflow before the human reviewer could see it.
 
-    A known selected id is authoritative.  In the inverse, unambiguous case
-    (one ``оставить`` and no id), derive the id from that decision.  If a model
-    gives an unknown id or several kept routes without an id, there is no
-    defensible automatic choice: publish a safe "none selected" proposal for
-    HITL rather than inventing a route or crashing Module A.
-    """
-    if not isinstance(payload, dict) or not isinstance(payload.get("decisions"), list):
-        return payload
-
-    decisions = payload["decisions"]
-    if not all(isinstance(item, dict) for item in decisions):
-        return payload
-
-    changed = False
-    for item in decisions:
-        route_id = item.get("route_id")
-        if isinstance(route_id, str):
-            normalized = route_id.strip()
-            if normalized != route_id:
-                item["route_id"] = normalized
-                changed = True
-
-    selected = payload.get("selected_route_id", "")
-    if not isinstance(selected, str):
-        return payload
-    normalized_selected = selected.strip()
-    if normalized_selected != selected:
-        payload["selected_route_id"] = normalized_selected
-        changed = True
-    selected = normalized_selected
-
-    ids = [item.get("route_id") for item in decisions]
-    kept = [item for item in decisions if item.get("recommendation") == "оставить"]
-    repair_note = ""
-    if selected and selected in ids:
-        for item in decisions:
-            recommendation = "оставить" if item.get("route_id") == selected else "отсеять"
-            if item.get("recommendation") != recommendation:
-                item["recommendation"] = recommendation
-                changed = True
-        if changed:
-            repair_note = "Рекомендации синхронизированы с selected_route_id."
-    elif not selected and len(kept) == 1:
-        payload["selected_route_id"] = kept[0]["route_id"]
-        changed = True
-        repair_note = "selected_route_id восстановлен из единственной рекомендации «оставить»."
-    elif selected or len(kept) > 1:
-        # Do not silently pick the first candidate: this is a scientific and
-        # operational decision reserved for the reviewer.
-        payload["selected_route_id"] = ""
-        for item in decisions:
-            if item.get("recommendation") == "оставить":
-                item["recommendation"] = "отсеять"
-        changed = True
-        repair_note = (
-            "Неоднозначный выбор модели сброшен: оператору нужно выбрать "
-            "маршрут вручную."
-        )
-
-    if changed:
-        if repair_note:
-            previous_reason = str(payload.get("selection_reason") or "").strip()
-            payload["selection_reason"] = (
-                f"{repair_note} {previous_reason}".strip()
-            )
-        logger.warning("[RouteSelectionAgent] normalized inconsistent route selection")
-    return payload
+def register_structured_answer(agent_name: str, **spec: Any) -> None:
+    """Register how ``agent_name``'s JSON answer is normalized / validated."""
+    _STRUCTURED_ANSWERS[agent_name] = StructuredAnswer(**spec)
 
 
 def _fallback_payload(agent_name: str, callback_context: Any) -> Optional[dict[str, Any]]:
     """Build a conservative schema-valid result when the model fails."""
+    spec = _STRUCTURED_ANSWERS.get(agent_name)
+    if spec is None or spec.fallback is None:
+        return None
     state = getattr(callback_context, "state", {}) or {}
-    if agent_name in {"LiteratureSynthesisAgent", "EvidenceVerifierAgent"}:
-        from CoScientist.microfluidics.models import LiteratureAnalysis
-        if agent_name == "EvidenceVerifierAgent":
-            candidate = state.get("literature_analysis_draft") or state.get("literature_analysis")
-            try:
-                return LiteratureAnalysis.model_validate(candidate or {}).model_dump()
-            except Exception:  # noqa: BLE001
-                pass
-        return {
-            "target_molecule": {}, "source_records": [], "analogues": [],
-            "synthesis_routes": [], "facts": [],
-            "gaps": [f"{agent_name}: ответ модели не удалось разобрать."],
-        }
-    if agent_name == "RouteSelectionAgent":
-        from CoScientist.microfluidics.models import RouteSelection
-        decisions = []
-        analysis = state.get("literature_analysis") or {}
-        routes = analysis.get("synthesis_routes") if isinstance(analysis, dict) else []
-        for route in routes or []:
-            if not isinstance(route, dict):
-                continue
-            product = route.get("product") or ""
-            if isinstance(product, dict):
-                product = product.get("name") or product.get("smiles") or ""
-            decisions.append({
-                "route_id": str(route.get("route_id") or "").strip(),
-                "product": str(product), "recommendation": "отсеять",
-                "reason": "Автоматическая рекомендация не сформирована; требуется решение оператора.",
-            })
-        try:
-            return RouteSelection(decisions=decisions).model_dump()
-        except Exception:  # noqa: BLE001
-            return {"decisions": [], "selected_route_id": "", "selection_reason":
-                    "Ответ модели не разобран; требуется ручная проверка."}
-    if agent_name == "TZQueryGenAgent":
-        return {"queries": []}
-    if agent_name == "MolDesignAgent":
-        return {"fixed_target": False, "candidates": [],
-                "gaps": ["Ответ агента дизайна не удалось разобрать."]}
-    return None
+    return spec.fallback(state)
 
 
 def _extract_structured_payload(
@@ -298,33 +196,17 @@ def _extract_structured_payload(
         if fallback is not None:
             logger.warning("[%s] non-JSON response; using safe fallback", agent_name)
             return fallback
-    if payload is None and agent_name == "LiteratureSynthesisAgent":
-        # Backward-compatible helper behavior for callers that do not provide
-        # an ADK callback context; real runs use the LiteratureAnalysis branch
-        # above and never emit a selection-shaped payload.
-        return {"selected_ids": [], "reason": "Ответ метаагента нельзя было разобрать.",
-                "warnings": ["Ответ метаагента нельзя было разобрать."]}
+    spec = _STRUCTURED_ANSWERS.get(agent_name)
     if payload is None:
-        return None
-    if agent_name == "RouteSelectionAgent":
-        payload = _lift_route_selection_fields(payload)
-        payload = _normalize_route_selection(payload)
-    if callback_context is not None and hasattr(callback_context, "state") and agent_name in {
-        "LiteratureSynthesisAgent", "EvidenceVerifierAgent", "RouteSelectionAgent",
-        "TZQueryGenAgent", "MolDesignAgent",
-    }:
+        # Callers that give no ADK callback context get the agent's plain default.
+        return dict(spec.contextless) if spec and spec.contextless is not None else None
+    if spec is None:
+        return payload
+    if spec.normalize is not None:
+        payload = spec.normalize(payload)
+    if spec.schema is not None and callback_context is not None and hasattr(callback_context, "state"):
         try:
-            from CoScientist.microfluidics.models import (
-                DesignCandidates, LiteratureAnalysis, LiteratureQueries, RouteSelection,
-            )
-            schema = {
-                "RouteSelectionAgent": RouteSelection,
-                "LiteratureSynthesisAgent": LiteratureAnalysis,
-                "EvidenceVerifierAgent": LiteratureAnalysis,
-                "TZQueryGenAgent": LiteratureQueries,
-                "MolDesignAgent": DesignCandidates,
-            }[agent_name]
-            payload = schema.model_validate(payload).model_dump()
+            payload = spec.schema.model_validate(payload).model_dump()
         except Exception:  # noqa: BLE001
             fallback = _fallback_payload(agent_name, callback_context)
             if fallback is not None:

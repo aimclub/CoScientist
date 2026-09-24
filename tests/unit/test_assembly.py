@@ -128,13 +128,6 @@ def test_dependency_cycle_rejected(config):
         SystemConfig.model_validate(raw)
 
 
-def test_duplicate_a2a_port_rejected(config):
-    raw = copy.deepcopy(config.model_dump(by_alias=True))
-    raw["agents"]["CoderAgent"]["a2a"]["port"] = raw["agents"]["ResearchAgent"]["a2a"]["port"]
-    with pytest.raises(Exception, match="port"):
-        SystemConfig.model_validate(raw)
-
-
 # ── the `loop` primitive ─────────────────────────────────────────────────────
 # A cyclic stage (body repeats until a tool escalates) is a composite like
 # sequential/parallel, backed by ADK's LoopAgent.

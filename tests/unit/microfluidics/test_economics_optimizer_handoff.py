@@ -512,7 +512,7 @@ def test_session_keeps_polling_a_running_task():
 
 
 def test_prompt_tells_the_model_the_tool_owns_the_ranking():
-    from CoScientist.agents.prompts.templates import microfluidics_optimizer
+    from CoScientist.microfluidics.prompts import microfluidics_optimizer
 
     prompt = microfluidics_optimizer(SimpleNamespace(render_tools=lambda: "", render_hitl=lambda: ""))
     assert "economics_ranking_required" in prompt

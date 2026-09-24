@@ -13,7 +13,7 @@ Requires the real LLM (.env) and network (paper_analysis / papers_search MCP
 reachable — VPN); HITL is disabled for the run.
 
 Run from the repo root:
-    python scripts/run_microfluidics_literature_batch.py
+    python scripts/microfluidics/run_microfluidics_literature_batch.py
 """
 import asyncio
 import contextlib
@@ -27,7 +27,7 @@ from pathlib import Path
 # Running this file directly (not via `-m`) sets sys.path[0] to scripts/, not
 # the repo root — add the root explicitly so `import CoScientist` works
 # regardless of invocation method or current working directory.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 os.environ.setdefault("HITL__ENABLED", "false")
 # The internal paper_analysis corpus in this environment doesn't cover the

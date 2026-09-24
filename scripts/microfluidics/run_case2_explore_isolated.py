@@ -10,7 +10,7 @@ context carries over between tasks), restricted to explore_scientific_database
 only (paper_analysis + task_tracker), per the user's instruction.
 
 Run from the repo root:
-    python scripts/run_case2_explore_isolated.py
+    python scripts/microfluidics/run_case2_explore_isolated.py
 """
 import asyncio
 import json
@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from run_microfluidics_literature_batch import APP, USER, _drain  # noqa: E402
 from CoScientist.assembly import build_system  # noqa: E402
@@ -29,7 +29,7 @@ from google.adk.sessions import InMemorySessionService  # noqa: E402
 
 SEED_PATH = Path("evaluation/microfluidics/runs/custom_case_02_explore_only.json")
 OUT_PATH = Path("evaluation/microfluidics/runs/custom_case_02_explore_isolated_v2.json")
-YAML_PATH = Path("CoScientist/agents/microfluidics.yaml")
+YAML_PATH = Path("CoScientist/microfluidics/microfluidics.yaml")
 FULL_TOOLS_LINE = "    tools: [websearch, paper_analysis, papers_search, task_tracker]"
 RESTRICTED_TOOLS_LINE = "    tools: [paper_analysis, task_tracker]"
 

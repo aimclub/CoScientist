@@ -235,3 +235,7 @@ antioxidant_output_stub/
 
 # microfluidics: final reports saved by ReportAgent (research_record.record_conclusion)
 reports/
+
+session_snapshots/
+hub_artifacts/
+tests/integration/parse_results/

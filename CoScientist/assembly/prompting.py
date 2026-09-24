@@ -181,7 +181,7 @@ what you expected and what you found. So:
   - `rejected` — the human stopped the order: call no more tools, submit your
     work report with `not_met` and say what was done and what was not."""
 
-_WORK_ORDER_HINTS = (
+_WORK_ORDER_HINTS: list[tuple[tuple[str, ...], str]] = [
     (("websearch",),
      "For searches, the query formulations and the source selection criteria "
      "(recency, study types, venues) are assumptions — list them as atomic items "
@@ -204,37 +204,16 @@ _WORK_ORDER_HINTS = (
      "assumptions "
      '(e.g. "Активность соединений выражена в нМ", '
      '"Основной источник активностей — ChEMBL v33 или новее").'),
-    (("economics_mcp",),
-     "For the economics server, each of these is a separate atomic assumption: "
-     "the target amount and unit of product (g, kg, mol or mmol), the step "
-     "yields you use (from the source, or default_yield), strategy (cheapest or "
-     "single_supplier), similarity (soft or hard), preferred_currency, and how "
-     "solvents and catalysts are counted (amount / overrides, or left out). In "
-     "`inputs` list the route ids and every substance you send, by English name "
-     'or SMILES (e.g. "Целевое количество продукта — 100 g").'),
-    (("retrosynthesis",),
-     "For the retrosynthesis service, the molecule forms you send (neutral "
-     "parent instead of a salt), the search mode and how many routes you keep "
-     "per candidate are assumptions; in `inputs` list every SMILES you send "
-     '(e.g. "Для соли ищем маршрут к нейтральной кислоте").'),
-    (("cfd_mcp",),
-     "For the CFD service, each value you pass is an atomic assumption with its "
-     "unit: the reactor id, inlet speed (m/s), concentrations (mol/m3), rate "
-     "constant (m3/(mol*s)), temperature (K), turnovers. In `inputs` name the "
-     "request_id of each run; a wait between polls is not a step "
-     '(e.g. "Константа скорости 1e-3 м3/(моль·с) — из литературы").'),
-    (("cfd_mcp_stub",),
-     "For the CFD simulation, the channel geometry, flow rates and fluid "
-     "properties you pass are assumptions — list them with units "
-     '(e.g. "Суммарный расход 0.5 мл/мин").'),
-    (("rig_mcp_stub", "microfluidics"),
-     "Commands to the microfluidic rig change a physical setup: put each "
-     "command (or one experiment point) in its own step, with the setpoints in "
-     "`inputs` and the telemetry you expect in `expected_outcome`."),
     (("research_graph",),
      "If you will write the research graph, name in the steps which nodes you will "
      "create or change."),
-)
+]
+
+
+def register_work_order_hint(tool_keys: tuple[str, ...], hint: str) -> None:
+    """Add a Work Order hint shown to agents that have any of ``tool_keys``
+    (profiles register the hints for their own tools)."""
+    _WORK_ORDER_HINTS.append((tuple(tool_keys), hint))
 
 
 # The orchestrator alone holds `research_triggers`, so only its copy of the

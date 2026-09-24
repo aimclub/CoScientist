@@ -841,4 +841,60 @@
         || RAIL_DEFAULT, false));
     }
 
-    // ==================================================================
+    // =========================================================================
+    // Layout — plan gate (start mode "planner")
+    // =========================================================================
+    // While the planner is still drafting, the right panel stays closed and
+    // Usage & Cost is left out. Once the plan is approved the panel opens with
+    // the plan on top and usage below it. planApproved is per session: set from
+    // the snapshot's history, then live by the approval (or by any non-planner
+    // agent starting, which covers runs with HITL off). Starts unapproved so a
+    // page load in planner mode does not flash the panel before the snapshot.
+    let planApproved = false;
+
+    function planGateActive() {
+      return appSettings.general.startMode === 'planner' && !planApproved;
+    }
+
+    function refreshPlanGate() {
+      const wasGated = document.body.classList.contains('plan-gated');
+      const gated = planGateActive();
+      document.body.classList.toggle('plan-gated', gated);
+      document.body.classList.toggle('plan-first', appSettings.general.startMode === 'planner');
+      if (gated) showSideRail(true);
+      else if (wasGated) applySideRailState();
+    }
+
+    // The session was (re)loaded: approved if its history already shows the
+    // planner's plan accepted or the work carried on past the planner.
+    function resetPlanGate(messages) {
+      const plannerRequests = new Set();
+      planApproved = (messages || []).some(message => {
+        if (message.type === 'hitl_request' && message.agent_name === 'PlannerAgent') {
+          plannerRequests.add(message.request_id);
+        } else if (message.type === 'hitl_response' || message.type === 'hitl_timeout') {
+          return plannerRequests.has(message.request_id)
+            && (message.type === 'hitl_timeout' ? !message.paused : message.action === 'approve');
+        } else if (message.type === 'agent_event' || message.type === 'agent_output') {
+          return isPostPlanAgent(message.author || message.agent);
+        }
+        return false;
+      });
+      refreshPlanGate();
+    }
+
+    function isPostPlanAgent(name) {
+      return !!name && name !== 'user' && !PLAN_AGENTS.includes(name);
+    }
+
+    // The plan was accepted in this session: open the panel for the user.
+    function releasePlanGate() {
+      if (planApproved) return;
+      planApproved = true;
+      const wasGated = document.body.classList.contains('plan-gated');
+      refreshPlanGate();
+      if (wasGated) {
+        localStorage.setItem(SIDE_RAIL_KEY, 'on');
+        applySideRailState();
+      }
+    }

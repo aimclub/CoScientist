@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run the real molecular-design tool and its tests without booting the app.
 
-Usage: .venv/bin/python scripts/test_molecular_design_offline.py
+Usage: .venv/bin/python scripts/microfluidics/test_molecular_design_offline.py
 Only parent package initializers are bypassed in this standalone process;
 RDKit, domain models, fixed-target logic and the async tool are real imports.
 No LLM, A2A, CFD or equipment is called. Outputs go to /tmp by default.
@@ -44,7 +44,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, default=Path("/tmp/molecular_design_phenolic_results.json"))
     args = parser.parse_args()
-    root = Path(__file__).resolve().parents[1]
+    root = Path(__file__).resolve().parents[2]
     sys.path.insert(0, str(root))
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     os.environ["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
@@ -63,7 +63,7 @@ def main() -> int:
     import rdkit
     import pytest
 
-    case = json.loads((root / "tests/fixtures/molecular_design/phenolic_antioxidant.json").read_text())
+    case = json.loads((root / "tests/unit/microfluidics/fixtures/molecular_design/phenolic_antioxidant.json").read_text())
 
     async def calculate():
         results = {"rdkit_version": rdkit.__version__, "case": case, "runs": {}}
@@ -79,7 +79,7 @@ def main() -> int:
         return results
 
     results = run_async(calculate())
-    exit_code = pytest.main([str(root / "tests/unit/test_molecular_design_phenolic.py"), "-q"])
+    exit_code = pytest.main([str(root / "tests/unit/microfluidics/test_molecular_design_phenolic.py"), "-q"])
     results["pytest_exit_code"] = int(exit_code)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(results, ensure_ascii=False, indent=2) + "\n")

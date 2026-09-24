@@ -37,10 +37,15 @@
 # Run a separate CoScientist instance with this profile:
 #
 #   COSCIENTIST_CONFIG=microfluidics python CoScientist/web/server.py
-#   # or: python scripts/run_microfluidics_web.py
+#   # or: python scripts/microfluidics/run_microfluidics_web.py
 #
 # Validate with:  COSCIENTIST_CONFIG=microfluidics python -m CoScientist.assembly
 # ─────────────────────────────────────────────────────────────────────────────
+
+# The profile's own prompts / tools / callbacks / classes live in this package;
+# the core loads them from here (CoScientist/microfluidics/plugin.py).
+plugins:
+  - CoScientist.microfluidics.plugin
 
 defaults:
   model: main

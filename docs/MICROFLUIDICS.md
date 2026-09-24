@@ -243,7 +243,7 @@ Order и проверку шагов при включённом HITL. Нача�
 повторной отправки, хранения промежуточных и последних результатов и графа:
 
 ```bash
-.venv/bin/python -m pytest tests/unit/test_microfluidics_optimization_a2a.py -q
+.venv/bin/python -m pytest tests/unit/microfluidics/test_microfluidics_optimization_a2a.py -q
 ```
 
 Интеграционный тест по умолчанию пропущен. Подготовьте JSON с реальными
@@ -267,10 +267,10 @@ RUN_OPTIMIZATION_A2A_TEST=1 OPTIMIZATION_A2A_INPUT=/path/input.json \
 ```bash
 # веб-интерфейс на отдельном порту (по умолчанию 8010) — можно поднимать
 # параллельно с основным CoScientist на 8000
-python scripts/run_microfluidics_web.py
+python scripts/microfluidics/run_microfluidics_web.py
 
 # без человека (headless-режим для тестирования — HITL полностью выключен)
-python scripts/run_microfluidics_web.py --no-hitl
+python scripts/microfluidics/run_microfluidics_web.py --no-hitl
 
 # или вручную:
 COSCIENTIST_CONFIG=microfluidics COSCIENTIST_WEB_PORT=8010 python CoScientist/web/server.py
@@ -333,7 +333,7 @@ COSCIENTIST_CONFIG=microfluidics python -m CoScientist.assembly
 задание»** (`TZSpecAgent`). Панель показывает ТЗ по разделам **вживую**, пока
 агент их заполняет: TZSpecAgent работает внутри AgentTool (своя дочерняя
 сессия), поэтому после каждого изменения он сам отправляет снимок ТЗ
-(`microfluidics/tz_live.py` → ws-событие `tz_snapshot`; последний снимок
+(`hitl/tz_panel.py` → ws-событие `tz_snapshot`; последний снимок
 отдаёт и `GET /api/users/{u}/sessions/{s}/tz`, и `session_snapshot` при
 переподключении).
 
@@ -389,7 +389,7 @@ COSCIENTIST_CONFIG=microfluidics python -m CoScientist.assembly
 
 ```bash
 HITL__ENABLED=false            # env или .env — циклы ревью проходят насквозь
-python scripts/run_microfluidics_web.py --no-hitl   # то же самое для веба
+python scripts/microfluidics/run_microfluidics_web.py --no-hitl   # то же самое для веба
 ```
 
 Точечно HITL отключается на конкретном агенте через `hitl: false` в
@@ -417,11 +417,18 @@ pytest tests/integration/test_microfluidics_hitl.py -q -s
 
 | Файл | Назначение |
 | --- | --- |
-| `CoScientist/agents/microfluidics.yaml` | декларация системы (профиль) |
+| `CoScientist/microfluidics/microfluidics.yaml` | декларация системы (профиль) |
 | `CoScientist/microfluidics/models.py` | `StructuredTZ`, `LiteratureQuery` (порт VibePAV) |
 | `CoScientist/microfluidics/tz_builder.py` | тулы `fill_tz_section`, `fill_agent_fields`, `edit_tz_section`; части ТЗ для параллельной сборки (`SECTION_GROUPS`) |
 | `CoScientist/microfluidics/tz_review.py` | форма ТЗ для оператора, применение его ответов |
-| `CoScientist/microfluidics/tz_live.py` | живые снимки ТЗ для веб-панели |
-| `CoScientist/web/static/js/modals/tz.js` | панель «Техническое задание» в веб-UI |
-| `CoScientist/agents/prompts/templates.py` | промпты `microfluidics_*` |
-| `scripts/run_microfluidics_web.py` | запуск отдельного веб-инстанса |
+| `CoScientist/microfluidics/plugin.py` | точка входа профиля (`plugins:` в YAML): регистрирует всё ниже в общем ядре |
+| `CoScientist/microfluidics/prompts.py` | промпты `microfluidics_*` |
+| `CoScientist/microfluidics/bindings.py` | инструменты, колбэки, классы агентов и схемы профиля |
+| `CoScientist/microfluidics/toolsets.py`, `settings.py` | MCP-тулсеты сервисов (экономика, CFD, установка) и их адреса |
+| `CoScientist/microfluidics/json_answers.py` | схемы и безопасные ответы для `sanitize_json_output` |
+| `CoScientist/microfluidics/work_order.py` | уровни риска инструментов и подсказки Work Order |
+| `CoScientist/hitl/tz_panel.py` (ядро) | живые снимки ТЗ для веб-панели; профиль регистрирует чтение ТЗ из state |
+| `CoScientist/web/static/js/modals/tz.js` (ядро) | панель «Техническое задание» в веб-UI |
+| `tests/unit/microfluidics/` | тесты профиля и записанные контракты сервисов (`fixtures/`) |
+| `scripts/microfluidics/` | скрипты запуска и прогонов кейсов |
+| `scripts/microfluidics/run_microfluidics_web.py` | запуск отдельного веб-инстанса |

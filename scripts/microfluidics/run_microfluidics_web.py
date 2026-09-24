@@ -1,14 +1,14 @@
 """Launch a SEPARATE CoScientist instance for the microfluidics case.
 
-Builds the system from CoScientist/agents/microfluidics.yaml (ТЗ agent +
+Builds the system from CoScientist/microfluidics/microfluidics.yaml (ТЗ agent +
 planner + orchestrator + literature analysis only) and serves the usual web
 UI on its own port, so it can run side by side with the default CoScientist.
 
 Usage (from the repo root):
-    python scripts/run_microfluidics_web.py            # HITL on: human reviews
+    python scripts/microfluidics/run_microfluidics_web.py            # HITL on: human reviews
                                                        # the ТЗ table, the
                                                        # queries and the plan
-    python scripts/run_microfluidics_web.py --no-hitl  # headless (testing
+    python scripts/microfluidics/run_microfluidics_web.py --no-hitl  # headless (testing
                                                        # without a human)
 
 Environment overrides:
@@ -26,16 +26,13 @@ os.environ.setdefault("COSCIENTIST_WEB_PORT", "8010")
 if "--no-hitl" in sys.argv:
     os.environ["HITL__ENABLED"] = "false"
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import uvicorn  # noqa: E402
+# The same launcher as `python -m CoScientist web`: its server guarantees that
+# Ctrl+C ends the process (forced after a grace period, or on a second Ctrl+C)
+# even when a tool thread is blocked — a plain uvicorn.run() waits for it.
+from CoScientist.cli import run_web  # noqa: E402
 
 
 if __name__ == "__main__":
-    uvicorn.run(
-        "CoScientist.web.server:app",
-        host="127.0.0.1",
-        port=int(os.environ["COSCIENTIST_WEB_PORT"]),
-        reload=False,
-        log_level="info",
-    )
+    run_web(host="127.0.0.1", port=int(os.environ["COSCIENTIST_WEB_PORT"]))

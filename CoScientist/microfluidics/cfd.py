@@ -10,7 +10,7 @@ module read the simulated numbers instead of the agent's retelling:
 
 A later answer for the same request id replaces the earlier one (``pending`` is
 followed by the terminal status). The shape is the one recorded from the service
-in ``tests/fixtures/cfd_mcp/``; ``results`` is kept as the service returned it
+in ``tests/unit/microfluidics/fixtures/cfd_mcp/``; ``results`` is kept as the service returned it
 (pressure drop, residence time, Damköhler number, conversion, outlet
 concentrations, mixing index). Errors (``isError``, a failed transport) and the
 listing tools change nothing.

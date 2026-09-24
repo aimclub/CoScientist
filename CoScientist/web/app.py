@@ -659,7 +659,7 @@ class WebRuntime:
         # Latest usage/cost snapshot per session — cumulative, so one entry is
         # the whole history and a reconnecting tab needs nothing older.
         self.metrics: dict[SessionKey, dict[str, Any]] = {}
-        # Latest ТЗ snapshot per session (microfluidics ТЗ panel) — each one is
+        # Latest ТЗ snapshot per session (ТЗ panel) — each one is
         # the whole ТЗ, so a reconnecting tab needs only the last.
         self.tz_snapshots: dict[SessionKey, dict[str, Any]] = {}
         # Dataset archive attached to a session from the chat's "+" menu. Kept
@@ -1341,13 +1341,14 @@ def _wire_checkpoints(runtime: WebRuntime) -> None:
 
 
 def _wire_tz_snapshots(runtime: WebRuntime) -> None:
-    """Stream the microfluidics ТЗ into the ТЗ panel while it is being built.
+    """Stream a ТЗ into the ТЗ panel while it is being built.
 
-    TZSpecAgent runs inside an AgentTool, in a child session this web session
-    cannot read until the whole module returns — so the agent pushes a snapshot
-    after every change and the sink below routes it to the session's tabs.
+    The ТЗ agent (microfluidics profile) runs inside an AgentTool, in a child
+    session this web session cannot read until the whole module returns — so
+    the agent pushes a snapshot after every change and the sink below routes it
+    to the session's tabs.
     """
-    from CoScientist.microfluidics.tz_live import set_tz_sink
+    from CoScientist.hitl.tz_panel import set_tz_sink
 
     async def deliver(key: SessionKey, payload: dict[str, Any]) -> None:
         if key not in runtime.sockets and key not in runtime.active_runs:
@@ -2796,7 +2797,7 @@ def create_app() -> FastAPI:
         return JSONResponse({"status": "success", "tasks": _json_safe(tasks)})
 
 
-    # --- ТЗ panel (microfluidics profile) ---
+    # --- ТЗ panel (filled by a profile that builds a ТЗ, e.g. microfluidics) ---
     @app.get("/api/users/{user_id}/sessions/{session_id}/tz")
     async def get_tz(user_id: str, session_id: str):
         """The session's ТЗ as the ТЗ panel renders it: the latest live snapshot,
@@ -2809,18 +2810,17 @@ def create_app() -> FastAPI:
         if key in runtime.tz_snapshots:
             return JSONResponse(runtime.tz_snapshots[key])
 
-        from CoScientist.microfluidics.tz_builder import TZ_STATE_KEY, load_tz
-        from CoScientist.microfluidics.tz_review import tz_view
+        from CoScientist.hitl.tz_panel import stored_tz_view
 
         adk_session = await runtime.session_service.get_session(
             app_name=APP_NAME, user_id=user_id, session_id=session_id,
         )
-        tz = load_tz(adk_session.state.get(TZ_STATE_KEY)) if adk_session else None
-        if tz is None:
+        view = stored_tz_view(adk_session.state) if adk_session else None
+        if view is None:
             return JSONResponse({"type": "tz_snapshot", "phase": "empty", "sections": []})
-        return JSONResponse(_json_safe({"type": "tz_snapshot", "phase": "stored", **tz_view(tz)}))
+        return JSONResponse(_json_safe({"type": "tz_snapshot", "phase": "stored", **view}))
 
-    # --- ТЗ document (microfluidics profile) ---
+    # --- ТЗ document ---
     @app.get("/api/tz-document")
     async def get_tz_document(name: str = ""):
         """Serve a ТЗ document from tz_documents/ (the latest one by default).

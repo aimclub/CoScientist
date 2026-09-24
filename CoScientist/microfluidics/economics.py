@@ -17,7 +17,7 @@ retelling:
     the full answer of the last ranking, breakdown included.
 
 The answer shapes are the ones recorded from the live server in
-``tests/fixtures/economics_mcp/``. A transport failure (``{"error": ...}``) or an
+``tests/unit/microfluidics/fixtures/economics_mcp/``. A transport failure (``{"error": ...}``) or an
 ``isError`` answer changes nothing: there are no numbers to keep.
 """
 from __future__ import annotations

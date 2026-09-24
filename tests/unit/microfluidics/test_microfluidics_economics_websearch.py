@@ -4,7 +4,7 @@ from pathlib import Path
 import yaml
 
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_economics_agent_has_websearch_fallback() -> None:
@@ -42,7 +42,7 @@ def test_optimizer_has_websearch_and_human_recovery() -> None:
 def test_optimizer_prompt_documents_economics_ranking_contract() -> None:
     from types import SimpleNamespace
 
-    from CoScientist.agents.prompts.templates import microfluidics_optimizer
+    from CoScientist.microfluidics.prompts import microfluidics_optimizer
 
     prompt = microfluidics_optimizer(
         SimpleNamespace(render_tools=lambda: "", render_hitl=lambda: "")

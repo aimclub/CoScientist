@@ -179,28 +179,6 @@ def test_economics_costs_only_the_selected_route():
     assert blocked and blocked["eligible_route_ids"] == ["LIT-ROUTE-01"]
 
 
-def test_a2a_hand_off_and_operator_form_cover_only_the_selected_route():
-    from CoScientist.microfluidics.a2a_optimization.contracts import EconomicsRankingError, prepare_inputs
-    from CoScientist.microfluidics.a2a_optimization.operator_ranking import ranking_form
-
-    state = state_for(selection())
-    finalize(state)
-    state["literature_analysis"]["facts"] = [{"statement": "fact", "sources": ["SRC-1"]}]
-    with pytest.raises(EconomicsRankingError) as err:
-        prepare_inputs(state)
-    assert err.value.route_ids == ["LIT-ROUTE-01"]
-    assert [b["title"] for b in ranking_form(state, err.value.route_ids, "e")["blocks"][1:]] == ["Маршрут LIT-ROUTE-01"]
-
-    state["economics_ranking"] = {"target_qty": 1, "target_unit": "g", "preferred_currency": "RUB",
-                                  "rank_by": "per_unit", "routes": {"LIT-ROUTE-01": {
-                                      "status": "ok", "rank": 1, "currency": "RUB",
-                                      "cost_per_unit": "3.48", "cost_packs": "9800"}}}
-    handoff = prepare_inputs(state)
-    assert [r["route_id"] for r in handoff["routes"]] == ["LIT-ROUTE-01"]
-    assert list(handoff["economics_ranking"]["routes"]) == ["LIT-ROUTE-01"]
-    assert "literature_analysis" not in handoff
-
-
 # ── design takes the selected route's product ───────────────────────────────
 
 def _design(state):

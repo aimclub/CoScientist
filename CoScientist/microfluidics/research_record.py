@@ -62,9 +62,12 @@ def _tools() -> List[Dict[str, Any]]:
     if retro:
         tools.append({"name": "Retrosynthesis Proxy API (ASKCOS)", "tool_type": "retrosynthesis",
                       "status": "available", "location": "HOSTS_PORTS__RETROSYNTHESIS_SERVICES_*"})
-    if mcp is not None and mcp.microfluidic_economic_url:
+    from CoScientist.microfluidics.settings import get_microfluidics_settings
+
+    economic_url = get_microfluidics_settings().microfluidic_economic_url
+    if economic_url:
         tools.append({"name": "chemquote (реагенты, прайс-листы РФ)", "tool_type": "economics",
-                      "status": "available", "location": mcp.microfluidic_economic_url})
+                      "status": "available", "location": economic_url})
     tools.append({"name": "Модуль оптимизации / CFD / установка (A2A)", "tool_type": "experiment",
                   "status": "available", "location": "OPTIMIZATION_A2A_URL"})
     return tools

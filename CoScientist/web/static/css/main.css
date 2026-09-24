@@ -1149,6 +1149,18 @@
       content: none;
     }
 
+    /* Measured and found to overshoot the clip by too little to be worth a
+       click (settleFold in chat.js): shown whole, no fade, no button. */
+    .fold-fits>.fold-body {
+      max-height: none;
+      overflow: visible;
+    }
+
+    .fold-fits>.fold-body::after,
+    .fold-fits>.fold-btn {
+      display: none;
+    }
+
     .fold-btn {
       margin-top: 0.5rem;
       font-size: 14px;

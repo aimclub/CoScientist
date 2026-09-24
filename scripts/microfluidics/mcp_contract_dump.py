@@ -4,8 +4,8 @@ the real contract instead of a guess.
 
 Usage (reads the URLs and the key from .env; needs the network that reaches them):
 
-    python scripts/mcp_contract_dump.py economics
-    python scripts/mcp_contract_dump.py cfd
+    python scripts/microfluidics/mcp_contract_dump.py economics
+    python scripts/microfluidics/mcp_contract_dump.py cfd
 
 Writes ``tests/fixtures/<server>_mcp/``:
 
@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from dotenv import load_dotenv  # noqa: E402
@@ -156,7 +156,7 @@ async def dump(server: str, timeout: float) -> int:
             return 2
         headers["X-API-Key"] = key
 
-    out = ROOT / "tests" / "fixtures" / f"{server}_mcp"
+    out = ROOT / "tests" / "unit" / "microfluidics" / "fixtures" / f"{server}_mcp"
     out.mkdir(parents=True, exist_ok=True)
 
     async with streamablehttp_client(

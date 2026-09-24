@@ -36,12 +36,18 @@ A config may also start with ``extends: <name-or-path>``, inheriting another
 config and overriding only the agents and fields it names — so a variant of the
 system (a limited profile, a deployment with one agent off) is a short overlay
 rather than a copy that drifts from the original. See :func:`_merge_raw`.
+
+A profile that brings its own prompts, tools and callbacks (a case package
+such as ``CoScientist/microfluidics``) lists them under ``plugins:`` — modules
+imported when the config is loaded, which register those names in the
+assembly registry. The core never imports a case package itself.
 """
 from __future__ import annotations
 
 import logging
 import os
 from functools import lru_cache
+from importlib import import_module
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -52,12 +58,15 @@ from CoScientist.config import get_settings
 
 _log = logging.getLogger(__name__)
 
-CONFIG_DIR = Path(__file__).resolve().parent.parent / "agents"
+PACKAGE_DIR = Path(__file__).resolve().parent.parent
+CONFIG_DIR = PACKAGE_DIR / "agents"
 DEFAULT_CONFIG_PATH = CONFIG_DIR / "system.yaml"
 
 # Env var selecting an alternative system profile for the whole process.
-# Accepts a bare profile name ("microfluidics" -> CoScientist/agents/
-# microfluidics.yaml) or a filesystem path to a YAML file. Every entry point
+# Accepts a bare profile name or a filesystem path to a YAML file. A name is
+# looked up in CoScientist/agents/ first ("experiments" -> agents/
+# experiments.yaml), then as a case package that carries its own profile
+# ("microfluidics" -> CoScientist/microfluidics/microfluidics.yaml). Every entry point
 # that builds the system through get_config() (CLI, web server, A2A serving)
 # honours it, so one deployment can run a differently-shaped CoScientist
 # without touching the default system.yaml.
@@ -79,7 +88,18 @@ def resolve_config_path(ref: Optional[str] = None) -> Path:
     path = Path(ref)
     if path.suffix in (".yaml", ".yml"):
         return path
-    return CONFIG_DIR / f"{ref}.yaml"
+    local = CONFIG_DIR / f"{ref}.yaml"
+    packaged = PACKAGE_DIR / ref / f"{ref}.yaml"
+    if not local.is_file() and packaged.is_file():
+        return packaged
+    return local
+
+
+def profile_paths() -> List[Path]:
+    """Every named profile: the configs in agents/ and the case packages'."""
+    return sorted(CONFIG_DIR.glob("*.yaml")) + sorted(
+        p for p in PACKAGE_DIR.glob("*/*.yaml") if p.stem == p.parent.name
+    )
 
 
 def _is_setting_ref(value: Any) -> bool:
@@ -439,6 +459,9 @@ class SystemConfig(BaseModel):
     # task: a Work Order allows them without declaring, and the web card never
     # shows them — even when the agent lists them anyway.
     internal_tools: List[str] = Field(default_factory=list)
+    # Modules imported before the system is built; they register the profile's
+    # own prompts / tools / callbacks / classes (see the module docstring).
+    plugins: List[str] = Field(default_factory=list)
     agents: Dict[str, AgentConfig]
 
     @model_validator(mode="after")
@@ -692,9 +715,17 @@ def _load_raw(path: Path, _seen: frozenset = frozenset()) -> Dict[str, Any]:
     return _merge_raw(base, raw)
 
 
+def load_plugins(modules: List[str]) -> None:
+    """Import a profile's plugin modules (idempotent: Python caches modules)."""
+    for module in modules:
+        import_module(module)
+
+
 def load_config(path: Optional[Path] = None) -> SystemConfig:
     path = Path(path) if path else resolve_config_path()
-    return SystemConfig.model_validate(_load_raw(path))
+    config = SystemConfig.model_validate(_load_raw(path))
+    load_plugins(config.plugins)
+    return config
 
 
 @lru_cache(maxsize=1)
@@ -716,5 +747,7 @@ __all__ = [
     "SystemConfig",
     "get_config",
     "load_config",
+    "load_plugins",
+    "profile_paths",
     "resolve_config_path",
 ]

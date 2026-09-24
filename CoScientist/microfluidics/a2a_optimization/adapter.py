@@ -377,8 +377,8 @@ async def approve_task_plan(
             }, channel)
     record = {**record, "approved_plans": [*approvals, fingerprint], "approved_at_step": steps}
     # The literal token the remote agent executes on, as sent by the vendor's
-    # own test_reactor_experiment_a2a.py. Any prose — including the Russian
-    # sentence of A2A-TESTING.md §7 — is taken for a clarification, so the
+    # own A2A test script. Any prose — including the Russian
+    # sentence of its testing guide — is taken for a clarification, so the
     # remote rebuilds the plan and asks for approval again, forever.
     return await _continue(tool_context, record, "Approve", channel)
 

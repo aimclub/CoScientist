@@ -22,7 +22,7 @@ import re
 from collections import Counter, OrderedDict
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 REPORT = ROOT / "evaluation/microfluidics/report.md"
 JSONL = ROOT / "evaluation/microfluidics/literature_results.jsonl"
 SVOD = ROOT / "tz_documents/TZ_svod_20260710_141503.html"

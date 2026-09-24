@@ -59,6 +59,7 @@ from CoScientist.assembly.schema import (
     default_reasoning_override,
     get_config,
     load_config,
+    load_plugins,
 )
 
 _logger = logging.getLogger(__name__)
@@ -479,6 +480,7 @@ def build_system(
     """Assemble every agent declared in the config; return the full system."""
     if config is None:
         config = load_config(config_path) if config_path else get_config()
+    load_plugins(config.plugins)
 
     built: Dict[str, BaseAgent] = {}
     for name in config.build_order():

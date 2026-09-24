@@ -25,8 +25,10 @@ from pathlib import Path
 import pytest
 import yaml
 
-CONFIG_DIR = Path(__file__).resolve().parents[2] / "CoScientist" / "agents"
-PROFILES = sorted(CONFIG_DIR.glob("*.yaml"))
+from CoScientist.assembly.schema import profile_paths
+
+# The configs in CoScientist/agents/ and the case packages' own profiles.
+PROFILES = profile_paths()
 
 #: The aliases the assembler resolves through settings (assembly/assembler.py::
 #: _resolve_model). Anything else is a literal passed straight to litellm.

@@ -3,7 +3,7 @@ ResearchAgent) on a single ad-hoc customer request, NOT from the свод — fo
 one-off case check. Stops after Module A — no MolDesignAgent, no design stub.
 
 Run from the repo root:
-    python scripts/run_single_custom_case.py
+    python scripts/microfluidics/run_single_custom_case.py
 """
 import asyncio
 import json
@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from run_microfluidics_literature_batch import APP, USER, _drain  # noqa: E402
 from CoScientist.assembly import build_system  # noqa: E402

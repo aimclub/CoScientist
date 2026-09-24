@@ -7,12 +7,12 @@ from types import SimpleNamespace
 import pytest
 from rdkit import Chem
 
-from scripts.test_molecular_design_offline import run_async
+from scripts.microfluidics.test_molecular_design_offline import run_async
 
 from CoScientist.microfluidics.models import DesignCandidates
 from CoScientist.microfluidics.molecular_design import molecular_design
 
-CASE = Path(__file__).resolve().parents[1] / "fixtures/molecular_design/phenolic_antioxidant.json"
+CASE = Path(__file__).resolve().parent / "fixtures/molecular_design/phenolic_antioxidant.json"
 
 
 @pytest.fixture
