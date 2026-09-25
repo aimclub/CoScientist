@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import time
+import uuid
+from collections import OrderedDict, deque
 from typing import Any, Optional
 
 from google.adk.agents.base_agent import BaseAgent
@@ -19,42 +21,100 @@ def _truncate(value: Any, limit: int = _MAX_FIELD_CHARS) -> str:
     return text if len(text) <= limit else text[:limit] + f"… ({len(text)} chars total)"
 
 
-class FedotLiveBroadcaster:
-    def __init__(self) -> None:
-        self._subscribers: list[asyncio.Queue] = []
-        self._last_config: Optional[dict] = None
+SessionKey = tuple[str, str]
 
-    def subscribe(self) -> asyncio.Queue:
+_MAX_RUNS_PER_SESSION = 5
+_MAX_SESSIONS = 20
+_MAX_TAIL_EVENTS = 5000
+# Kept for good however long the run gets: without them a late viewer cannot
+# reset itself or draw the pipeline shape.
+_HEAD_TYPES = frozenset({"run_start", "config"})
+
+
+class FedotLiveRun:
+    """One ``fedot_tool`` run, published into its web session's channel.
+
+    Every event is stamped with the run id and a wall-clock ``ts`` (the viewer
+    times the run from these, so a replay shows the real durations) and kept, so
+    a page opened after the run started — or after it ended — can be replayed
+    the whole thing instead of showing an empty graph.
+    """
+
+    def __init__(self, bus: "FedotLiveBroadcaster", key: SessionKey, run_id: str) -> None:
+        self.key = key
+        self.run_id = run_id
+        self._bus = bus
+        self._head: list[dict] = []
+        self._tail: deque[dict] = deque(maxlen=_MAX_TAIL_EVENTS)
+
+    @property
+    def history(self) -> list[dict]:
+        return [*self._head, *self._tail]
+
+    def event(self, payload: dict) -> None:
+        item = {**payload, "run_id": self.run_id, "ts": time.time()}
+        (self._head if item.get("type") in _HEAD_TYPES else self._tail).append(item)
+        self._bus._deliver(self.key, item)
+
+    def publish_config(self, config: dict) -> None:
+        self.event({"type": "config", "config": config})
+
+
+class FedotLiveBroadcaster:
+    """Fan-out of ``fedot_tool`` runs to viewers, one channel per web session.
+
+    A run belongs to the session whose agent launched it (``session_key`` — the
+    same ``(user_id, session_id)`` the knowledge graph is scoped by), so a page
+    opened for one session never draws another session's FEDOT.MAS. A viewer that
+    names no session (a bare ``/fedot-demo/``) sees every session's runs, as
+    before.
+    """
+
+    def __init__(self) -> None:
+        self._runs: OrderedDict[SessionKey, deque[FedotLiveRun]] = OrderedDict()
+        self._subscribers: list[tuple[Optional[SessionKey], asyncio.Queue]] = []
+        self._last_key: Optional[SessionKey] = None
+
+    def begin_run(self, key: SessionKey) -> FedotLiveRun:
+        run = FedotLiveRun(self, key, uuid.uuid4().hex[:12])
+        self._runs.setdefault(key, deque(maxlen=_MAX_RUNS_PER_SESSION)).append(run)
+        self._runs.move_to_end(key)
+        while len(self._runs) > _MAX_SESSIONS:
+            self._runs.popitem(last=False)
+        self._last_key = key
+        return run
+
+    def latest_run(self, key: Optional[SessionKey] = None) -> Optional[FedotLiveRun]:
+        runs = self._runs.get(key if key is not None else self._last_key)
+        return runs[-1] if runs else None
+
+    def subscribe(self, key: Optional[SessionKey] = None) -> asyncio.Queue:
+        """A queue that replays the latest run of ``key`` (any session if None), then follows live."""
         q: asyncio.Queue = asyncio.Queue()
-        self._subscribers.append(q)
-        if self._last_config is not None:
-            q.put_nowait({"type": "config", "config": self._last_config})
+        run = self.latest_run(key)
+        if run is not None:
+            for item in run.history:
+                q.put_nowait(item)
+        self._subscribers.append((key, q))
         return q
 
     def unsubscribe(self, q: asyncio.Queue) -> None:
-        try:
-            self._subscribers.remove(q)
-        except ValueError:
-            pass
+        self._subscribers = [(k, sub) for k, sub in self._subscribers if sub is not q]
 
-    def publish_config(self, config: dict) -> None:
-        self._last_config = config
-        self._broadcast({"type": "config", "config": config})
+    def _deliver(self, key: SessionKey, item: dict) -> None:
+        self._last_key = key
+        for wanted, q in list(self._subscribers):
+            if wanted is None or wanted == key:
+                q.put_nowait(item)
 
-    def event(self, payload: dict) -> None:
-        self._broadcast(payload)
-
-    def _broadcast(self, payload: dict) -> None:
-        for q in list(self._subscribers):
-            q.put_nowait(payload)
 
 fedot_live = FedotLiveBroadcaster()
 
 
 class FedotLivePlugin(BasePlugin):
-    def __init__(self, broadcaster: FedotLiveBroadcaster, name: str = "fedot_live") -> None:
+    def __init__(self, run: FedotLiveRun, name: str = "fedot_live") -> None:
         super().__init__(name)
-        self._bus = broadcaster
+        self._bus = run
         self._start: dict[str, float] = {}
 
     def _is_workflow(self, name: str) -> bool:

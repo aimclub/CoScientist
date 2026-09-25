@@ -251,16 +251,27 @@ def _stub_fedot(monkeypatch):
         async def get_server(self, sid):
             return _Server(sid)
 
-    class _MAS:
+    class _Config:
+        def model_dump(self):
+            return {}
+
+    class _MAW:
         def __init__(self, mcp_servers=None, plugins=None):
             seen["servers"] = sorted(mcp_servers or {})
 
-        async def run(self, task, timeout=None):
+        async def generate_config(self, task):
+            return _Config()
+
+        async def build_and_run(self, config, task, timeout=None):
             seen["timeout"] = timeout
             return "done"
 
+        def _finalize_langfuse(self):
+            return None
+
     monkeypatch.setattr(ft, "PostgresClient", _PG)
-    monkeypatch.setattr(ft, "MAS", _MAS)
+    monkeypatch.setattr(ft, "MAW", _MAW)
+    monkeypatch.setattr(ft, "run_config_guardrails", lambda config: [])
     monkeypatch.setattr(ft, "HttpMCPServer", lambda **kw: kw)
 
     def call(state):

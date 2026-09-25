@@ -12,6 +12,7 @@ from fedotmas.control import run_config_guardrails
 from fedotmas.plugins import LangfusePlugin, LoggingPlugin, WebSearchLimitPlugin
 
 from CoScientist.tools.fedot_artifact_plugin import ArtifactCapturePlugin
+from CoScientist.graph.session_scope import session_key
 from CoScientist.tools.fedot_live import FedotLivePlugin, _truncate, fedot_live
 from CoScientist.logging.metrics import UsageMetricsPlugin
 from rag_tools import MCPServer
@@ -101,7 +102,12 @@ class FedotMASToolset(BaseToolset):
                 FEDOT_TIMEOUT_S = None
         result = None
         status, err = "success", None
-        fedot_live.event({"type": "run_start"})
+        # Published into the channel of the WEB session that launched this run
+        # (session_key resolves it through AgentTool's child session), so the
+        # /fedot-demo page opened for that session draws it and no other does.
+        scope = session_key(tool_context)
+        live = fedot_live.begin_run(scope)
+        live.event({"type": "run_start", "session": {"user_id": scope[0], "session_id": scope[1]}})
         try:
             mas = MAW(
                 mcp_servers=servers_payload,
@@ -112,21 +118,25 @@ class FedotMASToolset(BaseToolset):
                     LoggingPlugin(),
                     WebSearchLimitPlugin(max_calls_per_agent=4),
                     LangfusePlugin(trace_name="coscientist:fedot"),
-                    FedotLivePlugin(fedot_live),
+                    FedotLivePlugin(live),
                     cap,
                     UsageMetricsPlugin(),
                 ],
             )
             try:
                 config = await mas.generate_config(task_description)
+                # Published the instant it exists — the /fedot-demo bridge draws
+                # the pipeline shape before a single agent has run. BEFORE the
+                # guardrails on purpose: a config they reject (an unused agent,
+                # say) is exactly the one you want to look at, and run_end below
+                # carries the reason. Checked after, the page showed an empty
+                # canvas for a pipeline that had in fact been generated.
+                live.publish_config(config.model_dump())
                 guardrail_errors = run_config_guardrails(config)
                 if guardrail_errors:
                     raise ValueError(
                         f"Invalid pipeline config: {'; '.join(guardrail_errors)}"
                     )
-                # Published the instant it exists — the /fedot-demo bridge draws
-                # the pipeline shape before a single agent has run.
-                fedot_live.publish_config(config.model_dump())
                 result = await mas.build_and_run(
                     config, task_description, timeout=FEDOT_TIMEOUT_S
                 )
@@ -147,7 +157,7 @@ class FedotMASToolset(BaseToolset):
                 except Exception:  # noqa: BLE001 — best-effort, tracing must never break the run
                     state_raw = {}
                 state_out = {k: _truncate(v, 40000) for k, v in state_raw.items() if k != "user_query"}
-            fedot_live.event({"type": "run_end", "status": status, "error": err, "state": state_out})
+            live.event({"type": "run_end", "status": status, "error": err, "state": state_out})
 
         # Fallback (F010.A4): scan the final MAS state for presigned URLs the plugin may
         # have missed (only when a result actually came back).

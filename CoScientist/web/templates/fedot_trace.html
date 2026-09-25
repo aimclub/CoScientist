@@ -55,11 +55,31 @@
   <div id="content"><div class="empty">Loading…</div></div>
 </main>
 <script>
+// 44ms · 2.65s · 17.2s · 2m 04s · 1h 02m
+function fmtMs(ms) {
+  if (!isFinite(ms) || ms < 0) return '';
+  if (ms < 1000) return Math.round(ms) + 'ms';
+  const s = ms / 1000;
+  if (s < 10) return s.toFixed(2) + 's';
+  if (s < 59.95) return s.toFixed(1) + 's';
+  const t = Math.round(s), pad = n => String(n).padStart(2, '0');
+  const h = Math.floor(t / 3600), m = Math.floor(t % 3600 / 60);
+  return h ? h + 'h ' + pad(m) + 'm' : m + 'm ' + pad(t % 60) + 's';
+}
+
 function fmtDur(startIso, endIso) {
   if (!startIso || !endIso) return '';
-  const ms = new Date(endIso) - new Date(startIso);
-  if (!isFinite(ms) || ms < 0) return '';
-  return ms < 1000 ? ms + 'ms' : (ms / 1000).toFixed(2) + 's';
+  return fmtMs(new Date(endIso) - new Date(startIso));
+}
+
+// The API sends UTC ISO; show it in the viewer's own timezone and locale.
+function fmtTime(iso) {
+  const d = new Date(iso);
+  if (!iso || isNaN(d)) return iso || '';
+  return d.toLocaleString(undefined, {
+    day: 'numeric', month: 'short', year: 'numeric',
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
 }
 
 function typeClass(type) {
@@ -153,8 +173,8 @@ async function load() {
 
     const meta = '<div class="meta">'
       + '<span><b>' + escapeHtml(data.name || 'trace') + '</b></span>'
-      + '<span>' + escapeHtml(data.timestamp || '') + '</span>'
-      + (data.latency != null ? '<span>latency: ' + data.latency + 's</span>' : '')
+      + '<span>' + escapeHtml(fmtTime(data.timestamp)) + '</span>'
+      + (data.latency != null ? '<span>latency: ' + fmtMs(data.latency * 1000) + '</span>' : '')
       + (data.total_cost != null ? '<span>cost: $' + Number(data.total_cost).toFixed(4) + '</span>' : '')
       + '</div>';
 

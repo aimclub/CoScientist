@@ -65,7 +65,10 @@
       } else if (name === "FedotTrace") {
         window.open('/fedot-trace', '_blank');
       } else if (name === "FedotDemo") {
-        window.open('/fedot-demo/', '_blank');
+        // Bound to this web session: the page draws only the FEDOT.MAS runs it launched.
+        window.open(activeUser && activeSession
+          ? `/fedot-demo/?user_id=${encodeURIComponent(activeUser.id)}&session_id=${encodeURIComponent(activeSession.id)}`
+          : '/fedot-demo/', '_blank');
       } else if (name === "CoderSandbox") {
         const link = document.getElementById('coder-sandbox-link');
         const url = (link && link.href) ? link.href : (activeSandboxWatchUrl || getBaseSandboxUrl());

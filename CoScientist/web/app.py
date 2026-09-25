@@ -85,7 +85,7 @@ APP_NAME = "coscientist_app"
 # time. Feeds REAL fedot_tool runs (CoScientist/tools/fedot_live.py) into
 # this exact page.
 _FEDOT_DEMO_LIVE_BRIDGE = r"""
-/* ───────── CoScientist live bridge (injected by the reverse proxy) ─────────
+/* ───────── CoScientist live bridge ─────────
  * Mirrors native liveRun()'s bookkeeping (timer, progress bar, per-agent
  * input/output details, final-answer extraction) so a real fedot_tool run
  * looks the same here as a run started from this page's own "Запустить".
@@ -93,7 +93,31 @@ _FEDOT_DEMO_LIVE_BRIDGE = r"""
 function _coscientistLiveConnect() {
   let liveT0 = null, liveTimer = null, liveTotal = 1, liveFinished = 0, liveAgentIO = {};
 
-  const es = new EventSource("/api/fedot-live-stream");
+  // Bound to the CoScientist web session the page was opened for (the activity
+  // rail adds ?user_id=&session_id=). Without them it follows every session.
+  const q = new URLSearchParams(location.search);
+  const scope = new URLSearchParams();
+  if (q.get("user_id") && q.get("session_id")) {
+    scope.set("user_id", q.get("user_id"));
+    scope.set("session_id", q.get("session_id"));
+  }
+  // Three "FEDOT.MAS" tabs are indistinguishable, so say whose runs this one draws.
+  // A page opened without a session (a typed address, a tab with an old rail) is
+  // NOT guessed onto one: it follows every session of this server, and says so.
+  if (scope.toString()) {
+    document.title = "FEDOT.MAS — сессия";
+    fetch(`/api/users/${encodeURIComponent(scope.get("user_id"))}/sessions/${encodeURIComponent(scope.get("session_id"))}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { const t = d && d.session && d.session.title; if (t) document.title = "FEDOT.MAS — " + t; })
+      .catch(() => {});
+  } else {
+    document.title = "FEDOT.MAS — все сессии";
+  }
+  const es = new EventSource("/api/fedot-live-stream" + (scope.toString() ? "?" + scope : ""));
+  // On (re)connect the server replays the latest run from its start, so a page
+  // opened mid-run or after it ended still shows the whole thing. Event times
+  // come from the server's `ts`, not from this page's clock at replay time.
+  const evMs = (ev) => (ev.ts ? ev.ts * 1000 : Date.now());
   es.onmessage = (e) => {
     let ev;
     try { ev = JSON.parse(e.data); } catch { return; }
@@ -110,10 +134,10 @@ function _coscientistLiveConnect() {
     if (ev.type === "run_start") {
       resetRun();
       liveAgentIO = {};
-      liveT0 = performance.now();
+      liveT0 = evMs(ev);
       clearInterval(liveTimer);
       liveTimer = setInterval(() => {
-        $("m-time").textContent = fmtTime((performance.now() - liveT0) / 1000);
+        $("m-time").textContent = fmtTime((Date.now() - liveT0) / 1000);
       }, 200);
       setPlayIcon(true);
       liveMessage("запуск", "runner", "Система запущена на реальных моделях. Первые ответы агентов появятся здесь.");
@@ -174,6 +198,7 @@ function _coscientistLiveConnect() {
     if (ev.type === "run_end") {
       clearInterval(liveTimer);
       liveTimer = null;
+      if (liveT0 != null) $("m-time").textContent = fmtTime((evMs(ev) - liveT0) / 1000);
       setPlayIcon(false);
       $("p-fill").style.width = "100%";
 
@@ -1697,15 +1722,23 @@ def create_app() -> FastAPI:
             from langfuse.api.client import LangfuseAPI
 
             client = LangfuseAPI(base_url=base_url, username=public_key, password=secret_key)
-            traces = client.trace.list(name="coscientist:fedot", limit=1, order_by="timestamp.desc")
-            if not traces.data:
+            # Match on the root SPAN's name, not the trace's: when fedot_tool runs
+            # inside another traced call, its "coscientist:fedot" span gets an
+            # ambient parent, so Langfuse derives no trace-level name (name == "")
+            # and trace.list(name=...) silently kept returning the last old run.
+            found = client.observations.get_many(name="coscientist:fedot", limit=5)
+            if not found.data:
                 return {"status": "empty"}
-            full = client.trace.get(traces.data[0].id)
+            latest = max(found.data, key=lambda o: o.start_time)
+            full = client.trace.get(latest.trace_id)
+            known_ids = {o.id for o in (full.observations or [])}
             observations = sorted(
                 (
                     {
                         "id": o.id,
-                        "parent_id": o.parent_observation_id,
+                        # An orphan (parent lives outside this export) is a root,
+                        # otherwise the page's tree never renders it.
+                        "parent_id": o.parent_observation_id if o.parent_observation_id in known_ids else None,
                         "type": o.type,
                         "name": o.name,
                         "start_time": o.start_time.isoformat() if o.start_time else None,
@@ -1741,10 +1774,26 @@ def create_app() -> FastAPI:
     # vendored gui-demo page mounted above via _FEDOT_DEMO_LIVE_BRIDGE. See
     # CoScientist/tools/fedot_live.py. No standalone page of its own. ---
     @app.get("/api/fedot-live-stream")
-    async def fedot_live_stream():
+    async def fedot_live_stream(user_id: str = "", session_id: str = ""):
+        """SSE of FEDOT.MAS runs launched by ONE web session, latest run replayed.
+
+        Bound to the session the page was opened for (``?user_id=&session_id=``,
+        put there by the activity rail). With neither given it follows every
+        session — a bare ``/fedot-demo/``. Naming only one of the two is an error.
+        """
         from CoScientist.tools.fedot_live import fedot_live
 
-        queue = fedot_live.subscribe()
+        if bool(user_id) != bool(session_id):
+            raise HTTPException(status_code=400, detail="user_id and session_id go together")
+        scope = None
+        if user_id:
+            try:
+                runtime.registry.require_session(user_id, session_id)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+            scope = (user_id, session_id)
+
+        queue = fedot_live.subscribe(scope)
 
         async def events():
             try:
@@ -1890,12 +1939,28 @@ def create_app() -> FastAPI:
             "task_description",
             "Ping test: say hello, do nothing else.",
         )
+        from types import SimpleNamespace
+
+        from CoScientist.graph.session_scope import (
+            GRAPH_SCOPE_SESSION_KEY,
+            GRAPH_SCOPE_USER_KEY,
+        )
         from CoScientist.tools.fedotmas_tools import FedotMASToolset
+
+        # Optional `user_id` + `session_id`: draw the run in that session's
+        # /fedot-demo page instead of the shared "local/default" channel.
+        state = {}
+        if data.get("user_id") and data.get("session_id"):
+            state = {
+                GRAPH_SCOPE_USER_KEY: data["user_id"],
+                GRAPH_SCOPE_SESSION_KEY: data["session_id"],
+            }
+        tool_context = SimpleNamespace(state=state)
 
         async def _run():
             toolset = FedotMASToolset()
             try:
-                await toolset.fedot_tool(task_description=task_description, tool_context=None)
+                await toolset.fedot_tool(task_description=task_description, tool_context=tool_context)
             except Exception as exc:  # noqa: BLE001 — this is a debug trigger, never crash the server
                 logging.getLogger("CoScientist.web").warning("fedot-debug-run failed: %r", exc)
 

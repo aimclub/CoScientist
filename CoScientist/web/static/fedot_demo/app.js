@@ -2141,7 +2141,7 @@ function init() {
 
 document.addEventListener("DOMContentLoaded", init);
 
-/* ───────── CoScientist live bridge (injected by the reverse proxy) ─────────
+/* ───────── CoScientist live bridge ─────────
  * Mirrors native liveRun()'s bookkeeping (timer, progress bar, per-agent
  * input/output details, final-answer extraction) so a real fedot_tool run
  * looks the same here as a run started from this page's own "Запустить".
@@ -2149,7 +2149,31 @@ document.addEventListener("DOMContentLoaded", init);
 function _coscientistLiveConnect() {
   let liveT0 = null, liveTimer = null, liveTotal = 1, liveFinished = 0, liveAgentIO = {};
 
-  const es = new EventSource("/api/fedot-live-stream");
+  // Bound to the CoScientist web session the page was opened for (the activity
+  // rail adds ?user_id=&session_id=). Without them it follows every session.
+  const q = new URLSearchParams(location.search);
+  const scope = new URLSearchParams();
+  if (q.get("user_id") && q.get("session_id")) {
+    scope.set("user_id", q.get("user_id"));
+    scope.set("session_id", q.get("session_id"));
+  }
+  // Three "FEDOT.MAS" tabs are indistinguishable, so say whose runs this one draws.
+  // A page opened without a session (a typed address, a tab with an old rail) is
+  // NOT guessed onto one: it follows every session of this server, and says so.
+  if (scope.toString()) {
+    document.title = "FEDOT.MAS — сессия";
+    fetch(`/api/users/${encodeURIComponent(scope.get("user_id"))}/sessions/${encodeURIComponent(scope.get("session_id"))}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { const t = d && d.session && d.session.title; if (t) document.title = "FEDOT.MAS — " + t; })
+      .catch(() => {});
+  } else {
+    document.title = "FEDOT.MAS — все сессии";
+  }
+  const es = new EventSource("/api/fedot-live-stream" + (scope.toString() ? "?" + scope : ""));
+  // On (re)connect the server replays the latest run from its start, so a page
+  // opened mid-run or after it ended still shows the whole thing. Event times
+  // come from the server's `ts`, not from this page's clock at replay time.
+  const evMs = (ev) => (ev.ts ? ev.ts * 1000 : Date.now());
   es.onmessage = (e) => {
     let ev;
     try { ev = JSON.parse(e.data); } catch { return; }
@@ -2166,10 +2190,10 @@ function _coscientistLiveConnect() {
     if (ev.type === "run_start") {
       resetRun();
       liveAgentIO = {};
-      liveT0 = performance.now();
+      liveT0 = evMs(ev);
       clearInterval(liveTimer);
       liveTimer = setInterval(() => {
-        $("m-time").textContent = fmtTime((performance.now() - liveT0) / 1000);
+        $("m-time").textContent = fmtTime((Date.now() - liveT0) / 1000);
       }, 200);
       setPlayIcon(true);
       liveMessage("запуск", "runner", "Система запущена на реальных моделях. Первые ответы агентов появятся здесь.");
@@ -2230,6 +2254,7 @@ function _coscientistLiveConnect() {
     if (ev.type === "run_end") {
       clearInterval(liveTimer);
       liveTimer = null;
+      if (liveT0 != null) $("m-time").textContent = fmtTime((evMs(ev) - liveT0) / 1000);
       setPlayIcon(false);
       $("p-fill").style.width = "100%";
 
