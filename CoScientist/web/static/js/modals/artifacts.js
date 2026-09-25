@@ -28,7 +28,7 @@
       // the list, and firing both at once read the session's binding — which,
       // for a session whose sandbox was started elsewhere, is nothing at all.
       await loadWorkspaces();
-      loadArtifacts(SANDBOX_ROOT);
+      await loadArtifacts(SANDBOX_ROOT);
     }
 
     // What the workspace list says about a task, in the words a reader uses.
@@ -97,6 +97,8 @@
 
     function closeArtifactsModal() {
       document.getElementById('artifacts-modal').classList.add('hidden');
+      // Reopening should land on the listing, not on whatever was last read.
+      if (artifactsViewing) closeArtifactFile();
     }
 
     function artifactsSession() {
@@ -163,6 +165,14 @@
     // The listing last drawn, so a redraw after a fetch shows the same folder.
     let lastArtifactEntries = [];
 
+    // What each kind of file is worth showing as. The server decides the kind
+    // from the name and serves the bytes with a matching content type, so this
+    // only chooses the element to put them in.
+    const KIND_ICONS = {
+      dir: 'folder', text: 'description', image: 'image',
+      pdf: 'picture_as_pdf', binary: 'deployed_code_alert',
+    };
+
     function renderArtifacts(entries) {
       if (entries) lastArtifactEntries = entries;
       entries = lastArtifactEntries;
@@ -180,27 +190,43 @@
       // Folders first, then files, each alphabetically: a workspace after a
       // training run is a hundred checkpoints and three things you want.
       const sorted = entries.slice().sort((a, b) => {
-        const da = a.type === 'directory', db = b.type === 'directory';
+        const da = isDirEntry(a), db = isDirEntry(b);
         if (da !== db) return da ? -1 : 1;
         return String(a.name || '').localeCompare(String(b.name || ''));
       });
 
       body.innerHTML = up + sorted.map(entry => {
-        const isDir = entry.type === 'directory';
+        const isDir = isDirEntry(entry);
         const full = entry.path || `${artifactsPath}/${entry.name}`;
+        const kind = isDir ? 'dir' : (entry.kind || 'binary');
         const link = artifactsFetched.get(fetchedKey(full));
-        const icon = isDir ? 'folder' : 'description';
+        const icon = KIND_ICONS[kind] || 'description';
+        // Three separate things: look at it here, keep a durable link to it,
+        // save it. Only the middle one goes through storage.
+        const look = (kind === 'binary' || isDir) ? ''
+          : `<button class="art-get" onclick="event.stopPropagation();openArtifactFile('${escAttr(full)}')">смотреть</button>`;
         const action = link
-          ? `<a class="art-open" href="${escAttr(link)}" target="_blank" rel="noopener">открыть ↗</a>`
-          : `<button class="art-get" onclick="fetchArtifact('${escAttr(full)}', this)">забрать</button>`;
-        const onclick = isDir ? ` onclick="loadArtifacts('${escAttr(full)}')"` : '';
+          ? `<a class="art-open" href="${escAttr(link)}" target="_blank" rel="noopener">ссылка ↗</a>`
+          : `<button class="art-get" onclick="event.stopPropagation();fetchArtifact('${escAttr(full)}', this)">забрать</button>`;
+        const onclick = isDir
+          ? ` onclick="loadArtifacts('${escAttr(full)}')"`
+          : (kind === 'binary' ? '' : ` onclick="openArtifactFile('${escAttr(full)}')"`);
         return `<div class="art-row"${onclick}>
             <span class="material-symbols-outlined text-sm text-outline-variant">${icon}</span>
             <span class="art-name">${escHtml(entry.name || '')}</span>
             <span class="art-size">${isDir ? '' : humanSize(entry.size)}</span>
+            ${look}
             ${action}
           </div>`;
       }).join('');
+    }
+
+    // The sandbox says "dir"; earlier drafts of this panel looked for
+    // "directory" and every folder in the workspace came out a file nobody
+    // could open. Accept both and be done with it.
+    function isDirEntry(entry) {
+      const type = String(entry && entry.type || '').toLowerCase();
+      return type === 'dir' || type === 'directory';
     }
 
     function parentPath(path) {
@@ -243,4 +269,120 @@
     function escAttr(value) {
       return String(value == null ? '' : value)
         .replace(/&/g, '&amp;').replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+    }
+
+// =========================================================================
+// Looking at one file
+// =========================================================================
+// A workspace is read far more often than it is harvested. The transfer
+// through storage answers "I want a link to this in the report"; this answers
+// "what is in it?", which is the commoner question and should not need a
+// bucket, a signature or a round trip through S3 to get an answer.
+
+    // The file currently open, so the viewer survives a redraw and «назад»
+    // knows which folder to return to.
+    let artifactsViewing = null;
+
+    function viewUrl(path, download) {
+      const base = artifactsSession();
+      return `${base}/view?path=${encodeURIComponent(path)}`
+        + (artifactsWorkspace ? `&sandbox_id=${encodeURIComponent(artifactsWorkspace)}` : '')
+        + (download ? '&download=1' : '');
+    }
+
+    function closeArtifactFile() {
+      artifactsViewing = null;
+      document.getElementById('artifacts-view').classList.add('hidden');
+      document.getElementById('artifacts-browse').classList.remove('hidden');
+    }
+
+    async function openArtifactFile(path) {
+      const base = artifactsSession();
+      if (!base) return;
+      artifactsViewing = path;
+      const name = String(path).split('/').pop();
+      document.getElementById('artifacts-browse').classList.add('hidden');
+      document.getElementById('artifacts-view').classList.remove('hidden');
+      document.getElementById('artifacts-view-name').textContent = name;
+      document.getElementById('artifacts-view-save').href = viewUrl(path, true);
+      const body = document.getElementById('artifacts-view-body');
+      body.innerHTML = '<div class="text-[11px] text-outline-variant py-6 text-center">Читаю…</div>';
+
+      // An image or a PDF is handed to the browser by URL — fetching the bytes
+      // here would only be to hand them back.
+      const kind = kindOfName(name);
+      if (kind === 'image') {
+        body.innerHTML = `<img class="art-image" src="${escAttr(viewUrl(path))}" alt="${escAttr(name)}">`;
+        return;
+      }
+      if (kind === 'pdf') {
+        body.innerHTML = `<iframe class="art-pdf" src="${escAttr(viewUrl(path))}"></iframe>`
+          + `<div class="text-[11px] mt-2"><a class="art-open" target="_blank" rel="noopener"
+               href="${escAttr(viewUrl(path))}">открыть в новой вкладке ↗</a></div>`;
+        return;
+      }
+
+      let response;
+      try {
+        response = await fetch(viewUrl(path), { cache: 'no-store' });
+      } catch (error) {
+        body.innerHTML = `<div class="text-[11px] text-error py-6 text-center">Не прочиталось: ${escHtml(String(error))}</div>`;
+        return;
+      }
+      if (!response.ok) {
+        let detail = `HTTP ${response.status}`;
+        try { detail = (await response.json()).detail || detail; } catch (e) { /* not JSON */ }
+        body.innerHTML = `<div class="text-[11px] text-error py-6 text-center">${escHtml(detail)}</div>`;
+        return;
+      }
+      const text = await response.text();
+      const cut = response.headers.get('X-Preview-Truncated') === '1';
+      body.innerHTML = renderFileBody(name, text)
+        + (cut ? '<div class="text-[11px] text-outline-variant mt-2">Показано начало файла — он длиннее.</div>' : '');
+    }
+
+    // Kept in step with CoScientist/web/preview.py, which decides the same
+    // thing server-side; this copy only picks the element.
+    const VIEW_IMAGE = /\.(png|jpe?g|gif|webp|bmp|ico|svg|avif|tiff?)$/i;
+
+    function kindOfName(name) {
+      if (VIEW_IMAGE.test(name)) return 'image';
+      if (/\.pdf$/i.test(name)) return 'pdf';
+      return 'text';
+    }
+
+    function renderFileBody(name, text) {
+      // Markdown is what reports and AGENTS.md are written in, and reading it
+      // raw is reading the syntax instead of the text.
+      if (/\.(md|markdown)$/i.test(name) && typeof marked !== 'undefined') {
+        return `<div class="md-body art-text-rendered">${
+          DOMPurify.sanitize(marked.parse(text), { ADD_ATTR: ['target'] })}</div>`;
+      }
+      if (/\.(json|ipynb|jsonl?)$/i.test(name)) {
+        try {
+          return `<pre class="art-text">${escHtml(JSON.stringify(JSON.parse(text), null, 2))}</pre>`;
+        } catch (error) { /* not valid JSON — show it as written */ }
+      }
+      if (/\.(csv|tsv)$/i.test(name)) return renderTable(name, text);
+      return `<pre class="art-text">${escHtml(text)}</pre>`;
+    }
+
+    // A results CSV is the point of most runs; a wall of commas is not how to
+    // read one. Only the head is laid out — the rest stays as text below.
+    const TABLE_ROWS = 200;
+
+    function renderTable(name, text) {
+      const sep = /\.tsv$/i.test(name) ? '\t' : ',';
+      const lines = text.split(/\r?\n/).filter(line => line.length);
+      if (lines.length < 2) return `<pre class="art-text">${escHtml(text)}</pre>`;
+      const rows = lines.slice(0, TABLE_ROWS).map(line => line.split(sep));
+      const head = rows.shift();
+      const more = lines.length > TABLE_ROWS
+        ? `<div class="text-[11px] text-outline-variant mt-2">Показаны первые ${TABLE_ROWS} строк из ${lines.length}.</div>`
+        : '';
+      return `<div class="art-table-wrap"><table class="art-table">
+          <thead><tr>${head.map(cell => `<th>${escHtml(cell)}</th>`).join('')}</tr></thead>
+          <tbody>${rows.map(row =>
+            `<tr>${row.map(cell => `<td>${escHtml(cell)}</td>`).join('')}</tr>`).join('')}</tbody>
+        </table></div>${more}`;
     }

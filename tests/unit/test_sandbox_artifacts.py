@@ -304,7 +304,8 @@ const context = {
     if (url.endsWith('/tasks')) {
       return { json: async () => ({ status: 'ok', workspaces: JSON.parse(process.argv[3]) }) };
     }
-    return { json: async () => ({ status: 'ok', path: '/workspace', entries: [] }) };
+    return { json: async () => ({ status: 'ok', path: '/workspace',
+                                 entries: JSON.parse(process.argv[4] || '[]') }) };
   },
 };
 vm.createContext(context);
@@ -312,12 +313,13 @@ vm.runInContext(source + '\n;globalThis.__open = openArtifactsModal;', context);
 context.__open().then(() => console.log(JSON.stringify({
   asked,
   options: nodes['artifacts-workspace'].innerHTML,
+  listing: nodes['artifacts-body'].innerHTML,
   note: nodes['artifacts-note'].textContent,
 })));
 """
 
 
-def _open_the_panel(workspaces):
+def _open_the_panel(workspaces, entries=()):
     """Open the panel against a sandbox holding ``workspaces``; report what it did."""
     import json
     import shutil
@@ -340,7 +342,8 @@ def _open_the_panel(workspaces):
         panel = f"{tmp}/artifacts.js"
         open(probe, "w").write(_PROBE)
         open(panel, "w").write(module)
-        out = subprocess.run([node, probe, panel, json.dumps(workspaces)],
+        out = subprocess.run([node, probe, panel, json.dumps(workspaces),
+                              json.dumps(list(entries))],
                              capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
     return json.loads(out.stdout.strip().splitlines()[-1])
@@ -397,3 +400,158 @@ def test_the_heading_of_a_markdown_prompt_does_not_fill_the_dropdown():
 
     assert "##" not in seen["options"]
     assert "Задача: Полный пайплайн" in seen["options"]
+
+
+# ---------------------------------------------------------------------------
+# Reading a file instead of harvesting it
+# ---------------------------------------------------------------------------
+
+def test_a_workspace_file_is_classified_by_what_can_be_done_with_it():
+    from CoScientist.web.preview import kind_of
+
+    assert kind_of("train.py") == "text"
+    assert kind_of("AGENTS.md") == "text"
+    assert kind_of("Dockerfile") == "text", "a working tree carries these bare"
+    assert kind_of(".gitignore") == "text"
+    assert kind_of("loss.png") == "image"
+    assert kind_of("arch.svg") == "image"
+    assert kind_of("paper.pdf") == "pdf"
+    assert kind_of("model.ckpt") == "binary"
+
+
+def test_nothing_from_a_workspace_is_served_as_something_the_browser_runs():
+    """An .html or .js in the workspace is the agent's output, not our page."""
+    from CoScientist.web.preview import media_type_of
+
+    assert media_type_of("index.html").startswith("text/plain")
+    assert media_type_of("bundle.js").startswith("text/plain")
+    assert media_type_of("page.xml").startswith("text/plain")
+    # An image is served as itself: an <img> does not run scripts in an SVG.
+    assert media_type_of("arch.svg") == "image/svg+xml"
+    assert media_type_of("model.ckpt") == "application/octet-stream"
+
+
+def test_a_checkpoint_is_not_read_into_the_page_to_be_refused(monkeypatch):
+    """Answering "nothing to show here" should not move a gigabyte first."""
+    from starlette.testclient import TestClient
+
+    from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
+    from CoScientist.web.app import create_app
+
+    def refuse(*a, **k):  # pragma: no cover - the point is that it is not called
+        raise AssertionError("the sandbox must not be contacted for a checkpoint")
+
+    monkeypatch.setattr(sandbox, "read_sandbox_file", refuse, raising=False)
+
+    with TestClient(create_app()) as client:
+        answer = client.get("/api/users/u1/sessions/s1/sandbox/view"
+                            "?path=/workspace/model.ckpt")
+
+    assert answer.status_code == 415
+
+
+def test_a_text_file_comes_back_readable_and_says_when_it_was_cut(monkeypatch):
+    from starlette.testclient import TestClient
+
+    from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
+    from CoScientist.web.app import create_app
+
+    seen = {}
+
+    def read(path, *, max_bytes, **kwargs):
+        seen.update(path=path, max_bytes=max_bytes, sandbox_id=kwargs.get("sandbox_id"))
+        return {"status": "ok", "data": b"epoch,loss\n1,0.7\n", "truncated": True}
+
+    monkeypatch.setattr(sandbox, "read_sandbox_file", read, raising=False)
+
+    with TestClient(create_app()) as client:
+        answer = client.get("/api/users/u1/sessions/s1/sandbox/view"
+                            "?path=/workspace/out.csv&sandbox_id=task-x")
+
+    assert answer.status_code == 200
+    assert answer.text.startswith("epoch,loss")
+    assert answer.headers["x-preview-kind"] == "text"
+    assert answer.headers["x-preview-truncated"] == "1"
+    assert answer.headers["x-content-type-options"] == "nosniff"
+    assert seen["sandbox_id"] == "task-x", "the chosen workspace must be read"
+    assert seen["max_bytes"] > 0
+
+
+def test_downloading_a_binary_is_allowed_where_showing_it_is_not(monkeypatch):
+    """Storage is refusing uploads today; saving a file should not depend on it."""
+    from starlette.testclient import TestClient
+
+    from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
+    from CoScientist.web.app import create_app
+
+    monkeypatch.setattr(
+        sandbox, "read_sandbox_file",
+        lambda path, *, max_bytes, **k: {"status": "ok", "data": b"\x00\x01",
+                                         "truncated": False},
+        raising=False)
+
+    with TestClient(create_app()) as client:
+        answer = client.get("/api/users/u1/sessions/s1/sandbox/view"
+                            "?path=/workspace/model.ckpt&download=1")
+
+    assert answer.status_code == 200
+    assert "attachment" in answer.headers["content-disposition"]
+
+
+def test_a_non_ascii_name_does_not_break_the_download_header(monkeypatch):
+    from starlette.testclient import TestClient
+
+    from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
+    from CoScientist.web.app import create_app
+
+    monkeypatch.setattr(
+        sandbox, "read_sandbox_file",
+        lambda path, *, max_bytes, **k: {"status": "ok", "data": b"x", "truncated": False},
+        raising=False)
+
+    with TestClient(create_app()) as client:
+        answer = client.get("/api/users/u1/sessions/s1/sandbox/view"
+                            "?path=/workspace/отчёт.txt")
+
+    assert answer.status_code == 200
+
+
+def test_the_listing_says_what_each_entry_is(monkeypatch):
+    """The sandbox answers "dir"; the panel needs one word and a kind."""
+    from starlette.testclient import TestClient
+
+    from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
+    from CoScientist.web.app import create_app
+
+    monkeypatch.setattr(
+        sandbox, "list_sandbox_files",
+        lambda path, **k: {"status": "ok", "path": path, "entries": [
+            {"name": "results", "type": "dir", "size": 4096},
+            {"name": "loss.png", "type": "file", "size": 120},
+            {"name": "model.ckpt", "type": "file", "size": 10 ** 9},
+        ]},
+        raising=False)
+
+    with TestClient(create_app()) as client:
+        entries = client.get(
+            "/api/users/u1/sessions/s1/sandbox/files").json()["entries"]
+
+    by_name = {e["name"]: e for e in entries}
+    assert by_name["results"]["kind"] == "dir"
+    assert by_name["loss.png"]["kind"] == "image"
+    assert by_name["model.ckpt"]["kind"] == "binary"
+
+
+def test_a_folder_is_a_folder_in_the_panel_not_a_file_to_harvest():
+    """The sandbox says "dir"; looking for "directory" made every folder a file."""
+    seen = _open_the_panel(
+        [{"sandbox_id": "w", "status": "running", "task": "", "browsable": True}],
+        entries=[{"name": "results", "type": "dir", "size": 4096,
+                  "kind": "dir", "path": "/workspace/results"},
+                 {"name": "train.py", "type": "file", "size": 900,
+                  "kind": "text", "path": "/workspace/train.py"}],
+    )
+
+    rows = seen["listing"]
+    assert "loadArtifacts('/workspace/results')" in rows, "a folder must open"
+    assert "openArtifactFile('/workspace/train.py')" in rows, "a file must be readable"

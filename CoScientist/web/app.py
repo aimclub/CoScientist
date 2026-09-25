@@ -218,6 +218,16 @@ ARTIFACT_URL_CACHE_TTL_SECONDS = 50 * 60
 _ARTIFACT_URL_CACHE: dict[tuple[str, str], tuple[str, float]] = {}
 _ARTIFACT_URL_CACHE_MAX = 1000
 
+#: A direct download out of the sandbox is held in memory on the way through,
+#: so it is bounded — beyond this, the transfer through storage is the route.
+_DOWNLOAD_MAX_BYTES = 256 * 1024 * 1024
+
+
+def _ascii_name(name: str) -> str:
+    """A filename safe to put in a header: no quotes, no newlines, no non-ASCII."""
+    cleaned = "".join(ch for ch in str(name) if ch.isprintable() and ch not in '"\\')
+    return cleaned.encode("ascii", "replace").decode("ascii") or "file"
+
 
 def _mint_artifact_url(bucket: str, key: str) -> str | None:
     """Mint a fresh download URL for one object. Runs in a worker thread.
@@ -1358,8 +1368,80 @@ def create_app() -> FastAPI:
                  "path": path, "entries": []},
                 status_code=502,
             )
+        from CoScientist.web.preview import kind_of
+
+        entries = []
+        for entry in result.get("entries", []):
+            # The sandbox answers "dir"/"file"; normalise once, here, so the
+            # panel has a single word to test against.
+            directory = str(entry.get("type", "")).lower() in ("dir", "directory")
+            entries.append({
+                **entry,
+                "type": "dir" if directory else "file",
+                "kind": "dir" if directory else kind_of(entry.get("name", "")),
+            })
         return JSONResponse({"status": "ok", "path": result.get("path", path),
-                             "entries": result.get("entries", [])})
+                             "entries": entries})
+
+    @app.get("/api/users/{user_id}/sessions/{session_id}/sandbox/view")
+    async def view_session_sandbox_file(user_id: str, session_id: str,
+                                        path: str,
+                                        sandbox_id: Optional[str] = None,
+                                        download: int = 0):
+        """Serve one workspace file to the browser, for reading rather than keeping.
+
+        The transfer through S3 is for files that must outlive the container —
+        a link in a report. Looking at a log or a plot wants neither a bucket
+        nor durability, so these bytes go straight through: the sandbox is on
+        another network, the browser is same-origin with us, and nothing is
+        stored on the way.
+        """
+        from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
+        from CoScientist.web.preview import cap_for, kind_of, media_type_of
+
+        name = path.rsplit("/", 1)[-1] or "file"
+        kind = kind_of(name)
+        # A checkpoint is not something to look at, and reading one to say so
+        # would move gigabytes. Downloading it, however, is fair.
+        cap = cap_for(name) if not download else _DOWNLOAD_MAX_BYTES
+        if cap <= 0:
+            raise HTTPException(
+                status_code=415,
+                detail="Этот файл можно только забрать — показать его нечем.",
+            )
+
+        result = await asyncio.to_thread(
+            sandbox.read_sandbox_file, path, max_bytes=cap,
+            session_id=session_id, sandbox_id=(sandbox_id or None),
+        )
+        if result.get("status") != "ok":
+            raise HTTPException(
+                status_code=502,
+                detail=result.get("error") or "Песочница не отдала файл.",
+            )
+
+        disposition = "attachment" if download else "inline"
+        headers = {
+            "Content-Disposition": f'{disposition}; filename="{_ascii_name(name)}"',
+            # Sent as text, read as text: no sniffing an .html back into
+            # something the browser would run on our origin.
+            "X-Content-Type-Options": "nosniff",
+            "X-Preview-Kind": kind,
+            "X-Preview-Truncated": "1" if result.get("truncated") else "0",
+            "Cache-Control": "no-store",
+        }
+        if kind != "pdf":
+            # A PDF is shown by the browser's own viewer, which a bare `sandbox`
+            # policy stops from loading at all; it gets no DOM of ours either
+            # way. Everything else is locked down.
+            headers["Content-Security-Policy"] = (
+                "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+        return Response(
+            content=result["data"],
+            media_type=("application/octet-stream" if download
+                        else media_type_of(name)),
+            headers=headers,
+        )
 
     @app.post("/api/users/{user_id}/sessions/{session_id}/sandbox/fetch")
     async def fetch_session_sandbox_file(user_id: str, session_id: str,

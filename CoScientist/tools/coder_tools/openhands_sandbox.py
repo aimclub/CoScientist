@@ -1841,6 +1841,70 @@ def list_sandbox_files(
     }
 
 
+def read_sandbox_file(
+    remote_path: str,
+    *,
+    max_bytes: int,
+    session_id: Optional[str] = None,
+    sandbox_id: Optional[str] = None,
+    tool_context: Any = None,
+    sandbox_url: Optional[str] = None,
+    timeout: float = 120.0,
+) -> Dict[str, Any]:
+    """Read up to ``max_bytes`` of a workspace file into memory.
+
+    :func:`download_sandbox_file` writes the whole thing to disk, which is what
+    a transfer wants and what a look at a file does not: a workspace holds
+    training logs and checkpoints, and showing the first megabyte of one beats
+    refusing to show it at all. The stream stops at the cap and says it did.
+    """
+    try:
+        api_url = _api(resolve_sandbox_url(sandbox_url))
+    except SandboxConfigError as exc:
+        return _error(str(exc))
+
+    session = resolve_session_key(session_id, tool_context)
+    target = sandbox_id or read_binding(session, tool_context)
+    if not target:
+        return _error("No sandbox is bound to this session.", session=session)
+
+    chunks: List[bytes] = []
+    read = 0
+    truncated = False
+    try:
+        with httpx.stream(
+            "GET",
+            f"{api_url}/files/download",
+            params={"path": remote_path, "task_id": target},
+            timeout=timeout,
+        ) as response:
+            response.raise_for_status()
+            for chunk in response.iter_bytes():
+                chunks.append(chunk)
+                read += len(chunk)
+                if read > max_bytes:
+                    truncated = True
+                    break
+    except httpx.HTTPStatusError as exc:
+        return _error(
+            f"Read failed: HTTP {exc.response.status_code}",
+            session=session, sandbox_id=target,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _error(f"Read failed: {exc}", session=session, sandbox_id=target)
+
+    data = b"".join(chunks)[:max_bytes]
+    return {
+        "status": "ok",
+        "session": session,
+        "sandbox_id": target,
+        "remote_path": remote_path,
+        "data": data,
+        "size_bytes": len(data),
+        "truncated": truncated,
+    }
+
+
 def download_sandbox_file(
     remote_path: str,
     local_path: str,
@@ -1994,6 +2058,7 @@ __all__ = [
     "list_sandbox_tasks",
     "list_sandbox_files",
     "download_sandbox_file",
+    "read_sandbox_file",
 ]
 
 
