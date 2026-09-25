@@ -39,6 +39,7 @@ const i18n = {
   'agent.FedotDemo.desc': { en: 'FEDOT.MAS agent graph', ru: 'Граф агентов FEDOT.MAS' },
   'agent.PaperStatistics.desc': { en: 'Paper Statistics', ru: 'Статистика статей' },
   'agent.CoderSandbox.desc': { en: 'CoderSandbox', ru: 'Песочница кода' },
+  'agent.SandboxArtifacts.desc': { en: 'Sandbox artifacts', ru: 'Артефакты песочницы' },
   'agent.__settings__.desc': { en: 'Settings', ru: 'Настройки' },
 
   // Chat controls & Header

@@ -1241,3 +1241,34 @@
       outline-offset: -2px;
       border-radius: 0.75rem;
     }
+
+/* Sandbox artifacts panel: a folder listing, not a table — the interesting
+   column is the name, and the row is a click target for a directory. */
+.art-row { display: flex; align-items: center; gap: 10px; padding: 7px 11px; font-size: 12px; }
+.art-row[onclick] { cursor: pointer; }
+.art-row:hover { background: rgba(255, 255, 255, .04); }
+.art-name { overflow-wrap: anywhere; }
+.art-size { margin-left: auto; color: #8b93a1; font-size: 11px; white-space: nowrap; }
+.art-get, .art-open { font-size: 11px; white-space: nowrap; }
+.art-get { color: #38bdf8; background: none; border: none; cursor: pointer; }
+.art-get:hover { text-decoration: underline; }
+.art-get:disabled { color: #6b7280; cursor: default; }
+.art-open { color: #22c55e; text-decoration: none; }
+.art-open:hover { text-decoration: underline; }
+
+/* Reading a workspace file in place: source as written, plots as plots, a
+   results CSV as a table. Nothing here is editable — this is a window, not an
+   editor, and the bytes never leave the page. */
+.art-text { font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px; line-height: 1.55; white-space: pre; overflow-wrap: normal;
+  color: #cbd5e1; margin: 0; }
+.art-text-rendered { font-size: 13px; }
+.art-image { max-width: 100%; height: auto; display: block; margin: 0 auto;
+  background: repeating-conic-gradient(#1f2937 0% 25%, #111827 0% 50%) 0 0 / 16px 16px; }
+.art-pdf { width: 100%; height: 55vh; border: 0; background: #111827; }
+.art-table-wrap { overflow-x: auto; }
+.art-table { border-collapse: collapse; font-size: 11.5px; width: 100%; }
+.art-table th, .art-table td { border: 1px solid rgba(255, 255, 255, .08);
+  padding: 3px 7px; text-align: left; white-space: nowrap; }
+.art-table th { position: sticky; top: 0; background: #1f2937; color: #e5e7eb; }
+.art-table td { color: #cbd5e1; }

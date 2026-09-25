@@ -10,7 +10,7 @@ from collections import defaultdict, OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import quote, urlparse
 from uuid import uuid4
 from weakref import WeakKeyDictionary
@@ -263,6 +263,36 @@ GRAPH_DELETE_TARGETS = ("execution", "research")
 ARTIFACT_URL_CACHE_TTL_SECONDS = 50 * 60
 _ARTIFACT_URL_CACHE: dict[tuple[str, str], tuple[str, float]] = {}
 _ARTIFACT_URL_CACHE_MAX = 1000
+
+#: A direct download out of the sandbox is held in memory on the way through,
+#: so it is bounded — beyond this, the transfer through storage is the route.
+_DOWNLOAD_MAX_BYTES = 256 * 1024 * 1024
+
+
+def _ascii_name(name: str) -> str:
+    """A filename safe to put in a header: no quotes, no newlines, no non-ASCII.
+
+    Non-ASCII is dropped rather than replaced: `отчёт_v2.txt` keeps `_v2.txt`,
+    which is at least a name, where a row of question marks is not.
+    """
+    cleaned = "".join(ch for ch in str(name) if ch.isprintable() and ch not in '"\\')
+    return cleaned.encode("ascii", "ignore").decode("ascii")
+
+
+def _disposition(kind: str, name: str) -> str:
+    """``Content-Disposition`` that keeps the name a Russian-speaking run gives.
+
+    The header is ASCII, so a wholly Cyrillic name has no ASCII form worth
+    offering. RFC 5987's ``filename*`` carries the real one, and the plain
+    ``filename`` stays only for a client that cannot read it — as a fallback
+    that is still a filename. This is the shape the session-file endpoint
+    settled on; the two should not answer differently.
+    """
+    stem = _ascii_name(Path(str(name)).stem).strip(" ._-")
+    suffix = _ascii_name(Path(str(name)).suffix)
+    ascii_name = f"{stem or 'file'}{suffix}"
+    return (f'{kind}; filename="{ascii_name}"; '
+            f"filename*=UTF-8''{quote(str(name))}")
 
 
 def _readable_links(text: str, scope: SessionKey) -> str:
@@ -1591,6 +1621,158 @@ def create_app() -> FastAPI:
             return JSONResponse({"status": "cancelled", "detail": str(exc)}, status_code=200)
 
     # --- Artifact delivery (report links) ---
+    @app.get("/api/users/{user_id}/sessions/{session_id}/sandbox/tasks")
+    async def list_session_sandbox_tasks(user_id: str, session_id: str):
+        """Every workspace the sandbox still holds, so the reader can choose one.
+
+        The session's own container is one of many on that machine, and the
+        sandbox addresses each by task id — the same id its console carries in
+        `?task_id=`. Offering the list turns "look at ours" into "look at any".
+        """
+        from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
+
+        result = await asyncio.to_thread(
+            sandbox.list_sandbox_tasks, session_id=session_id,
+        )
+        if result.get("status") != "ok":
+            return JSONResponse(
+                {"status": "error",
+                 "message": result.get("error") or "Песочница не ответила.",
+                 "workspaces": []},
+                status_code=502,
+            )
+        return JSONResponse({"status": "ok",
+                             "sandbox_id": result.get("sandbox_id"),
+                             "workspaces": result.get("workspaces", [])})
+
+    @app.get("/api/users/{user_id}/sessions/{session_id}/sandbox/files")
+    async def list_session_sandbox_files(user_id: str, session_id: str,
+                                         path: str = "/workspace",
+                                         sandbox_id: Optional[str] = None):
+        """What a sandbox workspace actually holds, for a human to see.
+
+        The agents have had `list_sandbox_files` all along; the person watching
+        the run had no way to look, and no way to reach a file the agent never
+        mentioned. Without ``sandbox_id`` this reads the session's own sandbox.
+        """
+        from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
+
+        result = await asyncio.to_thread(
+            sandbox.list_sandbox_files, path, session_id=session_id,
+            sandbox_id=(sandbox_id or None),
+        )
+        if result.get("status") != "ok":
+            return JSONResponse(
+                {"status": "error",
+                 "message": result.get("error") or "Песочница не ответила.",
+                 "path": path, "entries": []},
+                status_code=502,
+            )
+        from CoScientist.web.preview import kind_of
+
+        entries = []
+        for entry in result.get("entries", []):
+            # The sandbox answers "dir"/"file"; normalise once, here, so the
+            # panel has a single word to test against.
+            directory = str(entry.get("type", "")).lower() in ("dir", "directory")
+            entries.append({
+                **entry,
+                "type": "dir" if directory else "file",
+                "kind": "dir" if directory else kind_of(entry.get("name", "")),
+            })
+        return JSONResponse({"status": "ok", "path": result.get("path", path),
+                             "entries": entries})
+
+    @app.get("/api/users/{user_id}/sessions/{session_id}/sandbox/view")
+    async def view_session_sandbox_file(user_id: str, session_id: str,
+                                        path: str,
+                                        sandbox_id: Optional[str] = None,
+                                        download: int = 0,
+                                        dir: int = 0):
+        """Serve one workspace file to the browser, for reading rather than keeping.
+
+        The transfer through S3 is for files that must outlive the container —
+        a link in a report. Looking at a log or a plot wants neither a bucket
+        nor durability, so these bytes go straight through: the sandbox is on
+        another network, the browser is same-origin with us, and nothing is
+        stored on the way.
+        """
+        from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
+        from CoScientist.web.preview import cap_for, kind_of, media_type_of
+
+        name = path.rsplit("/", 1)[-1] or "file"
+        # A directory comes back from the sandbox as one ZIP, so that is what
+        # the reader is saving and what it should be called.
+        if dir:
+            name, download = f"{name}.zip", 1
+        kind = kind_of(name)
+        # A checkpoint is not something to look at, and reading one to say so
+        # would move gigabytes. Downloading it, however, is fair.
+        cap = cap_for(name) if not download else _DOWNLOAD_MAX_BYTES
+        if cap <= 0:
+            raise HTTPException(
+                status_code=415,
+                detail="Этот файл можно только забрать — показать его нечем.",
+            )
+
+        result = await asyncio.to_thread(
+            sandbox.read_sandbox_file, path, max_bytes=cap,
+            session_id=session_id, sandbox_id=(sandbox_id or None),
+        )
+        if result.get("status") != "ok":
+            raise HTTPException(
+                status_code=502,
+                detail=result.get("error") or "Песочница не отдала файл.",
+            )
+
+        disposition = "attachment" if download else "inline"
+        headers = {
+            "Content-Disposition": _disposition(disposition, name),
+            # Sent as text, read as text: no sniffing an .html back into
+            # something the browser would run on our origin.
+            "X-Content-Type-Options": "nosniff",
+            "X-Preview-Kind": kind,
+            "X-Preview-Truncated": "1" if result.get("truncated") else "0",
+            "Cache-Control": "no-store",
+        }
+        if kind != "pdf":
+            # A PDF is shown by the browser's own viewer, which a bare `sandbox`
+            # policy stops from loading at all; it gets no DOM of ours either
+            # way. Everything else is locked down.
+            headers["Content-Security-Policy"] = (
+                "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+        return Response(
+            content=result["data"],
+            media_type=("application/octet-stream" if download
+                        else media_type_of(name)),
+            headers=headers,
+        )
+
+    @app.post("/api/users/{user_id}/sessions/{session_id}/sandbox/fetch")
+    async def fetch_session_sandbox_file(user_id: str, session_id: str,
+                                         request: Request):
+        """Copy one sandbox path into storage and answer with its durable link.
+
+        The same transfer the agents use, so a file a person pulls across and a
+        file an agent pulls across are the same object with the same link.
+        """
+        from CoScientist.tools.coder_tools.sandbox_artifacts import (
+            transfer_sandbox_artifact,
+        )
+
+        body = await request.json()
+        path = str((body or {}).get("path") or "").strip()
+        if not path:
+            raise HTTPException(status_code=400, detail="path is required")
+        target = str((body or {}).get("sandbox_id") or "").strip() or None
+
+        result = await asyncio.to_thread(
+            transfer_sandbox_artifact, path, session_id=session_id,
+            sandbox_id=target,
+        )
+        return JSONResponse(result,
+                            status_code=200 if result.get("status") == "success" else 502)
+
     @app.get("/api/artifact/{bucket}/{key:path}")
     async def get_artifact(bucket: str, key: str):
         """Redirect the browser to a fresh download URL for one S3 object.

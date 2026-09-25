@@ -508,6 +508,53 @@
   </div>
 
   <!-- Dataset Link Modal — attaches a .zip archive to the session context -->
+  <div id="artifacts-modal"
+    class="hidden fixed inset-0 z-[120] flex items-center justify-center bg-black/70 backdrop-blur-sm">
+    <div class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-3xl shadow-2xl p-6 mx-4">
+      <div class="flex items-start justify-between mb-4">
+        <div class="flex items-center gap-3">
+          <div class="w-8 h-8 rounded-lg bg-primary/10 border border-primary/20 flex items-center justify-center">
+            <span class="material-symbols-outlined text-primary text-sm">inventory_2</span>
+          </div>
+          <div>
+            <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider">Артефакты песочницы</h3>
+          </div>
+        </div>
+        <button onclick="closeArtifactsModal()" class="text-outline-variant hover:text-on-surface transition-colors">
+          <span class="material-symbols-outlined text-lg">close</span>
+        </button>
+      </div>
+      <div class="flex items-center gap-2 mb-2 min-w-0">
+        <span class="material-symbols-outlined text-sm text-outline-variant shrink-0">deployed_code</span>
+        <select id="artifacts-workspace" onchange="pickWorkspace(this.value)"
+          class="flex-1 min-w-0 max-w-full truncate bg-surface-container-high border-outline-variant/20 rounded text-[10px] text-on-surface py-1.5"></select>
+      </div>
+      <div id="artifacts-browse">
+        <div class="flex items-center gap-2 mb-2 min-w-0">
+          <span class="material-symbols-outlined text-sm text-outline-variant shrink-0">folder_open</span>
+          <code id="artifacts-path" class="text-[11px] text-on-surface/80 truncate">/workspace</code>
+          <button onclick="loadArtifacts(artifactsPath)"
+            class="ml-auto shrink-0 text-[11px] text-primary hover:underline">обновить</button>
+        </div>
+        <div id="artifacts-body"
+          class="border border-outline-variant/20 rounded-lg divide-y divide-outline-variant/10 max-h-[52vh] overflow-y-auto"></div>
+        <div id="artifacts-note" class="hidden text-[11px] mt-3 text-outline-variant"></div>
+      </div>
+      <div id="artifacts-view" class="hidden">
+        <div class="flex items-center gap-2 mb-2 min-w-0">
+          <button onclick="closeArtifactFile()"
+            class="shrink-0 text-[11px] text-primary hover:underline flex items-center gap-1">
+            <span class="material-symbols-outlined text-sm">arrow_back</span>к списку</button>
+          <code id="artifacts-view-name" class="text-[11px] text-on-surface/80 truncate"></code>
+          <a id="artifacts-view-save" href="#" download
+            class="ml-auto shrink-0 text-[11px] text-primary hover:underline">скачать</a>
+        </div>
+        <div id="artifacts-view-body"
+          class="border border-outline-variant/20 rounded-lg p-3 max-h-[60vh] overflow-auto"></div>
+      </div>
+    </div>
+  </div>
+
   <div id="dataset-modal"
     class="hidden fixed inset-0 z-[120] flex items-center justify-center bg-black/70 backdrop-blur-sm">
     <div class="bg-surface-container border border-outline-variant/20 rounded-xl w-full max-w-lg shadow-2xl p-6 mx-4">
@@ -1010,6 +1057,7 @@
   <script src="/static/js/sessions.js"></script>
   <script src="/static/js/modals/settings.js"></script>
   <script src="/static/js/modals/dataset.js"></script>
+  <script src="/static/js/modals/artifacts.js"></script>
   <script src="/static/js/modals/roadmap.js"></script>
   <script src="/static/js/modals/checkpoints.js"></script>
   <script src="/static/js/plan_tracker.js"></script>

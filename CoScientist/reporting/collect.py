@@ -41,7 +41,17 @@ _TABLE_EXTS = (".csv", ".tsv")
 # them as results, so they are curated already.
 _FILE_EXTS = (".pdf", ".zip", ".tar", ".tar.gz", ".tgz", ".gz",
               ".pt", ".pth", ".pkl", ".pickle", ".ckpt", ".onnx",
-              ".h5", ".hdf5", ".joblib", ".parquet")
+              ".h5", ".hdf5", ".joblib", ".parquet",
+              # Metrics and arrays a run writes beside its figures. Boilerplate
+              # that shares these extensions is excluded by name below — a
+              # package.json is furniture, a metrics.json is the result.
+              ".json", ".npz", ".npy", ".xlsx")
+#: Files that carry a result extension and are not results.
+_BOILERPLATE_NAMES = frozenset({
+    "package.json", "package-lock.json", "tsconfig.json", "composer.json",
+    "manifest.json", "meta.json", "base_state.json", "owner_lease.json",
+    "tasks.json", "config.json", "settings.json",
+})
 # Ingest material, never a deliverable: source documents a search or parse
 # step pulled in. Everything else the run uploaded lands in Files.
 _SOURCE_EXTS = (".doc", ".docx")
@@ -677,6 +687,8 @@ def collect_artifacts(
                 src = Path(root) / fname
                 if _rel(src, workspace_dir) in already_synced:
                     continue  # the vault sync sent this one; it comes back above
+                if fname.lower() in _BOILERPLATE_NAMES:
+                    continue
                 stem = src.stem
                 if _looks_like(fname, _IMAGE_EXTS):
                     if ws_figures >= _MAX_WORKSPACE_FILES:
