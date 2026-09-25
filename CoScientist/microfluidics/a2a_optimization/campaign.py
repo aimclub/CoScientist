@@ -193,4 +193,5 @@ async def campaign_approve(tool_context: ToolContext) -> dict[str, Any]:
             "запустит физическую установку. Разрешить выполнение этого плана?"
         ),
         trigger="campaign_plan_approval",
+        action="Подтверждение запустит кампанию оптимизации условий на физической установке по плану блока оптимизации",
     )

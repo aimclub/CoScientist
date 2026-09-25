@@ -324,6 +324,7 @@ async def optimization_provide_input(details: str, tool_context: ToolContext) ->
 
 async def approve_task_plan(
     tool_context: ToolContext, channel: Channel, *, operator_message: str, trigger: str,
+    action: str,
 ) -> dict[str, Any]:
     """Approve the channel's current external plan after the operator agrees.
 
@@ -361,7 +362,10 @@ async def approve_task_plan(
             action_type=HITLAction.APPROVE,
             message=operator_message,
             context={
-                "output": plan,
+                # The card prints `output` as text: one sentence on what the
+                # approval sets off, not the raw plan dict ("[object Object]").
+                "output": f"{action} (задача {record.get('task_id')}).",
+                "plan": plan,
                 "task_id": record.get("task_id"),
                 "_session": {"user_id": user_id, "session_id": session_id},
             },
@@ -396,4 +400,5 @@ async def optimization_approve(tool_context: ToolContext) -> dict[str, Any]:
             "CFD и физическое оборудование. Разрешить выполнение этого плана?"
         ),
         trigger="optimization_plan_approval",
+        action="Подтверждение запустит во внешней A2A-системе оптимизации CFD и опыты на оборудовании по её плану",
     )

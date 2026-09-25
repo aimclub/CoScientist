@@ -78,7 +78,8 @@ function hitlDetailBlock(data) {
     const isToolCall = hitlTrigger(data) === 'before_tool';
     return {
       labelKey: isToolCall ? 'hitl.block.toolCall' : 'hitl.block.output',
-      text: String(ctx.output),
+      // A structured output would print as "[object Object]".
+      text: typeof ctx.output === 'object' ? JSON.stringify(ctx.output, null, 2) : String(ctx.output),
       code: isToolCall,
     };
   }
@@ -648,9 +649,9 @@ function renderHitlForm(live, data) {
               <button onclick="respondHITLForm('${rid}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
                 <span class="material-symbols-outlined text-base">check_circle</span> ${escHtml(t('hitl.form.save'))}
               </button>
-              <button onclick="respondHITLForm('${rid}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] hover:bg-surface-container-highest transition-all">
+              ${form.skippable === false ? '' : `<button onclick="respondHITLForm('${rid}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] hover:bg-surface-container-highest transition-all">
                 <span class="material-symbols-outlined text-base">skip_next</span> ${escHtml(t('hitl.form.skip'))}
-              </button>
+              </button>`}
             </div>
           </div>
         </div>`);

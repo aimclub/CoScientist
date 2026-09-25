@@ -152,8 +152,10 @@ def ranking_form(state: Any, route_ids: list[str], error: str) -> dict:
             "Внешней системе нужен рейтинг маршрутов по стоимости, но расчёт экономики не дал "
             f"пригодного рейтинга: {error}. Укажите стоимость хотя бы одного маршрута — "
             "ранги будут посчитаны по возрастанию стоимости. Значения будут помечены как "
-            "заданные оператором, а не как цены поставщиков. «Пропустить» — не запускать."
+            "заданные оператором, а не как цены поставщиков."
         ),
+        # Costs come only from the operator: no "agent decides" way out.
+        "skippable": False,
         "blocks": blocks,
     }
 
@@ -259,7 +261,12 @@ async def request_operator_ranking(tool_context: Any, route_ids: list[str], erro
             action_type=HITLAction.EDIT,
             message="Нет пригодного экономического рейтинга маршрутов. Укажите стоимости, чтобы запустить эксперимент.",
             context={
-                "output": {"error": problem, "route_ids": route_ids},
+                "output": (
+                    f"Стоимости маршрутов {', '.join(route_ids)} войдут в экономический "
+                    "рейтинг, по которому внешняя A2A-система запустит эксперимент."
+                ),
+                "error": problem,
+                "route_ids": route_ids,
                 "_session": {"user_id": user_id, "session_id": session_id},
             },
             form=ranking_form(tool_context.state, route_ids, problem),
