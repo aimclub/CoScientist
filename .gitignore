@@ -199,6 +199,7 @@ runs/
 logs/
 workspace/
 local_papers/
+local_papers_/
 tz_documents/
 tz_microfluidics/
 TZ_*.md
