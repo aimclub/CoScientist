@@ -99,14 +99,18 @@ def _s3_csv_preview(url: str, max_rows: int = 10, max_bytes: int = 200_000) -> s
     (header + first rows of Smiles + key property columns). Returns '' on any failure.
 
     Lets the final answer be formed from the ACTUAL S3 file contents rather than a bare
-    link or unverified prose (F010.A6).
+    link or unverified prose (F010.A6). Download convention matches
+    ``reporting.collect._download`` (html-unescape + requests) so MCP-escaped
+    MinIO/S3 SigV4 URLs still work.
     """
-    import urllib.request
     import csv
+    import html
     import io
+    import requests
     try:
-        with urllib.request.urlopen(url, timeout=20) as resp:
-            raw = resp.read(max_bytes).decode("utf-8", "replace")
+        resp = requests.get(html.unescape(url), timeout=20)
+        resp.raise_for_status()
+        raw = resp.content[:max_bytes].decode("utf-8", "replace")
         rows = list(csv.reader(io.StringIO(raw)))
         if not rows:
             return ""
