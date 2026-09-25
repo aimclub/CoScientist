@@ -12,4 +12,6 @@ agents:
       before_model: [save_uploaded_artifacts, seed_coder_workspace, redact_link_urls]
       before_tool: [resolve_link_refs]
       after_tool: [register_tool_result_links]
+      # ADK returns unknown tool calls as errors so the model can retry with a valid name.
+      # guard_unknown_tools would replace that call with a final text response.
       after_model: [require_pilot_delegations, expand_link_refs]
