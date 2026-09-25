@@ -18,6 +18,7 @@ from CoScientist.config.report import ReportConfig
 from CoScientist.graph.session_scope import session_key
 from CoScientist.reporting.collect import collect_artifacts
 from CoScientist.tools.vault_client import call_vault_sync
+from CoScientist.tools.sandbox_sweep import sweep_sandbox_workspace
 from CoScientist.tools.workspace_sync import sync_workspace_to_s3
 from CoScientist.utils.s3_refs import split_s3_uri
 
@@ -89,6 +90,32 @@ def _download_link(uri: str) -> Optional[str]:
     return (result or {}).get("presigned_url")
 
 
+#: The directory the collector walks for a session's workspace. Named here
+#: because the sweep stages into it and the collector reads it — the two have
+#: to agree, and agreeing by default value is how they came apart before.
+_WORKSPACE_ROOT = "workspace"
+
+
+def _indexed_filenames(tool_context: ToolContext) -> set:
+    """Names already in the artifact index, so the sweep does not duplicate them.
+
+    A figure the sandbox agent published itself is collected from its S3
+    reference. Staging the same file from the container would put it in the
+    report twice, under two labels.
+    """
+    try:
+        from CoScientist.reporting.artifact_index import load as load_index
+
+        user_id, session_id = session_key(tool_context)
+        return {
+            str(entry.get("label") or "").rsplit("/", 1)[-1]
+            for entry in load_index(session_id, user_id)
+            if entry.get("label")
+        }
+    except Exception:  # noqa: BLE001 - no index yet is normal
+        return set()
+
+
 async def format_results(tool_context: ToolContext) -> Dict[str, Any]:
     """Collect every figure, data table and downloadable file this run produced
     into the report folder and return markdown blocks (image embeds, tables,
@@ -108,6 +135,19 @@ async def format_results(tool_context: ToolContext) -> Dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 - a failed sync must not stop a report
         logger.warning("format_results: workspace sync failed (%s)", exc)
 
+    # The OpenHands sandbox is a third place again: another host, its own API,
+    # and nothing on this disk. Until now a report saw only the files that
+    # sandbox agent chose to upload mid-task — so a run whose plots were never
+    # published reached the reader with none of them. Stage the rest into the
+    # directory the collector walks, so everything downstream is unchanged.
+    try:
+        await asyncio.to_thread(
+            sweep_sandbox_workspace, tool_context, state, session_id,
+            _WORKSPACE_ROOT, _indexed_filenames(tool_context),
+        )
+    except Exception as exc:  # noqa: BLE001 - as above, attachments are not the report
+        logger.warning("format_results: sandbox sweep failed (%s)", exc)
+
     # Off the event loop. Collection downloads every artifact over the network,
     # and each dead link costs a vault round trip on top. On the loop thread all
     # of that would stall every other agent and every open websocket.
@@ -126,6 +166,7 @@ async def format_results(tool_context: ToolContext) -> Dict[str, Any]:
         # this host, because both sides use code_exec.workspace_root. Naming them
         # keeps a file whose upload failed reachable from disk.
         synced_files=synced,
+        workspace_root=_WORKSPACE_ROOT,
     )
     markdown = result["blocks_markdown"]
     # The counts the model is shown come from the BLOCKS, not from the files on

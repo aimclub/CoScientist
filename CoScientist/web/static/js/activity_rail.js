@@ -12,6 +12,7 @@
       { name: "FedotTrace", icon: "monitoring", desc: "FEDOT.MAS Trace", href: "/fedot-trace" },
       { name: "FedotDemo", icon: "hub", desc: "FEDOT.MAS Demo (agent graph)", href: "/fedot-demo/" },
       { name: "CoderSandbox", icon: "terminal", desc: "CoderSandbox", id: "coder-sandbox-link", href: "http://localhost:8884/" },
+      { name: "SandboxArtifacts", icon: "inventory_2", desc: "Sandbox artifacts" },
       { name: "__settings__", icon: "settings", desc: "Settings" },
     ];
 
@@ -65,6 +66,8 @@
         window.open('/fedot-trace', '_blank');
       } else if (name === "FedotDemo") {
         window.open('/fedot-demo/', '_blank');
+      } else if (name === "SandboxArtifacts") {
+        openArtifactsModal();
       } else if (name === "CoderSandbox") {
         const link = document.getElementById('coder-sandbox-link');
         const url = (link && link.href) ? link.href : (activeSandboxWatchUrl || getBaseSandboxUrl());

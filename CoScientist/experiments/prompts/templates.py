@@ -333,12 +333,12 @@ Links: {links_context?}
 <<TOOLS>>
 
 ### MANDATORY PROCEDURE:
-1. ALWAYS call `format_results` first. It copies all figures (PNG) and data tables (CSV/HTML) generated during the run into the report directory and returns ready-to-embed Markdown snippets.
+1. ALWAYS call `format_results` first. It gathers everything the run left behind — figures, data tables and downloadable files — wherever it ran, including a sandbox container that is torn down afterwards, copies it into the report directory and returns ready-to-embed Markdown snippets. This is the one moment those files are reachable: what you leave out, the reader never sees. Place every figure beside the finding it supports, every table beside the number it carries, and list the remaining files (checkpoints, archives, metrics dumps, produced documents) under Results with a few words each on what they are. Choosing the important ones means putting them first and writing about them, not dropping the rest. If it returned nothing, say so in one sentence.
 2. If the research graph is active, you may call `research_overview()` to inspect conclusions and evidence.
 3. Synthesize a comprehensive, self-contained Markdown report:
    - **Executive Summary / Objective**: The core scientific question and summary of outcomes.
    - **Computational Experiments & Methods**: Detailed breakdown of each executed task (EXP-1, EXP-2, etc.), tools used, and key findings.
-   - **Results, Tables & Figures**: Embed ALL figures and tables VERBATIM as returned by `format_results` — copy its `formatted_markdown` blocks exactly, links included. NEVER write a link to a figure, table or file yourself: a path you assemble from a filename resolves to nothing and the reader sees a broken image. If `formatted_markdown` is empty, state plainly that the run produced no embeddable artifacts instead of inventing paths.
+   - **Results, Tables & Figures**: Embed ALL figures and tables VERBATIM as returned by `format_results` — copy its `formatted_markdown` blocks exactly, links included — and close the section with the list of produced files and their links. NEVER write a link to a figure, table or file yourself: a path you assemble from a filename resolves to nothing and the reader sees a broken image. If `formatted_markdown` is empty, state plainly that the run produced no embeddable artifacts instead of inventing paths.
    - **Discussion & Selectivity Analysis**: Scientific interpretation of the results, binding affinities, selectivity ratios, and trade-offs.
    - **Limitations & Next Steps**: Caveats, failed or partial tasks, and concrete recommendations for follow-up studies.
 
