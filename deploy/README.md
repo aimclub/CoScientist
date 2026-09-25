@@ -68,11 +68,23 @@ runner. The steps need no root.
 
    ```
    systemctl --user status coscientist-web --no-pager
-   curl -fsS http://127.0.0.1:7000/ >/dev/null && echo up
+   curl -fsS http://127.0.0.1:7000/healthz >/dev/null && echo up
    ```
+
+   `/healthz` is the one path that answers without a login. Every other path,
+   including `/`, redirects to `/login`.
 
 Open the firewall for the port if clients are not on the server. The service
 binds `0.0.0.0:7000`.
+
+Open **only** that port. These services bind `0.0.0.0` by default and have no
+authentication of their own:
+
+- The code-exec server on `:8131`. It runs any shell command that is posted to
+  `/submit`. Set `CODE_EXEC_HOST=127.0.0.1`.
+- The MCP servers on `:7331`-`:7338`. The vault server on `:7338` holds the S3
+  credentials.
+- The A2A agent ports and the graph service.
 
 ## The deploy job
 
@@ -82,7 +94,7 @@ The job runs on the self-hosted runner. On each run it:
 2. Runs `uv sync --frozen` to match `uv.lock`.
 3. Re-links `.env` into the deploy directory.
 4. Restarts the user service.
-5. Polls `http://127.0.0.1:7000/` until it answers, or fails the job.
+5. Polls `http://127.0.0.1:7000/healthz` until it answers, or fails the job.
 
 Triggers: a push to `main`, or a manual run from the Actions tab. To deploy a
 different branch, change `DEPLOY_BRANCH` in `deploy-web.yml`.
@@ -121,6 +133,78 @@ At minimum set these in `~/.config/coscientist/.env`:
   literature search.
 
 Keys use the nested form `SECTION__FIELD` (double underscore).
+
+## Authentication
+
+One shared password gates the whole deployment. There are no user accounts.
+Everybody who logs in sees every session, every report and every setting.
+
+Set the password in `~/.config/coscientist/.env` **before** the first deploy of
+this feature. The gate fails closed: with `AUTH__ENABLED=true` and no password,
+every request gets `503`.
+
+```
+AUTH__PASSWORD=<long random string>
+AUTH__SECRET_KEY=<long random string>
+AUTH__ALLOWED_ORIGINS=https://<the host browsers use>
+```
+
+Keys:
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `AUTH__PASSWORD` | unset | The one password. Unset means `503` on every path. |
+| `AUTH__SECRET_KEY` | random per boot | Signs the session cookie. See note 3. |
+| `AUTH__ENABLED` | `true` | Set to `false` only for a localhost-only instance. |
+| `AUTH__COOKIE_SECURE` | auto | `Secure` on the session cookie. See note 1. |
+| `AUTH__ALLOWED_ORIGINS` | empty | Comma-separated origins that may open the WebSocket. Empty falls back to same-origin. |
+| `AUTH__SESSION_MAX_AGE` | `604800` | Cookie lifetime in seconds. |
+| `AUTH__MAX_LOGIN_ATTEMPTS` | `10` | Failed logins per 15 minutes before the login page reports a throttle. Read note 4. |
+
+Four things to get right:
+
+1. **TLS.** Leave `AUTH__COOKIE_SECURE` out of the file. Do not write it with
+   an empty value: an empty string is not a boolean, and the server stops at
+   startup before it can report why. The server then reads
+   `X-Forwarded-Proto` for each login and marks the cookie `Secure` under
+   HTTPS only. This matters because a browser never sends a `Secure` cookie
+   back over plain HTTP: pin it to `true` without TLS and the login appears to
+   succeed, then every page bounces back to `/login`. Set it to `true` to
+   demand HTTPS. On plain HTTP the password crosses the network in the clear,
+   whatever this key says.
+2. **The origin list.** `AUTH__ALLOWED_ORIGINS` must hold the origin the browser
+   shows, not `127.0.0.1:7000`. An empty list falls back to same-origin, which
+   works only while the proxy passes the `Host` header through unchanged. If
+   the proxy rewrites `Host`, the UI loads and then reports `Disconnected`.
+   The log names the refused origin, so check journalctl. Name the origin here
+   and the check no longer depends on the proxy.
+3. **The cookie key.** Leave `AUTH__SECRET_KEY` unset and the server mints a
+   new key at every start. The service restarts on each deploy, so every open
+   tab loses its session and jumps to `/login` — in the middle of a running
+   job. Set a fixed key to keep sessions across deploys.
+4. **The password must be long and random.** The login throttle counts failures
+   per client address, but uvicorn runs without `--proxy-headers`, so behind a
+   reverse proxy every caller arrives as the proxy address and shares one
+   counter. The server therefore checks the password before the throttle and
+   never refuses a correct one. The other order would let ten wrong guesses
+   from anywhere on the internet lock out the whole team for 15 minutes. The
+   cost is that the throttle slows guessing but does not stop it. Use 20 or
+   more random characters, not a memorable phrase.
+
+What this does not do:
+
+- It does not isolate users from each other. `user_id` still comes from the
+  caller, so anyone who logs in can read any session.
+- `POST /api/settings` still changes settings for everybody.
+- Anyone who logs in reaches `/alembic`, which builds arbitrary git
+  repositories. Set `ALEMBIC_WEB_CONTROLS=0` in the unit file unless somebody
+  is using it.
+- It does not stop a determined password-guessing attack. Read note 4.
+
+To rotate the password, change `AUTH__PASSWORD` and restart. This also logs
+everybody out: the cookie signing key mixes in the password, so every
+outstanding cookie stops verifying. Changing `AUTH__SECRET_KEY` and restarting
+does the same without changing the password.
 
 ## Artifact links on a cluster
 

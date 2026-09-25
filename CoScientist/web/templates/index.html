@@ -111,6 +111,14 @@
           </p>
           <p id="conn-status" class="text-[8px] text-error uppercase font-bold tracking-widest">Disconnected</p>
         </div>
+        <!-- Plain form POST, no script: the session cookie is HttpOnly, so
+             only the server can clear it. -->
+        <form method="post" action="/auth/logout" class="ml-auto">
+          <button type="submit" title="Sign out"
+            class="text-outline-variant hover:text-primary transition-colors flex items-center">
+            <span class="material-symbols-outlined text-sm">logout</span>
+          </button>
+        </form>
       </div>
     </div>
   </aside>

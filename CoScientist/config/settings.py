@@ -418,6 +418,68 @@ class CriticSettings(BaseModel):
 
 
 # =========================
+# AUTH
+# =========================
+class AuthSettings(BaseModel):
+    """Shared-password gate for the web UI.
+
+    Deliberately NOT part of WebSettings. That group is runtime-mutable: the
+    unauthenticated ``POST /api/settings`` writes into it field by field, and
+    ``GET /api/settings`` reads it back out to the browser. A credential there
+    is one careless key mapping away from being both writable and readable by
+    a caller. Nothing in the web layer mutates this group.
+
+    Override with AUTH__PASSWORD, AUTH__SECRET_KEY and so on.
+    """
+
+    enabled: bool = True
+
+    # The one password for the whole deployment. Empty means the gate cannot
+    # open, and every request gets 503 — see CoScientist/web/auth.py. The app
+    # never falls back to serving without a password.
+    password: Optional[str] = None
+
+    # HMAC key for the session cookie. Unset mints a fresh random key at every
+    # boot, so a restart logs everyone out. That matches the rest of the app:
+    # the ADK session service is in-memory and a restart already wipes it.
+    secret_key: Optional[str] = None
+
+    # Cookie lifetime in seconds. Default one week.
+    session_max_age: int = 7 * 24 * 60 * 60
+
+    # `Secure` on the session cookie. Unset means decide per request from
+    # X-Forwarded-Proto: Secure under HTTPS, not Secure over plain HTTP. That
+    # is the only setting correct for both deployments, because a browser
+    # never sends a Secure cookie back over plain HTTP — pinning it true
+    # without TLS accepts the password and then loops back to /login. Set it
+    # true to demand HTTPS, or false to force plain HTTP and accept that the
+    # password crosses the network in the clear.
+    cookie_secure: Optional[bool] = None
+
+    # Comma-separated origins allowed to open the WebSocket, e.g.
+    # "https://cosci.example.org". SameSite=Lax does not reliably cover a
+    # WebSocket handshake, so the origin needs its own check. An empty list
+    # falls back to same-origin, which depends on the proxy passing the Host
+    # header through. Name the origin here to stop depending on that.
+    allowed_origins: str = ""
+
+    # Online-guessing brake: failed logins per client IP per window. One
+    # password on the public internet makes this the main residual risk.
+    max_login_attempts: int = 10
+    login_window_seconds: int = 15 * 60
+
+    @property
+    def origin_list(self) -> List[str]:
+        # Lowercased: browsers send the host lowercased whatever the user
+        # typed, so a hand-written "https://CoSci.example.org" would otherwise
+        # never match.
+        return [
+            o.strip().rstrip("/").lower()
+            for o in self.allowed_origins.split(",")
+            if o.strip()
+        ]
+
+# =========================
 # MAIN SETTINGS
 # =========================
 class Settings(BaseSettings):
@@ -442,6 +504,7 @@ class Settings(BaseSettings):
     checkpoints: CheckpointSettings = CheckpointSettings()
     synapse: SynapseSettings = SynapseSettings()
     critic: CriticSettings = CriticSettings()
+    auth: AuthSettings = AuthSettings()
 
     model_config = SettingsConfigDict(
         env_file=".env",          

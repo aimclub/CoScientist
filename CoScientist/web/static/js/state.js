@@ -1,6 +1,22 @@
 // =========================================================================
 // WebSocket & State / Global Utilities
 // =========================================================================
+
+// Session expiry, in one place. The server answers 401 to every API call once
+// the cookie is gone, and the app makes those calls from apiJson and from a
+// dozen direct fetch() sites. Wrapping fetch itself covers all of them, so no
+// call site has to remember. state.js loads before every other app script.
+(function guardAgainstExpiredSession() {
+  const realFetch = window.fetch.bind(window);
+  window.fetch = async function (...args) {
+    const response = await realFetch(...args);
+    if (response.status === 401 && window.location.pathname !== '/login') {
+      window.location.href = '/login';
+    }
+    return response;
+  };
+})();
+
 let ws = null;
 let eventCount = 0;
 let reconnectTimer = null;

@@ -41,6 +41,22 @@
         document.getElementById('active-badge').className = 'text-[10px] bg-surface-container-highest px-3 py-1 rounded text-outline-variant border border-outline-variant/20 uppercase font-bold tracking-widest';
         if (intentionalDisconnect || !activeUser || !activeSession
           || activeUser.id !== userId || activeSession.id !== sessionId) return;
+        // The auth gate refused the handshake. Only some servers deliver that
+        // as a clean 1008 — uvicorn answers the upgrade with HTTP 403 instead,
+        // which reaches the browser as an abnormal close indistinguishable
+        // from a server restart. Handle the clean case here and probe for the
+        // other one below.
+        if (event.code === 1008) {
+          window.location.href = '/login';
+          return;
+        }
+        // Refused for its Origin, not for want of a session. The user is
+        // logged in, so /login would send them straight back here — a loop no
+        // correct password can escape. Report it and stop instead.
+        if (event.code === 4403) {
+          addTelemetry('REFUSED :: origin not allowed — set AUTH__ALLOWED_ORIGINS');
+          return;
+        }
         if (event.code === 4404) {
           localStorage.removeItem(USER_STORAGE_KEY);
           localStorage.removeItem(SESSION_STORAGE_KEY);
@@ -48,6 +64,11 @@
           return;
         }
         addTelemetry('DISCONNECTED — retrying in 3s');
+        // One cheap authenticated call separates "session expired" from
+        // "server restarting": the fetch wrapper in state.js redirects to
+        // /login on 401. If the server is simply down the call fails and the
+        // retry below carries on as before.
+        fetch('/api/users').catch(() => { });
         reconnectTimer = setTimeout(connect, 3000);
       };
 

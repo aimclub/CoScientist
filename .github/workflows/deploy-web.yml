@@ -16,7 +16,7 @@ jobs:
     env:
       DEPLOY_BRANCH: main
       SERVICE: coscientist-web
-      HEALTH_URL: http://127.0.0.1:7000/
+      HEALTH_URL: http://127.0.0.1:7000/healthz
     steps:
       - name: Set up environment
         # A job-level env: block cannot expand $HOME or run id(1), so resolve the
@@ -71,6 +71,9 @@ jobs:
             sleep 2
           done
           echo "service did not answer on $HEALTH_URL"
+          # Without -f curl prints the body. A 503 here names the missing
+          # setting, which is the usual cause of a failed first deploy.
+          curl -sS "$HEALTH_URL" || true
           systemctl --user status "$SERVICE" --no-pager || true
           journalctl --user -u "$SERVICE" -n 80 --no-pager || true
           exit 1
