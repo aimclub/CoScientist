@@ -41,7 +41,7 @@ auto-assigned per type: `Q1`, `H2`, `E3`, `VM1`, `CC1`, `T1`, …
 | Hypothesis | H | formulated → under_verification → confirmed / refuted / postponed |
 | Evidence | E | obtained → validated / rejected (requires `attrs.subtype`: literature/experimental/computational/expert/meta) |
 | Conclusion | CL | draft → approved |
-| VerificationMethod | VM | planned → running → done / failed |
+| VerificationMethod | VM | proposed → used / not_used; not_used → used |
 | ConfirmationCriteria | CC | not_met ↔ met |
 | Tool | T | available / needs_adaptation → being_created → available / creation_failed |
 | Resource | R | available ↔ exhausted |
@@ -107,10 +107,10 @@ it doesn't have.)
 
 ```jsonc
 nodes: [
-  {"type": "Evidence", "attrs": {"subtype": "computational", "content": "AUC=0.91"}, "ref": "e1"},
+  {"type": "Evidence", "attrs": {"subtype": "computational", "content": "AUC=0.91"}, "ref": "e_new"},
   {"id": "EB1", "attrs": {"volume": "20k"}}          // enrich an existing node (no "type")
 ]
-edges: [ {"type": "supports", "from": "#e1", "to": "H2"} ]   // "#ref" points at a node made in this call
+edges: [ {"type": "supports", "from": "#e_new", "to": "H2"} ] // "#ref" points at a node made in this call
 status_updates: [ {"id": "H2", "status": "under_verification", "reason": "..."} ]
 ```
 
@@ -183,9 +183,11 @@ could not be read as research at all:
   background validator keys its dedup on that id. It is skipped when the
   context-init pre-stage is enabled, since that stage seeds a richer frame and
   would archive a study one second old.
-* **The methods.** `sync_plan_to_research_graph` mirrors each registered plan
-  task into a `planned` VerificationMethod attributed to `plan-mirror`, so a
-  reader can see at a glance that no model chose them. It is idempotent per task
+* **The plan.** `sync_plan_to_research_graph` mirrors each registered plan task
+  into a `PlanStep` attributed to `plan-mirror`, so a reader can see at a glance
+  that no model chose them. (It used to write them as VerificationMethods, which
+  is the confusion the `PlanStep` type exists to undo: a step is an intention, a
+  method is the means.) It is idempotent per task
   title and runs from two hooks — `after_tool` on `create_plan` and
   `before_agent` on the orchestrator (reading `_master_active_tasks`) — because
   `create_plan` belongs to an agent that ships disabled, and an operator can

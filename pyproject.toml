@@ -25,6 +25,11 @@ dependencies = [
     "networkx>=3.4",
     "opik>=2.0.70",
     "pymongo>=4.6.3",
+    # The ТЗ («Основание и приёмка» → GOST 19.201-78) is handed to people and
+    # has to be a Word file. The NIR report's DOCX is laid out by the external
+    # normcontrol MCP, whose contract is closed to GOST 7.32 alone, so there is
+    # no second renderer to borrow — this is the only local one.
+    "python-docx>=1.1",
     "rag-tools",
     "rank-bm25>=0.2.2",
     "sqlalchemy>=2.0.51",

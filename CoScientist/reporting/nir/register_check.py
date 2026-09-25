@@ -63,7 +63,11 @@ _ENGLISH_TOKENS: Set[str] = {
 }
 #: …minus the ones that are ordinary English words a report may legitimately
 #: use inside a quoted title or a product name.
-_ENGLISH_TOKENS -= {"report", "tool", "spec", "publication", "resource", "meta"}
+#: …plus the method vocabulary, whose codes are ordinary English words that a
+#: Russian report may legitimately carry inside a quoted title, a metric name
+#: or a tool's own documentation.
+_ENGLISH_TOKENS -= {"report", "tool", "spec", "publication", "resource", "meta",
+                    "used", "proposed"}
 
 _ENGLISH_RE = re.compile(
     r"\b(?:" + "|".join(sorted(re.escape(t) for t in _ENGLISH_TOKENS)) + r")\b",

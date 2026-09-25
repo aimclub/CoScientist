@@ -61,6 +61,11 @@
         if (window.RoadmapModal && typeof window.RoadmapModal.feed === 'function') {
           window.RoadmapModal.feed(data);
         }
+        // After the roadmap: the tracker reads the task list the line above
+        // has just refreshed, so the two must not be swapped.
+        if (window.PlanTracker && typeof window.PlanTracker.feed === 'function') {
+          window.PlanTracker.feed(data);
+        }
         switch (data.type) {
           case 'connected':
             addTelemetry('INIT :: ' + data.message);
@@ -83,10 +88,13 @@
             break;
           case 'agent_event':
             activityTouchAgent(data.author, data.timestamp);
-            if (hasText(data.content)) {
+            if (isPostPlanAgent(data.author)) releasePlanGate();
+            if (hasText(data.content) && isChatNoise(data)) {
+              addTelemetry('NOTE :: ' + data.author + ' :: ' + stripThinking(data.content).slice(0, 200));
+            } else if (hasText(data.content)) {
               hideTyping();
               highlightAgent(data.author);
-              addAgentMsg(data.author, data.content, data.timestamp);
+              addAgentMsg(data.author, data.content, data.timestamp, data);
               const foundUrl = extractSandboxUrlFromText(data.content);
               if (foundUrl) updateCoderSandboxButton(foundUrl);
               addTelemetry('EVENT :: ' + data.author + (data.is_final ? ' [FINAL]' : ''));
@@ -113,8 +121,13 @@
             // The run continues after a subordinate answers, so the typing
             // indicator stays up — only the deliverable is posted here.
             activityTouchAgent(data.agent, data.timestamp);
+            if (PLAN_AGENTS.includes(data.agent)) {
+              addTelemetry('OUTPUT :: ' + data.agent + ' (plan view only)');
+              break;
+            }
             highlightAgent(data.agent);
-            addAgentOutputMsg(data.agent, data.content, data.timestamp, data.caller);
+            addAgentOutputMsg(data.agent, data.content, data.timestamp, data.caller, data);
+            if (window.refreshSessionDocuments) refreshSessionDocuments();
             addTelemetry('OUTPUT :: ' + data.agent + ' → ' + (data.caller || 'system'));
             break;
           case 'tool_activity':
@@ -125,6 +138,9 @@
             break;
           case 'final_response':
             hideTyping();
+            if (data.document && window.openDocument) {
+              openDocument(data.document.artifact_id, data.document.title);
+            }
             resetAgents();
             activityMarkIdle();
             currentPlannerHitlRequest = null;
@@ -135,6 +151,11 @@
           case 'hitl_request':
             hideTyping();
             showHITL(data);
+            // Being asked to approve something is the moment to read it.
+            if (data.document && window.openDocumentForRequest) {
+              openDocumentForRequest(data.request_id, data.document);
+            }
+            if (window.refreshSessionDocuments) refreshSessionDocuments();
             if (data.agent_name === 'PlannerAgent') {
               currentPlannerHitlRequest = data;
               updateRoadmapModalButtons();
@@ -142,8 +163,8 @@
             addTelemetry('HITL :: ' + data.agent_name + ' requests ' + data.action_type);
             break;
           case 'hitl_timeout':
+            if (data.agent_name === 'PlannerAgent' && !data.paused) releasePlanGate();
             disableHitlControls(data.request_id);
-            document.getElementById('hitl-panel').classList.add('hidden');
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();
             addSystemMsg(hitlTimeoutSummary(data));
@@ -159,7 +180,6 @@
             break;
           case 'hitl_cancelled':
             disableHitlControls(data.request_id);
-            document.getElementById('hitl-panel').classList.add('hidden');
             currentPlannerHitlRequest = null;
             updateRoadmapModalButtons();
             addTelemetry('HITL :: cancelled with its run');

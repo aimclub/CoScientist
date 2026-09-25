@@ -44,6 +44,16 @@ class ArtifactRef(StrictModel):
     derived_from: list[str] = Field(default_factory=list)
     created_at: datetime
     durability: Literal["managed", "workspace", "transient"]
+    #: Our own copy in the session's artifact store, when one was taken.
+    #:
+    #: Deliberately NOT named `artifact_id` — that one is this runtime's own
+    #: identity (``ART-<uuid>``) and means something else entirely. Conflating
+    #: the two put ``cos-artifact:ART-…`` into a graph node, which is a link to
+    #: a file that was never stored under that name.
+    #:
+    #: Not a canonical location either: it is a mirror OF whichever location
+    #: below is canonical, so `validate_location` must not count it.
+    session_artifact_id: str | None = None
 
     @field_validator("external_url")
     @classmethod

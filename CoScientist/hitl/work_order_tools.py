@@ -29,6 +29,7 @@ from google.adk.tools.tool_context import ToolContext
 from CoScientist.config import get_settings
 from CoScientist.graph.session_scope import session_key
 from CoScientist.hitl.models import HITLAction, HITLRequest, HITLResponse
+from CoScientist.agents.callbacks.report_language import session_report_language
 from CoScientist.hitl.work_order import (
     Artifact,
     Assumption,
@@ -77,6 +78,28 @@ def session_context(tool_context: Any) -> Dict[str, str]:
     return {"user_id": user_id, "session_id": session_id}
 
 
+def _marked(response: Any, field: str) -> set:
+    """The ids the operator ticked, whatever action they ticked them with.
+
+    One reader for both fields and every path. They used to be read only on the
+    one action each was thought to belong to, so a mark made alongside anything
+    else was discarded without a word.
+    """
+    if response is None or not isinstance(getattr(response, "form_values", None), dict):
+        return set()
+    return {str(i) for i in (response.form_values.get(field) or [])}
+
+
+def _rejected_ids(response: Any) -> set:
+    """Assumptions the operator refused to accept."""
+    return _marked(response, "rejected_assumption_ids")
+
+
+def _disputed_ids(response: Any) -> set:
+    """Findings the operator marked as wrong."""
+    return _marked(response, "disputed_finding_ids")
+
+
 def _claim_plan_step(state: Any, agent: str, order: Any) -> None:
     """An approved order takes the agent's current plan step to in_progress.
 
@@ -101,8 +124,45 @@ def _claim_plan_step(state: Any, agent: str, order: Any) -> None:
             order.plan_task_id = task_id
         set_task_status(state, task_id, "IN_PROGRESS",
                         notes="work order approved", agent=agent)
+        _show_the_step_started(state)
     except Exception as exc:  # noqa: BLE001
         logger.warning("claiming a plan step for %s failed: %s", agent, exc)
+
+
+def _show_the_step_started(state: Any) -> None:
+    """…and say so on the graph, now, rather than at the next orchestrator tick.
+
+    This is the moment a step actually begins, and it was the moment nothing
+    recorded. The plan mirror runs only on the orchestrator's own hooks, while
+    the tracker goes IN_PROGRESS → DONE inside a single sub-agent turn — so by
+    the time the mirror looked, the step had already finished and the graph
+    drew it «не начат» and then «выполнен», with nothing in between. That is
+    the whole of the operator's complaint that the graph never says which stage
+    is running, for every step that is not an experiment.
+
+    Best-effort, like everything else on this path: a bookkeeping failure must
+    not undo an order the human has already approved.
+    """
+    try:
+        from types import SimpleNamespace
+
+        from CoScientist.agents.callbacks.tool_callbacks import (
+            sync_plan_to_research_graph,
+        )
+        from CoScientist.graph.research.store import get_research_graph
+
+        tasks = state.get("_master_active_tasks") or []
+        if not tasks:
+            return
+        # The scope lives in the state itself, and `session_key` reads it off
+        # `context.state` — so a bare holder for it is the whole context this
+        # needs, and it resolves to the same store the agents commit to.
+        sync_plan_to_research_graph(
+            tasks, get_research_graph(SimpleNamespace(state=state)), state,
+            str(state.get("user_query", "")),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("mirroring the claimed plan step failed: %s", exc)
 
 
 def _close_plan_step(state: Any, agent: str, order: Any, status: str,
@@ -240,6 +300,8 @@ class WorkOrderToolset:
         session = session_context(tool_context)
         if not work_order_active():
             return None
+        # The contract is read by the same person the report is written for.
+        lang = session_report_language(tool_context)
         # A read-only amendment is just a notice; the contract itself always goes
         # to the human (under the veto window) — otherwise the agent starts first.
         if tier == Tier.READ and trigger != "work_order" and not force_blocking:
@@ -249,7 +311,7 @@ class WorkOrderToolset:
                     "agent_name": self.agent_name,
                     "tier": tier.value,
                     "work_order": order.model_dump(mode="json"),
-                    "text": render_work_order(order),
+                    "text": render_work_order(order, lang),
                     **(extra_context or {}),
                     "_session": session,
                 })
@@ -271,7 +333,7 @@ class WorkOrderToolset:
             context={
                 "work_order": order.model_dump(mode="json"),
                 "tier": tier.value,
-                "output": render_work_order(order),
+                "output": render_work_order(order, lang),
                 **(extra_context or {}),
                 "_session": session,
             },
@@ -288,6 +350,7 @@ class WorkOrderToolset:
         """
         if not work_order_active():
             return None
+        lang = session_report_language(tool_context)
         report = order.report or WorkReport()
         # Same windows as the declaration: veto for read/compute (a non-positive
         # window waits for the human), the global HITL timeout for side effects.
@@ -312,7 +375,10 @@ class WorkOrderToolset:
                     "amendments": list(order.amendments),
                     "deviations": list(order.deviations),
                 },
-                "output": render_work_report(order),
+                # The session is what turns an artifact reference into a
+                # link; the renderer cannot ask for it on its own.
+                "output": render_work_report(
+                    order, lang, scope=session_key(tool_context)),
                 "_session": session_context(tool_context),
             },
             invoked_via="tool",
@@ -454,12 +520,24 @@ class WorkOrderToolset:
         feedback = (response.instructions or response.free_input or "").strip() if response else ""
 
         if response is not None and response.action == HITLAction.EDIT:
-            return {
+            result: Dict[str, Any] = {
                 "status": "revise",
                 "feedback": feedback or "No feedback provided.",
                 "message": "The human asked for changes. Declare a revised work "
                            "order with declare_work_order before acting.",
             }
+            # An operator who unticks an assumption and writes a note is doing
+            # one thing, not two, and the note is what turns this into a revise.
+            # Only the approve path used to read the unticks, so on this path
+            # they reached nobody — the agent was sent back to the drawing board
+            # without being told which premise had been refused.
+            rejected = _rejected_ids(response)
+            named = [a.text for a in order.assumptions if a.id in rejected]
+            if named:
+                result["rejected_assumptions"] = named
+                result["message"] += (" The human REJECTED the listed assumptions: "
+                                      "the revised order must not rest on them.")
+            return result
         if response is not None and not response.approved:
             order.status = "rejected"
             order.operator_notes = feedback
@@ -471,9 +549,7 @@ class WorkOrderToolset:
                            "finish and report why the task was not carried out.",
             }
 
-        rejected_ids = set()
-        if response is not None and isinstance(response.form_values, dict):
-            rejected_ids = {str(i) for i in response.form_values.get("rejected_assumption_ids") or []}
+        rejected_ids = _rejected_ids(response)
         for assumption in order.assumptions:
             assumption.rejected = assumption.id in rejected_ids
         order.status = "approved"
@@ -718,10 +794,8 @@ class WorkOrderToolset:
         feedback = (response.instructions or response.free_input or "").strip() if response else ""
         report = order.report
 
+        disputed = sorted(_disputed_ids(response))
         if response is not None and response.action == HITLAction.EDIT:
-            disputed = []
-            if isinstance(response.form_values, dict):
-                disputed = [str(i) for i in response.form_values.get("disputed_finding_ids") or []]
             report.status = "revise"
             report.operator_notes = feedback
             report.disputed_finding_ids = disputed
@@ -759,6 +833,11 @@ class WorkOrderToolset:
 
         report.status = "accepted"
         report.operator_notes = feedback
+        # Accepting the result and doubting a particular finding are not the
+        # same act, and an operator may well do both. Only the rework path read
+        # these marks, so a finding ticked as wrong on an otherwise accepted
+        # report was recorded nowhere and mentioned to nobody.
+        report.disputed_finding_ids = disputed
         _close_plan_step(state, self.agent_name, order, "DONE",
                          "work report accepted")
         save_order(state, order)
@@ -770,6 +849,14 @@ class WorkOrderToolset:
         if feedback:
             result["operator_notes"] = feedback
             result["message"] += " Take the operator notes into account."
+        if disputed:
+            result["disputed_findings"] = [
+                {"id": f.id, "text": f.text} for f in report.findings
+                if f.id in disputed
+            ]
+            result["message"] += (" The human accepted the report but marked the "
+                                  "listed findings as wrong: do not carry them "
+                                  "into the answer as established.")
         return result
 
 

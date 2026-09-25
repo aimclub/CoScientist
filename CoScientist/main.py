@@ -208,6 +208,7 @@ class CoScientistManager:
             from CoScientist.graph.plugin import GraphMemoryPlugin
             from CoScientist.graph.research.validator import BackgroundValidatorPlugin
             from CoScientist.agents.truncation_plugin import ToolResultTruncationPlugin
+            from CoScientist.tools.paper_capture_plugin import PaperCapturePlugin
             from CoScientist.tools.mcp_artifact_plugin import McpArtifactCapturePlugin
             from CoScientist.verify.gate_plugin import ArtifactGatePlugin
             from CoScientist.agents.loop_guard_plugin import RepeatCallGuardPlugin
@@ -251,7 +252,12 @@ class CoScientistManager:
                     # Capture artifact (figure/table) URLs from tool results BEFORE
                     # truncation can drop them, so the report collector downloads them.
                     McpArtifactCapturePlugin(),
-                    # Keep truncation last so observers receive full results.
+                    # After it: a PDF already mirrored is re-filed as a paper
+                    # here instead of being fetched again.
+                    PaperCapturePlugin(),
+                    # Truncation answers None now, so it no longer decides
+                    # whether anything after it runs; it cuts for the model at
+                    # before_model and keeps only a safety net here.
                     ToolResultTruncationPlugin(),
                 ],
                 events_compaction_config=_compaction_config(),

@@ -14,6 +14,7 @@ from google.genai import types
 
 from CoScientist.config import get_settings
 from CoScientist.experiments.critique import PlanValidationError, validate_and_critique_plan
+from CoScientist.agents.callbacks.report_language import session_report_language
 from CoScientist.experiments.plan_view import plan_to_view
 from CoScientist.experiments.runtime import approve_plan, initialize_runtime, mark_result_review
 from CoScientist.experiments.runtime.execution_bridge import (
@@ -21,7 +22,12 @@ from CoScientist.experiments.runtime.execution_bridge import (
     record_plan_proposed,
 )
 from CoScientist.experiments.runtime.shared import audit
-from CoScientist.experiments.runtime.state_machine import REPLAN_ROUNDS_KEY
+from CoScientist.experiments.runtime.state_machine import (
+    REPLAN_ROUNDS_KEY,
+    fedot_route_available,
+    medical_route_available,
+    session_route_agents,
+)
 from CoScientist.experiments.schemas import ExperimentPlan
 from CoScientist.graph.session_scope import session_key
 from CoScientist.hitl.handler import AbstractHITLHandler, DelegatingHITLHandler
@@ -224,17 +230,67 @@ def _design_cell(value: Any, n: int | None = None) -> str:
     return _esc(str(value).replace("\n", " "), n)
 
 
-def render_experiment_plan(plan: ExperimentPlan) -> str:
+# The frame around the planner's own words. The goal, the questions and the
+# task names arrive in the session's language; these labels used to be English
+# regardless, so a Russian study opened its plan on "# Experiment plan".
+_PLAN_WORDS = {
+    "en": {
+        "title": "Experiment plan", "revision": "revision", "goal": "Goal",
+        "hypothesis_summary": "Hypothesis summary", "unspecified": "not specified",
+        "methods": "Methods", "duration": "Total duration", "min": "min",
+        "hypotheses": "Hypotheses",
+        "matrix": "Design matrix (hypothesis → experiment → data → baseline → metrics)",
+        "col": ("Task", "Hypothesis", "Question", "Dataset", "Baselines", "Metrics",
+                "Tools", "Analysis artifacts", "Route"),
+        "route": "Route", "repo": "Repo URL", "post_build": "Post-build route",
+        "hypothesis": "Hypothesis", "question": "Question", "dataset": "Dataset",
+        "baselines": "Baselines", "metrics": "Metrics",
+        "analysis": "Analysis artifacts", "task": "Task", "rationale": "Rationale",
+        "tools": "MCP/tools", "params": "Launch params", "inputs": "Inputs",
+        "criteria": "Success criteria", "expected": "Expected artifacts",
+        "task_duration": "Duration", "warnings": "Warnings", "none": "none",
+        "risks": "Risks", "operation": "research task",
+    },
+    "ru": {
+        "title": "План эксперимента", "revision": "ревизия", "goal": "Цель",
+        "hypothesis_summary": "Проверяемая гипотеза", "unspecified": "не задана",
+        "methods": "Методы", "duration": "Общая оценка", "min": "мин",
+        "hypotheses": "Гипотезы",
+        "matrix": "Матрица плана (гипотеза → эксперимент → данные → базлайн → метрики)",
+        "col": ("Задача", "Гипотеза", "Вопрос", "Данные", "Базлайны", "Метрики",
+                "Инструменты", "Анализ", "Маршрут"),
+        "route": "Маршрут", "repo": "Репозиторий", "post_build": "Маршрут после сборки",
+        "hypothesis": "Гипотеза", "question": "Вопрос", "dataset": "Данные",
+        "baselines": "Базлайны", "metrics": "Метрики",
+        "analysis": "Артефакты анализа", "task": "Что выполняется", "rationale": "Зачем",
+        "tools": "MCP / инструменты", "params": "Параметры запуска",
+        "inputs": "Входные данные", "criteria": "Критерии успеха",
+        "expected": "Ожидаемые артефакты", "task_duration": "Длительность",
+        "warnings": "Предупреждения", "none": "нет", "risks": "Риски",
+        "operation": "задача исследования",
+    },
+}
+
+
+def _plan_words(lang) -> dict:
+    from CoScientist.agents.callbacks.report_language import normalize_report_language
+
+    return _PLAN_WORDS[normalize_report_language(lang)]
+
+
+def render_experiment_plan(plan: ExperimentPlan, lang: str = "en") -> str:
+    w = _plan_words(lang)
     L = [
-        f"# Experiment plan · revision {plan.revision}", f"Goal: {plan.goal}",
-        f"Hypothesis summary: {plan.hypothesis or 'not specified'}",
-        f"Methods: {', '.join(plan.methods)}", f"Total duration: {plan.total_est_duration_min} min",
+        f"# {w['title']} · {w['revision']} {plan.revision}", f"{w['goal']}: {plan.goal}",
+        f"{w['hypothesis_summary']}: {plan.hypothesis or w['unspecified']}",
+        f"{w['methods']}: {', '.join(plan.methods)}",
+        f"{w['duration']}: {plan.total_est_duration_min} {w['min']}",
     ]
     if plan.hypotheses:
-        L += ["", "## Hypotheses"] + [f"- `{h.hypothesis_id}`: {h.statement}" for h in plan.hypotheses]
+        L += ["", f"## {w['hypotheses']}"] + [f"- `{h.hypothesis_id}`: {h.statement}" for h in plan.hypotheses]
     L += [
-        "", "## Design matrix (hypothesis → experiment → data → baseline → metrics)",
-        "| Task | Hypothesis | Question | Dataset | Baselines | Metrics | Tools | Analysis artifacts | Route |",
+        "", f"## {w['matrix']}",
+        "| " + " | ".join(w["col"]) + " |",
         "|---|---|---|---|---|---|---|---|---|",
     ]
     for t in plan.tasks:
@@ -278,38 +334,42 @@ def render_experiment_plan(plan: ExperimentPlan) -> str:
                 inputs_list.append(f"{inp.data_id} [{inp.kind}: {loc}]")
             else:
                 inputs_list.append(f"{inp.data_id} [{inp.kind}]")
-        inputs_str = "; ".join(inputs_list) if inputs_list else "none"
+        inputs_str = "; ".join(inputs_list) if inputs_list else w["none"]
 
         also = f" (+{', '.join(d.also_tests)})" if d.also_tests else ""
-        op_str = f" [Operation: `{d.operation_ref}`]" if d.operation_ref else ""
+        # Named, not coded. The operator reads this card beside the research
+        # frame, and «OP-1» told them nothing there either.
+        op_no = str(d.operation_ref or "").rsplit("-", 1)[-1]
+        op_str = (f" [{w['operation']} {op_no} · `{d.operation_ref}`]"
+                  if d.operation_ref else "")
         notes = f" — {d.dataset.notes}" if d.dataset.notes else ""
-        L += ["", f"## {t.id} · {t.name}", f"Route: `{t.route.value}`"]
+        L += ["", f"## {t.id} · {t.name}", f"{w['route']}: `{t.route.value}`"]
         if t.route.value == "alembic_build":
-            L += [f"Repo URL: {t.repo_url}", f"Post-build route: `{t.post_build_route}`"]
+            L += [f"{w['repo']}: {t.repo_url}", f"{w['post_build']}: `{t.post_build_route}`"]
         L += [
-            f"Hypothesis: `{d.hypothesis_ref}`{also}{op_str}",
-            f"Question: {_design_cell(d.experiment_question)}",
-            f"Dataset: {_design_cell(d.dataset.name)}{notes if d.dataset.name else ''}",
-            f"Baselines: {_design_cell('; '.join(f'{b.name} ({b.kind})' for b in d.baselines))}",
-            f"Metrics: {_design_cell('; '.join(f'{m.name} ({m.direction})' for m in d.metrics))}",
-            f"Analysis artifacts: {_design_cell('; '.join(f'{a.name} [{a.role}]' for a in d.analysis_artifacts))}",
-            f"Task: {t.description}",
+            f"{w['hypothesis']}: `{d.hypothesis_ref}`{also}{op_str}",
+            f"{w['question']}: {_design_cell(d.experiment_question)}",
+            f"{w['dataset']}: {_design_cell(d.dataset.name)}{notes if d.dataset.name else ''}",
+            f"{w['baselines']}: {_design_cell('; '.join(f'{b.name} ({b.kind})' for b in d.baselines))}",
+            f"{w['metrics']}: {_design_cell('; '.join(f'{m.name} ({m.direction})' for m in d.metrics))}",
+            f"{w['analysis']}: {_design_cell('; '.join(f'{a.name} [{a.role}]' for a in d.analysis_artifacts))}",
+            f"{w['task']}: {t.description}",
         ]
         if t.rationale and t.rationale != t.description:
-            L.append(f"Rationale: {t.rationale}")
-        L.append(f"MCP/tools: {'; '.join(tools) if tools else 'none'}")
+            L.append(f"{w['rationale']}: {t.rationale}")
+        L.append(f"{w['tools']}: {'; '.join(tools) if tools else w['none']}")
         if t.launch_params:
             params_str = ", ".join(f"{k}={v}" for k, v in t.launch_params.items())
-            L.append(f"Launch params: {params_str}")
+            L.append(f"{w['params']}: {params_str}")
         L += [
-            f"Inputs: {inputs_str}",
-            f"Success criteria: {criteria}",
-            f"Expected artifacts: {arts}",
-            f"Duration: {t.est_duration_min} min",
-            f"Warnings: {'; '.join(t.warnings) if t.warnings else 'none'}",
+            f"{w['inputs']}: {inputs_str}",
+            f"{w['criteria']}: {criteria}",
+            f"{w['expected']}: {arts}",
+            f"{w['task_duration']}: {t.est_duration_min} {w['min']}",
+            f"{w['warnings']}: {'; '.join(t.warnings) if t.warnings else w['none']}",
         ]
     if plan.risks:
-        L += ["", "## Risks"] + [f"- {r}" for r in plan.risks]
+        L += ["", f"## {w['risks']}"] + [f"- {r}" for r in plan.risks]
     return "\n".join(L)
 
 
@@ -348,40 +408,107 @@ def build_experiment_artifacts_manifest(state: Any) -> list[dict[str, str]]:
     return rows
 
 
+_RESULT_WORDS = {
+    "en": {
+        "title": "Experiment results", "count": "Task results",
+        "locations": "Canonical artifact locations (do not invent URLs)",
+        "none": "(none captured)", "route": "Route", "artifact": "Artifact",
+        "summary": "Summary",
+    },
+    "ru": {
+        "title": "Результаты эксперимента", "count": "Результатов задач",
+        "locations": "Канонические адреса артефактов (не придумывать URL)",
+        "none": "(ничего не собрано)", "route": "Маршрут", "artifact": "Артефакт",
+        "summary": "Итог",
+    },
+}
+
+
+def _openable(state: Any, location: str) -> str:
+    """A URL a reader can press, or "" when this session does not hold the file.
+
+    Read-only on the state: the scope keys are taken directly rather than
+    through `session_key`, which WRITES the resolved pair back and must not run
+    from a renderer.
+    """
+    text = str(location or "").strip()
+    if not text:
+        return ""
+    try:
+        from CoScientist.graph.session_scope import (
+            GRAPH_SCOPE_SESSION_KEY,
+            GRAPH_SCOPE_USER_KEY,
+        )
+        from CoScientist.utils.report_links import resolve_ref
+
+        user = str((state or {}).get(GRAPH_SCOPE_USER_KEY) or "")
+        session = str((state or {}).get(GRAPH_SCOPE_SESSION_KEY) or "")
+        if not (user and session):
+            return ""
+        scope = (user, session)
+        from CoScientist.reporting import session_files
+
+        mirrored = session_files.artifact_id_for_url(scope, text)
+        if mirrored:
+            return resolve_ref(f"cos-artifact:{mirrored}", scope) or ""
+        return resolve_ref(text, scope) or ""
+    except Exception:  # noqa: BLE001 — a link is not worth a failed render
+        return ""
+
+
+def _located(state: Any, label: str, location: str) -> str:
+    """The canonical address, and a link beside it when there is one.
+
+    Beside, never instead. This section is headed "do not invent URLs" and the
+    backticked address is what stops a model doing exactly that — it is the
+    string the runtime will accept back. The link is for the human reading the
+    same page, who otherwise has to copy an S3 key by hand.
+    """
+    address = f"`{location}`"
+    href = _openable(state, location)
+    return f"{address} → [{label}]({href})" if href else address
+
+
 def render_experiment_results(state: Any) -> str:
+    """The run's results. Reads its own language: it already has the state."""
+    from CoScientist.agents.callbacks.report_language import normalize_report_language
+
+    w = _RESULT_WORDS[normalize_report_language(session_report_language(state))]
     results = state.get("experiment_task_results") or []
     manifest = build_experiment_artifacts_manifest(state)
     if isinstance(state, dict):
         state["experiment_artifacts_manifest"] = manifest
     L = [
-        "# Experiment results",
-        f"Task results: {len(results)}",
+        f"# {w['title']}",
+        f"{w['count']}: {len(results)}",
         "",
-        "## Canonical artifact locations (do not invent URLs)",
+        f"## {w['locations']}",
     ]
     if manifest:
         for m in manifest:
             L.append(
-                f"- `{m['task_id']}` / `{m['name']}` (`{m['artifact_id']}`): `{m['location']}`"
+                f"- `{m['task_id']}` / `{m['name']}` (`{m['artifact_id']}`): "
+                + _located(state, m["name"] or m["artifact_id"], m["location"])
             )
     else:
-        L.append("- (none captured)")
+        L.append(f"- {w['none']}")
     for r in results:
         L += [
             "",
             f"## {r.get('task_id')} · {r.get('status')}",
             str(r.get("summary") or ""),
-            f"Route: `{r.get('route_used')}`",
+            f"{w['route']}: `{r.get('route_used')}`",
         ]
         for a in r.get("artifacts") or []:
             if not isinstance(a, dict):
                 continue
             L.append(
-                f"- Artifact `{a.get('artifact_id')}` ({a.get('name')}): "
-                f"`{_artifact_canonical_location(a)}`"
+                f"- {w['artifact']} `{a.get('artifact_id')}` ({a.get('name')}): "
+                + _located(state, str(a.get("name") or a.get("artifact_id") or ""),
+                           _artifact_canonical_location(a))
             )
     if summary := state.get("experiment_summary"):
-        L += ["", "## Summary", str(summary)]
+        L += ["", f"## {w['summary']}", str(summary)]
     return "\n".join(L)
 
 
@@ -590,6 +717,10 @@ class ExperimentReviewSessionAgent(SessionAgent):
             runtime = state.get("experiment_runtime") or {}
             previous = ExperimentPlan.model_validate(runtime["plan"]) if runtime.get("plan") else None
             payload = _stamp_context_invariants(_json_payload(output_text), context, previous)
+            # Asked of this session's executor, the one start_task hands work to:
+            # a route switched on after the session was built must not be
+            # approved here and then refused there.
+            route_agents = session_route_agents(getattr(ctx, "agent", None))
             plan, critique = validate_and_critique_plan(
                 payload, settings=cfg,
                 available_tools=(
@@ -601,6 +732,8 @@ class ExperimentReviewSessionAgent(SessionAgent):
                 repo_candidates=context.get("repo_candidates") or [],
                 operations=context.get("operations") or [],
                 pipeline_scope=context.get("pipeline_scope"),
+                fedot_on=fedot_route_available(cfg, route_agents=route_agents),
+                medical_on=medical_route_available(route_agents=route_agents),
             )
             if errs := _context_invariant_errors(plan, context):
                 raise PlanValidationError("ExperimentPlan context invariants failed", errors=errs)
@@ -650,6 +783,7 @@ class ExperimentReviewSessionAgent(SessionAgent):
         # One structured plan, three readers: the web review card, the call
         # graph's record of this round, and anything later that wants the plan
         # without re-deriving it from the runtime.
+        lang = session_report_language(state)
         view = plan_to_view(plan, critique_json)
         state["experiment_plan_view"] = view
         record_id = record_plan_proposed(ctx, self.name, view)
@@ -659,12 +793,12 @@ class ExperimentReviewSessionAgent(SessionAgent):
             _publish_approved_plan_to_graph(ctx, state)
             close_plan_record(ctx, record_id, "approved", reason="headless auto-approve")
             _audit(f"EXPERIMENT_REVIEW_APPROVED kind=plan mode={_approval_mode()} plan_id={plan.plan_id} phase=execution")
-            _audit("EXPERIMENT_DESIGN_MATRIX\n" + render_experiment_plan(plan))
+            _audit("EXPERIMENT_DESIGN_MATRIX\n" + render_experiment_plan(plan, "en"))
             return _auto_approve_response()
 
         response = await self.hitl_handler.handle_request(self._hitl(
             message="Review and explicitly approve the experiment plan.", kind="plan",
-            plan_id=plan.plan_id, output=render_experiment_plan(plan),
+            plan_id=plan.plan_id, output=render_experiment_plan(plan, lang),
             user_id=user_id, session_id=session_id, timeout_seconds=cfg.plan_review_timeout_s,
             plan_view=view,
         ))
@@ -672,7 +806,7 @@ class ExperimentReviewSessionAgent(SessionAgent):
             approve_plan(state)
             _publish_approved_plan_to_graph(ctx, state)
             _audit(f"EXPERIMENT_REVIEW_APPROVED kind=plan mode=human plan_id={plan.plan_id} phase=execution")
-            _audit("EXPERIMENT_DESIGN_MATRIX\n" + render_experiment_plan(plan))
+            _audit("EXPERIMENT_DESIGN_MATRIX\n" + render_experiment_plan(plan, "en"))
         view["status"] = _plan_outcome(response)
         if response.timed_out:
             # The record has said "paused" all along (_plan_outcome); state

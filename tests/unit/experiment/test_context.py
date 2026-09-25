@@ -388,3 +388,82 @@ def test_build_experiment_context_falls_back_without_graph(monkeypatch):
     refs = ctx.state["experiment_context"]["hypothesis_refs"]
     assert [r["hypothesis_id"] for r in refs] == ["H1", "H2"]
     assert refs[0]["statement"] == "Prose one works."
+
+
+def test_the_planner_context_carries_the_effective_fedot_answer(monkeypatch):
+    """experiment_context.route_fedot is the answer start_task gets - switch AND
+    FedotAgent attached - where it used to be the bare switch. The planner's own
+    JSON leaves it out: its prompt is built with or without the route."""
+    from CoScientist.assembly.schema import load_config, resolve_config_path
+    from CoScientist.config import get_settings
+    from CoScientist.experiments.context import build_experiment_context
+    from CoScientist.experiments.runtime import state_machine
+
+    def build() -> dict:
+        state: dict = {
+            "filtered_tools": [],
+            "experiment_source_request": "Estimate a chemical property with ready MCP tools.",
+        }
+        build_experiment_context(SimpleNamespace(state=state, user_content=None))
+        return state
+
+    on = build()
+    assert on["experiment_context"]["route_fedot"] is True
+    assert '"route_fedot"' not in on["experiment_planner_context"]
+
+    monkeypatch.setattr(get_settings().experiments, "route_fedot", False)
+    assert build()["experiment_context"]["route_fedot"] is False
+
+    monkeypatch.setattr(get_settings().experiments, "route_fedot", True)
+    detached = load_config(resolve_config_path("experiments"))
+    detached.agents["ExperimentExecutorAgent"].subordinates.remove("FedotAgent")
+    monkeypatch.setattr(state_machine, "_config_tree", lambda: detached)
+    assert build()["experiment_context"]["route_fedot"] is False
+
+
+def test_the_planner_context_carries_medical_tools_only_with_the_agent(monkeypatch):
+    """An empty list would still name the medical route to the planner."""
+    from CoScientist.config import get_settings
+    from CoScientist.experiments.context import build_experiment_context
+
+    def build() -> dict:
+        state: dict = {
+            "filtered_tools": [],
+            "experiment_source_request": "Review the clinical literature on the compound.",
+        }
+        build_experiment_context(SimpleNamespace(state=state, user_content=None))
+        return state
+
+    on = build()
+    assert on["experiment_context"]["route_medical"] is True
+    assert on["experiment_context"]["available_medical_capabilities"]
+    assert "search_pubmed" in on["experiment_planner_context"]
+
+    monkeypatch.setattr(get_settings().web, "medical_agent_enabled", False)
+    off = build()
+    assert off["experiment_context"]["route_medical"] is False
+    assert off["experiment_context"]["available_medical_capabilities"] == []
+    assert "medical" not in off["experiment_planner_context"]
+
+
+def test_the_planner_context_asks_the_sessions_executor(monkeypatch):
+    """Switch on, but this session's executor was built without MedicalAgent:
+    the planner must not be offered a route start_task would refuse."""
+    from CoScientist.experiments.context import build_experiment_context
+
+    executor = SimpleNamespace(tools=[
+        SimpleNamespace(agent=SimpleNamespace(name=name))
+        for name in ("ExperimentAgent", "CoderAgent", "ResearchAgent")
+    ])
+    root = SimpleNamespace(find_agent=lambda name: executor if name == "ExperimentExecutorAgent" else None)
+    planner = SimpleNamespace(root_agent=root)
+    state: dict = {
+        "filtered_tools": [],
+        "experiment_source_request": "Review the clinical literature on the compound.",
+    }
+    ctx = SimpleNamespace(state=state, user_content=None,
+                          _invocation_context=SimpleNamespace(agent=planner))
+    build_experiment_context(ctx)
+    assert state["experiment_context"]["route_medical"] is False
+    assert state["experiment_context"]["route_fedot"] is False
+    assert "medical" not in state["experiment_planner_context"]

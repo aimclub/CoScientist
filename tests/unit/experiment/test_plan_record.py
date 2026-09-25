@@ -183,8 +183,12 @@ def test_the_review_request_carries_the_structured_plan(monkeypatch):
     assert plan_view["task_count"] == 1
     assert plan_view["matrix"][0]["task_id"] == "EXP-1"
     assert plan_view["critique"]["verdict"] == "approve"
-    # The Markdown stays: the console and any other client still read it.
-    assert "Design matrix" in context["output"]
+    # The Markdown stays: the console and any other client still read it — and
+    # it is now written in the session's language, which defaults to Russian.
+    # (This copy becomes the document the chat panel opens, so an English frame
+    # around Russian content was what a reader actually met.)
+    assert "Матрица плана" in context["output"]
+    assert "Design matrix" not in context["output"]
     # And the view is on the state the module publishes to its caller.
     assert state["experiment_plan_view"]["plan_id"] == plan_view["plan_id"]
 

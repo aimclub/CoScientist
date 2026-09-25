@@ -44,6 +44,13 @@ class LLMSettings(BaseModel):
     # main_model when unset, which is exactly today's behaviour.
     nir_model: Optional[str] = None
 
+    # A small, cheap model for the "view summary" button on an agent in the
+    # execution log: it reads one agent's trace and writes a few lines on what
+    # was done, with which tools, and what came out. Called only on request,
+    # so a weak model is the right one. Falls back to the model half of
+    # `summary_url` ("base;model"), then to main_model. LLM__AGENT_SUMMARY_MODEL.
+    agent_summary_model: Optional[str] = None
+
     # Seconds to wait for a single completion before giving up. Without this a
     # provider that accepts the connection and then goes quiet never raises, so
     # the agent waits forever and the run looks frozen with nothing in the log.
@@ -152,6 +159,34 @@ class S3Settings(BaseModel):
     # SigV4 maximum. The default of the S3 client (360 s) expires before the
     # operator opens the report. Override via S3__PRESIGN_TTL.
     presign_ttl: int = 604800
+
+
+# =========================
+# ARTIFACTS (the session's own copy of what the run produced)
+# =========================
+class ArtifactsSettings(BaseModel):
+    """Mirroring tool output into the session directory.
+
+    A tool hands back a presigned link to its own storage, and one measured on a
+    live run was valid for six minutes. Storing that string is how a figure
+    becomes unreachable. Mirroring copies the bytes here while the link works.
+
+    The caps exist because this writes to disk on every tool call. What exceeds
+    one is recorded as a skipped artifact with a reason — never dropped quietly.
+    """
+
+    #: Master switch. Off means the run behaves exactly as it did before.
+    enabled: bool = True
+    #: Per file. Bigger than this is recorded as ``skipped/oversize``.
+    max_file_mb: int = 100
+    #: Per session, across every mirrored file.
+    max_session_mb: int = 2048
+    max_files_per_session: int = 500
+    #: One fetch of one artifact. The link may already be dead; do not hang.
+    download_timeout: int = 60
+    #: Also push a copy to our S3, giving the artifact a second durable address
+    #: that works from another host. Best effort — the local copy is the home.
+    mirror_to_s3: bool = True
 
 
 # =========================
@@ -359,12 +394,17 @@ class WebSettings(BaseModel):
     auto_clear_graph_enabled: bool = _os.getenv("GRAPH__AUTO_CLEAR", "false").lower() in ("true", "1", "yes")
     executor_tool_keep_score: float = float(_os.getenv("EXECUTOR_TOOL_KEEP_SCORE", "0.3"))
     executor_tool_abstain_score: float = float(_os.getenv("EXECUTOR_TOOL_ABSTAIN_SCORE", "0.2"))
+    # The main profile's FEDOT.MAS reranker fallback (ExecutorSwitchAgent). The
+    # Experiment Module's route decisions do not read it: their switch is
+    # EXPERIMENTS__ROUTE_FEDOT.
     fedot_fallback_enabled: bool = _os.getenv("EXECUTOR__FEDOT_FALLBACK", "true").lower() in ("true", "1", "yes")
     # The clinical specialist: PubMed/PICO, study taxonomy and DICOM. A narrow
     # role, and a study that needs none of it pays for the agent in the
     # orchestrator's roster and in the router's choices — so it switches off.
     # Turning it off also withdraws `medical` as an execution route, because a
-    # route whose agent is not in the tree is a route that cannot run.
+    # route whose agent is not in the tree is a route that cannot run: the
+    # experiment planner is not offered it, the critique refuses it, and a task
+    # already planned on it is blocked. Also a toggle in the web settings.
     medical_agent_enabled: bool = _os.getenv("MEDICAL__ENABLED", "true").lower() in ("true", "1", "yes")
     # The hypothesis generator's thinking budget. `high` by default because
     # ideation plus choosing what to test first is the most reasoning-bound job
@@ -378,6 +418,11 @@ class WebSettings(BaseModel):
     coder_mode: str = _os.getenv("CODER__MODE", "local")        # "local" | "openhands"
     merge_tasks_enabled: bool = _os.getenv("PLANNER__MERGE_TASKS", "true").lower() in ("true", "1", "yes")
     max_active_hypotheses: int = int(_os.getenv("HYPOTHESES__MAX_ACTIVE", "1"))
+    # A node's write-up is offered by a button on every reportable card; this
+    # decides whether a settled card also asks for one on its own. On by
+    # default, and the browser may overrule it for one reader.
+    node_report_auto: bool = _os.getenv(
+        "NODE_REPORT__AUTO", "true").lower() in ("true", "1", "yes")
     use_proxy: bool = _os.getenv("USE_PROXY", "True").lower() in ("true", "1", "yes")
     opik_enabled: bool = _os.getenv("OPIK__ENABLED", "false").lower() in ("true", "1", "yes")
     auto_naming_enabled: bool = _os.getenv("AUTO_NAMING__ENABLED", "true").lower() in ("true", "1", "yes")
@@ -423,7 +468,16 @@ class ExperimentsSettings(BaseModel):
     environment names use the nested ``EXPERIMENTS__*`` form.
     """
 
-    route_fedot: bool = True
+    # The one FEDOT.MAS switch of the Experiment Module (EXPERIMENTS__ROUTE_FEDOT).
+    # experiments.yaml attaches FedotAgent on it, and every route decision -
+    # the planner prompt, its context, the critique, start_task, fallback and
+    # the Alembic post-build route - asks state_machine.fedot_route_available,
+    # which also requires FedotAgent to be listed under ExperimentExecutorAgent.
+    # Off by default: FEDOT.MAS is not reliable enough to be a default route,
+    # and ReAct over the bound MCP tools (react_tools) covers the same tasks.
+    # EXECUTOR__FEDOT_FALLBACK is a different switch: the main profile's
+    # reranker fallback.
+    route_fedot: bool = False
     route_coder_mcp: bool = False
     route_alembic: bool = False
     task_max_attempts: int = Field(default=2, ge=1, le=2)
@@ -466,7 +520,8 @@ class ExperimentsSettings(BaseModel):
     # (EXPERIMENTS__LENIENT_PLANNER=false) to preserve unspecified* sentinels.
     lenient_planner: bool = True
     # Route fallback chains after a failed attempt. Default: fedot → react → coder.
-    # Override via EXPERIMENTS__FALLBACK_*.
+    # Override via EXPERIMENTS__FALLBACK_*. A route that is switched off is
+    # skipped, so a chain never falls back into FEDOT.MAS while it is off.
     fallback_fedot_mas: list[str] = Field(
         default_factory=lambda: ["fedot_mas", "react_tools", "coder"]
     )
@@ -533,6 +588,7 @@ class Settings(BaseSettings):
     hosts_ports: HostsPortsSettings = HostsPortsSettings()
     collections: CollectionsSettings = CollectionsSettings()
     s3: S3Settings = S3Settings()
+    artifacts: ArtifactsSettings = ArtifactsSettings()
     opik: OpikSettings = OpikSettings()
     hitl: HITLSettings = HITLSettings()
     nir: NIRSettings = NIRSettings()
@@ -553,16 +609,30 @@ class Settings(BaseSettings):
     )
 
     @property
+    def nir_buildable(self) -> bool:
+        """There is a normcontrol server to reach, so the agent can be built.
+
+        system.yaml attaches NirReportAgent on ``enabled: ${nir_buildable}``,
+        and attachment is decided ONCE, when the agent tree is assembled at
+        import. ``nir.enabled`` deliberately does not appear here: it is an
+        operator switch the web UI flips per session, and a gate read at build
+        time could never see that. Without the server there is nothing to gate —
+        the toolset is dropped as unconfigured, and an agent advertising a
+        capability it does not have is worse than an absent one.
+
+        Whether the operator is actually *asked* remains a runtime decision, in
+        ``reporting/nir/callback.py``, which reads ``nir_ready`` on every call.
+        """
+        return bool(self.mcp.normcontrol_url)
+
+    @property
     def nir_ready(self) -> bool:
         """The NIR stage is on AND there is a normcontrol server to reach.
 
-        system.yaml attaches NirReportAgent on ``enabled: ${nir_ready}``. The
-        flag alone is not enough: with NIR__ENABLED set and no
-        MCP__NORMCONTROL_URL, the agent would appear in the aggregator's roster
-        while its only toolset had been dropped as unconfigured — a capability
-        advertised and not present. Read through a property rather than fixed at
-        construction so a setting changed at runtime (the web UI writes some)
-        still decides correctly.
+        The runtime gate: what decides whether the operator sees the question
+        at all. Read through a property rather than fixed at construction so a
+        setting changed at runtime (the web UI writes some) still decides
+        correctly.
         """
         return bool(self.nir.enabled and self.mcp.normcontrol_url)
 

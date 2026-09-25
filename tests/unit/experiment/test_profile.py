@@ -11,7 +11,8 @@ from CoScientist.web.handler import WebHITLHandler
 
 def test_experiments_settings_defaults_and_nested_env(monkeypatch):
     defaults = ExperimentsSettings()
-    assert defaults.route_fedot is True
+    # FEDOT.MAS is off unless asked for: not reliable enough to be a default.
+    assert defaults.route_fedot is False
     assert defaults.route_coder_mcp is False
     assert defaults.route_alembic is False
     assert defaults.fallback_research == ["research"]
@@ -20,10 +21,10 @@ def test_experiments_settings_defaults_and_nested_env(monkeypatch):
     assert defaults.task_max_attempts == 2
     assert defaults.max_plan_tasks == 8
 
-    monkeypatch.setenv("EXPERIMENTS__ROUTE_FEDOT", "false")
+    monkeypatch.setenv("EXPERIMENTS__ROUTE_FEDOT", "true")
     monkeypatch.setenv("EXPERIMENTS__MAX_PLAN_TASKS", "6")
     configured = Settings(_env_file=None)
-    assert configured.experiments.route_fedot is False
+    assert configured.experiments.route_fedot is True
     assert configured.experiments.max_plan_tasks == 6
 
 
@@ -389,3 +390,106 @@ def test_glued_imperative_ask_splits_into_internal_ops():
     assert [op.operation_id for op in ops] == ["OP-1", "OP-2", "OP-3", "OP-4"]
     assert ops[0].statement.startswith("Generate GSK-3beta")
     assert "1." not in l2
+
+
+# ── FEDOT.MAS: one switch, and the tree is the truth ─────────────────────────
+
+def _experiments_without_fedot_in_executor():
+    config = load_config(resolve_config_path("experiments"))
+    config.agents["ExperimentExecutorAgent"].subordinates.remove("FedotAgent")
+    return config
+
+
+def _planner_prompt(config) -> str:
+    from CoScientist.assembly.prompting import PromptContext
+    from CoScientist.experiments.prompts import templates as exp_prompts
+
+    ctx = PromptContext(config=config.agent("ExperimentPlannerAgent"), system=config)
+    return exp_prompts.experiment_planner(ctx)
+
+
+def test_fedot_agent_hangs_on_the_experiment_switch(monkeypatch):
+    """Not on EXECUTOR__FEDOT_FALLBACK, which is main's reranker fallback: the
+    agent, its roster line and every route decision follow one switch."""
+    from CoScientist.config import get_settings
+
+    config = load_config(resolve_config_path("experiments"))
+    assert config.agent("FedotAgent").enabled == "${experiments.route_fedot}"
+    roster = lambda: [a.name for a in config.enabled_subordinates("ExperimentExecutorAgent")]
+
+    monkeypatch.setattr(get_settings().experiments, "route_fedot", False)
+    assert "FedotAgent" not in roster()
+    assert "ExperimentAgent" in roster()
+
+    monkeypatch.setattr(get_settings().experiments, "route_fedot", True)
+    monkeypatch.setattr(get_settings().web, "fedot_fallback_enabled", False)
+    assert "FedotAgent" in roster()
+
+
+def test_the_planner_never_hears_of_fedot_while_it_is_off(monkeypatch):
+    """A route named in the prompt is a route the model uses: `react_tools if
+    FEDOT off` as an aside was how every plan ended up on fedot_mas."""
+    from CoScientist.config import get_settings
+
+    monkeypatch.setattr(get_settings().experiments, "route_fedot", False)
+    off = _planner_prompt(load_config(resolve_config_path("experiments")))
+    assert "fedot" not in off.lower()
+    assert '"route":"react_tools"' in off
+    assert "post_build_route=react_tools" in off
+    assert "<<" not in off
+
+    # Switch on but the agent taken out of the executor: still off, because
+    # the executor could not run it.
+    monkeypatch.setattr(get_settings().experiments, "route_fedot", True)
+    detached = _planner_prompt(_experiments_without_fedot_in_executor())
+    assert "fedot" not in detached.lower()
+
+
+def test_with_fedot_on_react_tools_stays_the_mcp_route():
+    """On, FEDOT.MAS is the narrow exception, not the default it used to be."""
+    on = _planner_prompt(load_config(resolve_config_path("experiments")))
+    assert "route: react_tools|fedot_mas|" in on
+    assert '"route":"react_tools"' in on
+    assert "→ react_tools (ExperimentAgent calls the bound tool directly)" in on
+    assert "fedot_mas ONLY when ONE task must itself chain ≥2" in on
+    assert "never the default" in on
+    assert "FEDOT off" not in on
+    assert "post_build_route=fedot_mas" not in on
+    assert "<<" not in on
+
+
+def test_the_planner_is_offered_the_medical_route_only_with_its_agent(monkeypatch):
+    """MEDICAL__ENABLED used to reach only the runtime: the planner kept writing
+    medical tasks for an agent that was not in the tree."""
+    from CoScientist.config import get_settings
+
+    config = load_config(resolve_config_path("experiments"))
+    on = _planner_prompt(config)
+    assert "research|medical" in on
+    assert "→ medical, mcp_servers=[]" in on
+
+    monkeypatch.setattr(get_settings().web, "medical_agent_enabled", False)
+    roster = [a.name for a in config.enabled_subordinates("ExperimentExecutorAgent")]
+    assert "MedicalAgent" not in roster
+    off = _planner_prompt(config)
+    assert "medic" not in off.lower()
+    # Rule 3 stays, so the rules cited by number still line up.
+    assert "3) PubMed/PICO/DICOM asks: there is no clinical route in this run." in off
+    # Falls through to Alembic (4) before coder (5), as with the route on.
+    assert "anything else falls through to routes 4-5" in off
+    assert "<<" not in off
+
+
+def test_the_profile_builds_without_fedot(monkeypatch):
+    """Switched off, FedotAgent is neither a tool of the executor nor a line in
+    its route roster, so nothing can hand work to it."""
+    from CoScientist.assembly import build_system
+    from CoScientist.config import get_settings
+
+    monkeypatch.setattr(get_settings().experiments, "route_fedot", False)
+    system = build_system(load_config(resolve_config_path("experiments")))
+    executor = system.agent("ExperimentExecutorAgent")
+    agent_tools = {getattr(getattr(t, "agent", None), "name", None) for t in executor.tools}
+    assert "FedotAgent" not in agent_tools
+    assert "ExperimentAgent" in agent_tools
+    assert "FedotAgent" not in executor.instruction

@@ -74,6 +74,99 @@ def _recent_tool_calls(tool_context: Any, agent: str,
     return out
 
 
+def _activations(tool_context: Any, agent: str,
+                 limit: int = 6) -> List[Dict[str, str]]:
+    """This agent's current activation and the ones above it, nearest first.
+
+    Each entry is ``{agent, exec_id}``. The id is what makes a participation row
+    point at a RUN rather than at a name: an agent that worked on three nodes in
+    one study is three activations, and a reader following the record wants the
+    one that produced this node, not the agent's whole history.
+
+    `plugin._mint` gives every activation the id `agent:{Name}@{turn}[#n]`, and
+    the before_tool hook draws a `delegated_to` edge from the caller's
+    activation to the callee's before the callee runs. So the chain is on
+    record and survives a restart. `plan_tracker.js` was re-deriving it live in
+    the browser and losing it on replay; nothing server-side read it at all.
+
+    The current activation is the agent's newest one by start time — activations
+    are minted per run, so the newest is the one running now.
+    """
+    try:
+        from CoScientist.graph.memory import get_knowledge_graph
+        raw = get_knowledge_graph(tool_context).full()
+    except Exception:  # noqa: BLE001
+        return []
+    try:
+        mine = [n for n in raw.get("nodes") or []
+                if n.get("kind") in ("agent", "agent_call")
+                and n.get("executor_agent") == agent]
+        if not mine:
+            return []
+        here = max(mine, key=lambda n: n.get("t_start") or 0)["id"]
+        by_id = {n["id"]: n for n in raw.get("nodes") or [] if n.get("id")}
+        parent = {e["dst"]: e["src"] for e in raw.get("edges") or []
+                  if e.get("type") == "delegated_to" and e.get("dst") and e.get("src")}
+        chain = [{"agent": agent, "exec_id": here}]
+        seen = {here}
+        node = parent.get(here)
+        while node and node not in seen and len(chain) <= limit:
+            seen.add(node)
+            name = (by_id.get(node) or {}).get("executor_agent")
+            if name and name != agent:
+                chain.append({"agent": name, "exec_id": node})
+            node = parent.get(node)
+        return chain
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _own_activation(tool_context: Any, agent: str) -> str:
+    """The id of the run this agent is making right now, or "".
+
+    Read once per commit, so the authorship rows the store writes point at a
+    run rather than at a name.
+    """
+    chain = _activations(tool_context, agent, limit=0)
+    return chain[0]["exec_id"] if chain else ""
+
+
+def _note_participation(research_graph: Any, result: Any, agent: str,
+                        tool_context: Any) -> None:
+    """Record who took part in what this commit wrote, and on what basis.
+
+    The store itself records the author and whoever moved a status. This adds
+    the one basis only the calling side can know: the agents that delegated the
+    work down to this one. They took part in it — the orchestrator that sent a
+    worker after a hypothesis is why the evidence exists — and nothing else
+    writes that down.
+
+    No `provenance` row is manufactured here. `_recent_tool_calls` only ever
+    collects the CALLING agent's own calls, so such a row would name the agent
+    the `commit` row already names; the calls themselves are on the node as
+    `_provenance` and the panel jumps into the log from there.
+    """
+    try:
+        committed = getattr(result, "committed", None) or {}
+        ids = [e["id"] for e in (committed.get("nodes") or []) if e.get("id")]
+        ids += [e["id"] for e in (committed.get("status_updates") or [])
+                if e.get("id") and not e.get("auto")]
+        if not ids:
+            return
+        # The first entry is this agent's own activation; the rest delegated to
+        # it. Each row carries the id of the RUN, so a reader can open the log
+        # at the activation that produced this node instead of at whatever that
+        # agent happened to do last.
+        chain = _activations(tool_context, agent)
+        rows = [{"node_id": nid, "agent": link["agent"],
+                 "basis": "delegation", "exec_id": link["exec_id"]}
+                for link in chain[1:]
+                for nid in ids]
+        research_graph.add_contributors(rows, source=agent)
+    except Exception:  # noqa: BLE001 — bookkeeping never breaks a write
+        logger.debug("could not record participation", exc_info=True)
+
+
 def _as_op_list(value: Any, field: str) -> Optional[List[Dict[str, Any]]]:
     """Coerce a commit argument into the list of operations it was meant to be.
 
@@ -100,9 +193,55 @@ def _as_op_list(value: Any, field: str) -> Optional[List[Dict[str, Any]]]:
     return value
 
 
-def _attach_provenance(nodes: Optional[List[Dict[str, Any]]], agent: str,
-                       tool_context: Any = None) -> Optional[List[Dict[str, Any]]]:
-    """Stamp each newly-created Evidence node with the producing tool calls."""
+_EVIDENCE_TYPES = ("evidence", "свидетельство")
+
+
+def _attach_paper(attrs: Dict[str, Any], tool_context: Any) -> None:
+    """Give an Evidence citing a DOI the copy of the paper the session holds.
+
+    The agent writes the citation it read — `source_ref: 10.1021/…` — and has no
+    way of knowing that `PaperCapturePlugin` already fetched that paper.
+    Joining them here is what turns a DOI in the panel from a string into a file
+    with a download beside it.
+
+    Matched on identifiers and never on the title: two papers share a title far
+    more often than they share a DOI. The WHOLE citation is read, not one field
+    — an agent writes `source_ref` as a semicolon-separated list in which the
+    only handle we hold may be a PMC id in third place. Nothing the agent wrote
+    is overwritten: an attribute already present is its claim, not ours.
+    """
+    if attrs.get("session_artifact_id"):
+        return
+    try:
+        from CoScientist.reporting import paper_library as pl
+
+        cited = " ".join(str(attrs.get(k) or "")
+                         for k in ("doi", "pmcid", "source_ref"))
+        paper = pl.find(getattr(tool_context, "state", None), cited)
+        if not paper or not paper.get("session_artifact_id"):
+            return
+        attrs["session_artifact_id"] = paper["session_artifact_id"]
+        # The record's keys are already `kind:value`; re-parsing them as prose
+        # would not match, because `pmc:12610272` is not how a PMC id is written.
+        held = dict(k.split(":", 1) for k in (paper.get("refs") or []) if ":" in k)
+        stamps = {
+            "doi": paper.get("doi_raw") or paper.get("doi") or (
+                held.get("doi") or ""),
+            "pmcid": f"PMC{held['pmc']}" if held.get("pmc") else "",
+            "paper_title": paper.get("title"),
+            "paper_year": paper.get("year"),
+        }
+        for key, value in stamps.items():
+            if value and not attrs.get(key):
+                attrs[key] = value
+    except Exception:  # noqa: BLE001 — a missing paper must not refuse a commit
+        return
+
+
+def _enrich_evidence(nodes: Optional[List[Dict[str, Any]]], agent: str,
+                     tool_context: Any = None) -> Optional[List[Dict[str, Any]]]:
+    """Stamp each newly-created Evidence with what the record already knows:
+    the tool calls that produced it, and the paper it cites when we hold one."""
     if not nodes:
         return nodes
     prov = None
@@ -110,16 +249,21 @@ def _attach_provenance(nodes: Optional[List[Dict[str, Any]]], agent: str,
     for n in nodes:
         n = dict(n)
         # only CREATE ops for Evidence (id-merges keep their existing provenance)
-        if not n.get("id") and str(n.get("type", "")).strip().lower() in ("evidence", "свидетельство"):
+        if not n.get("id") and str(n.get("type", "")).strip().lower() in _EVIDENCE_TYPES:
             attrs = dict(n.get("attrs") or {})
             if "_provenance" not in attrs:
                 if prov is None:
                     prov = _recent_tool_calls(tool_context, agent)
                 if prov:
                     attrs["_provenance"] = prov
+            _attach_paper(attrs, tool_context)
             n["attrs"] = attrs
         out.append(n)
     return out
+
+
+#: The name this had while it only did the first half.
+_attach_provenance = _enrich_evidence
 
 
 def _context_budget() -> int:
@@ -265,10 +409,18 @@ class ResearchGraphToolset(BaseToolset):
         Args:
             nodes: list of node ops. CREATE: {"type": "<allowed_node_type>", "attrs": {...},
                 "status": "..." (optional), "ref": "local_handle" (optional)}.
-                ENRICH an existing node's attrs: {"id": "N1", "attrs": {...}} (no "type").
+                CHANGE a node that is already in the graph: {"id": "H3",
+                "attrs": {...}} — the id is what says WHICH node, so use the id
+                the graph shows you, not the ref you once wrote. A `ref` is only
+                a handle for a node created in THIS call, to point edges at
+                before it has an id; writing an existing node's id there is
+                refused, because it reads as an update and would record a
+                duplicate. Never invent an id for a new node: the store mints
+                them.
             edges: list of {"type": "supports", "from": "E4", "to": "H2"}. To
                 point at a node created in THIS call, use its ref with a leading
-                "#", e.g. "from": "#e1".
+                "#", e.g. "from": "#e_new" — a handle of your own, never the id of a
+                node already in the graph.
             status_updates: list of {"id": "H2", "status": "under_verification",
                 "reason": "..." (optional)}.
 
@@ -348,9 +500,10 @@ class ResearchGraphToolset(BaseToolset):
             research_graph = get_research_graph(tool_context)
             agent = _agent(tool_context)
             result = research_graph.commit(
-                source=agent, nodes=_attach_provenance(nodes, agent, tool_context),
+                source=agent, nodes=_enrich_evidence(nodes, agent, tool_context),
                 edges=edges,
                 status_updates=status_updates, autolink_focus=focus,
+                exec_id=_own_activation(tool_context, agent),
             )
         except Exception as exc:  # noqa: BLE001 — a bad payload must not end the run
             logger.exception("research_commit failed")
@@ -359,6 +512,7 @@ class ResearchGraphToolset(BaseToolset):
                             "the payload and call research_commit again"}
         if result.ok:
             _refresh_context_state(tool_context, self._is_root)
+            _note_participation(research_graph, result, agent, tool_context)
         else:
             # The store logs the refusal too; this line names the agent whose
             # step was lost, which is what a reader of the run log needs.

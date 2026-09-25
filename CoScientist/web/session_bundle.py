@@ -19,6 +19,7 @@ Bundle contents
     settings_snapshot.json          — settings at export time (read-only, informational)
     graphs/execution.json           — execution graph snapshot
     graphs/research_active.json     — research graph snapshot
+    graphs/agent_summaries.json     — per-agent run accounts already written
     knowledge_memory_snapshot.json  — global memory snapshot (read-only, informational)
     sandbox_trajectory.json         — full OpenHands sandbox trace, if any (read-only, best-effort)
 
@@ -34,6 +35,7 @@ import io
 import json
 import logging
 import os
+import re
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,11 +59,125 @@ _REPORT_LANGUAGE = "report_language.json"
 _SETTINGS = "settings_snapshot.json"
 _GRAPH_EXECUTION = "graphs/execution.json"
 _GRAPH_RESEARCH = "graphs/research_active.json"
+#: What a small model already wrote about each agent's run. Carried so an
+#: imported study opens with its accounts intact instead of re-buying every
+#: one of them, card by card, from a model.
+_GRAPH_SUMMARIES = "graphs/agent_summaries.json"
 _KNOWLEDGE_MEMORY = "knowledge_memory_snapshot.json"
 _SANDBOX_TRAJECTORY = "sandbox_trajectory.json"
 _MCP_BUILDS_JOBS = "mcp_builds/jobs.json"
 _MCP_BUILDS_LOGS = "mcp_builds/logs/"
 _MCP_BUILDS_BUNDLES = "mcp_builds/bundles/"
+# The files the run produced, and the index describing them. Without these a
+# bundle opened on another machine shows a graph full of artifacts it cannot
+# display — which is most of what a reader wanted to see.
+_ARTIFACT_MANIFEST = "artifacts/manifest.json"
+_ARTIFACT_INDEX = "artifacts/index.json"
+_ARTIFACT_FILES = "artifacts/files/"
+
+#: A bundle is a file the operator can edit, so an entry name from inside one is
+#: checked before it becomes a path — the same argument the report-language
+#: block makes about its own member.
+_ARTIFACT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _pack_artifacts(zf: "zipfile.ZipFile", user_id: str, session_id: str) -> None:
+    """Put the run's own files in the bundle, with the manifest describing them.
+
+    Best-effort, like the sandbox trajectory: a session that cannot be read
+    still exports everything else. What does not fit the budget is written into
+    the exported manifest as ``skipped/bundle_quota``, so the importer can say
+    *why* a figure is missing instead of rendering a hole.
+    """
+    try:
+        from CoScientist.reporting import artifact_index, session_files
+
+        key = (user_id, session_id)
+        manifest = session_files.load_manifest(session_id, user_id)
+        if not manifest:
+            return
+
+        budget = int(os.getenv("BUNDLE__MAX_ARTIFACT_MB", "512")) * 1024 * 1024
+        spent, packed = 0, 0
+        exported = dict(manifest)
+        for artifact_id, record in manifest.items():
+            if record.get("state") != session_files.STATE_STORED:
+                continue
+            path = session_files.resolve_path(key, artifact_id)
+            if path is None:
+                continue
+            size = path.stat().st_size
+            if spent + size > budget:
+                exported[artifact_id] = {
+                    **record,
+                    "state": session_files.STATE_SKIPPED,
+                    "reason": session_files.REASON_BUNDLE_QUOTA,
+                }
+                continue
+            zf.write(path, f"{_ARTIFACT_FILES}{artifact_id}")
+            spent += size
+            packed += 1
+
+        zf.writestr(_ARTIFACT_MANIFEST, _json_bytes({"artifacts": exported}))
+        index = artifact_index.load(session_id, user_id)
+        if index:
+            zf.writestr(_ARTIFACT_INDEX, _json_bytes({"artifacts": index}))
+        logger.info(
+            "bundle: packed %d/%d artifacts (%.1f MB)",
+            packed, len(manifest), spent / (1024 * 1024),
+        )
+    except Exception as exc:  # noqa: BLE001 — never sink an export over this
+        logger.warning("Could not include session artifacts in export: %s", exc)
+
+
+def _restore_artifacts(zf: "zipfile.ZipFile", user_id: str, session_id: str) -> int:
+    """Unpack a bundle's files under the NEW session, and return how many.
+
+    Nothing is rewritten on the way in. Graph attrs and report markdown hold
+    ``cos-artifact:<id>`` references that carry no session, and the link is
+    built from whoever is reading — so the same bytes answer under the new id.
+    """
+    try:
+        from CoScientist.reporting import artifact_index, session_files
+    except Exception:  # noqa: BLE001
+        return 0
+
+    key = (user_id, session_id)
+    restored = 0
+    try:
+        raw = json.loads(zf.read(_ARTIFACT_MANIFEST))
+    except (KeyError, json.JSONDecodeError):
+        return 0  # a bundle from before artifacts travelled
+
+    try:
+        target = session_files.files_dir(key)
+        target.mkdir(parents=True, exist_ok=True)
+        for entry in zf.namelist():
+            if not entry.startswith(_ARTIFACT_FILES) or entry.endswith("/"):
+                continue
+            name = Path(entry).name
+            if not _ARTIFACT_NAME_RE.match(name):
+                logger.warning("bundle: refusing artifact name %r", name)
+                continue
+            (target / name).write_bytes(zf.read(entry))
+            restored += 1
+
+        records = raw.get("artifacts") if isinstance(raw, dict) else raw
+        if isinstance(records, dict):
+            session_files.record_entries(
+                list(records.values()), user_id=user_id, session_id=session_id
+            )
+        try:
+            index = json.loads(zf.read(_ARTIFACT_INDEX))
+            entries = index.get("artifacts") if isinstance(index, dict) else index
+            if isinstance(entries, list):
+                artifact_index.record(entries, user_id=user_id, session_id=session_id)
+        except (KeyError, json.JSONDecodeError):
+            pass
+        logger.info("bundle: restored %d artifact(s) for %s", restored, session_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not restore session artifacts: %s", exc)
+    return restored
 
 
 def _json_bytes(obj: Any) -> bytes:
@@ -138,6 +254,14 @@ async def export_session(
         execution_graph = kg.full()
     except Exception as exc:  # noqa: BLE001
         logger.warning("Could not read execution graph: %s", exc)
+
+    # 7b. Accounts already written about the agents of this run.
+    agent_summaries: Optional[Dict[str, Any]] = None
+    try:
+        from CoScientist.graph.summary_store import all_entries
+        agent_summaries = all_entries((user_id, session_id)) or None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Could not read agent summaries: %s", exc)
 
     # 8. Research graph
     research_graph: Optional[Dict[str, Any]] = None
@@ -236,6 +360,9 @@ async def export_session(
             zf.writestr(_GRAPH_EXECUTION, _json_bytes(execution_graph))
         if research_graph is not None:
             zf.writestr(_GRAPH_RESEARCH, _json_bytes(research_graph))
+        if agent_summaries:
+            zf.writestr(_GRAPH_SUMMARIES,
+                        _json_bytes({"version": 1, "entries": agent_summaries}))
         if knowledge_memory is not None:
             zf.writestr(_KNOWLEDGE_MEMORY, _json_bytes(knowledge_memory))
         if sandbox_trajectory is not None:
@@ -243,6 +370,7 @@ async def export_session(
                 zf.writestr(_SANDBOX_TRAJECTORY, _json_bytes(sandbox_trajectory))
             except Exception as exc:  # noqa: BLE001 - a huge/odd trace must not sink the export
                 logger.warning("Could not include sandbox trajectory in export: %s", exc)
+        _pack_artifacts(zf, user_id, session_id)
         if mcp_jobs is not None:
             zf.writestr(_MCP_BUILDS_JOBS, _json_bytes(mcp_jobs))
         for jid, log_text in mcp_logs.items():
@@ -333,6 +461,8 @@ async def import_session(
     report_language_data = _read_json(_REPORT_LANGUAGE) or {}
     research_graph_data = _read_json(_GRAPH_RESEARCH)
     execution_graph_data = _read_json(_GRAPH_EXECUTION)
+    # Absent from a bundle written before this existed; reads back as {}.
+    agent_summaries_data = _read_json(_GRAPH_SUMMARIES)
 
     title = manifest.get("title", "Imported session")
     session_id = f"session_{uuid4().hex}"
@@ -415,7 +545,11 @@ async def import_session(
         )
 
     # --- Restore graphs ---
-    _restore_graph_files(user_id, session_id, execution_graph_data, research_graph_data)
+    _restore_graph_files(user_id, session_id, execution_graph_data,
+                         research_graph_data, agent_summaries_data)
+
+    # --- Restore the run's own files, so the graph has something to show ---
+    _restore_artifacts(zf, user_id, session_id)
 
     # --- Restore MCP builds ---
     _restore_mcp_builds(zf, rebuild_mcp)
@@ -430,6 +564,7 @@ def _restore_graph_files(
     session_id: str,
     execution_data: Optional[Dict[str, Any]],
     research_data: Optional[Dict[str, Any]],
+    summaries_data: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Write graph snapshots to the on-disk location the stores expect."""
     from CoScientist.graph.session_scope import storage_dir
@@ -443,6 +578,9 @@ def _restore_graph_files(
     if research_data is not None:
         from CoScientist.graph.research.store import _default_file
         _write_json(session_dir / _default_file(), research_data)
+    if summaries_data:
+        from CoScientist.graph.summary_store import STORE_FILENAME
+        _write_json(session_dir / STORE_FILENAME, summaries_data)
 
 
 def _restore_mcp_builds(zf: zipfile.ZipFile, rebuild: bool) -> None:

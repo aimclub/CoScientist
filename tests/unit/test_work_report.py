@@ -195,6 +195,33 @@ def test_an_accepted_report_closes_the_contract(hitl_on):
     assert order.report.round == 1
 
 
+def test_a_doubted_finding_survives_an_accepted_report(hitl_on):
+    """Accepting a result and doubting one of its findings are two acts.
+
+    Only the rework path read these marks, so a finding ticked as wrong on a
+    report the operator otherwise accepted was recorded nowhere and mentioned to
+    nobody — and the agent carried it into the final answer as established.
+    """
+    ctx = _context()
+    handler = _Handler(
+        HITLResponse(action=HITLAction.APPROVE, approved=True),
+        HITLResponse(action=HITLAction.APPROVE, approved=True,
+                     form_values={"disputed_finding_ids": ["F2"]}),
+    )
+    toolset = WorkOrderToolset(AGENT, TOOLS, handler)
+    _declare(toolset, ctx)
+
+    result = _submit(toolset, ctx, findings=[
+        {"text": "812 уникальных структур", "evidence": "data/btk.csv"},
+        {"text": "Селективность выше у пиразолов"},
+    ])
+
+    assert result["status"] == "accepted"
+    assert [f["id"] for f in result["disputed_findings"]] == ["F2"]
+    assert "do not carry them" in result["message"]
+    assert load_order(ctx.state, AGENT).report.disputed_finding_ids == ["F2"]
+
+
 def test_a_report_sent_back_names_the_findings_the_human_disputes(hitl_on):
     ctx = _context()
     # The first answer approves the DECLARATION; the second judges the report.
@@ -284,8 +311,11 @@ def test_the_card_carries_the_record_next_to_the_claim(hitl_on):
     assert context["journal"]["side_effects"] == ["package_install"]
     assert {w["code"] for w in context["warnings"]} >= {
         "findings_without_evidence", "deviations", "open_steps"}
-    # The console and any other client read the same report as plain text.
-    assert "Work Report" in context["output"]
+    # The console and any other client read the same report — as Markdown now,
+    # and in the session's language, because this text is what the chat writes
+    # into the document a person opens.
+    assert context["output"].startswith("# Отчёт о работе — DatasetCollectorAgent")
+    assert "\n## Цель" in context["output"]
 
 
 def test_with_work_orders_off_the_report_is_not_put_to_anyone(monkeypatch):

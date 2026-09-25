@@ -12,6 +12,8 @@ renderActivityRail();
 StatusIndicator.mount(document.getElementById('status-indicator'));
 
 applySideNavState();
+initSideRail();
+refreshPlanGate();
 bootstrap();
 loadSettings();
 connectDatasetLogsSSE();

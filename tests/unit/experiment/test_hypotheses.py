@@ -93,7 +93,40 @@ def test_seed_hypotheses_instructs_small_commits():
     seed_hypotheses_from_em_request(SimpleNamespace(state=state, user_content=None), req)
     text = req.contents[0].parts[0].text
     assert "Hypothesis nodes ONLY" in text
-    assert "At most" in text
+    # One commit, not "at most three per call, make more calls if you need
+    # more": every extra call used to get its own full allowance of active
+    # hypotheses, which is how a run configured for one verified several.
+    assert "ONE research_commit" in text
+    assert "Extra calls do not raise the ceiling" in text
+
+
+def test_the_seed_does_not_decide_how_many_hypotheses_there_are():
+    """The count comes from one place — the operator's setting, via the agent's
+    own instruction. This user turn used to override it with «one hypothesis per
+    operation slot, do not skip a slot», and a six-step request became six
+    hypotheses whatever the setting said."""
+    from google.adk.models import LlmRequest
+    from google.genai import types
+
+    from CoScientist.experiments.hypotheses import seed_hypotheses_from_em_request
+
+    state = {
+        "experiment_source_request": "Profile the metabolites.",
+        "experiment_operations": [
+            {"operation_id": f"OP-{i}", "statement": f"step {i}"} for i in range(1, 7)
+        ],
+    }
+    req = LlmRequest(contents=[types.Content(role="user", parts=[types.Part(text="noise")])])
+    seed_hypotheses_from_em_request(SimpleNamespace(state=state, user_content=None), req)
+    text = req.contents[0].parts[0].text
+
+    assert "one hypothesis per slot" not in text
+    assert "H1 matches OP-1" not in text
+    assert "one distinct hypothesis per distinct operation" not in text
+    # The operations still reach the model — as the scope, which is what they are.
+    assert "OP-6: step 6" in text
+    assert "SCOPE" in text and "NOT a list of hypotheses" in text
+    assert "stated in your instructions" in text
 
 
 def test_seed_hypotheses_does_not_instruct_creating_research_question():
@@ -672,3 +705,138 @@ def test_normalize_em_hypothesis_commit_shrinks_and_stashes():
     assert len(state["hypothesis_refs"]) == 3
     assert state["hypothesis_refs"][0]["hypothesis_id"] == "H1"
 
+
+
+# ── the normaliser must not turn a change into a copy ───────────────────────
+
+def _dispatched(args):
+    """What `normalize_em_hypothesis_commit` would actually send."""
+    from google.adk.models import LlmResponse
+    from google.genai import types
+
+    from CoScientist.experiments.hypotheses import normalize_em_hypothesis_commit
+
+    resp = LlmResponse(content=types.Content(
+        role="model",
+        parts=[types.Part.from_function_call(name="research_commit", args=args)]))
+    out = normalize_em_hypothesis_commit(SimpleNamespace(state={}), resp)
+    if out is None:                      # unchanged — the agent's own payload
+        return args
+    return dict(out.content.parts[0].function_call.args)
+
+
+def test_a_draft_that_names_a_node_stays_an_update():
+    """The defect behind the fourteen hypotheses.
+
+    `{"id": "H3", "attrs": {…}}` is the documented way to change a node. The
+    normaliser moved that id into `ref`, which the store reads as "create a
+    node and call it that" — so ten attempts to write a formulation into H3
+    produced H5…H14, each answered `ok: true`.
+    """
+    args = _dispatched({
+        "nodes": [{"id": "H3", "attrs": {"formulation": "Гипотеза о порядке шагов " + "x" * 60}}],
+    })
+    draft = args["nodes"][0]
+    assert draft["id"] == "H3"
+    assert "ref" not in draft and "type" not in draft
+    # And nothing invents a second «motivates» for a node the question already
+    # points at.
+    assert not args.get("edges")
+
+
+def test_an_update_does_not_carry_a_display_status_onto_the_node():
+    """`attrs.status` is what the card prints. When the normaliser rebuilds a
+    draft it must not put «formulated» on a hypothesis since postponed — the
+    card would then contradict the node. Shown on an overrun, because a
+    payload that kept to the instruction is shipped exactly as written.
+    """
+    nodes = [{"id": "H3", "attrs": {"formulation": "y" * 80,
+                                    "status": "formulated"}}]
+    nodes += [{"type": "Hypothesis", "ref": "hh%d" % i,
+               "attrs": {"formulation": "Гипотеза %d " % i + "q" * 60}}
+              for i in range(5)]
+    args = _dispatched({"nodes": nodes,
+                        "status_updates": [{"id": "H3", "status": "postponed"}]})
+    update = next(n for n in args["nodes"] if n.get("id") == "H3")
+    assert "status" not in update["attrs"]
+    # The creations keep theirs: there the attribute and the node agree.
+    assert all(n["attrs"]["status"] == "formulated"
+               for n in args["nodes"] if n.get("ref"))
+
+
+def test_a_commit_that_kept_to_the_instruction_is_dispatched_as_written():
+    """The seeded prompt asks for hypotheses only, at most three. A payload
+    that obeys it used to be rewritten anyway — its criterion and its method
+    were dropped, which is why that run kept re-sending them."""
+    args = _dispatched({
+        "nodes": [
+            {"type": "Hypothesis", "ref": "h_new", "attrs": {"formulation": "z" * 80}},
+            {"type": "ConfirmationCriteria", "ref": "cc_new",
+             "attrs": {"threshold": "доля валидных ≥ 0.5"}},
+            {"type": "VerificationMethod", "ref": "vm_new",
+             "attrs": {"description": "докинг в 2FBW, Vina"}},
+        ],
+        "edges": [{"type": "formulated_for", "from": "#cc_new", "to": "#h_new"}],
+    })
+    kinds = [n.get("type") for n in args["nodes"]]
+    assert kinds == ["Hypothesis", "ConfirmationCriteria", "VerificationMethod"]
+    assert args["edges"][0]["type"] == "formulated_for"
+
+
+def test_an_overrun_is_still_cut_down_and_keeps_the_ranking():
+    """What the rewrite was built for: too many hypotheses in one call. The
+    status changes ride along — they are an id and a word each, and dropping
+    them lost the agent's own choice of which branch to verify."""
+    args = _dispatched({
+        "nodes": [{"type": "Hypothesis", "ref": "hh%d" % i,
+                   "attrs": {"formulation": "Гипотеза %d " % i + "q" * 60}}
+                  for i in range(5)],
+        "status_updates": [{"id": "H1", "status": "postponed"}],
+    })
+    assert len(args["nodes"]) == 3
+    assert args["status_updates"] == [{"id": "H1", "status": "postponed"}]
+    assert len(args["edges"]) == 3
+
+
+def test_the_cut_falls_on_the_new_hypotheses_not_on_the_updates():
+    """Five creations and one update: the update is cheap and is the one thing
+    that cannot be re-derived from the text, so it survives the trim."""
+    nodes = [{"id": "H1", "attrs": {"formulation": "Первая, уточнённая " + "w" * 60}}]
+    nodes += [{"type": "Hypothesis", "ref": "hh%d" % i,
+               "attrs": {"formulation": "Гипотеза %d " % i + "q" * 60}}
+              for i in range(5)]
+    args = _dispatched({"nodes": nodes})
+    assert sum(1 for n in args["nodes"] if n.get("id") == "H1") == 1
+    assert sum(1 for n in args["nodes"] if n.get("ref")) == 3
+
+
+def test_an_overrun_keeps_the_type_on_a_draft_that_names_a_node():
+    """The seeded prompt asks the model to number its own hypotheses ("H1
+    matches OP-1"), so an id it writes may name nothing. Stripped of its type,
+    such a draft reaches the store as a change to a node that does not exist
+    and the whole commit is refused; with the type the store records it as a
+    new node and says the id was not honoured."""
+    nodes = [{"id": "H1", "type": "Hypothesis",
+              "attrs": {"formulation": "Первая гипотеза " + "w" * 60}}]
+    nodes += [{"type": "Hypothesis", "ref": "hh%d" % i,
+               "attrs": {"formulation": "Гипотеза %d " % i + "q" * 60}}
+              for i in range(5)]
+    args = _dispatched({"nodes": nodes})
+    update = next(n for n in args["nodes"] if n.get("id") == "H1")
+    assert update["type"] == "Hypothesis"
+    assert "ref" not in update
+
+
+def test_the_key_spellings_this_module_tolerates_are_repaired_before_dispatch():
+    """`node_type` and `attributes` are read everywhere in here because models
+    write them, and while every commit was being rebuilt that tolerance was
+    enough. Now a payload that kept to the instruction is dispatched as the
+    agent wrote it, and the store has never heard of either spelling: one makes
+    a node with no attrs, the other a draft with no type."""
+    args = _dispatched({"nodes": [
+        {"node_type": "Hypothesis", "ref": "h_new",
+         "attributes": {"formulation": "Гипотеза о порядке шагов " + "z" * 60}}]})
+    draft = args["nodes"][0]
+    assert draft["type"] == "Hypothesis" and "node_type" not in draft
+    assert draft["attrs"]["formulation"].startswith("Гипотеза о порядке шагов")
+    assert "attributes" not in draft

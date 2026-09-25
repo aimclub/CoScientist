@@ -22,8 +22,11 @@ const NICK_STORAGE_KEY = 'coscientist.nickname';
 const BOOT_STORAGE_KEY = 'coscientist.server_boot_id';
 let serverBootId = null;
 const SIDE_NAV_KEY = 'coscientist.side_nav';
+const RIGHT_PANEL_KEY = 'coscientist.right_panel';
 const LANG_STORAGE_KEY = 'coscientist.lang';
 const SHOW_INTERNAL_KEY = 'coscientist.show_internal';
+const SIDE_RAIL_KEY = 'coscientist.side_rail';
+const SIDE_RAIL_WIDTH_KEY = 'coscientist.side_rail_width';
 
 // Per-browser view preference: show the agents and tools the system YAML marks
 // internal. The html class drives the Work Order chips through CSS, so cards
@@ -63,6 +66,13 @@ const appSettings = {
   researchAgent: {
     maxSearches: 2,
   },
+  medicalAgent: {
+    enabled: true,                     // MEDICAL__ENABLED; the agent and the experiment medical route
+  },
+  nirReport: {
+    enabled: false,                    // NIR__ENABLED; offer the GOST 7.32-2017 DOCX at the end of a run
+    available: false,                  // read-only: whether MCP__NORMCONTROL_URL is configured at all
+  },
   taskExecutorAgent: {
     keepScore: 0.3,
     abstainScore: 0.2,
@@ -90,6 +100,7 @@ const appSettings = {
     resultAutoApprove: false,
     planReviewTimeoutS: 300,           // seconds; runs out => paused, not approved
     resultReviewTimeoutS: 300,
+    routeFedot: false,                 // FEDOT.MAS route; applies to the next session
   },
 };
 

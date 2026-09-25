@@ -1317,6 +1317,10 @@
     reset: guarded('reset', reset),
     demo: demo,   // async: the caller already handles its rejection
     setLang: guarded('setLang', function (value) { if (value) { lang = value; paint(); } }),
+    // The AGENTS table is the only place a class name is turned into a role a
+    // user would recognise. The plan tracker names the same agents, so it reads
+    // them from here rather than keeping a second copy that would drift.
+    agentLabel: guarded('agentLabel', agentLabel),
     setConnected: guarded('setConnected', function (value) { connected = !!value; render(); }),
     markStopped: guarded('markStopped', function () {
       endRun('stopped', STOPPED_LINGER_MS);

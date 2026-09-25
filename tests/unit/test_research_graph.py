@@ -72,15 +72,35 @@ def test_permission_agents_exist_in_system(request):
     counterparts one grain down: 'experiment-plan-mirror', which mirrors the
     experiment module's approved plan task by task, and 'ExperimentModule',
     the module's own deterministic bridge (the AGENT is ExperimentModuleAgent;
-    the write source is the code)."""
+    the write source is the code), and 'report-writer', which records the final
+    write-up — the aggregator that produced the text holds the read-only
+    research surface, and `finalize_report` has the markdown already, so there
+    is nothing a model would add by being allowed to write it. Last,
+    'paper-linker': the code that turns a DOI or PMC id an agent cited into the
+    file the session holds, and stamps the resolved citation back onto the
+    Evidence that carried it — a lookup, not a judgement."""
     from CoScientist.assembly.schema import get_config
     agents = set(get_config().agents)
     virtual = {"human", "ValidatorAgent", "plan-mirror",
-               "experiment-plan-mirror", "ExperimentModule"}
+               "experiment-plan-mirror", "ExperimentModule", "report-writer",
+               "paper-linker", "node-report"}
     for name in schema.AGENT_PERMISSIONS:
         if name in virtual:
             continue
         assert name in agents, f"AGENT_PERMISSIONS has unknown agent {name!r}"
+
+
+def test_every_granted_field_names_a_real_type():
+    """`update_fields` is how a non-owner writes one attribute on a node.
+
+    Two sources now depend on it and nothing validated it, so a typo in a type
+    name would have granted a right that silently never applies.
+    """
+    for source, perm in schema.AGENT_PERMISSIONS.items():
+        for node_type, attribute in perm.update_fields:
+            assert node_type in schema.NODE_TYPES, (
+                f"{source} is granted {attribute!r} on unknown type {node_type!r}")
+            assert attribute, f"{source} is granted an empty attribute name"
 
 
 # ── init + happy-path commit ────────────────────────────────────────────────────
@@ -405,18 +425,191 @@ def test_ready_trigger(store):
     assert [i["hypothesis"] for i in ready] == ["H1"]
 
 
-def test_ready_trigger_offers_one_hypothesis_at_a_time(store):
-    """Several verifiable hypotheses ⇒ exactly ONE is actionable; the rest are
-    reported as queued so the orchestrator does not verify them in parallel."""
+def test_ready_trigger_offers_as_many_hypotheses_as_the_setting_allows(store, monkeypatch):
+    """The digest follows `web.max_active_hypotheses` — the same number the
+    prompt asks for and the store admits.
+
+    It used to hand over exactly one whatever the setting said, which made the
+    setting a lie above 1: the store let three in, the orchestrator was told it
+    could run three in parallel, and this digest named one and called the other
+    two "do NOT verify in parallel".
+    """
+    settings = get_settings()
+    monkeypatch.setattr(settings.web, "max_active_hypotheses", 1)
     _build_verifiable(store)
     store.commit(source="HypothesesAgent",
-                 nodes=[{"type": "Hypothesis", "ref": "h2",
+                 nodes=[{"type": "Hypothesis", "ref": "h2", "status": "postponed",
                          "attrs": {"formulation": "alt", "priority": "high"}}],
                  edges=[{"type": "motivates", "from": "Q1", "to": "#h2"}])
+    # One slot, one occupant: H2 was committed postponed, so H1 holds it.
     ready = queries.ready_hypotheses(store)
-    assert [i["hypothesis"] for i in ready["items"]] == ["H2"]   # higher priority wins
+    assert [i["hypothesis"] for i in ready["items"]] == ["H1"]
+    assert not ready["queued"]
+
+    # Raise the ceiling and revive the alternative: now both are offered.
+    monkeypatch.setattr(settings.web, "max_active_hypotheses", 2)
+    assert store.commit(source="OrchestratorAgent",
+                        status_updates=[{"id": "H2", "status": "formulated"}]).ok
+    ready = queries.ready_hypotheses(store)
+    assert [i["hypothesis"] for i in ready["items"]] == ["H2", "H1"]  # priority first
+    assert not ready["queued"]
+    assert "up to 2 may run in parallel" in ready["rendered"]
+
+    # A third candidate has no slot, so it is named as queued, not as work.
+    monkeypatch.setattr(settings.web, "max_active_hypotheses", 1)
+    ready = queries.ready_hypotheses(store)
+    assert [i["hypothesis"] for i in ready["items"]] == ["H2"]
     assert [i["hypothesis"] for i in ready["queued"]] == ["H1"]
     assert "QUEUED" in ready["rendered"]
+
+
+def test_the_ceiling_counts_the_graph_not_the_commit(store, monkeypatch):
+    """Two commits of one hypothesis each used to give two active hypotheses at
+    a setting of one — the ceiling looked only at the drafts in front of it.
+
+    That is how a run configured for one came to verify several: the generator
+    was told «at most three per call, make more calls if you need more», and
+    every call got its own full allowance.
+    """
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 1)
+    _init(store)
+    for i, text in enumerate(("first", "second", "third")):
+        r = store.commit(source="HypothesesAgent",
+                         nodes=[{"type": "Hypothesis", "ref": f"hyp_{i}",
+                                 "attrs": {"formulation": text}}])
+        assert r.ok, r.errors
+    statuses = [n["status"] for n in store.full()["nodes"] if n["type"] == "Hypothesis"]
+    assert statuses.count("formulated") == 1, statuses
+    assert statuses.count("postponed") == 2, statuses
+
+
+def test_reviving_a_hypothesis_needs_a_free_slot(store, monkeypatch):
+    """The ceiling used to be one-sided: refused on the way in, free on the way
+    back. `postponed → formulated` takes a verification slot just as creating
+    one does."""
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 1)
+    _init(store)
+    store.commit(source="HypothesesAgent",
+                 nodes=[{"type": "Hypothesis", "ref": "a", "attrs": {"formulation": "one"}},
+                        {"type": "Hypothesis", "ref": "b", "attrs": {"formulation": "two"}}])
+    refused = store.commit(source="OrchestratorAgent",
+                           status_updates=[{"id": "H2", "status": "formulated"}])
+    assert not refused.ok
+    # The occupancy, not the sentence around it: the refusal has to tell the
+    # agent how full the run is, and pinning the prose makes rewording it a
+    # test failure instead of a rewording.
+    assert "1 of 1" in refused.errors[0], refused.errors
+
+    # Closing one and opening another in the SAME commit is not an excess —
+    # and it is a swap whichever order the two updates are written in. The
+    # plan mirror builds its list in node-id order and does not get to choose.
+    swap = store.commit(source="OrchestratorAgent",
+                        status_updates=[{"id": "H2", "status": "formulated"},
+                                        {"id": "H1", "status": "postponed"}])
+    assert swap.ok, swap.errors
+    statuses = {n["id"]: n["status"] for n in store.full()["nodes"]
+                if n["type"] == "Hypothesis"}
+    assert statuses == {"H1": "postponed", "H2": "formulated"}
+
+
+def test_every_door_into_verification_costs_a_slot(store, monkeypatch):
+    """`postponed → formulated` is not the only way back into the busy set.
+
+    The validator writes `inconclusive` on every verdict it refuses to confirm,
+    and reopening such a branch (`inconclusive → under_verification`) is the
+    orchestrator's documented scheduling move. Charged only on the first door,
+    the ceiling let an ordinary pair of commits hold two branches at once.
+    """
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 1)
+    _init(store)
+    store.commit(source="HypothesesAgent",
+                 nodes=[{"type": "Hypothesis", "ref": "a", "attrs": {"formulation": "one"}},
+                        {"type": "Hypothesis", "ref": "b", "attrs": {"formulation": "two"}}])
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "under_verification"}])
+    store.commit(source="ValidatorAgent",
+                 status_updates=[{"id": "H1", "status": "inconclusive"}])
+    # The slot is free now, so the alternative may take it.
+    assert store.commit(source="OrchestratorAgent",
+                        status_updates=[{"id": "H2", "status": "formulated"}]).ok
+    # And reopening the inconclusive branch is refused while it is held.
+    refused = store.commit(source="OrchestratorAgent",
+                           status_updates=[{"id": "H1", "status": "under_verification"}])
+    assert not refused.ok, refused.warnings
+    assert len(store._active_hypotheses()) == 1
+
+
+def test_one_hypothesis_closed_twice_frees_one_slot_not_two(store, monkeypatch):
+    """A node has one outcome however many times a payload names it.
+
+    `from` is read from the graph for every update, so two verdicts on the same
+    hypothesis both saw it busy and both were counted as freeing a slot. The
+    tally went negative and bought room that does not exist: under a ceiling of
+    one, two hypotheses went active — ``ok=True``, no error, no warning. The
+    apply loop lands only the last of the two, so only the last may be counted.
+
+    Reached through `enforce_permissions=False`, which is the door the
+    experiment module commits through.
+    """
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 1)
+    _init(store)
+    store.commit(source="HypothesesAgent",
+                 nodes=[{"type": "Hypothesis", "ref": "a",
+                         "attrs": {"formulation": "the branch being closed"}}])
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "under_verification"}])
+
+    result = store.commit(
+        source="ExperimentModule", enforce_permissions=False,
+        status_updates=[{"id": "H1", "status": "refuted"},
+                        {"id": "H1", "status": "inconclusive"}],
+        nodes=[{"type": "Hypothesis", "ref": "x",
+                "attrs": {"formulation": "first new idea"}},
+               {"type": "Hypothesis", "ref": "y",
+                "attrs": {"formulation": "second new idea"}}])
+
+    assert result.ok, result.errors
+    assert len(store._active_hypotheses()) == 1, (
+        "one branch closed, so one slot — not one per verdict written")
+
+
+def test_a_commit_that_frees_a_slot_may_fill_it_with_a_new_hypothesis(store, monkeypatch):
+    """One commit, one move: parking the branch that is done and proposing the
+    next claim. Judged in halves, the new hypothesis was filed as a backlog
+    entry into the slot that same commit had just freed — and postponed means
+    never verified."""
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 1)
+    _init(store)
+    store.commit(source="HypothesesAgent",
+                 nodes=[{"type": "Hypothesis", "ref": "a", "attrs": {"formulation": "one"}}])
+    r = store.commit(
+        source="HypothesesAgent",
+        nodes=[{"type": "Hypothesis", "ref": "b", "attrs": {"formulation": "next"}}],
+        status_updates=[{"id": "H1", "status": "postponed"}])
+    assert r.ok, r.errors
+    statuses = {n["id"]: n["status"] for n in store.full()["nodes"]
+                if n["type"] == "Hypothesis"}
+    assert statuses == {"H1": "postponed", "H2": "formulated"}
+
+
+def test_the_backlog_is_offered_only_when_a_slot_is_free(store, monkeypatch):
+    """The digest used to say «revive the most relevant one» whenever nothing
+    was ready — including when every slot was held by a branch under
+    verification, where the store now refuses exactly that commit."""
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 1)
+    _init(store)
+    store.commit(source="HypothesesAgent",
+                 nodes=[{"type": "Hypothesis", "ref": "a", "attrs": {"formulation": "one"}},
+                        {"type": "Hypothesis", "ref": "b", "attrs": {"formulation": "two"}}])
+    store.commit(source="OrchestratorAgent",
+                 status_updates=[{"id": "H1", "status": "under_verification"}])
+    # Nothing is READY (H1 is being verified), but the slot is taken.
+    assert not queries.ready_hypotheses(store)["items"]
+    assert not queries.postponed_hypotheses(store)["rendered"]
+
+    store.commit(source="ValidatorAgent",
+                 status_updates=[{"id": "H1", "status": "refuted"}])
+    assert "BACKLOG" in queries.postponed_hypotheses(store)["rendered"]
 
 
 def test_commit_keeps_one_hypothesis_active_and_postpones_the_rest(store, monkeypatch):
@@ -1587,12 +1780,11 @@ def test_nothing_floats_however_the_agents_left_it(store, broken):
     assert _drawn_components(store.to_view()) == 1
 
 
-def test_a_folded_artifact_keeps_the_link_it_carried(store):
+def test_a_folded_artifact_travels_on_the_finding_it_produced(store):
     """A dataset is not a card, and is not a hole either.
 
-    It travels on the finding it produced — with the path it lives at, so the
-    reader can open it — and the method that produced that finding keeps its
-    arrow.
+    It travels on the finding it produced, and the method that produced that
+    finding keeps its arrow.
     """
     _build_verifiable(store)
     store.commit(
@@ -1611,7 +1803,70 @@ def test_a_folded_artifact_keeps_the_link_it_carried(store):
     assert ("VM1", "E1") in {(e["src"], e["dst"]) for e in view["edges"]}
     attached = {a["id"]: a for a in drawn["E1"]["attachments"]}
     assert "GD1" in attached
-    assert attached["GD1"]["href"] == "data/smiles.csv", "openable, or it is lost"
+    assert attached["GD1"]["label"], "the reader is told which file it was"
+
+
+def test_a_path_on_this_machine_is_not_offered_as_a_link(store):
+    """The href used to be whatever string the attr held.
+
+    ``data/smiles.csv`` resolves against ``/graph`` and 404s;
+    ``D:\\projects26\\...`` the browser will not navigate to at all. Both were
+    drawn as anchors, and in one real session twelve of twelve attachments were
+    exactly that — a link-shaped thing that does nothing when clicked, which
+    reads as a broken page rather than as a file nobody mirrored. An empty href
+    makes the panel render plain text instead.
+    """
+    _build_verifiable(store)
+    store.commit(
+        source="ExperimentAgent",
+        nodes=[{"type": "Evidence", "ref": "e",
+                "attrs": {"subtype": "computational", "measured_on": "docking",
+                          "content": "score -9.1"}},
+               {"type": "GeneratedData", "ref": "gd",
+                "attrs": {"content": "225 SMILES",
+                          "path": r"D:\projects26\code_a\workspace\smiles.csv"}}],
+        edges=[{"type": "produces", "from": "VM1", "to": "#e"},
+               {"type": "derived_from", "from": "#gd", "to": "#e"}],
+    )
+    drawn = {n["id"]: n for n in store.to_view()["nodes"]}
+    attached = {a["id"]: a for a in drawn["E1"]["attachments"]}
+    assert attached["GD1"]["href"] == "", "a local path is not a link"
+    # The path itself is not lost — the panel lists it as a field.
+    fields = attached["GD1"].get("fields") or {}
+    assert any(r"D:\projects26" in str(v) for v in fields.values()), fields
+
+
+def test_a_mirrored_artifact_is_openable(store, tmp_path, monkeypatch):
+    """The other half: once the bytes are ours, the chip is a real link.
+
+    The reference carries no session, so the URL is built from whichever scope
+    is reading — which is what lets an imported study resolve its own files.
+    The bytes must genuinely be there: a reference alone is not a link, which
+    is what stops a stale id from rendering as a 📦 that 404s on click.
+    """
+    from CoScientist.reporting import session_files
+
+    monkeypatch.setenv("GRAPH_SNAPSHOT_DIR", str(tmp_path))
+    monkeypatch.setenv("ARTIFACTS__MIRROR_TO_S3", "False")
+    _build_verifiable(store)
+    store._scope = ("u1", "s1")
+    record = session_files.put_bytes(store._scope, b"smiles\nCCO\n", filename="smiles.csv")
+    store.commit(
+        source="ExperimentAgent",
+        nodes=[{"type": "Evidence", "ref": "e",
+                "attrs": {"subtype": "computational", "measured_on": "docking",
+                          "content": "score -9.1"}},
+               {"type": "GeneratedData", "ref": "gd",
+                "attrs": {"content": "225 SMILES", "path": "data/smiles.csv",
+                          "session_artifact_id": record["artifact_id"]}}],
+        edges=[{"type": "produces", "from": "VM1", "to": "#e"},
+               {"type": "derived_from", "from": "#gd", "to": "#e"}],
+    )
+    drawn = {n["id"]: n for n in store.to_view()["nodes"]}
+    attached = {a["id"]: a for a in drawn["E1"]["attachments"]}
+    assert attached["GD1"]["href"] == (
+        f"/api/users/u1/sessions/s1/artifacts/{record['artifact_id']}"
+    )
 
 
 def test_a_tool_rides_on_the_method_that_uses_it(store):
@@ -1730,17 +1985,15 @@ def test_a_root_written_by_a_plain_commit_still_names_its_archive(store, tmp_pat
 
 # ── why a step ended where it did ────────────────────────────────────────────
 
-def test_why_a_step_failed_reaches_the_reader(store):
+def test_why_a_method_settled_nothing_reaches_the_reader(store):
     """The reason was always recorded, and never left the store.
 
-    A failed method drew as its status word and stopped there, which is the one
-    question a reader of a failed step actually has.
+    A method the study did not lean on drew as its status word and stopped
+    there, which is the one question a reader of it actually has.
     """
     _build_verifiable(store)
-    store.commit(source="ExperimentAgent",
-                 status_updates=[{"id": "VM1", "status": "running"}])
     r = store.commit(source="ExperimentAgent",
-                     status_updates=[{"id": "VM1", "status": "failed",
+                     status_updates=[{"id": "VM1", "status": "not_used",
                                       "reason": "sandbox ran out of memory"}])
     assert r.ok, r.errors
 
@@ -1748,16 +2001,14 @@ def test_why_a_step_failed_reaches_the_reader(store):
     assert vm["why"] == "sandbox ran out of memory"
     assert vm["why_missing"] is False
     assert vm["status_history"][-1]["reason"] == "sandbox ran out of memory"
-    assert vm["status_history"][-1]["to_word"] == "не удался"
+    assert vm["status_history"][-1]["to_word"] == "не использован"
 
 
-def test_a_failure_can_also_explain_itself_in_its_attrs(store):
+def test_a_method_left_aside_can_also_explain_itself_in_its_attrs(store):
     """The executor that hit the error may name it on the node itself."""
     _build_verifiable(store)
     store.commit(source="ExperimentAgent",
-                 status_updates=[{"id": "VM1", "status": "running"}])
-    store.commit(source="ExperimentAgent",
-                 status_updates=[{"id": "VM1", "status": "failed"}],
+                 status_updates=[{"id": "VM1", "status": "not_used"}],
                  nodes=[{"id": "VM1", "attrs": {"failure_reason": "no CUDA device"}}])
     vm = next(n for n in store.to_view()["nodes"] if n["id"] == "VM1")
     assert vm["why"] == "no CUDA device"
@@ -1784,7 +2035,7 @@ def test_a_failure_with_no_reason_is_reported_as_a_gap(store):
     """A hole in the record is named, not quietly rendered as a colour."""
     _build_verifiable(store)
     store.commit(source="ExperimentAgent",
-                 status_updates=[{"id": "VM1", "status": "failed"}])
+                 status_updates=[{"id": "VM1", "status": "not_used"}])
     view = store.to_view()
     gaps = {g["code"]: g for g in view["gaps"]}
     assert "unreasoned_failures" in gaps
@@ -2187,17 +2438,16 @@ def test_a_study_with_no_hypothesis_says_so_as_an_instruction(store):
     assert q.trigger_report(store)["rendered"].startswith("NO HYPOTHESIS")
 
     # Methods already standing under the question is the aggravating case and is
-    # named — with their STATUS. The mirror creates them `planned`, the only
-    # creatable status, so calling them "running" was false on every graph that
-    # had just been planned and contradicted the PROGRESS line of the same
-    # digest.
+    # named — with their STATUS. A method is only ever created `proposed`, so
+    # calling them "running" was false on every graph that had just been
+    # planned and contradicted the PROGRESS line of the same digest.
     store.commit(source="ResearchAgent", nodes=[
         {"type": "VerificationMethod", "ref": "vm", "attrs": {
             "method_type": "literature_review", "procedure": "run it"}}],
         edges=[{"type": "tested_by", "from": store.root_id(), "to": "#vm"}])
     rendered = q.study_without_hypothesis(store)["rendered"]
     assert "nothing to test" in rendered
-    assert "VM1 (planned)" in rendered
+    assert "VM1 (proposed)" in rendered
     assert "are already running" not in rendered,         "do not assert a status the graph itself contradicts"
 
 
@@ -2264,17 +2514,14 @@ def test_the_orchestrator_is_told_to_get_a_hypothesis_before_running_methods():
     assert "Anything that gets a" in prompt and "PLAN goes in the graph" in prompt
 
 
-def test_the_generator_is_asked_for_one_or_two_hypotheses_that_could_be_wrong():
-    """It asked for "a small set (2–5)". Five hypotheses on one question buy
-    five verification branches and finish none, and the surplus are usually
-    the same claim reworded. The ceiling is two, and the two rules underneath
-    are what stop a restated request or a method from being filed as one.
+def test_the_generator_is_asked_for_exactly_as_many_hypotheses_as_the_run_can_verify():
+    """One setting decides the count, everywhere.
 
-    The ceiling has to FOLLOW `web.max_active_hypotheses`, not ignore it: the
-    selection scaffolding further down the prompt is generated from that
-    setting, so a hardcoded "propose one or two, not five" told the model to
-    write two hypotheses and then handed it five SELECTED HYPOTHESIS slots to
-    fill. Raising the active limit is the operator asking for more branches.
+    It used to be three numbers. The prompt allowed `max(2, limit)` — two even
+    when the operator had asked for one — the store admitted its own count per
+    commit, and the READY digest offered exactly one whatever either said. The
+    graph filled with hypotheses nothing would ever test, which is how a run
+    configured for one ended up showing six.
     """
     from CoScientist.assembly import load_config
     from CoScientist.assembly.prompting import PromptContext
@@ -2284,26 +2531,39 @@ def test_the_generator_is_asked_for_one_or_two_hypotheses_that_could_be_wrong():
     cfg = load_config()
     settings = get_settings()
     original = settings.web.max_active_hypotheses
+    # With the agent's real tools attached, or the render falls through to the
+    # branch for a run without the research graph — a prompt nobody gets here.
+    entries = [REGISTRY.tool(key) for key in cfg.agent("HypothesesAgent").tools]
     try:
         rendered = {}
         for limit in (1, 2, 5):
             settings.web.max_active_hypotheses = limit
             rendered[limit] = REGISTRY.prompt("hypotheses")(
-                PromptContext(config=cfg.agent("HypothesesAgent"), system=cfg))
+                PromptContext(config=cfg.agent("HypothesesAgent"), system=cfg,
+                              tool_entries=entries))
     finally:
         settings.web.max_active_hypotheses = original
 
+    # The research_commit example is the part the model copies, so it has to
+    # show what the rules allow and nothing else.
+    assert "research_commit(" in rendered[1]
+    assert "postponed" not in rendered[1].split("Example research_commit call:")[-1]
+
+    assert "exactly ONE hypothesis" in rendered[1]
+    assert "UP TO" not in rendered[1].split("### What counts")[0], (
+        "at a ceiling of one there is no second hypothesis to invite")
+    for limit in (2, 5):
+        assert f"UP TO {limit} hypotheses" in rendered[limit]
+        # and the only thing a second one may be
+        assert "RIVAL EXPLANATION" in rendered[limit], limit
+        assert "ONE RUN DECIDES BOTH" in rendered[limit], limit
+    assert "RIVAL EXPLANATION" not in rendered[1]
+
     for limit, prompt in rendered.items():
         assert "(2–5)" not in prompt, limit
-        assert "ONE or TWO" in prompt, f"the preference survives at limit {limit}"
-        # The one combination that used to contradict itself.
-        if limit > 2:
-            assert "Not five" not in prompt, (
-                f"limit {limit} offers {limit} selection slots, so the prompt "
-                f"must not also forbid five")
-            assert f"at most {limit} hypotheses" in prompt
-        else:
-            assert "Propose ONE or TWO hypotheses" in prompt
+        # Nothing is parked: what is committed is what gets verified.
+        assert "EVERYTHING YOU HAND OVER WILL BE VERIFIED" in prompt, limit
+        assert "ranked backlog" not in prompt, limit
 
     prompt = rendered[2]                      # the configured default
     assert "threshold test" in prompt and "restatement test" in prompt

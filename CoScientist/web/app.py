@@ -10,13 +10,14 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from uuid import uuid4
 from weakref import WeakKeyDictionary
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import (
+    FileResponse,
     HTMLResponse,
     JSONResponse,
     RedirectResponse,
@@ -229,6 +230,40 @@ def _ascii_name(name: str) -> str:
     return cleaned.encode("ascii", "replace").decode("ascii") or "file"
 
 
+def _readable_links(text: str, scope: SessionKey) -> str:
+    """Every link in one piece of agent prose, made openable by the reader.
+
+    The single boundary between what an agent wrote and what a person sees.
+    Both chat paths pass through it, so the live socket and the replayed
+    transcript can never disagree about a link.
+
+    Two rewrites, in order:
+
+    * ``cos-artifact:<id>`` becomes ``/api/users/<u>/sessions/<s>/artifacts/<id>``.
+      The stored form carries no session on purpose — that is what lets an
+      exported bundle open elsewhere — but no browser knows the scheme, and the
+      chat's sanitizer drops an ``src`` it cannot classify. So it is resolved
+      here, from the scope that is asking, and nowhere earlier.
+    * a raw S3 URL becomes ``/api/artifact/<bucket>/<key>``. Report prose used
+      to carry presigned URLs verbatim: four hundred characters of signature
+      that stop working within the hour, which is exactly what a user reported
+      seeing in the chat.
+
+    Never raises, and never shortens: a message must still arrive.
+    """
+    if not text:
+        return text
+    try:
+        from CoScientist.utils.report_links import resolve_artifact_refs
+
+        return remint_report_urls(resolve_artifact_refs(text, scope), scope)
+    except Exception:  # noqa: BLE001 — a link is not worth a lost message
+        logging.getLogger("CoScientist.web").warning(
+            "could not rewrite links for delivery", exc_info=True
+        )
+        return text
+
+
 def _mint_artifact_url(bucket: str, key: str) -> str | None:
     """Mint a fresh download URL for one object. Runs in a worker thread.
 
@@ -378,6 +413,13 @@ def _apply_frontend_settings(frontend: dict) -> None:
             exp.plan_auto_approve = bool(experiment["planAutoApprove"])
         if "resultAutoApprove" in experiment:
             exp.result_auto_approve = bool(experiment["resultAutoApprove"])
+        # FEDOT.MAS route (EXPERIMENTS__ROUTE_FEDOT). The next session's tree
+        # attaches FedotAgent on it and builds the planner prompt with or
+        # without the route. Off also stops a running session at once: the
+        # critique and start_task read this flag on every call. On cannot reach
+        # a running session - its executor was built without FedotAgent.
+        if "routeFedot" in experiment:
+            exp.route_fedot = bool(experiment["routeFedot"])
         # Both windows fail closed, so a nonsense value must not become
         # "wait forever" by accident: the model declares gt=0 but a BaseModel
         # does not validate assignment, and handler.py reads <= 0 as no
@@ -420,11 +462,29 @@ def _apply_frontend_settings(frontend: dict) -> None:
     if "abstainScore" in task_exec:
         web.executor_tool_abstain_score = float(task_exec["abstainScore"])
 
+    # MEDICAL__ENABLED. The next session's tree attaches MedicalAgent on it
+    # (orchestrator roster, experiment executor, planner prompt). Off also takes
+    # the medical route out of a running experiment at once: the critique and
+    # start_task ask medical_route_available on every call.
+    medical = frontend.get("medicalAgent", {})
+    if "enabled" in medical:
+        web.medical_agent_enabled = bool(medical["enabled"])
+
+    # NIR__ENABLED. Purely a runtime gate: NirReportAgent is attached whenever
+    # MCP__NORMCONTROL_URL is set, and this decides whether ask_nir_report
+    # offers the GOST 7.32-2017 report at all. It reads settings on every call,
+    # so the switch takes effect on the next aggregator run without a restart.
+    nir = frontend.get("nirReport", {})
+    if "enabled" in nir:
+        get_settings().nir.enabled = bool(nir["enabled"])
+
     hypotheses = frontend.get("hypothesesAgent", {})
     if "maxActiveHypotheses" in hypotheses:
         val = int(hypotheses["maxActiveHypotheses"])
         if 1 <= val <= 5:
             web.max_active_hypotheses = val
+    if "nodeReportAuto" in hypotheses:
+        web.node_report_auto = bool(hypotheses["nodeReportAuto"])
 
     coder = frontend.get("coderAgent", {})
     if "sandboxUrl" in coder:
@@ -492,6 +552,7 @@ def _current_settings() -> dict:
             "resultAutoApprove": settings.experiments.result_auto_approve,
             "planReviewTimeoutS": settings.experiments.plan_review_timeout_s,
             "resultReviewTimeoutS": settings.experiments.result_review_timeout_s,
+            "routeFedot": settings.experiments.route_fedot,
         },
         "plannerAgent": {
             "retrievalEnabled": web.planner_retrieval_enabled,
@@ -501,8 +562,17 @@ def _current_settings() -> dict:
             "mergeTasksEnabled": web.merge_tasks_enabled,
         },
         "researchAgent": {"maxSearches": web.max_searches},
+        "medicalAgent": {"enabled": web.medical_agent_enabled},
+        # The GOST 7.32-2017 report. `available` is not a setting but a fact
+        # about the deployment: with no MCP__NORMCONTROL_URL there is nothing to
+        # submit a document to, and the switch has nothing to switch.
+        "nirReport": {
+            "enabled": settings.nir.enabled,
+            "available": settings.nir_buildable,
+        },
         "hypothesesAgent": {
             "maxActiveHypotheses": web.max_active_hypotheses,
+            "nodeReportAuto": web.node_report_auto,
         },
         "taskExecutorAgent": {
             "keepScore": web.executor_tool_keep_score,
@@ -1112,6 +1182,37 @@ def _wire_tool_activity(runtime: WebRuntime) -> None:
     set_tool_activity_sink(deliver)
 
 
+async def _attach_document(
+    payload: dict[str, Any],
+    key: SessionKey,
+    *,
+    markdown: str,
+    kind: str,
+    agent: str = "",
+    summary: str = "",
+) -> None:
+    """Publish one long body as a session document and point the message at it.
+
+    Silent on failure: a message with no document is a message that shows its
+    body the way it always did. Losing the text is not on the table.
+    """
+    try:
+        from CoScientist.reporting.documents import publish_document
+
+        document = await asyncio.to_thread(
+            publish_document, key,
+            markdown=markdown, kind=kind, agent=agent, summary=summary,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("CoScientist.web").warning(
+            "chat document not published (%s): %s", kind, exc
+        )
+        return
+    if document:
+        payload["document"] = document.as_payload()
+        payload["summary"] = document.summary
+
+
 def _wire_agent_output(runtime: WebRuntime) -> None:
     """Post the final answer of the key agents into the chat.
 
@@ -1128,9 +1229,17 @@ def _wire_agent_output(runtime: WebRuntime) -> None:
             # A key we never served (e.g. the CLI default scope) has nowhere to go.
             return
         if "content" in payload and isinstance(payload["content"], str):
-            payload["content"] = strip_thinking(payload["content"])
+            payload["content"] = _readable_links(strip_thinking(payload["content"]), key)
             if not payload["content"].strip():
                 return
+            # The deliverable is a document; the feed gets its first paragraph
+            # and a button. `content` stays on the event — the transcript and
+            # any tab that predates the panel still read it.
+            await _attach_document(
+                payload, key,
+                markdown=payload["content"], kind="answer",
+                agent=str(payload.get("agent") or ""),
+            )
         event = {"type": "agent_output", **_json_safe(payload)}
         runtime.agent_events[key].append(event)
         await runtime.send(key, event)
@@ -1505,6 +1614,135 @@ def create_app() -> FastAPI:
             _ARTIFACT_URL_CACHE.clear()
         _ARTIFACT_URL_CACHE[cache_key] = (url, now + ARTIFACT_URL_CACHE_TTL_SECONDS)
         return RedirectResponse(url, status_code=302)
+
+    @app.get("/api/users/{user_id}/sessions/{session_id}/artifacts")
+    async def list_session_artifacts(user_id: str, session_id: str):
+        """Everything this run produced, whether or not a node points at it.
+
+        A graph node links an artifact only when something recorded the link,
+        and plenty is captured that nothing ever attaches — a figure an MCP tool
+        rendered mid-task is in the store with its bytes, and reachable from
+        nowhere on the page. This is the flat answer to "what did the run make",
+        including what did NOT survive and why, so a missing figure is a fact
+        the reader can see rather than an absence they have to infer.
+        """
+        from CoScientist.reporting import session_files
+
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        from CoScientist.utils.report_links import session_artifact_link
+
+        items = []
+        for artifact_id, record in session_files.load_manifest(session_id, user_id).items():
+            stored = record.get("state") == session_files.STATE_STORED
+            items.append({
+                "artifact_id": artifact_id,
+                "name": record.get("filename") or artifact_id,
+                # `label` titles it, `source_kind` is how the document panel
+                # tells a written document from a captured figure.
+                "label": record.get("label"),
+                "source_kind": record.get("source_kind"),
+                "agent": record.get("agent") or record.get("source_tool"),
+                "media_type": record.get("media_type"),
+                "size_bytes": record.get("size_bytes"),
+                "tool": record.get("source_tool"),
+                "state": record.get("state"),
+                "reason": record.get("reason"),
+                "captured_at": record.get("captured_at"),
+                "href": (
+                    session_artifact_link(user_id, session_id, artifact_id)
+                    if stored else None
+                ),
+            })
+        items.sort(key=lambda i: (i["state"] != session_files.STATE_STORED,
+                                  -(i.get("captured_at") or 0)))
+        return JSONResponse({
+            "artifacts": items,
+            "stored": sum(1 for i in items if i["state"] == session_files.STATE_STORED),
+            "total": len(items),
+        })
+
+    @app.get("/api/users/{user_id}/sessions/{session_id}/artifacts/{artifact_id}")
+    async def get_session_artifact(
+        user_id: str, session_id: str, artifact_id: str, fallback: str = "",
+    ):
+        """Serve one file this session mirrored into its own directory.
+
+        The sibling of ``/api/artifact/<bucket>/<key>``, and deliberately not a
+        replacement for it:
+
+        =================  ============================  ==========================
+        ..                 /api/artifact/<b>/<k>          this route
+        =================  ============================  ==========================
+        storage            S3/MinIO                       this host's disk
+        scope              none                           one session, guarded
+        answers            302 to a fresh presigned URL   the bytes
+        needs              S3 reachable                   nothing
+        survives export    only if the bucket is shared   yes
+        =================  ============================  ==========================
+
+        Graph attrs and report markdown store ``cos-artifact:<id>``, which
+        carries no session — so an imported bundle resolves through whatever
+        scope is asking, with nothing rewritten.
+
+        Traversal is refused three times over: ``artifact_id`` is a plain path
+        parameter, so Starlette will not match a ``/`` at all; ``resolve_path``
+        re-checks the name against ``ARTIFACT_ID_RE`` and then confirms the
+        resolved file still sits inside this session's directory.
+        """
+        from CoScientist.reporting import session_files
+
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+        key = (user_id, session_id)
+        record = session_files.load_manifest(session_id, user_id).get(artifact_id) or {}
+        path = session_files.resolve_path(key, artifact_id)
+
+        if path is None:
+            # The bundle was exported without its files, or the copy was pruned.
+            # A second address beats a 404 when the record kept one.
+            if fallback == "s3" and record.get("bucket") and record.get("s3_key"):
+                from CoScientist.utils.report_links import artifact_link
+
+                return RedirectResponse(
+                    artifact_link(record["bucket"], record["s3_key"]), status_code=302
+                )
+            raise HTTPException(status_code=404, detail="No such artifact in this session.")
+
+        media_type = (
+            record.get("media_type")
+            or mimetypes.guess_type(artifact_id)[0]
+            or "application/octet-stream"
+        )
+        # Show what a browser can show; hand the rest over as a download under
+        # the name the tool gave it, not the hashed id.
+        inline = media_type.startswith(("image/", "text/")) or media_type == "application/pdf"
+        name = record.get("filename") or artifact_id
+        # A wholly Cyrillic name folds to nothing, and `filename=" .png"` is
+        # worse than no fallback at all. The id is ASCII by construction.
+        ascii_name = name.encode("ascii", "ignore").decode().strip()
+        if len(ascii_name.strip(" ._-")) < 3:
+            ascii_name = artifact_id
+        disposition = (
+            f"{'inline' if inline else 'attachment'}; filename=\"{ascii_name}\"; "
+            f"filename*=UTF-8''{quote(name)}"
+        )
+        return FileResponse(
+            path,
+            media_type=media_type,
+            headers={
+                "Content-Disposition": disposition,
+                # The id is the content hash, so the bytes behind it can never
+                # change. Unlike /api/artifact/, whose 302 target expires.
+                "Cache-Control": "private, max-age=31536000, immutable",
+            },
+        )
 
     # --- Local users and sessions (process lifetime only) ---
     @app.get("/api/users")
@@ -1904,10 +2142,16 @@ def create_app() -> FastAPI:
             if view == "research":
                 # One study at a time, and the session's others listed beside
                 # it — the same shape the execution log uses for requests.
-                return get_research_graph(
+                payload = get_research_graph(
                     user_id=user_id,
                     session_id=session_id,
                 ).view_of(turn)
+                # The graph page is a self-contained monolith: it loads none of
+                # the chat page's scripts and so cannot read the settings the
+                # usual way. A setting it must honour rides along with the data
+                # it already asks for.
+                payload["auto_node_reports"] = get_settings().web.node_report_auto
+                return payload
             execution = get_knowledge_graph(
                 user_id=user_id,
                 session_id=session_id,
@@ -1921,7 +2165,12 @@ def create_app() -> FastAPI:
                 # One request at a time: roster and hub removed, placed on a
                 # clock. The payload also lists the session's other requests.
                 from CoScientist.graph.projection import execution_tree
-                return execution_tree(execution, turn=turn)
+                # The scope is what turns a stored reference into a link, and it
+                # is the scope of whoever is *reading* — so an imported session
+                # resolves its artifacts under its own id.
+                return execution_tree(
+                    execution, turn=turn, scope=(user_id, session_id)
+                )
             if view not in ("", "execution"):
                 # `knowledge` and `memory` were served here until the knowledge
                 # memory was removed. Falling through to the execution graph
@@ -1951,6 +2200,94 @@ def create_app() -> FastAPI:
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse(payload)
+
+    @app.post("/api/users/{user_id}/sessions/{session_id}/graph/agent_summary")
+    async def api_agent_summary(user_id: str, session_id: str, request: Request):
+        """A few lines from a small model on what one agent did in one request.
+
+        Body: ``{"node_id", "turn", "lang"}``. Only on request — the button in
+        the execution log's panel — and remembered per trace, so a click on an
+        agent that has not changed since is free.
+        """
+        body = await request.json() if await request.body() else {}
+        node_id, turn = body.get("node_id"), body.get("turn") or None
+        if not node_id:
+            raise HTTPException(status_code=422, detail="node_id is required")
+        try:
+            tree = graph_payload(user_id, session_id, "execution", turn)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        node = next((n for n in tree.get("nodes", []) if n.get("id") == node_id), None)
+        if node is None or node.get("kind") not in ("agent", "agent_call"):
+            raise HTTPException(status_code=404, detail=f"agent {node_id!r} is not in this request")
+        from CoScientist.graph.agent_summary import summarize
+        from CoScientist.graph.summary_store import for_session
+        try:
+            result = await summarize(node, lang=str(body.get("lang") or "ru"),
+                                     scope=f"{user_id}/{session_id}",
+                                     force=bool(body.get("again")),
+                                     # Durable: the in-process cache dies with
+                                     # the process, and re-opening a finished
+                                     # study used to re-buy every account.
+                                     store=for_session((user_id, session_id)))
+        except Exception as exc:  # noqa: BLE001 — the model is an outside service
+            raise HTTPException(status_code=502, detail=f"summary failed: {exc}") from exc
+        return JSONResponse(result)
+
+    @app.get("/api/users/{user_id}/sessions/{session_id}/graph/agent_summary")
+    async def api_agent_summary_stored(user_id: str, session_id: str,
+                                       node_id: str, lang: str = "ru"):
+        """What has already been written about this agent's run, or 404.
+
+        Reads, never writes. The node report cites these accounts, and one
+        research node can have half a dozen contributors — generating them
+        inside that request would turn opening a card into six model calls.
+        """
+        runtime.registry.require_session(user_id, session_id)
+        from CoScientist.graph.summary_store import latest
+
+        kept = latest((user_id, session_id), node_id, lang=lang)
+        if not kept:
+            raise HTTPException(status_code=404,
+                                detail=f"no summary written for {node_id!r}")
+        return JSONResponse(kept)
+
+    @app.post("/api/users/{user_id}/sessions/{session_id}/graph/node_report")
+    async def api_node_report(user_id: str, session_id: str, request: Request):
+        """Write, or return, the account of one RESEARCH-graph node.
+
+        A sibling of the agent summary and deliberately not the same route: the
+        two graphs have separate id namespaces, and a route that accepted either
+        would answer about whichever node happened to match.
+        """
+        runtime.registry.require_session(user_id, session_id)
+        body = await request.json() if await request.body() else {}
+        node_id = str(body.get("node_id") or "")
+        if not node_id:
+            raise HTTPException(status_code=422, detail="node_id is required")
+
+        from CoScientist.graph.research.store import get_research_graph
+        from CoScientist.graph.summary_store import for_session
+        from CoScientist.reporting import node_report
+
+        store = get_research_graph(user_id=user_id, session_id=session_id)
+        view = store.view_of(body.get("turn") or None)
+        if not node_report._reportable(view, node_id):
+            raise HTTPException(
+                status_code=404,
+                detail=f"{node_id!r} is not a node a report is written for")
+        try:
+            written = await node_report.write_report(
+                view, node_id, scope=(user_id, session_id), store=store,
+                summaries=for_session((user_id, session_id)),
+                lang=str(body.get("lang") or "ru"),
+                force=bool(body.get("again")))
+        except Exception as exc:  # noqa: BLE001 — the model is an outside service
+            raise HTTPException(status_code=502,
+                                detail=f"node report failed: {exc}") from exc
+        if written is None:
+            raise HTTPException(status_code=404, detail=f"no node {node_id!r}")
+        return JSONResponse(written)
 
     @app.get("/api/users/{user_id}/sessions/{session_id}/graph.svg")
     async def api_session_graph_svg(user_id: str, session_id: str):
@@ -2334,10 +2671,16 @@ def create_app() -> FastAPI:
     async def get_tz_document(name: str = ""):
         """Serve a ТЗ document from tz_documents/ (the latest one by default).
 
-        The TZSpecAgent announces the file in the chat; this endpoint lets the
-        user open it in the browser.
+        The framing stage announces the file in the chat and hangs it off the
+        «Постановка» card of the research graph; both links land here.
+
+        Markdown is returned as text so the browser shows it; a .docx is
+        returned as a download, because a Word file rendered as text is a
+        screenful of binary. The file name travels in the link, so the two
+        formats of one document are two links, not a format switch.
         """
         from fastapi.responses import PlainTextResponse
+        from urllib.parse import quote
 
         tz_dir = Path("tz_documents")
         if not tz_dir.is_dir():
@@ -2348,10 +2691,24 @@ def create_app() -> FastAPI:
             if not candidate.is_file():
                 return JSONResponse({"error": f"no such document: {name}"}, status_code=404)
         else:
-            files = sorted(tz_dir.glob("TZ_*.md"))
+            # Newest of either format. `TZ_*` is the microfluidics profile's
+            # naming, `ТЗ_*` the research frame's; both live here.
+            files = sorted((p for p in tz_dir.iterdir()
+                            if p.suffix.lower() in (".md", ".docx")),
+                           key=lambda p: p.stat().st_mtime)
             if not files:
                 return JSONResponse({"error": "no ТЗ documents yet"}, status_code=404)
             candidate = files[-1]
+        if candidate.suffix.lower() == ".docx":
+            return FileResponse(
+                str(candidate),
+                media_type="application/vnd.openxmlformats-officedocument."
+                           "wordprocessingml.document",
+                # RFC 5987: the names are Russian, and a bare `filename=` would
+                # reach the browser as mojibake.
+                headers={"Content-Disposition":
+                         "attachment; filename*=UTF-8''" + quote(candidate.name)},
+            )
         return PlainTextResponse(
             candidate.read_text(encoding="utf-8"),
             media_type="text/markdown; charset=utf-8",
@@ -2848,7 +3205,9 @@ async def _run_chat_invocation(
                         if cleaned:
                             text_parts.append(cleaned)
                     if text_parts:
-                        event_data["content"] = "\n".join(text_parts)
+                        event_data["content"] = _readable_links(
+                            "\n".join(text_parts), key
+                        )
 
                     # Extract tool calls (function_call) and tool responses
                     # (function_response) so the frontend can show live
@@ -3003,20 +3362,46 @@ async def _run_chat_invocation(
         # run_async above (its events streamed like any other agent), so its report
         # is in `report_markdown`. Fall back to the orchestrator's own answer only if
         # the aggregator produced nothing.
+        # The scope, not None. Everything downstream of finalize that writes
+        # anywhere reads the user and session from here: passing None made
+        # `_publish_to_research_graph` bail with "no user scope in state", so
+        # the Report card was never published from the web path at all — only
+        # from the CLI, which passes real state.
+        from CoScientist.graph.session_scope import (
+            GRAPH_SCOPE_SESSION_KEY,
+            GRAPH_SCOPE_USER_KEY,
+        )
+
+        finalize_state = {
+            GRAPH_SCOPE_USER_KEY: user_id,
+            GRAPH_SCOPE_SESSION_KEY: session_id,
+        }
         result = await asyncio.to_thread(
             finalize_report, manager.session_id,
-            report_markdown or final_response, report_config, None,
+            report_markdown or final_response, report_config, finalize_state,
         )
 
         runtime.registry.touch_session(user_id, session_id, status="idle")
         payload = {
             "type": "final_response",
-            "content": remint_report_urls(result.markdown),
+            "content": _readable_links(result.markdown, key),
             "timestamp": datetime.now().isoformat(),
         }
         if result.report_dir:
             payload["report_dir"] = str(result.report_dir)
             payload["manifest"] = result.manifest
+        if result.report_artifact_id:
+            # `finalize` already mirrored report.md into this session, so the
+            # panel opens that file rather than a second copy of the same text.
+            from CoScientist.reporting.documents import summarise_markdown
+
+            title, summary = summarise_markdown(result.markdown)
+            payload["document"] = {
+                "artifact_id": result.report_artifact_id,
+                "title": title or "Отчёт по исследованию",
+                "kind": "result",
+            }
+            payload["summary"] = summary
         await runtime.send(key, payload)
 
     finally:

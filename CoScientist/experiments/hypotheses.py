@@ -21,7 +21,27 @@ logger = logging.getLogger(__name__)
 _OUTPUT_KEYS = ("hypotheses", "experiment_hypotheses")
 _PENDING_FC_KEY = "_em_hypotheses_from_fc"
 _FORCE_COMMIT_KEY = "_em_hypotheses_commit_forced"
-_MAX_H_PER_COMMIT = 3
+#: Ceiling for the REPAIR paths — how many hypotheses a rebuilt commit may
+#: carry. It has to follow the operator's setting, or a run configured for five
+#: would have the repair silently cut it to three and the agent would meet a
+#: graph that lost two of its claims without saying so.
+_MAX_H_PER_COMMIT_FLOOR = 3
+
+
+def _max_h_per_commit() -> int:
+    try:
+        from CoScientist.config import get_settings
+
+        return max(_MAX_H_PER_COMMIT_FLOOR,
+                   min(5, int(get_settings().web.max_active_hypotheses)))
+    except Exception:  # noqa: BLE001 — a repair must not depend on settings
+        return _MAX_H_PER_COMMIT_FLOOR
+
+
+#: Above this the commit is compacted to hypotheses alone. It is a size, not a
+#: policy: the point of the rewrite is a function call the channel can carry,
+#: and a payload under it was never the problem the rewrite was built for.
+_MAX_COMMIT_CHARS = 6000
 # Numbered draft lines from model thinking / prose, e.g.
 # "1. **ATP-competitive hypothesis**: Molecules with …"
 _NUMBERED_HYP_RE = re.compile(
@@ -169,6 +189,15 @@ def _clear_leftover_inventory(state: Any) -> None:
     state["accumulated_tools"] = []
     state["filtered_tools"] = []
     state["retrieval_queries"] = []
+    # And the reranker's verdict about them. Left behind, it says a search
+    # happened for THIS ask and found nothing, when in fact nothing has looked
+    # yet — two different things to tell the hypothesis generator.
+    try:
+        from CoScientist.agents.callbacks.tool_callbacks import TOOL_MATCH_STATE_KEY
+
+        state[TOOL_MATCH_STATE_KEY] = None
+    except Exception:  # noqa: BLE001
+        pass
     try:
         from CoScientist.tools.retrieval_tools import clear_session_accumulated_tools
 
@@ -214,25 +243,34 @@ def seed_hypotheses_from_em_request(
             elif isinstance(item, str) and item.strip():
                 lines.append(f"- {item.strip()}")
         if lines:
+            # The operations BOUND the study; they do not enumerate hypotheses.
+            # This block used to say "one hypothesis per slot; H1 matches OP-1,
+            # …; do not skip a slot", which contradicted the agent's own
+            # instruction ("one claim covering five operations is the goal") and
+            # won, because it arrives as the user turn. Six operations then
+            # produced six hypotheses whatever the operator had configured.
             op_block = (
-                "AUTHORITATIVE operations (one hypothesis per slot; "
-                "H1 matches OP-1, H2 matches OP-2, …). Do not invent extra "
-                "endpoints and do not skip a slot:\n"
+                "SCOPE — the operations this study was asked for. A hypothesis "
+                "may span several of them; do not invent endpoints beyond them. "
+                "This list is NOT a list of hypotheses: do not write one per "
+                "line, and do not treat a line as something that must be "
+                "covered by a claim of its own — the plan links its tasks to "
+                "these operations anyway.\n"
                 + "\n".join(lines)
                 + "\n"
             )
     prompt = (
         "Generate falsifiable scientific hypotheses for the computational experiment below.\n"
         f"{op_block}"
-        "Prefer one distinct hypothesis per distinct operation the user asked to "
-        "execute (numbered/separated steps in ASK, or AUTHORITATIVE operations "
-        "above). Do not invent extra endpoints beyond those operations. Skip a "
+        "How MANY to propose is stated in your instructions and comes from the "
+        "operator's setting — do not infer a count from the list above. Skip a "
         "narrative-only report step — that is ResultAggregator, not a hypothesis.\n"
         "CRITICAL — keep research_commit SMALL and reliable:\n"
         "- Commit Hypothesis nodes ONLY (no VerificationMethod / ConfirmationCriteria "
         "in the same call). Add VM/CC later in separate small commits if needed.\n"
-        f"- At most {_MAX_H_PER_COMMIT} Hypothesis nodes per research_commit; "
-        "make additional commits if you need more.\n"
+        "- Commit every hypothesis in ONE research_commit. Extra calls do not "
+        "raise the ceiling: the surplus is filed as 'postponed', and a "
+        "postponed hypothesis is never verified.\n"
         "- Prefer short formulation strings; avoid huge protocol_steps dumps.\n"
         "The research graph already has its ResearchQuestion root by the time you "
         "run. If you somehow still see an empty graph, do NOT try to create the "
@@ -417,7 +455,7 @@ def _refs_from_numbered_drafts(text: str) -> list[dict[str, str]]:
             continue
         seen.add(statement)
         out.append({"hypothesis_id": f"H{len(out) + 1}", "statement": statement})
-        if len(out) >= _MAX_H_PER_COMMIT:
+        if len(out) >= _max_h_per_commit():
             break
     return out
 
@@ -426,7 +464,7 @@ def _refs_from_model_draft(text: str) -> list[dict[str, str]]:
     """Prefer explicit Hypothesis-N labels; else numbered thinking drafts."""
     refs = extract_hypothesis_refs(text or "")
     if refs:
-        return refs[:_MAX_H_PER_COMMIT]
+        return refs[:_max_h_per_commit()]
     return _refs_from_numbered_drafts(text)
 
 
@@ -446,13 +484,13 @@ def _commit_args_from_refs(
     refs: list[dict[str, str]], *, root_id: str,
 ) -> dict[str, Any]:
     nodes: list[dict[str, Any]] = []
-    for i, ref in enumerate(refs[:_MAX_H_PER_COMMIT], start=1):
+    for i, ref in enumerate(refs[:_max_h_per_commit()], start=1):
         statement = re.sub(r"\s+", " ", str(ref.get("statement") or "").strip())[:500]
         if not statement:
             continue
         nodes.append({
             "type": "Hypothesis",
-            "ref": f"h{i}",
+            "ref": f"h_{i}",
             "attrs": {"formulation": statement, "status": "formulated"},
         })
     edges = [
@@ -543,13 +581,64 @@ def enforce_hypothesis_research_commit(
     )
 
 
+def _repair_node_keys(args: dict[str, Any]) -> dict[str, Any]:
+    """Rename the key spellings this module tolerates into the ones the store
+    reads.
+
+    `node_type` and `attributes` are accepted everywhere in here because models
+    write them, and while every commit was being rebuilt from scratch that
+    tolerance was enough. Now that a payload which kept to the instruction is
+    dispatched as the agent wrote it, those spellings would reach a store that
+    has never heard of them: `attributes` becomes a node with no attrs at all,
+    and `node_type` a draft with no type. Renaming them changes nothing for a
+    payload that did not use them.
+    """
+    nodes = args.get("nodes")
+    if not isinstance(nodes, list):
+        return args
+    out, touched = [], False
+    for node in nodes:
+        if not isinstance(node, dict):
+            out.append(node)
+            continue
+        fixed = dict(node)
+        if "attrs" not in fixed and isinstance(fixed.get("attributes"), dict):
+            fixed["attrs"] = fixed.pop("attributes")
+            touched = True
+        if not fixed.get("type") and fixed.get("node_type"):
+            fixed["type"] = fixed.pop("node_type")
+            touched = True
+        out.append(fixed)
+    if not touched:
+        return args
+    return {**args, "nodes": out}
+
+
 def _shrink_commit_args(args: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, str]], bool]:
-    """Keep Hypothesis-only (≤3) so the FC channel stays dispatchable."""
+    """Keep Hypothesis-only (≤3) so the FC channel stays dispatchable.
+
+    Only when the agent has actually overrun. It used to rewrite EVERY commit
+    carrying a hypothesis, and that cost more than it saved:
+
+    * a draft NAMING a node — ``{"id": "H3", "attrs": {…}}``, the form the tool
+      documents for changing one — had its id moved into ``ref``, which turns an
+      update into a creation. On session_d9765b9e6de44530a3540da3aa0cd4c0 the
+      agent tried ten times to write a formulation into H3 and got H5…H14, each
+      answered ``ok: true``;
+    * every edge it drew was replaced by ``Q1 -motivates-> #ref`` and its
+      ``status_updates`` were dropped, so a hypothesis could not be ranked and a
+      method could not be tied to what it tests;
+    * the ConfirmationCriteria and VerificationMethod written in the same call
+      were discarded — which is why that run kept re-sending them.
+
+    A payload that obeys the seeded instruction is now dispatched as written.
+    """
     nodes_raw = args.get("nodes")
     if isinstance(nodes_raw, str):
         nodes_raw = _parse_payload(nodes_raw)
     nodes = nodes_raw if isinstance(nodes_raw, list) else []
     hyp_nodes: list[dict[str, Any]] = []
+    creates = 0
     for node in nodes:
         if not isinstance(node, dict):
             continue
@@ -564,29 +653,69 @@ def _shrink_commit_args(args: dict[str, Any]) -> tuple[dict[str, Any], list[dict
         ).strip()
         if not formulation:
             continue
-        ref = str(node.get("ref") or node.get("id") or f"h{len(hyp_nodes) + 1}").strip()
-        compact_attrs = {
+        compact_attrs: dict[str, Any] = {
             "formulation": re.sub(r"\s+", " ", formulation)[:500],
-            "status": str(attrs.get("status") or "formulated"),
         }
         if attrs.get("priority"):
             compact_attrs["priority"] = str(attrs["priority"])[:40]
+        named = str(node.get("id") or "").strip()
+        if named:
+            # The type travels with it. Stripped, an id the model invented for
+            # its own draft ("H1 matches OP-1", which the seeded prompt asks
+            # for) reaches the store as an update of a node that does not
+            # exist, and the whole commit is refused; with the type the store
+            # records it as a new node and says the id was not honoured.
+            # A node the graph already holds, kept as an update. `status` stays
+            # out of it: that attribute is what the card displays, and merging
+            # "formulated" onto a hypothesis since postponed would make the card
+            # contradict the node. Status moves through `status_updates`.
+            hyp_nodes.append({"id": named, "type": "Hypothesis",
+                              "attrs": compact_attrs})
+            continue
+        creates += 1
+        compact_attrs["status"] = str(attrs.get("status") or "formulated")
+        ref = str(node.get("ref") or f"h_{creates}").strip()
         hyp_nodes.append({"type": "Hypothesis", "ref": ref, "attrs": compact_attrs})
-        if len(hyp_nodes) >= _MAX_H_PER_COMMIT:
-            break
-    refs = _refs_from_hypothesis_nodes(hyp_nodes)
     if not hyp_nodes:
-        return args, refs, False
+        fixed = _repair_node_keys(args)
+        return fixed, _refs_from_hypothesis_nodes(args), fixed is not args
+    # The seeded instruction is "Hypothesis nodes only, at most three, short
+    # formulations". Enforce it where it was broken; leave a commit that kept to
+    # it alone, so the criteria and methods written in the same breath reach the
+    # graph instead of being re-sent a turn later.
+    if creates <= _max_h_per_commit() and _estimate_commit_chars(args) <= _MAX_COMMIT_CHARS:
+        # `changed` is what makes the callback ship a rewritten call, so a
+        # repaired payload has to claim it — otherwise the repair is computed
+        # and thrown away with the rest of the untouched response.
+        fixed = _repair_node_keys(args)
+        return fixed, _refs_from_hypothesis_nodes(args), fixed is not args
+    # Trim the CREATES to the cap; updates are an id and a sentence each and
+    # were never what overran the channel.
+    kept, seen = [], 0
+    for n in hyp_nodes:
+        if n.get("ref"):
+            seen += 1
+            if seen > _max_h_per_commit():
+                continue
+        kept.append(n)
+    hyp_nodes = kept
+    refs = _refs_from_hypothesis_nodes(hyp_nodes)
+    # Only for the nodes this call creates: one already in the graph is already
+    # attached to the question, and a second `motivates` is noise.
     edges = [
         {"type": "motivates", "from": "Q1", "to": f"#{n['ref']}"}
-        for n in hyp_nodes
+        for n in hyp_nodes if n.get("ref")
     ]
-    shrunk = {"nodes": hyp_nodes, "edges": edges}
+    shrunk: dict[str, Any] = {"nodes": hyp_nodes, "edges": edges}
+    # Status changes are a handful of ids and words — never what made a commit
+    # too big to dispatch, and dropping them lost the agent's own ranking.
+    updates = args.get("status_updates")
+    if isinstance(updates, list) and updates:
+        shrunk["status_updates"] = updates
     # Preserve optional root question if present and tiny.
     for key in ("question", "research_question"):
         if isinstance(args.get(key), str) and args[key].strip():
             shrunk[key] = args[key].strip()[:400]
-    # Always emit the compact Hypothesis-only form when Hs were extracted.
     return shrunk, refs, True
 
 
@@ -717,11 +846,14 @@ def normalize_em_hypothesis_commit(
             new_parts.append(
                 types.Part.from_function_call(name="research_commit", args=shrunk)
             )
+            sent = len(shrunk["nodes"])
+            had = len(args.get("nodes") or []) if isinstance(args.get("nodes"), list) else sent
+            what = "SHRUNK" if sent < had else "REPAIRED"
             audit(
                 logger,
-                f"EXPERIMENT_HYPOTHESES_COMMIT_SHRUNK nodes={len(shrunk['nodes'])} "
-                f"chars≈{_estimate_commit_chars(shrunk)}",
-                stdout=f"EXPERIMENT_HYPOTHESES_COMMIT_SHRUNK nodes={len(shrunk['nodes'])}",
+                f"EXPERIMENT_HYPOTHESES_COMMIT_{what} nodes={sent} "
+                f"chars~{_estimate_commit_chars(shrunk)}",
+                stdout=f"EXPERIMENT_HYPOTHESES_COMMIT_{what} nodes={sent}",
             )
         elif coerced or extracted_args:
             # Not shrunk (e.g. edges/status-only or non-Hypothesis nodes) but a

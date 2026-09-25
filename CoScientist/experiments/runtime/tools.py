@@ -21,6 +21,17 @@ def _call(operation, *args, **kwargs) -> dict[str, Any]:
         return {"status": "error", "error_code": "validation_error", "message": str(exc)}
 
 
+def _route_agents(tool_context: ToolContext) -> frozenset[str] | None:
+    """Names of the agents attached as AgentTools to the executor calling us.
+
+    That tree is what the executor can actually call; the YAML may have
+    changed under a running session. None when the tree cannot be read, and
+    start_task then goes by the YAML alone.
+    """
+    agent = getattr(getattr(tool_context, "_invocation_context", None), "agent", None)
+    return state_machine.agent_tool_names(agent)
+
+
 def _mirror_result_to_graph(tool_context: ToolContext, task_id: str, stored: dict[str, Any]) -> None:
     """Best-effort: mirror a recorded TaskResult into the research graph
     (Evidence/GeneratedData + VerificationMethod status). Never raises."""
@@ -35,6 +46,25 @@ def _mirror_result_to_graph(tool_context: ToolContext, task_id: str, stored: dic
             get_research_graph(tool_context), tool_context.state, task_id, task_result,
         )
     except Exception:  # noqa: BLE001 — the recorded result always wins
+        pass
+
+
+def _mirror_task_state_to_graph(tool_context: ToolContext, task_id: str) -> None:
+    """Best-effort: move the task's card to wherever the runtime just put it.
+
+    Called after every control tool that starts, retries, re-routes or skips a
+    task — the moments the graph never used to hear about. Reads the runtime's
+    own status rather than being handed one, so it cannot disagree with it.
+    Never raises.
+    """
+    try:
+        from CoScientist.experiments.runtime.graph_bridge import publish_task_state_to_graph
+        from CoScientist.graph.research.store import get_research_graph
+
+        publish_task_state_to_graph(
+            get_research_graph(tool_context), tool_context.state, task_id,
+        )
+    except Exception:  # noqa: BLE001 — the run always wins
         pass
 
 
@@ -61,7 +91,12 @@ class ExperimentControlToolset(BaseToolset):
 
     def start_task(self, task_id: str, tool_context: ToolContext) -> dict[str, Any]:
         """Start one ready task and create a fresh attempt/route envelope."""
-        return _call(state_machine.start_task, tool_context.state, task_id)
+        started = _call(
+            state_machine.start_task, tool_context.state, task_id,
+            route_agents=_route_agents(tool_context),
+        )
+        _mirror_task_state_to_graph(tool_context, task_id)
+        return started
 
     def record_result(
         self,
@@ -76,8 +111,11 @@ class ExperimentControlToolset(BaseToolset):
         MCP outputs) is accepted even when planner artifact or criterion names
         differ — name mismatch alone must not fallback to Coder.
         """
+        route_agents = _route_agents(tool_context)
         try:
-            stored = state_machine.record_result(tool_context.state, task_id, attempt_id, result)
+            stored = state_machine.record_result(
+                tool_context.state, task_id, attempt_id, result, route_agents=route_agents,
+            )
             _mirror_result_to_graph(tool_context, task_id, stored)
             return stored
         except ExperimentRuntimeError as exc:
@@ -90,7 +128,9 @@ class ExperimentControlToolset(BaseToolset):
                 "error_message": str(exc),
                 "retryable": True,
             }
-            stored = state_machine.record_result(tool_context.state, task_id, attempt_id, downgraded)
+            stored = state_machine.record_result(
+                tool_context.state, task_id, attempt_id, downgraded, route_agents=route_agents,
+            )
             stored.update({"downgraded_from": result.get("status"), "downgrade_reason": "result_incomplete"})
             _mirror_result_to_graph(tool_context, task_id, stored)
             return stored
@@ -99,15 +139,24 @@ class ExperimentControlToolset(BaseToolset):
 
     def retry_task(self, task_id: str, tool_context: ToolContext) -> dict[str, Any]:
         """Permit a retryable failure to create a new attempt on the same route."""
-        return _call(state_machine.retry_task, tool_context.state, task_id)
+        retried = _call(state_machine.retry_task, tool_context.state, task_id)
+        _mirror_task_state_to_graph(tool_context, task_id)
+        return retried
 
     def fallback_task(self, task_id: str, reason: str, tool_context: ToolContext) -> dict[str, Any]:
         """Move a failed task to the next route in its finite fallback chain."""
-        return _call(state_machine.fallback_task, tool_context.state, task_id, reason)
+        moved = _call(
+            state_machine.fallback_task, tool_context.state, task_id, reason,
+            route_agents=_route_agents(tool_context),
+        )
+        _mirror_task_state_to_graph(tool_context, task_id)
+        return moved
 
     def skip_task(self, task_id: str, reason: str, tool_context: ToolContext) -> dict[str, Any]:
         """Skip an optional task and create its terminal skipped TaskResult."""
-        return _call(state_machine.skip_task, tool_context.state, task_id, reason)
+        skipped = _call(state_machine.skip_task, tool_context.state, task_id, reason)
+        _mirror_task_state_to_graph(tool_context, task_id)
+        return skipped
 
     def amend_task(
         self,

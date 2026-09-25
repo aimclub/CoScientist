@@ -167,7 +167,8 @@ def _approved_state(plan: ExperimentPlan) -> dict:
     state: dict = {}
     critique = critique_plan(
         plan,
-        settings=ExperimentsSettings(),
+        # The fixtures default to fedot_mas tasks; FEDOT.MAS is off by default.
+        settings=ExperimentsSettings(route_fedot=True),
         available_tools=_inventory(),
     )
     payload = critique.model_dump(mode="json")

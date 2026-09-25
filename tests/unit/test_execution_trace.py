@@ -602,8 +602,59 @@ def test_an_agent_lists_the_files_and_links_it_produced():
     agent["output_files"] = ["s3://b/fig.png"]
     got = {n["id"]: n for n in execution_tree(full)["nodes"]}["agent:Research"]["artifacts"]
     assert [a["uri"] for a in got] == ["s3://b/k", "s3://b/fig.png", "https://x.y/report"]
-    assert got[0] == {"uri": "s3://b/k", "kind": "file", "tool": "extract"}
+    assert got[0] == {"uri": "s3://b/k", "kind": "file", "tool": "extract",
+                      "href": "/api/artifact/b/k"}
     assert got[2]["kind"] == "link"
+
+
+def test_a_file_artifact_is_something_the_reader_can_open(tmp_path, monkeypatch):
+    """`uri` is the durable reference; `href` is where the anchor goes.
+
+    A ``file`` artifact used to carry no href, and the panel drew it as plain
+    text — so an ``s3://`` key sat there unopenable even though
+    ``/api/artifact/`` had been serving exactly that for ages. A mirrored file
+    resolves against the scope that is *reading*, which is what lets an
+    imported session open its own artifacts.
+    """
+    from CoScientist.graph.projection import execution_tree
+    from CoScientist.reporting import session_files
+
+    monkeypatch.setenv("GRAPH_SNAPSHOT_DIR", str(tmp_path))
+    monkeypatch.setenv("ARTIFACTS__MIRROR_TO_S3", "False")
+    scope = ("u1", "s1")
+    # The bytes have to exist: a reference to a file this session does not hold
+    # is deliberately not offered as a link.
+    record = session_files.put_bytes(scope, b"\x89PNG\r\n\x1a\nx", filename="fig.png")
+    reference = session_files.ref(record["artifact_id"])
+
+    full = _agent_with_calls()
+    agent = next(n for n in full["nodes"] if n["id"] == "agent:Research")
+    agent["output_files"] = ["s3://b/fig.png", reference]
+    got = {n["id"]: n for n in
+           execution_tree(full, scope=scope)["nodes"]}["agent:Research"]["artifacts"]
+    by_uri = {a["uri"]: a for a in got}
+    assert by_uri["s3://b/fig.png"]["href"] == "/api/artifact/b/fig.png"
+    assert by_uri[reference]["href"] == (
+        f"/api/users/u1/sessions/s1/artifacts/{record['artifact_id']}"
+    )
+    assert by_uri[reference]["kind"] == "file"
+
+
+def test_a_truncated_link_is_not_offered_as_an_artifact():
+    """`_short()` marks its cut with an ellipsis, and the scrape used to keep it.
+
+    ``http://10.3…`` was listed beside real files, and told the reader something
+    existed that could never be fetched.
+    """
+    from CoScientist.graph.projection import execution_tree
+
+    full = _agent_with_calls()
+    agent = next(n for n in full["nodes"] if n["id"] == "agent:Research")
+    agent["output"] = "figure=http://10.3… and s3://b/real.png"
+    agent["output_files"] = []
+    got = {n["id"]: n for n in execution_tree(full)["nodes"]}["agent:Research"]["artifacts"]
+    assert not [a for a in got if "…" in a["uri"]]
+    assert "s3://b/real.png" in {a["uri"] for a in got}
 
 
 def test_an_old_snapshot_borrows_task_and_report_for_its_agents():

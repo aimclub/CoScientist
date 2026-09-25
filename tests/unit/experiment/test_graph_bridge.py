@@ -127,11 +127,11 @@ def test_publish_result_writes_evidence_and_vm_status(tmp_path):
     assert any(e["type"] == "relates_to" and e["from"] == evidence_id and e["to"] == "H1"
                for e in edges)
     statuses = _node_status(store)
-    assert statuses[vm_id] == "done"
+    assert statuses[vm_id] == "used"
     assert statuses["H1"] == "under_verification"
 
 
-def test_publish_result_failure_marks_vm_failed(tmp_path):
+def test_publish_result_failure_leaves_the_method_unused(tmp_path):
     from CoScientist.experiments.runtime.graph_bridge import (
         publish_plan_to_graph,
         publish_result_to_graph,
@@ -148,7 +148,7 @@ def test_publish_result_failure_marks_vm_failed(tmp_path):
     by_type = _nodes_by_type(store)
     assert by_type.get("Evidence") is None
     vm_status = {n["id"]: n["status"] for n in store.full()["nodes"]}[vm_id]
-    assert vm_status == "failed"
+    assert vm_status == "not_used"
 
 
 def test_publish_result_skips_when_no_vm(tmp_path):
@@ -610,3 +610,170 @@ def test_a_finished_task_says_so_on_its_own_card(tmp_path):
     assert by_task["EXP-1"]["status"] == "done"
     assert by_task["EXP-2"]["status"] == "failed"
     assert "refused the call" in by_task["EXP-2"]["attrs"]["failure_reason"]
+
+
+# ── what the graph is told while a task is actually running ───────────────────
+# The graph used to learn about a task at exactly two moments: plan approval and
+# `record_result`. `start_task` wrote nothing — and `start_task` is the only
+# producer of the runtime's `running` — so a card read «запланирован» for the
+# whole of a run that took minutes and then jumped straight to «выполнен». The
+# operator's complaint that the graph never says which stage is going was, at
+# bottom, this: nothing was writing it down.
+
+def _started(state, task_id="EXP-1", status="running"):
+    state.setdefault("experiment_runtime", {}).setdefault("tasks", {})[
+        task_id] = {"status": status}
+    return state
+
+
+def test_a_task_that_starts_says_so_on_the_canvas(tmp_path):
+    from CoScientist.experiments.runtime.graph_bridge import (
+        publish_plan_detail_to_graph,
+        publish_task_state_to_graph,
+    )
+
+    store = _seeded_store(tmp_path)
+    state = _approved_state(_plan(_task("EXP-1")))
+    state["_master_active_tasks"] = _with_outer_plan(store)
+    publish_plan_detail_to_graph(store, state)
+    xt_id = state[_XT_KEY]["EXP-1"]
+    assert _node_status(store)[xt_id] == "planned"
+
+    publish_task_state_to_graph(store, _started(state), "EXP-1")
+    assert _node_status(store)[xt_id] == "running"
+
+
+def test_the_step_above_a_running_task_is_under_way_too(tmp_path):
+    """The outer plan's own mirror runs only on an orchestrator tick, and by
+    then the tracker has usually moved the step from «не начат» straight to
+    «выполнен» — so a step being worked on for minutes was never once drawn as
+    being worked on. The module knows the moment a task starts.
+    """
+    from CoScientist.experiments.runtime.graph_bridge import (
+        publish_plan_detail_to_graph,
+        publish_task_state_to_graph,
+    )
+
+    store = _seeded_store(tmp_path)
+    state = _approved_state(_plan(_task("EXP-1")))
+    state["_master_active_tasks"] = _with_outer_plan(store, status="todo")
+    store.commit(source="plan-mirror",
+                 status_updates=[{"id": _nodes_by_type(store)["PlanStep"][0],
+                                  "status": "todo"}])
+    publish_plan_detail_to_graph(store, state)
+    step_id = _nodes_by_type(store)["PlanStep"][0]
+    assert _node_status(store)[step_id] == "todo"
+
+    publish_task_state_to_graph(store, _started(state), "EXP-1")
+    assert _node_status(store)[step_id] == "in_progress"
+
+
+def test_a_step_already_finished_is_not_reopened_by_a_late_task(tmp_path):
+    """`done → in_progress` is a legal move for a step and a wrong one to make
+    from here: the module may only say that work has BEGUN, and a finished step
+    is the outer plan's own record, not this module's to overwrite.
+    """
+    from CoScientist.experiments.runtime.graph_bridge import (
+        publish_plan_detail_to_graph,
+        publish_task_state_to_graph,
+    )
+
+    store = _seeded_store(tmp_path)
+    state = _approved_state(_plan(_task("EXP-1")))
+    state["_master_active_tasks"] = _with_outer_plan(store)
+    publish_plan_detail_to_graph(store, state)
+    step_id = _nodes_by_type(store)["PlanStep"][0]
+    store.commit(source="plan-mirror",
+                 status_updates=[{"id": step_id, "status": "done"}])
+
+    publish_task_state_to_graph(store, _started(state), "EXP-1")
+    assert _node_status(store)[step_id] == "done"
+    # …and not at the price of a refused commit every run: a refusal is
+    # counted as a gap on the reader's own banner.
+    assert not [g for g in store.to_view()["gaps"]
+                if g["code"] == "rejected_commits"]
+
+
+def test_a_move_the_graph_would_refuse_is_not_attempted(tmp_path):
+    """A commit is all-or-nothing and this one carries nothing else worth
+    losing, so the legality is asked before the write rather than after the
+    refusal. `running → planned` is not a move an experiment task has.
+    """
+    from CoScientist.experiments.runtime.graph_bridge import (
+        publish_plan_detail_to_graph,
+        publish_task_state_to_graph,
+    )
+
+    store = _seeded_store(tmp_path)
+    state = _approved_state(_plan(_task("EXP-1")))
+    state["_master_active_tasks"] = _with_outer_plan(store)
+    publish_plan_detail_to_graph(store, state)
+    xt_id = state[_XT_KEY]["EXP-1"]
+    publish_task_state_to_graph(store, _started(state), "EXP-1")
+    publish_task_state_to_graph(store, _started(state, status="ready"), "EXP-1")
+    assert _node_status(store)[xt_id] == "running"
+
+
+def test_the_control_tools_are_the_ones_that_report_progress(tmp_path):
+    """Wiring, not behaviour: every tool that moves a task mirrors it. A tool
+    added later that forgets to is a task the graph goes quiet about again.
+    """
+    import inspect
+
+    from CoScientist.experiments.runtime import tools as control
+
+    for name in ("start_task", "retry_task", "fallback_task", "skip_task"):
+        body = inspect.getsource(getattr(control.ExperimentControlToolset, name))
+        assert "_mirror_task_state_to_graph" in body, name
+
+
+def test_a_step_blocked_by_someone_else_is_not_quietly_released(tmp_path):
+    """A replan retires a step to `blocked`, and the retirement sweep only ever
+    looks at steps that are still `todo` — so a step this module talked out of
+    `blocked` would stay «выполняется» for the rest of the run, and flap between
+    the two every time the outer mirror ticked. Whatever blocked it knows why;
+    this module does not.
+    """
+    from CoScientist.experiments.runtime.graph_bridge import (
+        publish_plan_detail_to_graph,
+        publish_task_state_to_graph,
+    )
+
+    store = _seeded_store(tmp_path)
+    state = _approved_state(_plan(_task("EXP-1")))
+    state["_master_active_tasks"] = _with_outer_plan(store)
+    publish_plan_detail_to_graph(store, state)
+    step_id = _nodes_by_type(store)["PlanStep"][0]
+    store.commit(source="plan-mirror",
+                 status_updates=[{"id": step_id, "status": "blocked",
+                                  "reason": "шаг убран при пересмотре плана"}])
+
+    publish_task_state_to_graph(store, _started(state), "EXP-1")
+    assert _node_status(store)[step_id] == "blocked"
+
+
+def test_a_finished_task_stops_being_drawn_as_running_even_with_no_method(tmp_path):
+    """`publish_plan_to_graph` can land its tasks and lose its methods — its
+    own commit is all-or-nothing and the detail commit is not. The result
+    recording used to give up at that point, which merely left the card out of
+    date; now that `start_task` draws the card as running, giving up leaves a
+    card pulsing «выполняется» on the canvas for the rest of the session.
+    """
+    from CoScientist.experiments.runtime.graph_bridge import (
+        publish_plan_detail_to_graph,
+        publish_result_to_graph,
+        publish_task_state_to_graph,
+    )
+
+    store = _seeded_store(tmp_path)
+    state = _approved_state(_plan(_task("EXP-1")))
+    state["_master_active_tasks"] = _with_outer_plan(store)
+    publish_plan_detail_to_graph(store, state)          # tasks, but no methods
+    xt_id = state[_XT_KEY]["EXP-1"]
+    publish_task_state_to_graph(store, _started(state), "EXP-1")
+    assert _node_status(store)[xt_id] == "running"
+
+    publish_result_to_graph(store, state, "EXP-1",
+                            {"result_id": "RES-9", "status": "success",
+                             "summary": "done without a method node"})
+    assert _node_status(store)[xt_id] == "done"

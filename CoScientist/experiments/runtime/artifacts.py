@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import copy
 import html
+import logging
 import mimetypes
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping
@@ -20,6 +21,8 @@ from CoScientist.experiments.schemas import (
     is_presigned_url,
     utc_now,
 )
+
+logger = logging.getLogger(__name__)
 
 ARTIFACT_KEYS = ("mcp_artifacts", "fedot_artifacts", "coder_artifacts")
 _DATA_ROLES = frozenset({"data", "model", "mcp_server"})
@@ -80,8 +83,69 @@ def match_expected_artifact(
     if len(compatible) == 1:
         return compatible[0]
     if role_key == "data" and len(same_role) == 1:
-        return same_role[0]
+        # Last resort, and deliberately loose about the suffix: a planner names
+        # an expected artifact before the tool runs, so `generated_molecules.json`
+        # routinely arrives as a CSV. Renaming it to the name the plan asked for
+        # is right.
+        #
+        # But a PICTURE, a PAPER or an ARCHIVE is never the data a plan asked
+        # for. A task that failed to produce `dataset_overview.json` had a
+        # cluster-map PNG captured in the same attempt; this branch claimed the
+        # PNG as that dataset, and the graph then showed an attachment named
+        # `dataset_overview.json` that was a figure — belonging to a task whose
+        # own summary said the artifact was never obtained.
+        if not _crosses_media_boundary(name, same_role[0].name):
+            return same_role[0]
     return None
+
+
+#: What a file *is*, coarsely. Renaming within a family is the whole point of
+#: the branch above — a planner names `generated_molecules.json` before the tool
+#: runs and a CSV comes back. Renaming ACROSS one is always a lie.
+#:
+#: The image family alone used to be guarded, which left the same bug one
+#: category over: a Semantic Scholar PDF that a literature search pulled in was
+#: claimed as the expected `metabolite_smiles.json`, and the research graph then
+#: offered a `.json` chip that downloaded a paper. Worse than cosmetic — the
+#: rename also let that PDF satisfy a required artifact and pass a success
+#: criterion the run had not actually met.
+_MEDIA_FAMILIES: dict[str, frozenset[str]] = {
+    "image": frozenset({".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg",
+                        ".bmp", ".avif", ".tif", ".tiff"}),
+    "document": frozenset({".pdf", ".doc", ".docx", ".odt", ".ppt", ".pptx",
+                           ".rtf", ".epub"}),
+    "archive": frozenset({".zip", ".tar", ".gz", ".tgz", ".bz2", ".xz", ".7z",
+                          ".rar"}),
+    "model": frozenset({".pt", ".pth", ".pkl", ".pickle", ".ckpt", ".onnx",
+                        ".h5", ".hdf5", ".joblib", ".safetensors"}),
+}
+
+#: Anything not in a named family. Data is the open category on purpose: a
+#: plan's expected artifacts are overwhelmingly data, and a suffix nobody
+#: anticipated should behave like `.json`, not like a refusal.
+_FAMILY_DATA = "data"
+
+
+def _media_family(name: str) -> str:
+    suffix = _artifact_suffix(name)
+    if not suffix:
+        return ""
+    for family, suffixes in _MEDIA_FAMILIES.items():
+        if suffix in suffixes:
+            return family
+    return _FAMILY_DATA
+
+
+def _crosses_media_boundary(captured: str, expected: str) -> bool:
+    """These two are different kinds of thing, whatever the plan called them.
+
+    An unknown suffix on either side is not a crossing: `output` with no
+    extension at all is exactly the case the loose branch exists to serve.
+    """
+    got, want = _media_family(captured), _media_family(expected)
+    if not got or not want:
+        return False
+    return got != want
 
 
 def find_artifact(
@@ -149,6 +213,7 @@ def normalise_artifacts(
     runtime: dict[str, Any],
     task_runtime: dict[str, Any],
     attempt: dict[str, Any],
+    state: Any = None,
 ) -> tuple[list[ArtifactRef], list[str]]:
     task = ExperimentTask.model_validate(task_runtime["task"])
     expected = task.expected_artifacts
@@ -200,6 +265,30 @@ def normalise_artifacts(
         if location_key in seen:
             continue
         seen.add(location_key)
+
+        # Mirror first, then believe the store about the name. Its ids are
+        # content-addressed and first-wins, so identical bytes already captured
+        # under another name come back as that record — and if we kept the
+        # plan's name here, every consumer downstream (the media type below, the
+        # GeneratedData description, the graph chip's label) would go on
+        # describing a file by a name that is not the one being served.
+        mirrored = _mirror_record_to_session(
+            state, name=name, workspace_path=workspace_path,
+            bucket=bucket if s3_key else None, s3_key=s3_key,
+            external_url=external_url, tool=raw.get("producer_tool") or raw.get("tool"),
+        )
+        stored_name = str((mirrored or {}).get("filename") or "")
+        if stored_name and stored_name != name:
+            warnings.append(
+                f"Artifact {name!r} was already stored as {stored_name!r}; "
+                "using the stored name."
+            )
+            logger.warning(
+                "experiment artifact %r resolved to a stored copy named %r",
+                name, stored_name,
+            )
+            name = stored_name
+
         artifacts.append(
             ArtifactRef(
                 artifact_id=raw.get("artifact_id") or f"ART-{uuid4().hex}",
@@ -220,9 +309,73 @@ def normalise_artifacts(
                 derived_from=raw.get("derived_from") or [],
                 created_at=utc_now(),
                 durability=durability,
+                session_artifact_id=(mirrored or {}).get("artifact_id"),
             )
         )
     return artifacts, warnings
+
+
+def _mirror_to_session(
+    state: Any, *, name: str, workspace_path: Any, bucket: Any, s3_key: Any,
+    external_url: Any, tool: Any,
+) -> str | None:
+    """The id of our own copy of one experiment artifact.
+
+    Thin wrapper over :func:`_mirror_record_to_session` for callers that only
+    need the reference.
+    """
+    record = _mirror_record_to_session(
+        state, name=name, workspace_path=workspace_path, bucket=bucket,
+        s3_key=s3_key, external_url=external_url, tool=tool,
+    )
+    return (record or {}).get("artifact_id")
+
+
+def _mirror_record_to_session(
+    state: Any, *, name: str, workspace_path: Any, bucket: Any, s3_key: Any,
+    external_url: Any, tool: Any,
+) -> dict[str, Any] | None:
+    """Take our own copy of one experiment artifact, and return its record.
+
+    Everything above settles on a *canonical location*, and for most experiment
+    output that location is a path on the machine that ran the task. A path is
+    not something a reader can open: the research graph showed
+    ``dataset_overview.json`` as an attachment whose href was
+    ``D:\\projects26\\...``, which no browser will follow. Copying the bytes into
+    the session's own store is what turns that row into a link — and it is the
+    same copy the report collector and an exported bundle then use.
+
+    The record, not just the id, because the store is content-addressed and
+    first-wins: the same bytes mirrored earlier under another name come back as
+    *that* record, and the id then ends in that name's extension. The caller has
+    to be able to see the name it actually got, or it goes on believing the
+    artifact is called whatever the plan asked for — which is how a graph chip
+    came to read ``metabolite_smiles.json`` while serving a PDF.
+
+    Best-effort: a failure here leaves the artifact exactly as it was.
+    """
+    try:
+        from CoScientist.graph.session_scope import (
+            GRAPH_SCOPE_SESSION_KEY,
+            GRAPH_SCOPE_USER_KEY,
+        )
+        from CoScientist.reporting.mirror import mirror_artifact
+
+        user_id = str((state or {}).get(GRAPH_SCOPE_USER_KEY) or "")
+        session_id = str((state or {}).get(GRAPH_SCOPE_SESSION_KEY) or "")
+        if not (user_id and session_id):
+            return None
+        record = mirror_artifact(
+            user_id=user_id, session_id=session_id,
+            path=workspace_path, bucket=bucket, s3_key=s3_key,
+            url=external_url, filename=name, label=name,
+            tool=str(tool or ""), source_kind="experiment",
+        )
+        if record.get("state") == "stored":
+            return record
+    except Exception as exc:  # noqa: BLE001 — the artifact is still usable
+        logger.warning("experiment artifact mirror failed for %s (%s)", name, exc)
+    return None
 
 
 def artifact_exists(artifact: ArtifactRef) -> bool:

@@ -106,6 +106,7 @@
     #detail .prov:hover { border-color: var(--accent); background: #1a1f28; }
     #detail .prov .tool { font-weight: 700; color: var(--accent); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13.5px; }
     #detail .prov .jump { float: right; color: var(--accent); font-size: 11.5px; opacity: .65; }
+    #detail .prov.dim { opacity: .55; }
     #detail .prov .res { color: var(--ink2); font-size: 13px; margin-top: 5px; line-height: 1.5;
       white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; }
     #detail .empty { color: var(--ink3); font-style: italic; }
@@ -156,6 +157,8 @@
     .report { background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
       padding: 10px 12px; font-size: 14px; line-height: 1.55; max-height: 52vh; overflow-y: auto;
       overflow-wrap: anywhere; }
+    /* The write-up card: the panel scrolls, so the document does not need to. */
+    .report.full { max-height: none; overflow-y: visible; }
     .report > :first-child { margin-top: 0; } .report > :last-child { margin-bottom: 0; }
     .report h1, .report h2, .report h3, .report h4 { font-size: 15px; margin: 12px 0 4px; color: var(--ink); }
     .report h1 { font-size: 16.5px; }
@@ -172,9 +175,63 @@
     .art:last-child { border-bottom: 0; }
     .art .ic { flex: none; }
     .art .uri { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px; overflow-wrap: anywhere; color: var(--ink); }
+    /* A DOI or URL in a field row is an anchor too, and `.uri` was only ever
+       styled inside `.art` — so the one link a reader most wants to press
+       rendered as unstyled browser default. */
+    #detail .kv .uri { color: var(--accent); overflow-wrap: anywhere; text-decoration: none; }
+    #detail .kv .uri:hover { text-decoration: underline; }
     .art a.uri { color: var(--accent); text-decoration: none; } .art a.uri:hover { text-decoration: underline; }
     .art .by { color: var(--ink3); font-size: 12.5px; white-space: nowrap; margin-left: auto; }
     #detail .note { color: var(--ink3); font-size: 13px; font-style: italic; margin: 2px 0 0; }
+    /* the on-request summary: a button until asked, then the model's lines */
+    /* Two tabs in the head: the summary alone, or everything recorded. */
+    .tabs { display: flex; gap: 6px; margin-top: 14px; }
+    .tab { padding: 7px 16px; border-radius: 9px; font-size: 14.5px; font-weight: 600; color: var(--ink2);
+      cursor: pointer; border: 1px solid transparent; user-select: none; }
+    .tab:hover { color: var(--ink); }
+    .tab.on { background: var(--surface2); color: var(--ink); border-color: var(--line); }
+    /* The summary reads as a document, the way a markdown renderer shows it:
+       no box, generous leading, real headings, lists and code. */
+    .sumbox { margin: 4px 0 18px; }
+    .sumbox .ask { padding: 26px 8px 10px; text-align: center; }
+    .sumbtn { display: inline-flex; align-items: center; gap: 9px; background: var(--surface2);
+      color: var(--ink); border: 1px solid var(--line); border-radius: 10px; padding: 12px 20px;
+      font: inherit; font-size: 16px; font-weight: 600; cursor: pointer; }
+    .sumbtn:hover { border-color: var(--accent); color: var(--accent); }
+    .sumbtn[disabled] { opacity: .6; cursor: progress; }
+    .sumbox .hint { color: var(--ink3); font-size: 13.5px; margin-top: 12px; line-height: 1.5; }
+    .mdoc { font-size: 17px; line-height: 1.7; color: var(--ink); overflow-wrap: anywhere; padding: 6px 2px 0; }
+    .mdoc > :first-child { margin-top: 0; } .mdoc > :last-child { margin-bottom: 0; }
+    .mdoc h1, .mdoc h2, .mdoc h3, .mdoc h4 { color: var(--ink); font-weight: 700; line-height: 1.3;
+      margin: 22px 0 8px; }
+    .mdoc h1 { font-size: 21px; } .mdoc h2 { font-size: 19px; } .mdoc h3 { font-size: 17.5px; }
+    .mdoc h4 { font-size: 16.5px; color: var(--ink2); text-transform: uppercase; letter-spacing: .3px; }
+    .mdoc p { margin: 10px 0; }
+    .mdoc ul, .mdoc ol { margin: 8px 0; padding-left: 26px; }
+    .mdoc li { margin: 5px 0; } .mdoc li::marker { color: var(--ink3); }
+    .mdoc strong { color: #fff; }
+    .mdoc code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 15px; background: var(--surface2);
+      border: 1px solid var(--line); padding: 1px 6px; border-radius: 5px; }
+    .mdoc pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px;
+      margin: 10px 0; overflow-x: auto; font-size: 14.5px; line-height: 1.5; max-height: none; }
+    .mdoc pre code { background: none; border: 0; padding: 0; font-size: inherit; }
+    .mdoc blockquote { margin: 10px 0; padding: 2px 0 2px 14px; border-left: 3px solid var(--accent); color: var(--ink2); }
+    .mdoc hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
+    .mdoc a { color: var(--accent); } .mdoc img { max-width: 100%; border-radius: 6px; }
+    .mdoc table { border-collapse: collapse; font-size: 15px; margin: 10px 0; }
+    .mdoc th, .mdoc td { border: 1px solid var(--line); padding: 5px 10px; }
+    .mdoc th { background: var(--surface2); }
+    .sumbox .meta { display: flex; gap: 14px; align-items: baseline; color: var(--ink3); font-size: 13px;
+      margin-top: 18px; padding-top: 10px; border-top: 1px solid var(--line); }
+    .sumbox .meta a { color: var(--accent); cursor: pointer; text-decoration: none; }
+    .sumbox .meta a:hover { text-decoration: underline; }
+    .sumbox .err { color: var(--crit); font-size: 15px; margin: 12px 0 6px; line-height: 1.5; }
+    .sumbox .stale { color: var(--warn); }
+    /* pictures: any image the agent produced or linked is shown, not named */
+    .pic { display: block; margin: 8px 0 4px; }
+    .pic img { max-width: 100%; max-height: 60vh; border-radius: 8px; border: 1px solid var(--line);
+      background: #fff; cursor: zoom-in; display: block; }
+    .art { flex-wrap: wrap; } .art .pic { flex-basis: 100%; }
   </style>
 </head>
 <body>
@@ -190,6 +247,8 @@
       <select id="turn" style="max-width:340px"></select>
     </label>
     <label><input type="checkbox" id="auto" checked /> <span data-i18n="graph.live">live</span></label>
+    <label id="autoReportWrap" style="display:none"><input type="checkbox" id="autoReport"
+      onchange="toggleAutoNodeReports(this)" /> <span data-i18n="graph.nodeReport.auto">write node reports</span></label>
     <button id="refresh" data-i18n-title="graph.refresh">↻</button>
     <span class="spacer"></span>
     <span id="status" data-i18n="graph.connecting">connecting…</span>
@@ -226,6 +285,16 @@
       inconclusive:{c:ORANGE,g:'≈'},
       under_verification:{c:WARN,g:'⧗'}, running:{c:WARN,g:'⧗'}, obtained:{c:WARN,g:'●'}, draft:{c:WARN,g:'✎'},
       formulated:{c:INFO,g:'○'}, open:{c:INFO,g:'○'}, planned:{c:INFO,g:'○'}, not_met:{c:INFO,g:'○'},
+      // The plan track's own vocabulary, which this table simply did not know:
+      // a step in progress and a step nobody had started both fell through to
+      // the default and drew as the same slate bullet, so the one question the
+      // plan column exists to answer — what is going on right now — had the
+      // same answer everywhere on it.
+      todo:{c:INFO,g:'○'}, in_progress:{c:WARN,g:'⧗'},
+      blocked:{c:CRIT,g:'⊗'}, skipped:{c:SLATE,g:'⊘'},
+      // A method's own three. It is the MEANS, never work: it is offered, the
+      // study leans on it, or it is left aside.
+      proposed:{c:INFO,g:'○'}, used:{c:GOOD,g:'✓'}, not_used:{c:SLATE,g:'⊘'},
       needs_adaptation:{c:ORANGE,g:'⚙'}, being_created:{c:ORANGE,g:'⚙'},
       postponed:{c:SLATE,g:'⏸'}, exhausted:{c:SLATE,g:'∅'}, decomposed:{c:SLATE,g:'⊟'}, closed:{c:SLATE,g:'●'},
       active:{c:VIOLET,g:'▮'}, created:{c:SLATE,g:'▢'},
@@ -293,10 +362,17 @@
     // neutral ink. `inconclusive` belongs there too: it is the honest "we
     // measured and it did not settle", not a failure.
     const STATUS_GOOD = new Set(["confirmed", "validated", "met", "approved",
-                                 "done", "available"]);
+                                 "done", "available", "used"]);
     const STATUS_BAD = new Set(["refuted", "rejected", "failed", "creation_failed"]);
+    // …and a third thing, which is neither: what is happening RIGHT NOW. Left
+    // in neutral ink it read exactly like a card nobody had touched, which is
+    // the complaint this whole table exists to answer — the study says which
+    // stage is going, and the reader could not see it.
+    const STATUS_LIVE = new Set(["in_progress", "running", "under_verification",
+                                 "obtained"]);
     const statusInk = st => STATUS_GOOD.has(st) ? GOOD
-                          : STATUS_BAD.has(st) ? CRIT : INK2;
+                          : STATUS_BAD.has(st) ? CRIT
+                          : STATUS_LIVE.has(st) ? WARN : INK2;
 
     const R_ICON = { researchquestion:'❓', hypothesis:'💡', evidence:'🔬', conclusion:'✅',
       verificationmethod:'⚙️', confirmationcriteria:'🎯', tool:'🔧', resource:'🔋',
@@ -305,6 +381,11 @@
       costmodel:'💰', efficiencymetric:'📊', framing:'🧩', outcome:'▣' };
     const R_LEVEL = { researchquestion:0, constraint:0, hypothesis:1, empiricalbase:1,
       verificationmethod:2, confirmationcriteria:2, tool:2,
+      // The plan track. Absent from this table the two of them were not in
+      // `RESEARCH_KINDS` either, and the tooltip of the very cards a reader
+      // watches for progress printed the raw code — "experimenttask",
+      // "in_progress" — instead of the words on the card beside it.
+      planstep:2, experimenttask:2,
       evidence:3, resource:3, generateddata:3, codeartifact:3, conclusion:4,
       report:5, publication:5, spec:5, efficiencyjustification:5, costmodel:5, efficiencymetric:5,
       framing:0, outcome:5 };
@@ -359,9 +440,39 @@
     // list that used to live here dropped those nodes AND every edge touching
     // one, which in a real session was every edge there was.
     // hex -> "r,g,b" for translucent fills
-    function rgba(hex, a){ const m = hex.replace('#',''); const v = m.length===3
-      ? m.split('').map(x=>parseInt(x+x,16)) : [0,2,4].map(i=>parseInt(m.slice(i,i+2),16));
+    function channels(hex){ const m = String(hex).replace('#','').trim();
+      return m.length===3 ? m.split('').map(x=>parseInt(x+x,16))
+                          : [0,2,4].map(i=>parseInt(m.slice(i,i+2),16)); }
+    function rgba(hex, a){ const v = channels(hex);
       return `rgba(${v[0]},${v[1]},${v[2]},${a})`; }
+
+    // A card on the canvas must be OPAQUE.
+    //
+    // vis draws every edge before it draws any node (`_drawEdges` then
+    // `_drawNodes`), so a card painted at 14% alpha lets the wires running
+    // beneath it straight through — across the label, which is what made the
+    // graph hard to read. Compositing the very same tint over the canvas colour
+    // keeps each card looking exactly as it did and gives its text something
+    // solid to sit on. The blend base is read from `--bg`, so a theme change
+    // moves the cards with it instead of leaving them a shade off.
+    let _canvasRgb = null;
+    function canvasRgb(){
+      if (!_canvasRgb) {
+        let v = null;
+        try {
+          const css = getComputedStyle(document.documentElement)
+            .getPropertyValue('--bg').trim();
+          if (/^#?[0-9a-f]{3}([0-9a-f]{3})?$/i.test(css)) v = channels(css);
+        } catch (err) { v = null; }
+        _canvasRgb = (v && v.every(x => Number.isFinite(x))) ? v : [0x14, 0x16, 0x1a];
+      }
+      return _canvasRgb;
+    }
+    function solid(hex, a){
+      const v = channels(hex), b = canvasRgb();
+      const mix = v.map((x, i) => Math.round(x * a + b[i] * (1 - a)));
+      return `rgb(${mix[0]},${mix[1]},${mix[2]})`;
+    }
 
     // ── execution view styling ────────────────────────────────────────────────
     // One tint per stretch of a run: enough to tell them apart behind the
@@ -485,8 +596,13 @@
     // it was built with, and who recorded it. A step that ended badly says WHY
     // on the card itself — that answer used to live in the store and never
     // reach the page, so a failed method drew as "не удался" and stopped there.
+    // No pictograms on the canvas. A method card carried five or six of them —
+    // ⚙️ for the type, 🎯 twice, 📎, 🛠️ — on a box 230 px wide, and none of
+    // them said anything the words beside them did not. The status glyph stays:
+    // ✓ ✗ ⧗ ○ is a typographic mark that carries the verdict, and it is the
+    // one thing on the card that is read at a glance rather than word by word.
     function researchLabel(n){
-      const st = rStatus(n.status), icon = R_ICON[n.kind] || "•";
+      const st = rStatus(n.status);
       const idx = n.index && n.kind !== "researchquestion" ? " " + n.index : "";
       const sw = rStatusWord(n);
       const L = [];
@@ -494,7 +610,7 @@
       // the status word is wrapped in <b><i> so it lands on the `boldital`
       // class, which `researchNode` gives the status colour and a plain bold
       // weight — the only way to get two colours into one vis label.
-      const head = visSafe(st.g + " " + icon + " " + rTypeName(n) + idx);
+      const head = visSafe(st.g + " " + rTypeName(n) + idx);
       L.push(sw ? "<b>" + head + " · </b><b><i>" + visSafe(sw) + "</i></b>"
                 : "<b>" + head + "</b>");
       // A headline, still — but a wider one than the cramped column layout
@@ -511,7 +627,7 @@
       // that tells this card from its twin. Four look-alike method cards left
       // the reader no way to know why there were four.
       if (n.tests)
-        L.push(visSafe("🎯 " + t('graph.card.tests') + " "
+        L.push(visSafe(t('graph.card.tests') + " "
                        + firstSentence(n.tests, 80)));
       if (n.plan_step)
         L.push("<code>" + visSafe(String(n.plan_step).slice(0, 24)) + "</code>");
@@ -521,14 +637,17 @@
       // right on the method box, and that is what makes it answerable: a
       // reader can see the LD50 came out of ADMETlab and not out of a model's
       // recollection.
+      // No slice: the store decides how many instruments a card names
+      // (`_MAX_INSTRUMENTS`), and a second, smaller cap here meant the last of
+      // them were polled to the browser and drawn nowhere.
       if (n.instruments)
-        L.push(String(n.instruments).split(",").slice(0, 4)
+        L.push(String(n.instruments).split(",")
                .map(x => "<code>" + visSafe(x.trim().slice(0, 34)) + "</code>")
                .join(" "));
       // A detailed task names the general step it serves. Without it the two
       // lanes read as two unrelated lists.
       if (n.kind === "experimenttask" && n.elaborates)
-        L.push(visSafe("↳ " + t('graph.card.elaborates') + " " + n.elaborates));
+        L.push(visSafe(t('graph.card.elaborates') + " " + n.elaborates));
       if (n.kind === "experimenttask" && n.input && n.input.route)
         L.push("<code>" + visSafe(String(n.input.route).slice(0, 34)) + "</code>");
       if ((n.kind === "planstep" || n.kind === "experimenttask")
@@ -537,7 +656,7 @@
                .map(x => "<code>" + visSafe(x.trim().slice(0, 34)) + "</code>")
                .join(" "));
       if (n.criterion)
-        L.push(visSafe("🎯 " + t('graph.card.criterion') + " "
+        L.push(visSafe(t('graph.card.criterion') + " "
                        + firstSentence(n.criterion, 80)));
       else if (n.origin && n.origin.code !== "question")
         L.push("<i>" + visSafe(t('graph.origin.' + n.origin.code,
@@ -548,10 +667,10 @@
                .join(" "));
       const foot = [
         n.attachments && n.attachments.length
-          ? "📎 " + t('graph.count.attached', { count: n.attachments.length }) : "",
+          ? t('graph.count.attached', { count: n.attachments.length }) : "",
         n.executor_agent ? shortAgent(n.executor_agent) : "",
         (n.provenance || []).length
-          ? "🛠️ " + t('graph.count.calls', { count: n.provenance.length }) : "",
+          ? t('graph.count.calls', { count: n.provenance.length }) : "",
       ].filter(Boolean).join("  ·  ");
       if (foot) L.push("<i>" + visSafe(foot) + "</i>");
       return L.join("\n");
@@ -567,6 +686,86 @@
       Array.isArray(n.calls) && n.calls.length ? t('graph.tooltip.toolCalls', { count: n.calls.length }) : "",
       n.why ? t('graph.why.title') + ": " + String(n.why).slice(0, 200) : "",
       n.output?String(n.output).slice(0,300):"" ].filter(Boolean).join("\n");
+
+    // ── what is working right now ─────────────────────────────────────────────
+    // An ACTION card pulses; everything else in flight is coloured and still.
+    // The difference is the user's, and it is the right one: a plan step and an
+    // experiment task are work somebody is doing this minute, while a
+    // hypothesis under verification or an observation waiting to be weighed is
+    // a state, not an activity. On a canvas of sixty cards a reader finds the
+    // one that moves before they find the one that is merely yellow.
+    const PULSING_KINDS = new Set(["planstep", "experimenttask"]);
+    const PULSING_STATUS = new Set(["in_progress", "running"]);
+    const isPulsing = n => PULSING_KINDS.has(n.kind) && PULSING_STATUS.has(n.status);
+    //: Redraw rate while something is running. 20 is far below the 60 a plain
+    //: rAF loop would ask for, and a pulse this slow does not need the rest.
+    //: PULSE_CYCLE is the full breath in milliseconds — named as the period a
+    //: reader can time, not as the 1/ω the sine actually takes, because the
+    //: two differ by 2π and one of them is what somebody tuning this will mean.
+    const PULSE_FPS = 20, PULSE_MS = 1000 / PULSE_FPS, PULSE_CYCLE = 1200;
+    let pulsing = new Set(), pulseRunning = false, pulseLast = 0;
+
+    //: Which cards are working, recomputed from the payload the server just
+    //: sent. Held OUTSIDE the DataSet on purpose: `poll` rebuilds every node
+    //: object wholesale every 1.5 s, so a colour an animation wrote into a node
+    //: would be overwritten within the second — and each such write re-runs
+    //: vis's html-label parser over agent-written text, the one code path in
+    //: this file that can take the whole canvas down.
+    function setPulsing(next){
+      pulsing = next;
+      if (pulsing.size && !pulseRunning) {
+        pulseRunning = true;
+        requestAnimationFrame(pulseLoop);
+      }
+    }
+    function pulseLoop(ts){
+      // …and it stops when there is nothing to say. `pulsing` is recomputed
+      // only inside `poll`, so with the live feed switched off — or with every
+      // poll throwing — nothing would ever empty the set, and the loop would
+      // repaint the canvas twenty times a second for as long as the tab was
+      // open, animating a study that is no longer being updated.
+      const live = document.getElementById("auto");
+      if (!pulsing.size || !network || (live && !live.checked)) {
+        pulseRunning = false;
+        return;
+      }
+      if (ts - pulseLast >= PULSE_MS) { pulseLast = ts; network.redraw(); }
+      requestAnimationFrame(pulseLoop);
+    }
+    function roundPath(ctx, x, y, w, h, r){
+      const k = Math.min(r, w / 2, h / 2);
+      ctx.beginPath();
+      ctx.moveTo(x + k, y);
+      ctx.arcTo(x + w, y, x + w, y + h, k);
+      ctx.arcTo(x + w, y + h, x, y + h, k);
+      ctx.arcTo(x, y + h, x, y, k);
+      ctx.arcTo(x, y, x + w, y, k);
+      ctx.closePath();
+    }
+    //: The halo itself, drawn UNDER the cards: `solid()` makes every card
+    //: background fully opaque, so a ring painted before them can never touch
+    //: the label — it reads as a glow escaping from behind the box, and the
+    //: text it surrounds stays exactly as legible as it was.
+    function drawPulse(ctx){
+      if (!pulsing.size || !network) return;
+      const phase = 0.5 + 0.5 * Math.sin(
+        performance.now() * 2 * Math.PI / PULSE_CYCLE);
+      ctx.save();
+      ctx.strokeStyle = WARN;
+      ctx.lineWidth = 3;
+      pulsing.forEach(id => {
+        let box = null;
+        try { box = network.getBoundingBox(id); } catch (err) { return; }
+        if (!box || box.right - box.left < 2 || box.bottom - box.top < 2) return;
+        ctx.globalAlpha = 0.22 + 0.62 * phase;
+        const pad = 4 + 5 * phase;
+        roundPath(ctx, box.left - pad, box.top - pad,
+                  box.right - box.left + pad * 2,
+                  box.bottom - box.top + pad * 2, 13);
+        ctx.stroke();
+      });
+      ctx.restore();
+    }
 
     // ══════════════════════════════════════════════════════════════════════════
     const nodes = new vis.DataSet([]);
@@ -604,7 +803,7 @@
       // just says where one stretch ended and the next began, which is the
       // thing you otherwise reconstruct by reading every name in order.
       network.on("beforeDrawing", ctx => {
-        if (isResearch()) return drawStageBands(ctx);
+        if (isResearch()) { drawStageBands(ctx); return drawPulse(ctx); }
         if (!lastPhases.length) return;
         const ys = Object.values(nodeData)
           .map(n => n.y).filter(v => typeof v === "number");
@@ -1070,13 +1269,13 @@
       const slot = place && place[n.id];
       const node = {
         id: n.id, title: titleOf(n), shape: "box", label: researchLabel(n),
-        color: { background: rgba(c, 0.14), border: c,
-                 highlight: { background: rgba(c, 0.22), border: c },
+        color: { background: solid(c, 0.14), border: c,
+                 highlight: { background: solid(c, 0.22), border: c },
                  // Without an explicit hover vis falls back to its OWN default
                  // (#D2E5FF) and leaves the label at --ink #e8eaed: 1.07:1
                  // contrast, so the card went blank under the cursor and read as
                  // if the node had vanished.
-                 hover: { background: rgba(c, 0.26), border: c } },
+                 hover: { background: solid(c, 0.26), border: c } },
         font: { color: INK, size: 16, multi: "html",
                 face: "-apple-system, Segoe UI, sans-serif", align: "left",
                 // mod "bold" rather than the default "bold italic": the status
@@ -1336,6 +1535,13 @@
         if (g.error) throw new Error(t('graph.error.server', { error: g.error }));
         const research = isResearch();
         lastPhases = research ? [] : (g.phases || []);
+        // Node reports belong to the research graph; the execution log has the
+        // agent summaries instead, and they have their own button.
+        const autoWrap = document.getElementById("autoReportWrap");
+        if (autoWrap) {
+          autoWrap.style.display = research ? "" : "none";
+          document.getElementById("autoReport").checked = autoNodeReports();
+        }
         // The log is drawn one request at a time; the payload lists the rest.
         const turnWrap = document.getElementById("turnWrap"),
               turnSel = document.getElementById("turn"),
@@ -1385,11 +1591,14 @@
         // redraw behind it.
         const batchNodes = [], batchEdges = [];
         const liveNodes = new Set(), liveEdges = new Set();
+        const working = new Set();
         ordered.forEach(n => {
           try {
           nodeData[n.id] = n; liveNodes.add(n.id);
-          if (research) { batchNodes.push(researchNode(n, place)); }
-          else {
+          if (research) {
+            batchNodes.push(researchNode(n, place));
+            if (isPulsing(n)) working.add(n.id);
+          } else {
             // Cards, sized by what they are: the request opens the row, agents
             // carry it, calls are the detail. Status is the border, identity the
             // fill, so a failed call is visible without reading its label.
@@ -1403,12 +1612,12 @@
               // (projection._CARD_WIDTH). If the two disagree the cards overlap.
               widthConstraint: { minimum: (n.card_width || 190) - 26,
                                  maximum: (n.card_width || 190) - 26 },
-              color:{ background: rgba(c, isGoal || isResult ? 0.22 : 0.16),
+              color:{ background: solid(c, isGoal || isResult ? 0.22 : 0.16),
                       border: borderOf(n) === "#20232a" ? c : borderOf(n),
-                      highlight: { background: rgba(c, 0.32), border: c },
+                      highlight: { background: solid(c, 0.32), border: c },
                       // Same default-hover trap as the research card: without
                       // this the box turns pale blue under a near-white label.
-                      hover: { background: rgba(c, 0.30), border: c } },
+                      hover: { background: solid(c, 0.30), border: c } },
               borderWidth: 2,
               chosen: { node: true, label: false },
               font:{ color:"#e8eaed", multi:false, align:"left",
@@ -1541,6 +1750,9 @@
         // drawing when each node updated the DataSet on its own.
         if (batchNodes.length) nodes.update(batchNodes);
         if (batchEdges.length) edges.update(batchEdges);
+        // After the cards are in: `getBoundingBox` has nothing to report for a
+        // node vis has not drawn yet, and the halo is measured off the box.
+        setPulsing(working);
         // Reconciliation: what the server no longer sends must leave the canvas.
         // Nothing was ever removed, so a node that changed id, moved into
         // another card or belonged to a study the reader switched away from
@@ -1789,7 +2001,13 @@
       if (!isResearch() && !RESEARCH_KINDS.has(n.kind)) return showDetailClassic(n);
       const st = rStatus(n.status);
       let body = "";
-      body += reportBlock(t('graph.detail.says'), n.output || n.label);
+      // A write-up card carries the whole document, not a line about itself, so
+      // the block is titled for what it is. `reportBlock` already renders
+      // markdown through marked + DOMPurify and scrolls.
+      const isWriteUp = n.kind === "report";
+      body += reportBlock(
+        isWriteUp ? t('graph.type.report') : t('graph.detail.says'),
+        n.output || n.label, isWriteUp);
       if (n.why)
         body += `<div class="k">${t('graph.why.title')}</div><pre>${esc(n.why)}</pre>`;
       else if (n.why_missing)
@@ -1798,11 +2016,13 @@
       // The research card's own fields: these keys are attribute codes the
       // server sends for the browser to translate (i18n.js says so explicitly).
       body += readable(t('graph.detail.details'), n.input, null, true);
+      body += nodeReportBlock(n);
       body += historyBlock(n.status_history);
       body += attachmentsBlock(n.chips, t('graph.chips.tools'));
       body += attachmentsBlock(n.attachments, t('graph.attach.title'));
       body += linksBlock(n.id);
       body += provBlock(n.provenance);
+      body += contributorsBlock(n.contributors);
       if (!body) body = `<div class="empty">${esc(t('graph.detail.empty'))}</div>`;
       const head = `<div class="dhead"><span class="close" onclick="closeDetail()">✕</span>`
         + `<h3>${R_ICON[n.kind]||"•"} ${esc(rTypeName(n))}${n.index ? " " + n.index : ""}</h3>`
@@ -1874,6 +2094,29 @@
           + (p.exec_id ? `<span class="jump">${esc(t('graph.detail.execLog'))}</span>` : "")
           + (p.result ? `<div class="res">${esc(p.result)}</div>` : "") + `</div>`;
       }).join("");
+    }
+    // Who took part, and on what basis we say so.
+    //
+    // The difference is load-bearing. A PLANNED assignee is who the plan named;
+    // nothing observed that they did the work, and until now that was the only
+    // thing recorded about a plan step. Everything else here — wrote it, moved
+    // it, delegated it, took it under a work order, ran it — is something the
+    // system watched happen. Drawing the two alike is exactly how a reader ends
+    // up certain that the wrong agent did something, so the planned ones sit
+    // last, dimmed, and say so in words.
+    function contributorsBlock(list){
+      if (!Array.isArray(list) || !list.length) return "";
+      return `<div class="k">${esc(t('graph.contrib.title'))} <span class="chars">${list.length}</span></div>`
+        + list.map(c => {
+            const basis = esc(t('graph.basis.' + c.basis, c.basis || ""));
+            const jump = c.exec_id
+              ? ` onclick="jumpToExecution('${esc(String(c.exec_id))}')" title="${esc(t('graph.detail.openInLog'))}"`
+              : "";
+            const mark = c.observed ? "●" : "○";
+            return `<div class="prov${c.observed ? "" : " dim"}"${jump}>`
+              + `<span class="tool">${mark} ${esc(c.agent || "")}</span>`
+              + `<span class="jump">${basis}</span></div>`;
+          }).join("");
     }
     function focusNode(id){
       if (!nodeData[id]) return;
@@ -2001,13 +2244,33 @@
     // records an argument literally called `content`, and `graph.field.content`
     // means "Finding". Translating unconditionally captioned the file body it
     // was about to write as «Результат», next to the real result block.
+    // A DOI is an address, not prose. The panel printed `10.1021/acs.jafc.2c05393`
+    // as escaped text, so the one thing a reader wants to do with it — open the
+    // paper — took a copy-paste out of the page. Linkified only where `fields`
+    // is on, i.e. the research card: the execution log's rows are raw tool
+    // arguments and must stay literal.
+    const DOI_RE = /^(?:doi:\s*|https?:\/\/(?:dx\.)?doi\.org\/)?(10\.\d{4,9}\/[^\s"<>]+)$/i;
+    const URL_RE = /^https?:\/\/[^\s"<>]+$/;
+    function anchor(href, label){
+      return `<a class="uri" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>`;
+    }
+    function scalarValue(text, fields){
+      if (!fields) return esc(text);
+      const trimmed = String(text).trim();
+      // Not encodeURIComponent: a DOI's slash is part of the identifier, and
+      // escaping it produces a doi.org link that resolves to nothing.
+      const doi = trimmed.match(DOI_RE);
+      if (doi) return anchor("https://doi.org/" + doi[1], trimmed);
+      if (URL_RE.test(trimmed)) return anchor(trimmed, trimmed);
+      return esc(text);
+    }
     function kvRows(obj, depth, fields){
       return `<div class="kv">` + Object.entries(obj).map(([k, v]) => {
         const key = `<span class="key">${esc(fields ? fieldLabel(k) : k)}</span>`;
         if (!isScalar(v)) {
           if (Array.isArray(v) && v.every(x => isScalar(x) && String(x).length <= 40))
             return `<div class="row">${key}<span class="val">`
-              + v.map(x => `<span class="pill">${esc(x)}</span>`).join("") + `</span></div>`;
+              + v.map(x => `<span class="pill">${scalarValue(x, fields)}</span>`).join("") + `</span></div>`;
           const count = Array.isArray(v) ? t('graph.count.item', { count: v.length })
                                          : t('graph.count.field', { count: Object.keys(v).length });
           return `<div class="row">${key}<span class="val dim">${count}</span>`
@@ -2015,14 +2278,14 @@
         }
         const text = String(v);
         const long = text.length > 90 || text.includes("\n");
-        return `<div class="row">${key}<span class="val${long ? " block" : ""}">${esc(text)}</span></div>`;
+        return `<div class="row">${key}<span class="val${long ? " block" : ""}">${scalarValue(text, fields)}</span></div>`;
       }).join("") + `</div>`;
     }
     function nestedValue(v, depth, fields){
       if (depth > 4) return `<pre>${esc(JSON.stringify(v, null, 2))}</pre>`;
       if (Array.isArray(v))
         return `<ol class="items">` + v.map(x =>
-          `<li>${isScalar(x) ? esc(x) : nestedValue(x, depth, fields)}</li>`).join("") + `</ol>`;
+          `<li>${isScalar(x) ? scalarValue(x, fields) : nestedValue(x, depth, fields)}</li>`).join("") + `</ol>`;
       return kvRows(v, depth, fields);
     }
     // A titled block: labelled rows for a mapping, a list for a list, the text
@@ -2079,7 +2342,20 @@
       const key = "graph.kind." + n.kind;
       return t(key, KIND_WORD[n.kind] || n.kind || "");
     };
-    function headOf(n, title){
+    // Which of the two tabs an agent's panel opens on; remembered per browser.
+    const TAB_KEY = "graph.panelTab";
+    let panelTab = "report";
+    try { panelTab = localStorage.getItem(TAB_KEY) === "more" ? "more" : "report"; } catch (e) {}
+    function setPanelTab(tab){
+      panelTab = tab === "more" ? "more" : "report";
+      try { localStorage.setItem(TAB_KEY, panelTab); } catch (e) {}
+      if (selectedId && nodeData[selectedId]) showDetail(nodeData[selectedId]);
+    }
+    function tabsHtml(){
+      const tab = (id, label) => `<span class="tab${panelTab === id ? " on" : ""}" onclick="setPanelTab('${id}')">${esc(label)}</span>`;
+      return `<div class="tabs">${tab("report", t('graph.tab.report'))}${tab("more", t('graph.tab.more'))}</div>`;
+    }
+    function headOf(n, title, tabs){
       const c = statusColor(n), at = clockOf(n), dur = secsOf(n);
       const sub = [kindWord(n),
                    n.runs > 1 ? t('graph.detail.runOf', { run: n.run, runs: n.runs }) : "",
@@ -2087,7 +2363,7 @@
       return `<div class="dhead"><span class="close" onclick="closeDetail()">✕</span>`
         + `<h3>${esc(title)}</h3><div class="sub">${esc(sub)}</div>`
         + (n.status ? `<span class="badge" style="background:${rgba(c,.18)};color:${c};border:1px solid ${c}">${esc(n.status)}</span>` : "")
-        + `</div>`;
+        + (tabs || "") + `</div>`;
     }
     function callRow(c){
       const when = [clockOf(c), secsOf(c)].filter(Boolean).join(" · ");
@@ -2113,31 +2389,254 @@
     }
     // An agent's final words, rendered as the document they are. Plain text
     // when the markdown libraries did not load.
-    function reportBlock(title, text){
+    function reportBlock(title, text, full){
       if (!text) return "";
       const raw = String(text);
-      let html;
-      if (window.marked && window.DOMPurify) {
-        try { html = DOMPurify.sanitize(marked.parse(raw), { ADD_ATTR: ["target"] })
-                .replace(/<a /g, '<a target="_blank" rel="noopener noreferrer" '); }
-        catch (e) { html = null; }
-      }
+      const html = markdown(raw);
       const size = raw.length > 900 ? ` <span class="chars">${esc(t('graph.chars', { count: raw.length.toLocaleString() }))}</span>` : "";
+      // A quoted answer sits in a 52vh box beside the rest of the card. A
+      // write-up IS the card, and boxing a document inside a panel that already
+      // scrolls gives the reader two scrollbars and half a screen to read in.
+      const cls = full ? "report full" : "report";
       return `<div class="k">${title}${size}</div>`
-        + (html ? `<div class="report">${html}</div>` : `<pre>${esc(raw)}</pre>`)
+        + (html ? `<div class="${cls}">${html}</div>` : `<pre>${esc(raw)}</pre>`)
         + truncationNote(raw, false);
     }
-    // What the agent left behind: files its tools wrote and links its report names.
+    // ── files and pictures ───────────────────────────────────────────────────
+    // An s3:// reference is not something a browser can open; the server's
+    // artifact endpoint redirects to a fresh signed URL for it, so every such
+    // reference becomes a link there. Anything that looks like a picture is
+    // shown, not just named.
+    const S3_RE = /s3:\/\/([^\/\s"'<>()\[\]]+)\/([^\s"'<>()\[\]]+)/g;
+    function artifactHref(uri){
+      const m = String(uri).match(/^s3:\/\/([^\/]+)\/(.+)$/);
+      if (!m) return String(uri);
+      return "/api/artifact/" + encodeURIComponent(m[1]) + "/"
+        + m[2].split("/").map(encodeURIComponent).join("/");
+    }
+    const isImage = uri => /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(String(uri).split(/[?#]/)[0]);
+    function picture(href, alt){
+      return `<a class="pic" href="${esc(href)}" target="_blank" rel="noopener noreferrer">`
+        + `<img src="${esc(href)}" alt="${esc(alt || "")}" loading="lazy"></a>`;
+    }
+    // Rendered markdown, with s3:// references turned into links, s3:// image
+    // and link targets rewritten, and a preview under every picture link.
+    function enrich(html){
+      const box = document.createElement("div");
+      box.innerHTML = html;
+      const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+      const texts = [];
+      for (let n = walker.nextNode(); n; n = walker.nextNode())
+        if (S3_RE.test(n.nodeValue) && !n.parentNode.closest("a, code, pre")) texts.push(n);
+      S3_RE.lastIndex = 0;
+      for (const n of texts) {
+        const span = document.createElement("span");
+        span.innerHTML = esc(n.nodeValue).replace(S3_RE, m =>
+          `<a href="${esc(artifactHref(m))}" data-uri="${esc(m)}" target="_blank" rel="noopener noreferrer">${esc(m)}</a>`);
+        n.replaceWith(...span.childNodes);
+      }
+      box.querySelectorAll("code").forEach(c => {
+        const m = c.textContent.trim().match(/^s3:\/\/[^\s]+$/);
+        if (m && !c.closest("a, pre")) {
+          const a = document.createElement("a");
+          a.href = artifactHref(m[0]); a.dataset.uri = m[0]; a.target = "_blank"; a.rel = "noopener noreferrer";
+          c.replaceWith(a); a.appendChild(c);
+        }
+      });
+      box.querySelectorAll("img[src^='s3://']").forEach(img => { img.src = artifactHref(img.getAttribute("src")); });
+      box.querySelectorAll("a[href^='s3://']").forEach(a => {
+        a.dataset.uri = a.getAttribute("href"); a.href = artifactHref(a.getAttribute("href")); });
+      box.querySelectorAll("a").forEach(a => {
+        a.target = "_blank"; a.rel = "noopener noreferrer";
+        const href = a.getAttribute("href") || "";
+        // The picture test looks at the reference the agent wrote, not only
+        // at the address it was rewritten to.
+        if ((isImage(href) || isImage(a.dataset.uri || "")) && !a.querySelector("img") && !a.closest(".pic")) {
+          const wrap = document.createElement("span");
+          wrap.innerHTML = picture(href, a.textContent);
+          a.after(wrap.firstChild);
+        }
+      });
+      return box.innerHTML;
+    }
+    function markdown(text){
+      if (!(window.marked && window.DOMPurify)) return null;
+      try { return enrich(DOMPurify.sanitize(marked.parse(String(text)), { ADD_ATTR: ["target"] })); }
+      catch (e) { return null; }
+    }
+    // What the agent left behind: files its tools wrote and links its report
+    // names. Every one is a link; pictures are shown.
     function artifactsBlock(list){
       if (!Array.isArray(list) || !list.length) return "";
       return `<div class="k">${t('graph.detail.artifacts')} <span class="chars">${list.length}</span></div>` + list.map(a => {
-        const file = a.kind === "file";
-        const name = file ? `<span class="uri">${esc(a.uri)}</span>`
-          : `<a class="uri" href="${esc(a.uri)}" target="_blank" rel="noopener noreferrer">${esc(a.uri)}</a>`;
-        return `<div class="art"><span class="ic">${file ? "📦" : "🔗"}</span>${name}`
-          + (a.tool ? `<span class="by">${esc(a.tool)}</span>` : "") + `</div>`;
+        // `uri` is the durable reference and stays what the reader sees; the
+        // anchor goes to the server's href when the projection minted one,
+        // else through /api/artifact/ for an s3:// key. Pictures are shown.
+        const file = a.kind === "file", href = a.href || artifactHref(a.uri), img = isImage(a.uri);
+        return `<div class="art"><span class="ic">${img ? "🖼" : file ? "📦" : "🔗"}</span>`
+          + `<a class="uri" href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(a.uri)}</a>`
+          + (a.tool ? `<span class="by">${esc(a.tool)}</span>` : "")
+          + (img ? picture(href, a.uri) : "") + `</div>`;
       }).join("");
     }
+    // ── the on-request summary ───────────────────────────────────────────────
+    // A button until the reader asks; then a small model reads the agent's
+    // trace and writes a few lines. Kept per node across redraws, so a live
+    // poll does not take the summary away or ask the model again.
+    const summaries = {};   // node id -> { loading } | { text, model, cached, stamp } | { error, stamp }
+    // What the summary was written from; when it changes, the summary is old.
+    const stampOf = n => [n.status, (n.calls || []).length, String(n.output || "").length,
+                          String(n.input || "").length].join("|");
+    const isRunning = n => n.status === "running";
+    function summaryBlock(n){
+      const st = summaries[n.id];
+      const again = `<a onclick="requestSummary('${esc(n.id)}', true)">↻ ${esc(t('graph.summary.again'))}</a>`;
+      let inner;
+      if (!st) {
+        // Written on its own once the agent is done; while it runs, the trace
+        // is still growing and a summary of it would be out of date at once.
+        if (isRunning(n)) inner = `<div class="ask"><div class="hint">${esc(t('graph.summary.waiting'))}</div>`
+          + `<div class="meta" style="justify-content:center;border:0"><a onclick="requestSummary('${esc(n.id)}')">${esc(t('graph.summary.now'))}</a></div></div>`;
+        else { setTimeout(() => requestSummary(n.id), 0);
+               inner = `<div class="ask"><button class="sumbtn" disabled>⏳ ${esc(t('graph.summary.loading'))}</button></div>`; }
+      }
+      else if (st.loading) inner = `<div class="ask"><button class="sumbtn" disabled>⏳ ${esc(t('graph.summary.loading'))}</button></div>`;
+      else if (st.error) inner = `<div class="err">${esc(t('graph.summary.failed', { error: st.error }))}</div><div class="meta">${again}</div>`;
+      else {
+        const html = markdown(st.text);
+        const stale = st.stamp !== stampOf(n) ? `<span class="stale">${esc(t('graph.summary.stale'))}</span>` : "";
+        inner = (html ? `<div class="mdoc">${html}</div>` : `<pre>${esc(st.text)}</pre>`)
+          + `<div class="meta">${stale}${st.model ? `<span>${esc(t('graph.summary.by', { model: st.model }))}</span>` : ""}${again}</div>`;
+      }
+      return `<div class="sumbox">${inner}</div>`;
+    }
+    // ── a research node's own write-up ───────────────────────────────────────
+    // What the execution log's summary is to an agent, this is to a node: what
+    // it establishes, what it rests on, who took part and where the files are.
+    // The body arrives inlined in the payload (the browser cannot fetch an
+    // artifact's text), so this map only holds what is in flight.
+    const nodeReports = {};
+    const REPORTABLE = new Set(["evidence", "planstep", "experimenttask",
+                                "verificationmethod"]);
+
+    function nodeReportBlock(n){
+      if (!REPORTABLE.has(String(n.kind || ""))) return "";
+      const st = nodeReports[n.id] || {};
+      const again = `<a onclick="requestNodeReport('${esc(n.id)}', true)">↻ ${esc(t('graph.nodeReport.again'))}</a>`;
+      const title = `<div class="k">${esc(t('graph.nodeReport.title'))}</div>`;
+      if (st.loading)
+        return title + `<div class="sumbox"><div class="ask"><button class="sumbtn" disabled>⏳ ${esc(t('graph.nodeReport.writing'))}</button></div></div>`;
+      if (st.error)
+        return title + `<div class="sumbox"><div class="err">${esc(st.error)}</div><div class="meta">${again}</div></div>`;
+      if (n.report) {
+        const html = markdown(n.report);
+        // Stale is worth saying, never worth hiding the report over: what it
+        // records still happened.
+        const stale = (st.stamp && n.report_stamp && st.stamp !== n.report_stamp)
+          ? `<span class="stale">${esc(t('graph.nodeReport.stale'))}</span>` : "";
+        return title + `<div class="sumbox">`
+          + (html ? `<div class="mdoc">${html}</div>` : `<pre>${esc(n.report)}</pre>`)
+          + `<div class="meta">${stale}${again}</div></div>`;
+      }
+      if (autoNodeReports() && isSettled(n) && worthReporting(n)) {
+        queueNodeReport(n.id);
+        return title + `<div class="sumbox"><div class="ask"><button class="sumbtn" disabled>⏳ ${esc(t('graph.nodeReport.writing'))}</button></div></div>`;
+      }
+      return title + `<div class="sumbox"><div class="ask">`
+        + `<button class="sumbtn" onclick="requestNodeReport('${esc(n.id)}')">${esc(t('graph.nodeReport.ask'))}</button></div></div>`;
+    }
+
+    // A node still moving will be described wrongly, and a node with nothing
+    // recorded on it has nothing to describe — asking the model either way
+    // spends a call to say so.
+    const UNSETTLED = new Set(["todo", "in_progress", "formulated",
+                               "under_verification", "draft", "planned",
+                               // A method that has only been offered is the
+                               // same case as a `planned` task: nothing has
+                               // been done with it yet to describe.
+                               "proposed"]);
+    function isSettled(n){ return !UNSETTLED.has(String(n.status || "")); }
+    function worthReporting(n){
+      return (n.contributors || []).length > 0
+        || (n.attachments || []).length > 0
+        || (n.chips || []).length > 0;
+    }
+
+    // One at a time. A study has forty cards and the toggle defaults to on, so
+    // an unqueued auto-run would open the page with forty model calls at once.
+    const reportQueue = [];
+    let reportRunning = false;
+    function queueNodeReport(nodeId){
+      if (nodeReports[nodeId] || reportQueue.includes(nodeId)) return;
+      reportQueue.push(nodeId);
+      drainReportQueue();
+    }
+    async function drainReportQueue(){
+      if (reportRunning) return;
+      reportRunning = true;
+      try {
+        while (reportQueue.length) await requestNodeReport(reportQueue.shift());
+      } finally { reportRunning = false; }
+    }
+
+    async function requestNodeReport(nodeId, again){
+      const n = nodeData[nodeId];
+      if (!n || (nodeReports[nodeId] && nodeReports[nodeId].loading)) return;
+      nodeReports[nodeId] = { loading: true };
+      if (selectedId === nodeId) showDetail(n);
+      const q = new URLSearchParams(location.search);
+      const url = `/api/users/${encodeURIComponent(q.get("user_id") || "")}/sessions/${encodeURIComponent(q.get("session_id") || "")}/graph/node_report`;
+      try {
+        const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ node_id: nodeId, turn: document.getElementById("turn").value || null,
+                                 lang: (typeof currentLang === "string" ? currentLang : "ru"), again: !!again }) });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.detail || data.error || ("HTTP " + r.status));
+        nodeReports[nodeId] = { stamp: data.stamp || "" };
+        // The body comes back on the node itself with the next poll; show it now.
+        if (nodeData[nodeId]) nodeData[nodeId].report = String(data.report || "");
+      } catch (e) {
+        nodeReports[nodeId] = { error: String(e.message || e) };
+      }
+      if (selectedId === nodeId && nodeData[nodeId]) showDetail(nodeData[nodeId]);
+    }
+
+    // The setting decides, and the reader may overrule it for this browser.
+    function autoNodeReports(){
+      try {
+        const own = localStorage.getItem("graph.autoNodeReports");
+        if (own === "0") return false;
+        if (own === "1") return true;
+      } catch (err) { /* private window */ }
+      return lastGraph && lastGraph.auto_node_reports !== false;
+    }
+    function toggleAutoNodeReports(el){
+      try { localStorage.setItem("graph.autoNodeReports", el.checked ? "1" : "0"); }
+      catch (err) { /* nothing to remember it with */ }
+      if (el.checked && selectedId && nodeData[selectedId]) showDetail(nodeData[selectedId]);
+    }
+
+    async function requestSummary(nodeId, again){
+      const n = nodeData[nodeId];
+      if (!n || (summaries[nodeId] && summaries[nodeId].loading)) return;
+      summaries[nodeId] = { loading: true };
+      if (selectedId === nodeId) showDetail(n);
+      const q = new URLSearchParams(location.search);
+      const url = `/api/users/${encodeURIComponent(q.get("user_id") || "")}/sessions/${encodeURIComponent(q.get("session_id") || "")}/graph/agent_summary`;
+      try {
+        const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ node_id: nodeId, turn: document.getElementById("turn").value || null,
+                                 lang: (typeof currentLang === "string" ? currentLang : "ru"), again: !!again }) });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(data.detail || data.error || ("HTTP " + r.status));
+        summaries[nodeId] = { text: String(data.summary || ""), model: data.model || "", cached: !!data.cached,
+                              stamp: stampOf(nodeData[nodeId] || n) };
+      } catch (e) {
+        summaries[nodeId] = { error: String(e.message || e), stamp: stampOf(nodeData[nodeId] || n) };
+      }
+      if (selectedId === nodeId && nodeData[nodeId]) showDetail(nodeData[nodeId]);
+    }
+
     // An agent opens on its task and its report, then what it produced, then
     // the tool calls it made, folded, in the order they ran. A request opens
     // on the prompt, an answer on the answer, and a call nobody owns on itself.
@@ -2150,7 +2649,11 @@
       let body;
       if (n.kind === "goal") body = readable(t('graph.detail.whatAsked'), n.label);
       else if (n.kind === "result") body = reportBlock(t('graph.detail.answer'), n.output || n.label);
-      else if (isAgent) {
+      else if (isAgent && panelTab === "report") {
+        // The summary alone: what a reader came for. Everything recorded is
+        // one tab away.
+        body = summaryBlock(n);
+      } else if (isAgent) {
         const where = n.io_source === "delegation" ? t('graph.detail.ioDelegation')
           : n.io_source === "request" ? t('graph.detail.ioRequest') : "";
         body = reportBlock(t('graph.detail.report'), n.output)
@@ -2168,7 +2671,7 @@
                          + `<div class="attr">${esc(n.verdict)}</div>` : "")
           + readable(t('graph.detail.note'), n.output);
       } else body = readable(t('graph.detail.arguments'), n.input) + readable(t('graph.detail.result'), n.output);
-      if (isAgent) {
+      if (isAgent && panelTab === "more") {
         // Older snapshots recorded nothing on the agent itself; say so, or
         // the panel opening on the call list reads as a missing section.
         if (!body) body = `<div class="k">${t('graph.detail.taskReport')}</div><div class="empty">${t('graph.detail.notRecorded')}</div>`;
@@ -2180,7 +2683,7 @@
           : `<div class="k">${t('graph.detail.toolCalls')}</div><div class="empty">${t('graph.detail.noneRecorded')}</div>`;
       }
       if (!body) body = `<div class="empty">${t('graph.detail.empty')}</div>`;
-      paint(n, headOf(n, title) + `<div class="dbody">${body}</div>`);
+      paint(n, headOf(n, title, isAgent ? tabsHtml() : "") + `<div class="dbody">${body}</div>`);
     }
     function closeDetail(){ selectedId=null; lastDetailStamp=null; paintedId=null;
       focusCallId=null; focusPending=false;

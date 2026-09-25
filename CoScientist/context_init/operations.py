@@ -14,7 +14,7 @@ from typing import Any, Iterable, List
 from CoScientist.context_init.models import FrameOperation, ResearchFrame
 
 MAX_OPERATIONS = 20
-OPS_FORM_BLOCK = "Операции эксперимента"
+OPS_FORM_BLOCK = "Задачи исследования"
 
 _NUMBERED_STEP_RE = re.compile(
     r"(?P<n>\d{1,2})[.)]\s+(?P<body>\S.+?)(?=\s+\d{1,2}[.)]\s+|\Z)",

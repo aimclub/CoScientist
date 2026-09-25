@@ -72,11 +72,18 @@ function describeHitlVia(data) {
 function hitlDetailBlock(data) {
   const ctx = data.context || {};
   if (ctx.output) {
+    // A tool's arguments are code; an agent's proposed result is a plan, a
+    // summary, a page of prose. `code` decides which of the two treatments
+    // the block gets — the same <pre> used to set both in IBM Plex Mono.
     const isToolCall = hitlTrigger(data) === 'before_tool';
-    return { labelKey: isToolCall ? 'hitl.block.toolCall' : 'hitl.block.output', text: String(ctx.output) };
+    return {
+      labelKey: isToolCall ? 'hitl.block.toolCall' : 'hitl.block.output',
+      text: String(ctx.output),
+      code: isToolCall,
+    };
   }
-  if (ctx.command) return { labelKey: 'hitl.block.command', text: String(ctx.command) };
-  if (ctx.user_query) return { labelKey: 'hitl.block.userQuery', text: String(ctx.user_query) };
+  if (ctx.command) return { labelKey: 'hitl.block.command', text: String(ctx.command), code: true };
+  if (ctx.user_query) return { labelKey: 'hitl.block.userQuery', text: String(ctx.user_query), code: false };
   return null;
 }
 
@@ -111,12 +118,7 @@ function redrawPlanCards() {
     if (!data || !document.querySelector(`[data-hitl-card="${CSS.escape(rid)}"]`)) return;
     const box = document.getElementById('hitl-controls-' + rid);
     const answered = !!(box && box.querySelector('button[disabled]'));
-    // Redraw the sidebar only while it belongs to THIS request — a newer one
-    // may own it by now, and its panel is not ours to overwrite.
-    const panel = document.getElementById('hitl-panel');
-    const owns = !answered && panel && !panel.classList.contains('hidden')
-      && panel.innerHTML.indexOf(rid) !== -1;
-    renderExperimentPlanReview(owns ? panel : null, data);
+    renderExperimentPlanReview(!answered, data);
     if (answered) disableHitlControls(rid);
   });
 }
@@ -135,39 +137,45 @@ function placeHitlCard(rid, html) {
 }
 
 // history=true renders a card from the session transcript (reload, import):
-// no sidebar panel, no countdown, controls disabled until the server
-// redelivers the request as still open.
+// no countdown, controls disabled until the server redelivers the request as
+// still open.
+//
+// There used to be a second copy of every card in the right sidebar. It said
+// the same thing as the one in the feed and could not be answered, so it was
+// two places to read and one place to act. `live` is the only thing the
+// renderers ever took from it — whether this request is still open — so that
+// is what they are given now.
 function showHITL(data, { history = false } = {}) {
-  const panel = history ? null : document.getElementById('hitl-panel');
+  const live = !history;
   hitlCards.set(data.request_id || '', data);
 
   // Structured intake (e.g. the research frame): render a per-field form
   // instead of the free-text review, then stop — the other HITL points keep
   // the free-text / option path below.
   if (data.form && Array.isArray(data.form.blocks)) {
-    renderHitlForm(panel, data);
+    renderHitlForm(live, data);
   } else if (((data.context || {}).experiment_plan || {}).tasks) {
     // An experiment plan is not a paragraph to skim: it is a design matrix and
     // a task list, and it is what the human is being asked to approve. The
     // backend ships it structured next to the rendered Markdown, so it gets a
     // view of its own rather than a <pre> of pipe-separated rows.
-    renderExperimentPlanReview(panel, data);
+    renderExperimentPlanReview(live, data);
   } else if (data.trigger === 'work_report') {
     // Work Report (what the agent found, against its order): accept, send back
     // for rework with findings marked wrong, or reject.
-    renderWorkReportCard(panel, data);
+    renderWorkReportCard(live, data);
   } else if (String(data.trigger || '').startsWith('work_order')) {
     // Work Order (the agent's contract before it acts): its own card with
     // assumptions to uncheck, a veto countdown and a Pause button.
-    renderWorkOrderCard(panel, data);
+    renderWorkOrderCard(live, data);
   } else {
-    renderHitlCard(panel, data);
+    renderHitlCard(live, data);
   }
   if (history) disableHitlControls(data.request_id);
   scrollChat();
 }
 
-function renderHitlCard(panel, data) {
+function renderHitlCard(live, data) {
   const messageHtml = hitlDynamic(data, 'message', localizeHitlMessage(data));
   const viaHtml = hitlDynamic(data, 'via', describeHitlVia(data));
   const agentHtml = `<span class="font-bold text-on-surface">${escHtml(data.agent_name || '—')}</span>`;
@@ -176,12 +184,12 @@ function renderHitlCard(panel, data) {
   let openRoadmapChatBtn = '';
   if (data.agent_name === 'PlannerAgent') {
     openRoadmapSidebarBtn = `
-      <button onclick="openRoadmapEditor()" class="w-full mt-2 flex items-center justify-center gap-2 bg-surface-variant border border-outline-variant/20 text-on-surface py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-high transition-all">
+      <button onclick="openRoadmapEditor()" class="w-full mt-2 flex items-center justify-center gap-2 bg-surface-variant border border-outline-variant/20 text-on-surface py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] hover:bg-surface-container-high transition-all">
         <span class="material-symbols-outlined text-sm">map</span> ${hitlLabel('hitl.btn.openRoadmap')}
       </button>
     `;
     openRoadmapChatBtn = `
-      <div class="mt-4 pl-11">
+      <div class="mt-4">
         <button onclick="openRoadmapEditor()" class="flex items-center justify-center gap-2 bg-surface-variant border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-wider hover:bg-surface-container-high transition-all">
           <span class="material-symbols-outlined text-sm">map</span> ${hitlLabel('hitl.btn.openRoadmap')}
         </button>
@@ -195,88 +203,77 @@ function renderHitlCard(panel, data) {
   // Show in sidebar. For question windows (options present) or input requests the sidebar is
   // informational only — answer directly in the chat card.
   const sidebarButtons = (hasOptions || isProvideInput) ? `
-        <p class="text-[10px] text-outline-variant leading-relaxed">${hitlLabel('hitl.answerInChat')}</p>` : `
+        <p class="text-[12px] text-on-surface-variant leading-relaxed">${hitlLabel('hitl.answerInChat')}</p>` : `
         <div class="flex gap-3">
-          <button onclick="respondHITL('${data.request_id}', true)" class="flex-1 flex items-center justify-center gap-2 bg-primary text-on-primary py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+          <button onclick="respondHITL('${data.request_id}', true)" class="flex-1 flex items-center justify-center gap-2 bg-primary text-on-primary py-3 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
             <span class="material-symbols-outlined text-base">check_circle</span> ${hitlLabel('hitl.btn.accept')}
           </button>
-          <button onclick="respondHITL('${data.request_id}', false)" class="flex-1 flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
+          <button onclick="respondHITL('${data.request_id}', false)" class="flex-1 flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error py-3 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] hover:bg-error/10 transition-all">
             <span class="material-symbols-outlined text-base">close</span> ${hitlLabel('hitl.btn.reject')}
           </button>
         </div>`;
-  if (panel) {
-    panel.classList.remove('hidden');
-    panel.innerHTML = `
-    <div class="relative">
-      <div class="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 blur-2xl opacity-40"></div>
-      <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-4">
-        <div class="flex items-center gap-3">
-          <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
-            <span class="material-symbols-outlined text-on-primary text-sm">ads_click</span>
-          </div>
-          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${hitlLabel('hitl.titleShort')}</h3>
-        </div>
-        <p class="text-xs text-on-surface-variant leading-relaxed">${messageHtml}</p>
-        <div class="flex flex-col gap-1 text-[11px] leading-relaxed">
-          <p><span class="text-outline-variant">${hitlLabel('hitl.viaLabel')}:</span> <span class="text-primary">${viaHtml}</span></p>
-        </div>
-        ${sidebarButtons}
-        ${openRoadmapSidebarBtn}
-      </div>
-    </div>`;
-  }
 
   // Also show in chat: the request details + Accept / Revise controls.
   const detail = hitlDetailBlock(data);
-  const outputBlock = detail ? `
-        <div class="mt-3 pl-11">
-          <p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${hitlLabel(detail.labelKey)}</p>
-          <pre class="font-mono text-[11px] leading-relaxed text-on-surface-variant whitespace-pre-wrap bg-surface-container-high p-3 rounded-lg border border-outline-variant/10 max-h-96 overflow-auto">${escHtml(detail.text)}</pre>
-        </div>` : '';
+  // Prose drops the grey fill entirely: white-on-grey is what made this hard
+  // to look at, and an accent rule marks the block just as well without
+  // putting a second surface under the one thing the human has to read.
+  const detailBody = !detail ? '' : detail.code
+    ? `<pre class="font-mono text-[13px] leading-relaxed text-on-surface whitespace-pre-wrap `
+      + `bg-surface-container-high px-3 py-2.5 rounded-lg border border-outline-variant/20">${escHtml(detail.text)}</pre>`
+    : `<div class="md-body hitl-prose text-on-surface border-l-2 border-primary/40 pl-4 pr-1">`
+      + `${renderMarkdown(detail.text)}</div>`;
+  const asDocument = documentBlock(data);
+  const outputBlock = !detail && !asDocument ? '' : `
+        <div class="mt-4 pt-4 border-t border-outline-variant/15">
+          <p class="text-[13px] font-bold text-on-surface-variant uppercase tracking-wider mb-2">${hitlLabel(
+      detail ? detail.labelKey : 'hitl.block.output')}</p>
+          ${asDocument || foldable(detailBody, detail.text, { bg: '#191c22' })}
+        </div>`;
   placeHitlCard(data.request_id, `
-    <div class="my-6 relative msg-enter" data-hitl-card="${escHtml(data.request_id || '')}">
+    <div class="my-6 relative msg-enter max-w-4xl" data-hitl-card="${escHtml(data.request_id || '')}">
       <div class="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 blur-2xl opacity-40"></div>
-      <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
+      <div class="relative bg-surface-container-low p-5 rounded-xl border border-primary/40 shadow-2xl">
         <div class="flex items-center gap-3 mb-3">
           <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
             <span class="material-symbols-outlined text-on-primary text-sm">ads_click</span>
           </div>
-          <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${hitlLabel('hitl.title')}</h3>
+          <h3 class="font-headline font-bold text-base text-on-surface uppercase tracking-tight">${hitlLabel('hitl.title')}</h3>
         </div>
-        <p class="text-sm text-on-surface-variant leading-relaxed pl-11">${messageHtml}</p>
-        <div class="mt-2 pl-11 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-[11px]">
+        <p class="text-sm text-on-surface-variant leading-relaxed">${messageHtml}</p>
+        <div class="mt-2 flex flex-wrap items-baseline gap-x-5 gap-y-1 text-[11px]">
           <span><span class="text-outline-variant">${hitlLabel('hitl.viaLabel')}:</span> <span class="text-primary">${viaHtml}</span></span>
         </div>
         ${outputBlock}
         ${isProvideInput ? `
-        <div id="hitl-controls-${data.request_id}" class="mt-4 pl-11 flex flex-col gap-2">
+        <div id="hitl-controls-${data.request_id}" class="mt-4 pt-4 border-t border-outline-variant/15 flex flex-col gap-2">
           <textarea id="hitl-feedback-${data.request_id}" rows="2" data-i18n-placeholder="hitl.ph.input" placeholder="${escHtml(t('hitl.ph.input'))}"
-            class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
+            class="w-full bg-surface-container-high border border-outline-variant/25 rounded-md px-2.5 py-2 text-[13px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
           <div class="flex">
-            <button onclick="respondHITLInput('${data.request_id}')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+            <button onclick="respondHITLInput('${data.request_id}')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
               <span class="material-symbols-outlined text-base">send</span> ${hitlLabel('hitl.btn.send')}
             </button>
           </div>
         </div>` : hasOptions ? `
-        <div id="hitl-controls-${data.request_id}" class="mt-4 pl-11 flex flex-col gap-2">
+        <div id="hitl-controls-${data.request_id}" class="mt-4 pt-4 border-t border-outline-variant/15 flex flex-col gap-2">
           <textarea id="hitl-feedback-${data.request_id}" rows="2" data-i18n-placeholder="hitl.ph.reply" placeholder="${escHtml(t('hitl.ph.reply'))}"
-            class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
+            class="w-full bg-surface-container-high border border-outline-variant/25 rounded-md px-2.5 py-2 text-[13px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
           <div class="flex flex-wrap gap-2">
-            <button onclick="respondHITLEdit('${data.request_id}')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+            <button onclick="respondHITLEdit('${data.request_id}')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
               <span class="material-symbols-outlined text-base">reply</span> ${hitlLabel('hitl.btn.reply')}
             </button>
             ${data.options.map(o => `
-            <button onclick="respondHITLOption('${data.request_id}', '${escJs(o)}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">${escHtml(o)}</button>`).join('')}
+            <button onclick="respondHITLOption('${data.request_id}', '${escJs(o)}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] hover:bg-surface-container-highest transition-all">${escHtml(o)}</button>`).join('')}
           </div>
         </div>` : `
-        <div id="hitl-controls-${data.request_id}" class="mt-4 pl-11 flex flex-col gap-2">
+        <div id="hitl-controls-${data.request_id}" class="mt-4 pt-4 border-t border-outline-variant/15 flex flex-col gap-2">
           <textarea id="hitl-feedback-${data.request_id}" rows="2" data-i18n-placeholder="hitl.ph.revise" placeholder="${escHtml(t('hitl.ph.revise'))}"
-            class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
+            class="w-full bg-surface-container-high border border-outline-variant/25 rounded-md px-2.5 py-2 text-[13px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
           <div class="flex gap-3">
-            <button onclick="respondHITL('${data.request_id}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+            <button onclick="respondHITL('${data.request_id}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
               <span class="material-symbols-outlined text-base">check_circle</span> ${hitlLabel('hitl.btn.accept')}
             </button>
-            <button onclick="respondHITL('${data.request_id}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
+            <button onclick="respondHITL('${data.request_id}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] hover:bg-error/10 transition-all">
               <span class="material-symbols-outlined text-base">close</span> ${hitlLabel('hitl.btn.reject')}
             </button>
           </div>
@@ -288,6 +285,12 @@ function renderHitlCard(panel, data) {
 
 function disableHitlControls(requestId) {
   stopWorkOrderCountdown(requestId);
+  // Answered, timed out or cancelled: the question is closed, so the panel it
+  // opened closes with it. One the reader opened by hand stays.
+  if (window.closeDocumentForRequest) closeDocumentForRequest(requestId);
+  // Nothing left to act on: fold whatever this card was showing open.
+  const card = document.querySelector(`[data-hitl-card="${CSS.escape(String(requestId || ''))}"]`);
+  if (card) card.querySelectorAll('.fold-open').forEach(collapseFold);
   const box = document.getElementById('hitl-controls-' + requestId);
   if (!box) return;
   box.querySelectorAll('button, textarea').forEach(el => {
@@ -377,6 +380,10 @@ function sendHitlResponse(payload) {
   if (ws && ws.readyState === 1) {
     ws.send(JSON.stringify(payload));
   }
+  const request = hitlCards.get(payload.request_id || '');
+  if (payload.action === 'approve' && request && request.agent_name === 'PlannerAgent') {
+    releasePlanGate();
+  }
   if (window.StatusIndicator) {
     StatusIndicator.feed({ type: 'hitl_response', request_id: payload.request_id });
   }
@@ -394,7 +401,6 @@ function respondHITLInput(requestId) {
     instructions: feedback,
     free_input: feedback,
   });
-  document.getElementById('hitl-panel').classList.add('hidden');
   disableHitlControls(requestId);
 
   if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
@@ -416,7 +422,6 @@ function respondHITL(requestId, approved) {
     instructions: feedback || null,
     free_input: feedback || null,
   });
-  document.getElementById('hitl-panel').classList.add('hidden');
   disableHitlControls(requestId);
 
   if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
@@ -436,7 +441,6 @@ function respondHITLOption(requestId, option) {
     instructions: option,
     free_input: option,
   });
-  document.getElementById('hitl-panel').classList.add('hidden');
   disableHitlControls(requestId);
 }
 
@@ -457,7 +461,6 @@ function respondHITLEdit(requestId) {
     instructions: feedback,
     free_input: feedback,
   });
-  document.getElementById('hitl-panel').classList.add('hidden');
   disableHitlControls(requestId);
 
   if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
@@ -467,7 +470,7 @@ function respondHITLEdit(requestId) {
 }
 
 // ── Structured frame form (research frame intake) ────────────────────────
-function renderHitlForm(panel, data) {
+function renderHitlForm(live, data) {
   const form = data.form;
   const rid = data.request_id;
   // The backend sends {en, ru} dicts for the display strings. The canonical
@@ -479,61 +482,57 @@ function renderHitlForm(panel, data) {
   const blocksHtml = form.blocks.map((b, bi) => {
     const fieldsHtml = (b.fields || []).map((f, fi) => {
       const openTag = f.open
-        ? `<span class="text-[9px] text-error uppercase tracking-wider">${escHtml(t('hitl.form.notSet'))}</span>`
-        : `<span class="text-[9px] text-outline-variant uppercase tracking-wider">${escHtml(f.status || '')}</span>`;
+        ? `<span class="text-[11px] text-error uppercase tracking-wider">${escHtml(t('hitl.form.notSet'))}</span>`
+        : `<span class="text-[11px] text-outline-variant uppercase tracking-wider">${escHtml(f.status || '')}</span>`;
       const val = f.open ? '' : String(f.value || '');
       const label = loc(f.label, f.name);
       const placeholder = loc(f.placeholder, t('hitl.form.placeholderFallback'));
       return `
             <div class="flex flex-col gap-1">
               <div class="flex items-center justify-between">
-                <label class="text-[11px] font-mono text-on-surface-variant">${escHtml(label)}</label>
+                <label class="text-[15px] font-semibold text-on-surface">${escHtml(label)}</label>
                 ${openTag}
               </div>
               <textarea id="frm-${rid}-${bi}-${fi}" data-block="${escJs(b.title)}" data-field="${escJs(f.name)}"
                 rows="2" placeholder="${escHtml(placeholder)}"
-                class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50">${escHtml(val)}</textarea>
+                class="w-full bg-surface-container-high border border-outline-variant/25 rounded-md px-3 py-2 text-[15px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50">${escHtml(val)}</textarea>
             </div>`;
     }).join('');
     const blockTitle = loc(b.title_i18n, b.title);
     const blockUsage = loc(b.usage_i18n, b.usage);
     return `
-          <div class="mt-3 border border-outline-variant/10 rounded-lg p-3 bg-surface-container-high/40">
-            <p class="text-[11px] font-bold text-on-surface uppercase tracking-wider">${escHtml(blockTitle)}</p>
-            ${blockUsage ? `<p class="text-[10px] text-outline-variant mb-2">${escHtml(blockUsage)}</p>` : '<div class="mb-2"></div>'}
+          <div class="mt-4 border border-outline-variant/15 rounded-lg p-4 bg-surface-container-high/30">
+            <p class="text-[19px] font-bold text-on-surface leading-tight">${escHtml(blockTitle)}</p>
+            ${blockUsage ? `<p class="text-[13px] text-on-surface-variant/80 mb-2.5 mt-0.5">${escHtml(blockUsage)}</p>` : '<div class="mb-2"></div>'}
             <div class="flex flex-col gap-2">${fieldsHtml}</div>
           </div>`;
   }).join('');
 
-  if (panel) {
-    panel.classList.remove('hidden');
-    panel.innerHTML = `
-        <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-2">
-          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${escHtml(t('hitl.form.sidebarTitle'))}</h3>
-          <p class="text-[11px] text-on-surface-variant">${escHtml(t('hitl.form.sidebarHint'))}</p>
-        </div>`;
-  }
+
+  // Open while the request is live — a form cannot be filled in folded —
+  // and folded once it has been answered or replayed from the transcript.
+  const blocksBlock = foldable(blocksHtml, blocksHtml, { bg: '#191c22', open: live });
 
   const formTitle = loc(form.title_i18n, form.title || t('hitl.form.title'));
   const formIntro = loc(form.intro_i18n, form.intro || data.message || '');
   // insertAdjacentHTML, not `innerHTML +=`: re-parsing the whole feed would
   // wipe whatever the operator is typing into the earlier cards.
   placeHitlCard(rid, `
-        <div id="hitl-controls-${rid}" data-hitl-card="${escHtml(rid || '')}" class="my-6 relative msg-enter">
-          <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
+        <div id="hitl-controls-${rid}" data-hitl-card="${escHtml(rid || '')}" class="my-6 relative msg-enter max-w-4xl">
+          <div class="relative bg-surface-container-low p-5 rounded-xl border border-primary/40 shadow-2xl">
             <div class="flex items-center gap-3 mb-2">
               <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
                 <span class="material-symbols-outlined text-on-primary text-sm">fact_check</span>
               </div>
-              <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${escHtml(formTitle)}</h3>
+              <h3 class="font-headline font-bold text-base text-on-surface uppercase tracking-tight">${escHtml(formTitle)}</h3>
             </div>
-            <p class="text-xs text-on-surface-variant leading-relaxed">${escHtml(formIntro)}</p>
-            ${blocksHtml}
+            <p class="text-sm text-on-surface-variant leading-relaxed">${escHtml(formIntro)}</p>
+            ${blocksBlock}
             <div class="flex flex-wrap gap-3 mt-4">
-              <button onclick="respondHITLForm('${rid}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+              <button onclick="respondHITLForm('${rid}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
                 <span class="material-symbols-outlined text-base">check_circle</span> ${escHtml(t('hitl.form.save'))}
               </button>
-              <button onclick="respondHITLForm('${rid}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
+              <button onclick="respondHITLForm('${rid}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] hover:bg-surface-container-highest transition-all">
                 <span class="material-symbols-outlined text-base">skip_next</span> ${escHtml(t('hitl.form.skip'))}
               </button>
             </div>
@@ -563,7 +562,6 @@ function respondHITLForm(requestId, collect) {
     approved: true,
     form_values: formValues,
   });
-  document.getElementById('hitl-panel').classList.add('hidden');
   disableHitlControls(requestId);
 }
 
@@ -576,8 +574,8 @@ const WO_TIER_STYLE = {
 const WO_STEP_MARK = { pending: '○', in_progress: '◐', done: '✓', skipped: '–' };
 const woTimers = new Map();  // request_id -> interval id
 
-function woChip(text, cls = 'text-on-surface-variant border-outline-variant/20 bg-surface-container-high') {
-  return `<span class="inline-block text-[10px] font-mono px-2 py-0.5 rounded border ${cls}">${escHtml(text)}</span>`;
+function woChip(text, cls = 'text-on-surface-variant border-outline-variant/30 bg-surface-container-high') {
+  return `<span class="inline-block text-[11px] font-mono px-2 py-0.5 rounded border ${cls}">${escHtml(text)}</span>`;
 }
 
 // Internal tools the agent named: always rendered, shown only while the viewer
@@ -594,30 +592,51 @@ function woToolChips(tools, internal) {
 function woSection(labelKey, inner) {
   if (!inner) return '';
   return `
-        <div class="mt-3">
-          <p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${hitlLabel(labelKey)}</p>
+        <div class="mt-3 pt-3 border-t border-outline-variant/15 first:mt-0 first:pt-0 first:border-0">
+          <p class="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5">${hitlLabel(labelKey)}</p>
           ${inner}
         </div>`;
 }
 
-function woStepRow(step) {
+// A card with a document shows its steps as one row of marks: the progress
+// notices still replace a chip in place, so the run stays visible, and what each
+// step is *for* is read in the panel. `woStepRow` keeps the full shape for a
+// card that has no document to send the reader to.
+function woStepChip(step) {
+  const status = step.status || 'pending';
+  const tip = [step.id, step.title, step.note, step.expected_outcome]
+    .filter(Boolean).join(' — ');
+  const tone = status === 'done' ? 'text-secondary border-secondary/40 bg-secondary/10'
+    : status === 'in_progress' ? 'text-primary border-primary/50 bg-primary/10'
+      : status === 'skipped' ? 'text-outline-variant/70 border-outline-variant/20'
+        : 'text-outline-variant border-outline-variant/30';
+  return `
+          <li data-wo-step="${escHtml(step.id)}" data-wo-status="${escHtml(status)}"
+            title="${escHtml(tip)}"
+            class="inline-flex items-baseline gap-1 px-1.5 py-0.5 rounded border font-mono text-[11px] ${tone}">
+            <span data-wo-mark>${WO_STEP_MARK[status] || '○'}</span>${escHtml(step.id)}
+          </li>`;
+}
+
+function woStepRow(step, compact) {
+  if (compact) return woStepChip(step);
   const status = step.status || 'pending';
   const tools = woToolChips(step.tools, step.internal_tools);
   return `
         <li data-wo-step="${escHtml(step.id)}" data-wo-status="${escHtml(status)}" class="flex flex-col gap-0.5">
           <div class="flex items-baseline gap-2">
             <span data-wo-mark class="font-mono text-primary w-4 text-center">${WO_STEP_MARK[status] || '○'}</span>
-            <span class="font-mono text-[10px] text-outline-variant">${escHtml(step.id)}</span>
+            <span class="font-mono text-[11px] text-outline-variant shrink-0">${escHtml(step.id)}</span>
             <span class="text-on-surface">${escHtml(step.title || '')}</span>
             <span class="flex flex-wrap gap-1">${tools}</span>
           </div>
-          ${step.expected_outcome ? `<p class="pl-6 text-[11px] text-outline-variant">→ ${escHtml(step.expected_outcome)}</p>` : ''}
-          <p data-wo-note class="pl-6 text-[11px] text-on-surface-variant italic">${escHtml(step.note || '')}</p>
+          ${step.expected_outcome ? `<p class="pl-6 text-[12px] text-on-surface-variant">→ ${escHtml(step.expected_outcome)}</p>` : ''}
+          <p data-wo-note class="pl-6 text-[12px] text-on-surface-variant italic">${escHtml(step.note || '')}</p>
         </li>`;
 }
 
 // The contract itself. interactive=true renders assumptions as checkboxes.
-function workOrderBody(order, rid, interactive) {
+function workOrderBody(order, rid, interactive, compact) {
   const assumptions = (order.assumptions || []).map(a => {
     if (interactive) {
       return `
@@ -634,22 +653,85 @@ function workOrderBody(order, rid, interactive) {
   const tools = woToolChips(order.planned_tools, order.internal_tools);
   // Only internal tools: the whole section hides with them.
   const toolsOnlyInternal = !(order.planned_tools || []).length;
-  return `
+  const assumptionsBlock = woSection('workOrder.assumptions', assumptions
+    ? (interactive ? `<p class="text-[12px] text-on-surface-variant mb-1.5">${hitlLabel('workOrder.assumptionsHint')}</p>` : '')
+    + `<div class="flex flex-col gap-1">${assumptions}</div>`
+    : '');
+  const stepsBlock = woSection('workOrder.steps', (order.steps || []).length
+    ? `<ol data-wo-steps data-compact="${compact ? '1' : '0'}" class="flex flex-col gap-1.5">`
+      + order.steps.map(step => woStepRow(step, compact)).join('') + '</ol>'
+    : '');
+
+  // What the card is answered with, and what a progress notice patches. Never
+  // folded: `.fold-body` clips with `overflow: hidden`, so a checkbox below the
+  // line cannot be clicked and a step chip cannot be seen to tick.
+  //
+  // With a document it is chips, because the words are in the file. Without
+  // one there is nowhere else for them to be, so it is the real thing.
+  const controls = `
+        <div class="text-xs text-on-surface-variant leading-relaxed flex flex-col gap-1.5 mt-3">
+          ${compact ? chipsRow(order, interactive) + stepsRow(order)
+    : assumptionsBlock + stepsBlock}
+          <div data-wo-deviations class="flex flex-col gap-1"></div>
+        </div>`;
+
+  if (compact) {
+    // Only the mechanism, never the prose: a checkbox per assumption because
+    // `respondWorkOrder` reads them back, a chip per step because the progress
+    // notices replace them as the agent works. Both say what they are in a
+    // tooltip and in full in the document this card opens.
+    return controls;
+  }
+
+  const body = `
         <div class="text-xs text-on-surface-variant leading-relaxed">
           ${woSection('workOrder.goal', `<p class="text-on-surface">${escHtml(order.goal || '')}</p>`)}
           ${woSection('workOrder.done', order.done_criteria ? `<p>${escHtml(order.done_criteria)}</p>` : '')}
-          ${woSection('workOrder.assumptions', assumptions
-    ? (interactive ? `<p class="text-[10px] text-outline-variant mb-1">${hitlLabel('workOrder.assumptionsHint')}</p>` : '')
-    + `<div class="flex flex-col gap-1">${assumptions}</div>`
-    : '')}
-          ${woSection('workOrder.steps', (order.steps || []).length
-      ? `<ol data-wo-steps class="flex flex-col gap-1.5">${order.steps.map(woStepRow).join('')}</ol>` : '')}
           ${tools ? `<div class="${toolsOnlyInternal ? 'wo-internal' : ''}">${woSection('workOrder.tools', `<div class="flex flex-wrap gap-1">${tools}</div>`)}</div>` : ''}
           ${woSection('workOrder.sideEffects', effects ? `<div class="flex flex-wrap gap-1">${effects}</div>` : '')}
           ${woSection('workOrder.expected', order.expected_outcome ? `<p>${escHtml(order.expected_outcome)}</p>` : '')}
           ${woSection('workOrder.fallback', order.fallback ? `<p>${escHtml(order.fallback)}</p>` : '')}
-          <div data-wo-deviations class="mt-2 flex flex-col gap-1"></div>
         </div>`;
+  // The prose folds; the controls under it do not. `.fold-body` clips with
+  // `overflow: hidden`, so anything inside it that has to be clicked — or
+  // patched by a progress notice — would be unreachable below the 11rem line.
+  return foldable(body, JSON.stringify(order), { bg: '#191c22' }) + controls;
+}
+
+// ── The two rows the card is answered with ────────────────────────────────
+function chipsRow(order, interactive) {
+  const chips = (order.assumptions || []).map(a => `
+            <label title="${escHtml(a.id + ' — ' + (a.text || ''))}"
+              class="inline-flex items-baseline gap-1 px-1.5 py-0.5 rounded border cursor-pointer
+                     font-mono text-[11px] border-outline-variant/30 hover:border-primary/50
+                     transition-colors ${a.rejected ? 'line-through-dim' : 'text-on-surface-variant'}">
+              <input type="checkbox" data-wo-assumption="${escHtml(a.id)}"
+                class="accent-primary align-middle"
+                ${a.rejected ? '' : 'checked'} ${interactive ? '' : 'disabled'} />
+              ${escHtml(a.id)}
+            </label>`).join('');
+  if (!chips) return '';
+  return `<div class="flex items-baseline flex-wrap gap-1.5">
+            <span class="text-[12px] text-outline-variant shrink-0">${hitlLabel('workOrder.assumptions')}</span>
+            ${chips}
+          </div>`;
+}
+
+// `done` is not the only way a step closes: the server counts `skipped` as
+// closed too (work_order.report_warnings reads open_steps the same way), so a
+// run that skipped one would otherwise read 3/4 for ever.
+const WO_STEP_OPEN = new Set(['pending', 'in_progress']);
+
+function stepsRow(order) {
+  const steps = order.steps || [];
+  if (!steps.length) return '';
+  const closed = steps.filter(s => !WO_STEP_OPEN.has(s.status || 'pending')).length;
+  return `<div class="flex items-baseline flex-wrap gap-1.5">
+            <span class="text-[12px] text-outline-variant shrink-0">${hitlLabel('workOrder.steps')}</span>
+            <ol data-wo-steps data-compact="1" class="inline-flex flex-wrap items-baseline gap-1">${
+    steps.map(woStepChip).join('')}</ol>
+            <span data-wo-progress class="text-[11px] font-mono text-outline-variant">${closed}/${steps.length}</span>
+          </div>`;
 }
 
 function workOrderDiff(ctx) {
@@ -660,7 +742,7 @@ function workOrderDiff(ctx) {
   (diff.added_steps || []).forEach(st => rows.push('+ ' + st.id + '. ' + st.title));
   const reason = ctx.reason ? woSection('workOrder.reason', `<p class="text-on-surface">${escHtml(ctx.reason)}</p>`) : '';
   const changes = rows.length ? woSection('workOrder.added',
-    `<pre class="font-mono text-[11px] text-secondary whitespace-pre-wrap bg-surface-container-high p-2 rounded border border-outline-variant/10">${escHtml(rows.join('\n'))}</pre>`) : '';
+    `<pre class="font-mono text-[12px] text-secondary whitespace-pre-wrap bg-surface-container-high px-2.5 py-2 rounded border border-outline-variant/20">${escHtml(rows.join('\n'))}</pre>`) : '';
   return reason + changes;
 }
 
@@ -671,56 +753,48 @@ function woHeader(icon, titleKey, tier, agent, revision) {
           <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
             <span class="material-symbols-outlined text-on-primary text-sm">${icon}</span>
           </div>
-          <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${hitlLabel(titleKey)}</h3>
+          <h3 class="font-headline font-bold text-base text-on-surface uppercase tracking-tight">${hitlLabel(titleKey)}</h3>
           ${tier ? `<span class="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded border ${tierCls}">${hitlLabel('workOrder.tier.' + tier)}</span>` : ''}
-          <span class="text-[11px] font-bold text-on-surface">${escHtml(agent || '—')}</span>
+          <span class="text-[12px] font-bold text-on-surface">${escHtml(agent || '—')}</span>
           <span class="font-mono text-[10px] text-outline-variant">rev ${escHtml(String(revision || 1))}</span>
         </div>`;
 }
 
-function renderWorkOrderCard(panel, data) {
+function renderWorkOrderCard(live, data) {
   const rid = data.request_id;
   const ctx = data.context || {};
   const order = ctx.work_order || {};
   const tier = ctx.tier || order.tier || 'compute';
   const isAmendment = data.trigger === 'work_order_amendment';
-  // A history card (no panel) never counts down: its window has closed.
-  const timeout = panel ? (Number(data.timeout_seconds) || 0) : 0;
+  // A history card never counts down: its window has closed.
+  const timeout = live ? (Number(data.timeout_seconds) || 0) : 0;
   const messageHtml = hitlDynamic(data, 'message', localizeHitlMessage(data));
 
-  if (panel) {
-    panel.classList.remove('hidden');
-    panel.innerHTML = `
-        <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-2">
-          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${hitlLabel(isAmendment ? 'workOrder.amendTitle' : 'workOrder.title')}</h3>
-          <p class="text-[11px] text-on-surface-variant">${messageHtml}</p>
-          <p class="text-[10px] text-outline-variant leading-relaxed">${hitlLabel('hitl.answerInChat')}</p>
-        </div>`;
-  }
 
-  const countdown = woCountdown(panel, data, timeout, 'workOrder.countdown');
+  const countdown = woCountdown(live, data, timeout, 'workOrder.countdown');
 
   placeHitlCard(rid, `
-        <div class="my-6 relative msg-enter" data-hitl-card="${escHtml(rid || '')}" data-wo-agent="${escHtml(data.agent_name || '')}" data-wo-rev="${escHtml(String(order.revision || 1))}">
-          <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
+        <div class="my-6 relative msg-enter max-w-4xl" data-hitl-card="${escHtml(rid || '')}" data-wo-agent="${escHtml(data.agent_name || '')}" data-wo-rev="${escHtml(String(order.revision || 1))}">
+          <div class="relative bg-surface-container-low p-5 rounded-xl border border-primary/40 shadow-2xl">
             ${woHeader(isAmendment ? 'edit_note' : 'assignment', isAmendment ? 'workOrder.amendTitle' : 'workOrder.title',
     tier, data.agent_name, order.revision)}
             <p class="text-sm text-on-surface-variant leading-relaxed mt-2">${messageHtml}</p>
             ${isAmendment ? workOrderDiff(ctx) : ''}
-            ${workOrderBody(order, rid, !isAmendment)}
+            ${documentBlock(data)}
+            ${workOrderBody(order, rid, !isAmendment, !!(data.document && data.document.artifact_id))}
             ${countdown}
             <div id="hitl-controls-${rid}" class="mt-4 flex flex-col gap-2">
               <textarea id="hitl-feedback-${rid}" rows="2" data-i18n-placeholder="workOrder.ph.notes" placeholder="${escHtml(t('workOrder.ph.notes'))}"
-                class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
+                class="w-full bg-surface-container-high border border-outline-variant/25 rounded-md px-2.5 py-2 text-[13px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
               <div class="flex flex-wrap gap-3">
-                <button onclick="respondWorkOrder('${rid}', 'approve')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+                <button onclick="respondWorkOrder('${rid}', 'approve')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
                   <span class="material-symbols-outlined text-base">check_circle</span> ${hitlLabel('hitl.btn.accept')}
                 </button>
                 ${timeout > 0 && !data.held ? `
-                <button id="wo-pause-${rid}" onclick="holdWorkOrder('${rid}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-tertiary/30 text-tertiary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-tertiary/10 transition-all">
+                <button id="wo-pause-${rid}" onclick="holdWorkOrder('${rid}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-tertiary/30 text-tertiary px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] hover:bg-tertiary/10 transition-all">
                   <span class="material-symbols-outlined text-base">pause</span> ${hitlLabel('workOrder.btn.pause')}
                 </button>` : ''}
-                <button onclick="respondWorkOrder('${rid}', 'reject')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
+                <button onclick="respondWorkOrder('${rid}', 'reject')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] hover:bg-error/10 transition-all">
                   <span class="material-symbols-outlined text-base">close</span> ${hitlLabel('hitl.btn.reject')}
                 </button>
               </div>
@@ -732,9 +806,9 @@ function renderWorkOrderCard(panel, data) {
 }
 
 // The veto countdown (or "waiting for your decision") under a live card.
-function woCountdown(panel, data, timeout, textKey) {
+function woCountdown(live, data, timeout, textKey) {
   const rid = data.request_id;
-  if (!panel) return '';
+  if (!live) return '';
   if (timeout > 0 && !data.held) {
     return `
         <div id="wo-countdown-${rid}" data-wo-countdown-key="${escHtml(textKey)}" class="mt-4 flex flex-col gap-1">
@@ -810,9 +884,18 @@ function respondWorkOrder(rid, action) {
     ? [...card.querySelectorAll('input[data-wr-finding]')].filter(el => el.checked).map(el => el.dataset.wrFinding)
     : [];
   if (card) card.querySelectorAll('input[data-wo-assumption], input[data-wr-finding]').forEach(el => { el.disabled = true; });
-  let formValues = null;
-  if (action === 'approve') formValues = { rejected_assumption_ids: rejectedIds };
-  else if (action === 'edit' && disputedIds.length) formValues = { disputed_finding_ids: disputedIds };
+  // What the operator marked travels with EVERY action, not with one of them.
+  //
+  // These two lists used to be attached per action — rejections only on
+  // `approve`, disputes only on `edit` — while the single button silently turns
+  // `approve` into `edit` the moment a note is typed (above). So the ordinary
+  // move of unticking an assumption AND saying why dropped the untick on the
+  // floor: the agent was asked to revise and never told which assumption the
+  // operator had rejected. Marking something and being ignored is worse than
+  // having no checkbox at all.
+  const formValues = {};
+  if (rejectedIds.length) formValues.rejected_assumption_ids = rejectedIds;
+  if (disputedIds.length) formValues.disputed_finding_ids = disputedIds;
   sendHitlResponse({
     type: 'hitl_response',
     request_id: rid,
@@ -820,9 +903,8 @@ function respondWorkOrder(rid, action) {
     approved: action === 'approve',
     instructions: feedback || null,
     free_input: feedback || null,
-    form_values: formValues,
+    form_values: Object.keys(formValues).length ? formValues : null,
   });
-  document.getElementById('hitl-panel').classList.add('hidden');
   disableHitlControls(rid);
   const box = document.getElementById('wo-countdown-' + rid);
   if (box) box.remove();
@@ -836,7 +918,7 @@ const WR_VERDICT_STYLE = {
 };
 const WR_CONFIDENCE_STYLE = {
   high: 'text-primary border-primary/30 bg-primary/10',
-  medium: 'text-on-surface-variant border-outline-variant/20 bg-surface-container-high',
+  medium: 'text-on-surface-variant border-outline-variant/30 bg-surface-container-high',
   low: 'text-tertiary border-tertiary/30 bg-tertiary/10',
 };
 
@@ -878,7 +960,7 @@ function wrFindingRow(f, interactive) {
 }
 
 // The report set against the order. interactive=true lets the human mark findings wrong.
-function workReportBody(order, report, extra, interactive) {
+function workReportBody(order, report, extra, interactive, compact) {
   const warnings = (extra.warnings || []).map(wrWarning).join('');
   const journal = extra.journal || {
     tool_calls: order.tool_calls || {},
@@ -919,63 +1001,73 @@ function workReportBody(order, report, extra, interactive) {
             </div>` : '';
   const summary = report.fallback
     ? `<p class="text-[10px] text-outline-variant mb-1">${hitlLabel('workReport.finalAnswer')}</p>
-       <pre class="text-[11px] text-on-surface whitespace-pre-wrap bg-surface-container-high p-2 rounded border border-outline-variant/10 max-h-64 overflow-auto">${escHtml(report.summary || '—')}</pre>`
+       ${foldable(`<div class="md-body hitl-prose text-on-surface border-l-2 border-primary/40 pl-4 pr-1">`
+         + `${renderMarkdown(report.summary || '—')}</div>`, report.summary || '', { bg: '#191c22' })}`
     : `<p class="text-on-surface">${escHtml(report.summary || '')}</p>`;
-  return `
+  const findingsBlock = woSection('workReport.findings', findings
+    ? (interactive ? `<p class="text-[12px] text-on-surface-variant mb-1.5">${hitlLabel('workReport.findingsHint')}</p>` : '')
+      + `<ol class="flex flex-col gap-1.5">${findings}</ol>`
+    : '');
+  const warningsBlock = warnings
+    ? `<div class="mt-3 flex flex-col gap-1 p-2 rounded border border-tertiary/30 bg-tertiary/5">${warnings}</div>`
+    : '';
+
+  if (compact) {
+    // The findings carry the dispute checkboxes, and a warning is the one thing
+    // that must not wait for someone to open a panel.
+    return `
         <div class="text-xs text-on-surface-variant leading-relaxed">
-          ${warnings ? `<div class="mt-3 flex flex-col gap-1 p-2 rounded border border-tertiary/30 bg-tertiary/5">${warnings}</div>` : ''}
+          ${warningsBlock}
+          ${findingsBlock}
+        </div>`;
+  }
+
+  const body = `
+        <div class="text-xs text-on-surface-variant leading-relaxed">
+          ${warningsBlock}
           ${woSection('workOrder.goal', `<p>${escHtml(order.goal || '')}</p>`)}
           ${woSection('workReport.summary', summary)}
-          ${woSection('workReport.findings', findings
-    ? (interactive ? `<p class="text-[10px] text-outline-variant mb-1">${hitlLabel('workReport.findingsHint')}</p>` : '')
-    + `<ol class="flex flex-col gap-1.5">${findings}</ol>` : '')}
+          ${findingsBlock}
           ${woSection('workOrder.done', done)}
           ${woSection('workReport.outcome', outcome)}
           ${woSection('workReport.steps', (order.steps || []).length
-      ? `<ol class="flex flex-col gap-1.5">${order.steps.map(woStepRow).join('')}</ol>` : '')}
+      ? `<ol class="flex flex-col gap-1.5">${order.steps.map(s => woStepRow(s, false)).join('')}</ol>` : '')}
           ${woSection('workReport.artifacts', artifacts ? `<div class="flex flex-col gap-1">${artifacts}</div>` : '')}
           ${woSection('workReport.journal', journalHtml)}
         </div>`;
+  return foldable(body, JSON.stringify(report), { bg: '#191c22' });
 }
 
-function renderWorkReportCard(panel, data) {
+function renderWorkReportCard(live, data) {
   const rid = data.request_id;
   const ctx = data.context || {};
   const order = ctx.work_order || {};
   const report = ctx.work_report || {};
   const tier = ctx.tier || order.tier || 'compute';
-  const timeout = panel ? (Number(data.timeout_seconds) || 0) : 0;
+  const timeout = live ? (Number(data.timeout_seconds) || 0) : 0;
   const messageHtml = hitlDynamic(data, 'message', localizeHitlMessage(data));
-  if (panel) {
-    panel.classList.remove('hidden');
-    panel.innerHTML = `
-        <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-2">
-          <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${hitlLabel('workReport.title')}</h3>
-          <p class="text-[11px] text-on-surface-variant">${messageHtml}</p>
-          <p class="text-[10px] text-outline-variant leading-relaxed">${hitlLabel('hitl.answerInChat')}</p>
-        </div>`;
-  }
 
   placeHitlCard(rid, `
-        <div class="my-6 relative msg-enter" data-hitl-card="${escHtml(rid || '')}" data-wr-agent="${escHtml(data.agent_name || '')}">
-          <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
+        <div class="my-6 relative msg-enter max-w-4xl" data-hitl-card="${escHtml(rid || '')}" data-wr-agent="${escHtml(data.agent_name || '')}">
+          <div class="relative bg-surface-container-low p-5 rounded-xl border border-primary/40 shadow-2xl">
             ${woHeader('fact_check', 'workReport.title', tier, data.agent_name, order.revision)}
             <p class="font-mono text-[10px] text-outline-variant mt-1">${escHtml(t('workReport.round').replace('{n}', report.round || 1))}</p>
             <p class="text-sm text-on-surface-variant leading-relaxed mt-2">${messageHtml}</p>
-            ${workReportBody(order, report, ctx, !report.fallback)}
-            ${woCountdown(panel, data, timeout, 'workReport.countdown')}
+            ${documentBlock(data)}
+            ${workReportBody(order, report, ctx, !report.fallback, !!(data.document && data.document.artifact_id))}
+            ${woCountdown(live, data, timeout, 'workReport.countdown')}
             <div id="hitl-controls-${rid}" class="mt-4 flex flex-col gap-2">
               <textarea id="hitl-feedback-${rid}" rows="2" data-i18n-placeholder="workReport.ph.notes" placeholder="${escHtml(t('workReport.ph.notes'))}"
-                class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
+                class="w-full bg-surface-container-high border border-outline-variant/25 rounded-md px-2.5 py-2 text-[13px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
               <div class="flex flex-wrap gap-3">
-                <button onclick="respondWorkOrder('${rid}', 'approve')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+                <button onclick="respondWorkOrder('${rid}', 'approve')" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
                   <span class="material-symbols-outlined text-base">check_circle</span> ${hitlLabel('hitl.btn.accept')}
                 </button>
                 ${timeout > 0 && !data.held ? `
-                <button id="wo-pause-${rid}" onclick="holdWorkOrder('${rid}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-tertiary/30 text-tertiary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-tertiary/10 transition-all">
+                <button id="wo-pause-${rid}" onclick="holdWorkOrder('${rid}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-tertiary/30 text-tertiary px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] hover:bg-tertiary/10 transition-all">
                   <span class="material-symbols-outlined text-base">pause</span> ${hitlLabel('workOrder.btn.pause')}
                 </button>` : ''}
-                <button onclick="respondWorkOrder('${rid}', 'reject')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
+                <button onclick="respondWorkOrder('${rid}', 'reject')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] hover:bg-error/10 transition-all">
                   <span class="material-symbols-outlined text-base">close</span> ${hitlLabel('hitl.btn.reject')}
                 </button>
               </div>
@@ -999,8 +1091,8 @@ function renderWorkOrderNotice(data) {
     const order = data.work_order || {};
     const report = data.work_report || {};
     appendMsgToFeed(`
-          <div class="my-4 relative msg-enter" data-wr-agent="${escHtml(data.agent_name || '')}">
-            <div class="relative bg-surface-container-lowest p-5 rounded-xl border border-outline-variant/20">
+          <div class="my-4 relative msg-enter max-w-4xl" data-wr-agent="${escHtml(data.agent_name || '')}">
+            <div class="relative bg-surface-container-low p-5 rounded-xl border border-outline-variant/25">
               ${woHeader('fact_check', 'workReport.title', data.tier || order.tier, data.agent_name, order.revision)}
               ${workReportBody(order, report, data, false)}
             </div>
@@ -1012,8 +1104,8 @@ function renderWorkOrderNotice(data) {
     const order = data.work_order || {};
     const amended = kind === 'amended';
     appendMsgToFeed(`
-          <div class="my-4 relative msg-enter" data-wo-agent="${escHtml(data.agent_name || '')}" data-wo-rev="${escHtml(String(order.revision || 1))}">
-            <div class="relative bg-surface-container-lowest p-5 rounded-xl border border-outline-variant/20">
+          <div class="my-4 relative msg-enter max-w-4xl" data-wo-agent="${escHtml(data.agent_name || '')}" data-wo-rev="${escHtml(String(order.revision || 1))}">
+            <div class="relative bg-surface-container-low p-5 rounded-xl border border-outline-variant/25">
               ${woHeader(amended ? 'edit_note' : 'assignment', amended ? 'workOrder.amendTitle' : 'workOrder.noticeTitle',
       data.tier || order.tier, data.agent_name, order.revision)}
               ${amended ? workOrderDiff(data) : ''}
@@ -1027,12 +1119,22 @@ function renderWorkOrderNotice(data) {
   if (kind === 'progress' && data.step) {
     if (!card) return;
     let row = card.querySelector(`[data-wo-step="${CSS.escape(data.step.id)}"]`);
-    const html = woStepRow(data.step);
+    const list = card.querySelector('[data-wo-steps]');
+    // A card whose detail moved to a document lists its steps compactly; a
+    // replacement row has to match, or one tick would bring the detail back.
+    const html = woStepRow(data.step, !!list && list.dataset.compact === '1');
     if (row) {
       row.outerHTML = html;
-    } else {
-      const list = card.querySelector('[data-wo-steps]');
-      if (list) list.insertAdjacentHTML('beforeend', html);
+    } else if (list) {
+      list.insertAdjacentHTML('beforeend', html);
+    }
+    // The compact row carries a "2/4" beside it; without this it would still
+    // read 0/4 while the chips went green one by one.
+    const tally = card.querySelector('[data-wo-progress]');
+    if (tally && list) {
+      const steps = [...list.querySelectorAll('[data-wo-step]')];
+      const closed = steps.filter(el => !WO_STEP_OPEN.has(el.dataset.woStatus || 'pending')).length;
+      tally.textContent = `${closed}/${steps.length}`;
     }
     return;
   }
@@ -1075,7 +1177,7 @@ const PLAN_ROUTE_TONE = {
   research: 'text-outline-variant border-outline-variant/30 bg-outline-variant/5',
   medical: 'text-outline-variant border-outline-variant/30 bg-outline-variant/5',
 };
-const PLAN_CHIP_TONE = 'text-on-surface-variant border-outline-variant/20 bg-surface-container-high';
+const PLAN_CHIP_TONE = 'text-on-surface-variant border-outline-variant/30 bg-surface-container-high';
 
 // A slot the planner left empty is shown as empty. Printing its placeholder
 // text ("unspecified", "n/a") made an unfilled design look filled in.
@@ -1091,29 +1193,29 @@ function planText(value) {
 function planItems(items, empty) {
   const rows = (items || []).filter(x => x !== null && x !== undefined && String(x).trim());
   if (!rows.length) return empty === undefined ? planDash() : escHtml(empty);
-  return rows.map(x => `<span class="inline-block bg-surface-container-high border border-outline-variant/10 rounded px-1.5 py-0.5 mr-1 mb-1 text-[10px] font-mono">${escHtml(String(x))}</span>`).join('');
+  return rows.map(x => `<span class="inline-block bg-surface-container-high border border-outline-variant/25 rounded px-1.5 py-0.5 mr-1 mb-1 text-[11px] font-mono">${escHtml(String(x))}</span>`).join('');
 }
 
 function planChip(label, value, tone) {
-  const name = label ? `<span class="opacity-60 uppercase tracking-wider">${escHtml(label)}</span>` : '';
-  return `<span class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[10px] font-mono ${tone || PLAN_CHIP_TONE}">${name}${escHtml(String(value))}</span>`;
+  const name = label ? `<span class="opacity-80 uppercase tracking-wider">${escHtml(label)}</span>` : '';
+  return `<span class="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-mono ${tone || PLAN_CHIP_TONE}">${name}${escHtml(String(value))}</span>`;
 }
 
 function planRouteChip(route) {
-  return `<span class="inline-flex items-center rounded-md border px-2 py-0.5 text-[10px] font-mono ${PLAN_ROUTE_TONE[route] || PLAN_CHIP_TONE}">${escHtml(route || '')}</span>`;
+  return `<span class="inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-mono ${PLAN_ROUTE_TONE[route] || PLAN_CHIP_TONE}">${escHtml(route || '')}</span>`;
 }
 
 function planField(label, valueHtml) {
-  return `<div class="grid grid-cols-[minmax(92px,max-content)_1fr] gap-x-3 py-1 border-b border-outline-variant/5 last:border-0">
-    <span class="text-[10px] uppercase tracking-wider text-outline-variant pt-0.5">${escHtml(label)}</span>
-    <span class="text-[11px] text-on-surface-variant leading-relaxed break-words min-w-0">${valueHtml}</span>
+  return `<div class="grid grid-cols-[minmax(104px,max-content)_1fr] gap-x-3 py-1.5 border-b border-outline-variant/15 last:border-0">
+    <span class="text-[11px] uppercase tracking-wider text-outline-variant pt-0.5">${escHtml(label)}</span>
+    <span class="text-[12px] text-on-surface-variant leading-relaxed break-words min-w-0">${valueHtml}</span>
   </div>`;
 }
 
 function planSection(title, bodyHtml) {
   if (!bodyHtml) return '';
-  return `<div class="mt-3">
-    <p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider mb-1">${escHtml(title)}</p>
+  return `<div class="mt-3 pt-3 border-t border-outline-variant/15 first:mt-0 first:pt-0 first:border-0">
+    <p class="text-[11px] font-bold text-on-surface-variant uppercase tracking-wider mb-1.5">${escHtml(title)}</p>
     ${bodyHtml}</div>`;
 }
 
@@ -1126,11 +1228,11 @@ const PLAN_MATRIX_COLUMNS = [
 function planMatrix(plan) {
   if (!Array.isArray(plan.matrix) || !plan.matrix.length) return '';
   const head = PLAN_MATRIX_COLUMNS
-    .map(key => `<th class="text-left font-bold uppercase tracking-wider text-[9px] text-outline-variant px-2 py-1.5 whitespace-nowrap">${escHtml(t(key))}</th>`)
+    .map(key => `<th class="text-left font-bold uppercase tracking-wider text-[11px] text-on-surface-variant px-2 py-2 whitespace-nowrap">${escHtml(t(key))}</th>`)
     .join('');
   const rows = plan.matrix.map(r => `
     <tr class="border-t border-outline-variant/10 align-top">
-      <td class="px-2 py-1.5 font-mono text-[10px] text-primary whitespace-nowrap">${escHtml(r.task_id || '')}</td>
+      <td class="px-2 py-1.5 font-mono text-[11px] text-primary whitespace-nowrap">${escHtml(r.task_id || '')}</td>
       <td class="px-2 py-1.5 font-mono text-[10px] whitespace-nowrap">${planText(r.hypothesis)}</td>
       <td class="px-2 py-1.5 text-[11px] min-w-[220px]">${planText(r.question)}</td>
       <td class="px-2 py-1.5 text-[11px]">${planText(r.dataset)}</td>
@@ -1161,8 +1263,8 @@ function planCriteria(task) {
   const rows = task.success_criteria || [];
   if (!rows.length) return planDash();
   return rows.map(c => `<div class="mb-1.5">
-    <span class="font-mono text-[10px] text-primary">${escHtml(c.criterion_id || '')}</span>
-    <span class="text-[9px] uppercase tracking-wider text-outline-variant ml-1">${escHtml(c.kind || '')}</span>
+    <span class="font-mono text-[11px] text-primary">${escHtml(c.criterion_id || '')}</span>
+    <span class="text-[11px] uppercase tracking-wider text-outline-variant ml-1">${escHtml(c.kind || '')}</span>
     ${c.threshold ? `<span class="ml-1 font-mono text-[10px] text-tertiary">${escHtml(c.threshold)}</span>` : ''}
     <div class="text-[11px]">${planText(c.description)}</div>
     ${c.verification ? `<div class="text-[10px] text-outline-variant">${escHtml(c.verification)}</div>` : ''}
@@ -1174,7 +1276,7 @@ function planInputs(task) {
   if (!rows.length) return `<span class="text-outline-variant/60">${escHtml(t('plan.noInputs'))}</span>`;
   return rows.map(d => `<div class="mb-1">
     <span class="font-mono text-[10px] text-on-surface">${escHtml(d.data_id || '')}</span>
-    <span class="text-[9px] uppercase tracking-wider text-outline-variant ml-1">${escHtml(d.kind || '')}</span>
+    <span class="text-[11px] uppercase tracking-wider text-outline-variant ml-1">${escHtml(d.kind || '')}</span>
     ${d.location ? `<div class="font-mono text-[10px] text-outline-variant break-all">${escHtml(d.location)}</div>` : ''}
     ${d.description ? `<div class="text-[11px]">${escHtml(d.description)}</div>` : ''}
   </div>`).join('');
@@ -1214,8 +1316,8 @@ function planTaskCard(rid, task, index) {
     <button type="button" onclick="togglePlanTask('${escJs(rid)}','${escJs(task.id)}')"
       class="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-surface-container-high/60 rounded-lg transition-colors">
       <span class="material-symbols-outlined text-sm text-outline-variant">${open ? 'expand_more' : 'chevron_right'}</span>
-      <span class="font-mono text-[10px] text-primary">${escHtml(task.id || ('#' + (index + 1)))}</span>
-      <span class="text-[11px] text-on-surface truncate flex-1">${escHtml(task.name || '')}</span>
+      <span class="font-mono text-[11px] text-primary">${escHtml(task.id || ('#' + (index + 1)))}</span>
+      <span class="text-[13px] font-medium text-on-surface truncate flex-1">${escHtml(task.name || '')}</span>
       ${task.optional ? planChip('', t('plan.task.optional')) : ''}
       ${(task.depends_on || []).length ? planChip(t('plan.task.after'), task.depends_on.join(', ')) : ''}
       ${planChip('', (task.est_duration_min || 0) + ' ' + t('plan.min'))}
@@ -1259,8 +1361,8 @@ function planCritiqueBlock(plan) {
   const approved = critique.verdict === 'approve';
   const issues = (critique.issues || []).map(i => `<div class="mb-1">
     <span class="text-[9px] uppercase tracking-wider ${i.severity === 'blocker' ? 'text-error' : 'text-tertiary'}">${escHtml(i.severity || '')}</span>
-    <span class="text-[9px] uppercase tracking-wider text-outline-variant ml-1">${escHtml(i.category || '')}</span>
-    ${i.task_id ? `<span class="font-mono text-[10px] text-primary ml-1">${escHtml(i.task_id)}</span>` : ''}
+    <span class="text-[11px] uppercase tracking-wider text-outline-variant ml-1">${escHtml(i.category || '')}</span>
+    ${i.task_id ? `<span class="font-mono text-[11px] text-primary ml-1">${escHtml(i.task_id)}</span>` : ''}
     <div class="text-[11px]">${planText(i.message)}</div>
     ${i.suggestion ? `<div class="text-[10px] text-outline-variant">${escHtml(i.suggestion)}</div>` : ''}
   </div>`).join('');
@@ -1274,42 +1376,43 @@ function planBullets(list) {
     : '';
 }
 
-function renderExperimentPlanReview(panel, data) {
+function renderExperimentPlanReview(live, data) {
   const plan = (data.context || {}).experiment_plan;
   const rid = data.request_id;
   planByRequest.set(rid, plan);
 
-  if (panel) {
-    panel.classList.remove('hidden');
-    panel.innerHTML = `
-    <div class="relative bg-surface-container-lowest p-4 rounded-xl border border-primary/30 shadow-2xl flex flex-col gap-3">
-      <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-tight">${escHtml(t('plan.sidebarTitle'))}</h3>
-      <p class="text-[11px] text-on-surface-variant">${escHtml(t('plan.revision').replace('{n}', plan.revision))} · ${escHtml(t('plan.tasks').replace('{n}', plan.task_count))}</p>
-      <p class="text-[10px] text-outline-variant leading-relaxed">${escHtml(t('plan.sidebarHint'))}</p>
-      <div class="flex gap-3">
-        <button onclick="respondHITL('${escJs(rid)}', true)" class="flex-1 flex items-center justify-center gap-2 bg-primary text-on-primary py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
-          <span class="material-symbols-outlined text-base">check_circle</span> ${escHtml(t('plan.accept'))}
-        </button>
-        <button onclick="respondHITL('${escJs(rid)}', false)" class="flex-1 flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error py-3 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
-          <span class="material-symbols-outlined text-base">close</span> ${escHtml(t('plan.reject'))}
-        </button>
-      </div>
-    </div>`;
-  }
 
   const hypotheses = (plan.hypotheses || []).map(h =>
-    `<div class="mb-1"><span class="font-mono text-[10px] text-primary">${escHtml(h.id || '')}</span>
+    `<div class="mb-1"><span class="font-mono text-[11px] text-primary">${escHtml(h.id || '')}</span>
       <span class="text-[11px] ml-1">${planText(h.statement)}</span></div>`).join('');
 
+  // Everything that is read rather than glanced at. The goal stays above the
+  // fold with the chips: between them they say what this plan is, which is
+  // what someone scrolling past needs.
+  const detail = `
+    ${plan.hypothesis ? planField(t('plan.hypothesis'), planText(plan.hypothesis)) : ''}
+    ${planField(t('plan.methods'), planItems(plan.methods))}
+    ${hypotheses ? planSection(t('plan.hypotheses'), hypotheses) : ''}
+    ${planCritiqueBlock(plan)}
+    ${planMatrix(plan)}
+    <div class="mt-3 flex items-center justify-between">
+      <p class="text-[13px] font-bold text-on-surface-variant uppercase tracking-wider">${escHtml(t('plan.tasksTitle'))}</p>
+      <button type="button" id="plan-toggle-all-${escHtml(rid)}" onclick="togglePlanAllTasks('${escJs(rid)}')"
+        class="text-[13px] uppercase tracking-wider text-primary hover:underline">${escHtml(t('plan.expandAll'))}</button>
+    </div>
+    <div id="plan-tasks-${escHtml(rid)}" class="mt-1">${plan.tasks.map((task, i) => planTaskCard(rid, task, i)).join('')}</div>
+    ${planSection(t('plan.risks'), planBullets(plan.risks))}
+    ${planSection(t('plan.assumptions'), planBullets(plan.assumptions))}`;
+
   placeHitlCard(rid, `
-<div data-hitl-card="${escHtml(rid || '')}" class="my-6 relative msg-enter">
+<div data-hitl-card="${escHtml(rid || '')}" class="my-6 relative msg-enter max-w-4xl">
   <div class="absolute -inset-2 bg-gradient-to-r from-primary/10 via-transparent to-primary/10 blur-2xl opacity-40"></div>
-  <div class="relative bg-surface-container-lowest p-6 rounded-xl border border-primary/30 shadow-2xl">
+  <div class="relative bg-surface-container-low p-5 rounded-xl border border-primary/40 shadow-2xl">
     <div class="flex items-center gap-3 mb-2">
       <div class="w-8 h-8 rounded-full bg-primary flex items-center justify-center shadow-[0_0_15px_rgba(0,218,243,0.4)]">
         <span class="material-symbols-outlined text-on-primary text-sm">science</span>
       </div>
-      <h3 class="font-headline font-bold text-on-surface uppercase tracking-tight">${escHtml(t('plan.title'))}</h3>
+      <h3 class="font-headline font-bold text-base text-on-surface uppercase tracking-tight">${escHtml(t('plan.title'))}</h3>
     </div>
     <p class="text-[10px] text-outline-variant font-mono mb-2">CTX: ${escHtml(String(rid).slice(0, 8))} · ${escHtml(data.agent_name || '')}</p>
     <div class="flex flex-wrap gap-1.5 mb-3">
@@ -1320,33 +1423,21 @@ function renderExperimentPlanReview(panel, data) {
       ${plan.plan_id ? planChip('id', plan.plan_id) : ''}
     </div>
     ${planField(t('plan.goal'), planText(plan.goal))}
-    ${plan.hypothesis ? planField(t('plan.hypothesis'), planText(plan.hypothesis)) : ''}
-    ${planField(t('plan.methods'), planItems(plan.methods))}
-    ${hypotheses ? planSection(t('plan.hypotheses'), hypotheses) : ''}
-    ${planCritiqueBlock(plan)}
-    ${planMatrix(plan)}
-    <div class="mt-3 flex items-center justify-between">
-      <p class="text-[10px] font-bold text-outline-variant uppercase tracking-wider">${escHtml(t('plan.tasksTitle'))}</p>
-      <button type="button" id="plan-toggle-all-${escHtml(rid)}" onclick="togglePlanAllTasks('${escJs(rid)}')"
-        class="text-[10px] uppercase tracking-wider text-primary hover:underline">${escHtml(t('plan.expandAll'))}</button>
-    </div>
-    <div id="plan-tasks-${escHtml(rid)}" class="mt-1">${plan.tasks.map((task, i) => planTaskCard(rid, task, i)).join('')}</div>
-    ${planSection(t('plan.risks'), planBullets(plan.risks))}
-    ${planSection(t('plan.assumptions'), planBullets(plan.assumptions))}
+    ${documentBlock(data) || foldable(detail, JSON.stringify(plan), { bg: '#191c22' })}
     <!-- Only the answer is disabled once this review is over (timeout, or
          the operator has answered): the plan stays readable and its task
          cards stay foldable, which is the whole point of drawing it. -->
     <div id="hitl-controls-${escHtml(rid)}" class="mt-4 flex flex-col gap-2">
       <textarea id="hitl-feedback-${escHtml(rid)}" rows="2" placeholder="${escHtml(t('plan.feedbackPlaceholder'))}"
-        class="w-full bg-surface-container-high border border-outline-variant/20 rounded-md p-2 font-mono text-[11px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
+        class="w-full bg-surface-container-high border border-outline-variant/25 rounded-md px-2.5 py-2 text-[13px] text-on-surface placeholder:text-outline-variant focus:outline-none focus:border-primary/50"></textarea>
       <div class="flex flex-wrap gap-3">
-        <button onclick="respondHITL('${escJs(rid)}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
+        <button onclick="respondHITL('${escJs(rid)}', true)" class="flex items-center justify-center gap-2 bg-primary text-on-primary px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] shadow-lg shadow-primary/20 hover:brightness-110 active:scale-95 transition-all">
           <span class="material-symbols-outlined text-base">check_circle</span> ${escHtml(t('plan.accept'))}
         </button>
-        <button onclick="respondHITLEdit('${escJs(rid)}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-surface-container-highest transition-all">
+        <button onclick="respondHITLEdit('${escJs(rid)}')" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-on-surface px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] hover:bg-surface-container-highest transition-all">
           <span class="material-symbols-outlined text-base">edit_note</span> ${escHtml(t('plan.revise'))}
         </button>
-        <button onclick="respondHITL('${escJs(rid)}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[10px] uppercase tracking-[0.15em] hover:bg-error/10 transition-all">
+        <button onclick="respondHITL('${escJs(rid)}', false)" class="flex items-center justify-center gap-2 bg-surface-container-high border border-outline-variant/20 text-error px-4 py-2 rounded-md font-bold text-[12px] uppercase tracking-[0.08em] hover:bg-error/10 transition-all">
           <span class="material-symbols-outlined text-base">close</span> ${escHtml(t('plan.reject'))}
         </button>
       </div>

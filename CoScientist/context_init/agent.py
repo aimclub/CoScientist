@@ -8,7 +8,7 @@
      through the HITL bridge, and folds the operator's answers back onto the
      frame — untouched fields keep the agent's drafted values (soft gate);
   3. seeds the confirmed frame into the Research Context Graph (the privileged
-     init path) BEFORE the orchestrator runs, then publishes a short summary.
+     init path) BEFORE the orchestrator runs (without duplicating the frame in chat).
 
 In headless mode (no HITL handler) the base loop skips the review and step 3
 still runs — the agent's drafted frame is seeded as-is.
@@ -23,7 +23,6 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 from google.adk.agents.invocation_context import InvocationContext
 from google.adk.events.event import Event
 from google.adk.events.event_actions import EventActions
-from google.genai import types
 
 from CoScientist.context_init.commit import seed_frame
 from CoScientist.context_init.models import (
@@ -57,16 +56,33 @@ _FORM_INTRO_EN = ("Fill in the research frame. The agent fills empty fields "
                   "search, expensive or cheap experiment.")
 _HITL_MESSAGE = "Подтвердите рамку исследования перед запуском."
 _HITL_MESSAGE_EN = "Confirm the research frame before the run starts."
-_OPS_BLOCK_USAGE = ("слоты плана: одна обязательная задача на операцию; "
-                    "отчёт не входит")
-_OPS_BLOCK_USAGE_EN = ("Plan slots: one mandatory task per operation; the "
-                       "report is not one of them.")
+_OPS_BLOCK_USAGE = ("что исследование обязано дать на выходе. Это задачи "
+                    "ИССЛЕДОВАНИЯ, а не эксперимента: каждая из них "
+                    "разворачивается в один или несколько экспериментов на "
+                    "этапе планирования. Отчёт задачей не считается")
+_OPS_BLOCK_USAGE_EN = ("What the research must deliver. These are tasks of the "
+                       "RESEARCH, not of an experiment: each becomes one or "
+                       "more experiments at planning time. The report is not "
+                       "one of them.")
 _OPS_FIELD_PLACEHOLDER = {
-    "en": ("Enter one deliverable the run must produce, or leave it empty so "
-           "the agent derives the slots from the ask."),
-    "ru": ("Укажите один результат, который должен дать запуск, или оставьте "
-           "поле пустым — агент выведет слоты из запроса."),
+    "en": ("Enter one deliverable the research must produce, or leave it empty "
+           "so the agent derives the tasks from the ask."),
+    "ru": ("Укажите один результат, который должно дать исследование, или "
+           "оставьте поле пустым — агент выведет задачи из запроса."),
 }
+
+
+def _task_label(operation_id: str) -> Dict[str, str]:
+    """«Задача 1 · OP-1» — the word for the reader, the id for the plan.
+
+    The id is not decoration: the experiment planner writes it into
+    `design.operation_ref`, and the plan critic refuses a plan that leaves an
+    operation uncovered. An operator who sees «OP-1» in a plan card has to be
+    able to find it here, so it stays — behind the word that says what it is.
+    """
+    number = operation_id.split("-")[-1].strip() or "?"
+    return {"en": f"Task {number} · {operation_id}",
+            "ru": f"Задача {number} · {operation_id}"}
 
 
 def coerce_frame(value: Any) -> ResearchFrame:
@@ -104,20 +120,20 @@ def frame_to_form(frame: ResearchFrame) -> Dict[str, Any]:
     ops_fields = [
         {"name": op.operation_id, "value": op.statement,
          "status": "задано заказчиком", "open": False,
-         "label": {"en": op.operation_id, "ru": op.operation_id},
+         "label": _task_label(op.operation_id),
          "placeholder": _OPS_FIELD_PLACEHOLDER}
         for op in frame.operations
     ]
     if not ops_fields:
         ops_fields = [{
             "name": "OP-1", "value": "", "status": "не задано", "open": True,
-            "label": {"en": "OP-1", "ru": "OP-1"},
+            "label": _task_label("OP-1"),
             "placeholder": _OPS_FIELD_PLACEHOLDER,
         }]
     blocks.append({
         "title": OPS_FORM_BLOCK,
         "usage": _OPS_BLOCK_USAGE,
-        "title_i18n": {"en": "Experiment operations", "ru": OPS_FORM_BLOCK},
+        "title_i18n": {"en": "Research tasks", "ru": OPS_FORM_BLOCK},
         "usage_i18n": {"en": _OPS_BLOCK_USAGE_EN, "ru": _OPS_BLOCK_USAGE},
         "fields": ops_fields,
     })
@@ -178,7 +194,8 @@ def render_frame_summary(frame: ResearchFrame) -> str:
     if frame.operations:
         lines.append(f"✓ **{OPS_FORM_BLOCK}**: {len(frame.operations)} слот(ов)")
         for op in frame.operations:
-            lines.append(f"    - {op.operation_id}: {op.statement}")
+            lines.append(f"    - {_task_label(op.operation_id)['ru']}: "
+                         f"{op.statement}")
     return "\n".join(lines)
 
 
@@ -229,7 +246,13 @@ class ContextInitSessionAgent(SessionAgent):
             action_type=HITLAction.APPROVE,
             message=_HITL_MESSAGE,
             form=frame_to_form(frame),
-            context={"_session": {"user_id": user_id, "session_id": session_id}},
+            # `output` is what the web handler publishes as the request's
+            # document; without it the frame would be the one review with no
+            # readable body to open.
+            context={
+                "_session": {"user_id": user_id, "session_id": session_id},
+                "output": render_frame_summary(frame),
+            },
             invoked_via="internal_loop",
         )
         response = await self.hitl_handler.handle_request(request)
@@ -256,12 +279,14 @@ class ContextInitSessionAgent(SessionAgent):
 
         ok = bool(result.get("ok"))
         stats = result.get("graph_stats") or {}
-        header = ("🧭 Рамка исследования зафиксирована в графе"
-                  if ok else "⚠️ Рамку не удалось зафиксировать в графе")
-        if ok and stats:
-            header += (f" ({stats.get('nodes', 0)} узлов, "
-                       f"{stats.get('edges', 0)} рёбер).")
-        text = f"{header}\n\n{render_frame_summary(frame)}"
+        if ok:
+            logger.info(
+                "research frame seeded in graph (%d nodes, %d edges)",
+                stats.get("nodes", 0), stats.get("edges", 0),
+            )
+        else:
+            logger.warning("frame graph seeding did not succeed: %s", result)
+
         state_delta = {FRAME_STATE_KEY: frame.model_dump()}
         if ask := (frame.original_request or "").strip():
             state_delta["orchestrator_root_goal"] = ask
@@ -275,7 +300,6 @@ class ContextInitSessionAgent(SessionAgent):
             invocation_id=ctx.invocation_id,
             author=self.name,
             branch=ctx.branch,
-            content=types.Content(role="model", parts=[types.Part(text=text)]),
             actions=EventActions(state_delta=state_delta),
         )
 

@@ -69,7 +69,10 @@ defaults:
 # The manager driver (CoScientist.main) executes: pre… → root → post…
 # ─────────────────────────────────────────────────────────────────────────────
 pipeline:
-  pre: [ContextInitAgent]         # draft + confirm + seed the research frame
+  # ContextInit drafts, confirms and seeds the research frame; TZSpec writes it
+  # out as a техническое задание by GOST 19.201-78 and hands the operator the
+  # Word file. Order matters: the second reads what the first confirmed.
+  pre: [ContextInitAgent, TZSpecAgent]
   post: [ResultAggregatorAgent]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -228,6 +231,41 @@ agents:
       # `[[link1]]` inside a frame field would never be expanded.
       after_model: [expand_link_refs, sanitize_json_output]
 
+  TZSpecAgent:
+    # tz_spec_session = SessionAgent that issues the техническое задание from the
+    # frame ContextInitAgent confirmed. The sections are assembled from the frame
+    # deterministically (CoScientist/context_init/tz.py); this agent only writes
+    # the prose of the sections that already have content, and cannot fill an
+    # empty one — an invented customer or deadline would read as an obligation
+    # in a document that goes to people.
+    #
+    # No review of its own: the frame WAS the review, and a second approval
+    # window at the start of every run costs more than it gives. Revise the
+    # frame and the document is issued again.
+    class: custom:tz_spec_session
+    enabled: ${context_init.enabled}
+    description: >-
+      агент технического задания — излагает подтверждённую рамку исследования
+      как ТЗ по ГОСТ 19.201-78, сохраняет документ в Word и прикрепляет его к
+      карточке «Постановка» в графе исследования.
+    # Тот же модельный слот, что и у отчёта по ГОСТ 7.32 (LLM__NIR_MODEL): оба
+    # пишут официальный русский документ, и это ровно та работа, ради которой
+    # слот и заведён. Сортировать факты по разделам умеет любая модель; написать
+    # «требуется разработать» там, где заказчик сказал «автоматизируй», —
+    # заметно не любая, а документ уходит людям. Слот не задан — падаем на main.
+    model: nir
+    # Переформулирование, а не рассуждение: факты уже собраны и проверены
+    # оператором. Минимума хватает, чтобы выдержать регистр, и он не заставляет
+    # ждать в начале каждого прогона.
+    reasoning: low
+    prompt: tz_spec
+    output_key: tz_prose
+    output_schema: tz_prose
+    hitl: false
+    callbacks:
+      before_agent: [stage_tz_draft]
+      after_model: [sanitize_json_output]
+
   ResultAggregatorAgent:
     class: llm
     # Terminal stage of the pipeline (see top-level `pipeline.post`). Runs as the
@@ -272,11 +310,17 @@ agents:
 
   NirReportAgent:
     class: llm
-    # Off by default. A reachable normcontrol server is not a reason to spend a
-    # strong model on a 30-page document, so an operator turns this on
-    # deliberately; disabled, it is not attached to the aggregator and vanishes
-    # from its prompt.
-    enabled: ${nir_ready}
+    # Built whenever there is a normcontrol server to submit to — attachment is
+    # decided once, when the tree is assembled at import, so it cannot depend on
+    # NIR__ENABLED: that is an operator switch the web Settings modal flips per
+    # session, long after this is read.
+    #
+    # Being attached is not being used. The operator switch and the HITL answer
+    # both live in ask_nir_report, which reads settings on every call: with
+    # either one off it writes an empty {nir_block?}, the aggregator's prompt
+    # says nothing about НИР, and every nir_report_* tool refuses with
+    # «Отчёт о НИР не запрашивался оператором».
+    enabled: ${nir_buildable}
     description: >-
       Writes the GOST 7.32-2017 research report (ОТЧЁТ О НИР) from the finished
       research graph and the run's figures, and builds the DOCX through the
@@ -304,20 +348,21 @@ agents:
   HypothesesAgent:
     class: llm
     description: >-
-      generates candidate hypotheses and returns the selected hypothesis(es) to verify next 
-      the alternatives stay in the graph as postponed backlog).
+      generates the hypotheses this study will verify — as many as the run is
+      allowed to hold at once (HYPOTHESES__MAX_ACTIVE, default 1) and no more.
+      Everything it commits gets verified; it leaves no backlog behind.
     routing: >-
       when the study has no hypothesis yet — BEFORE any verification method
       runs, including when the route to an answer already looks obvious. An
       obvious route is still a claim that it will produce the result, and that
       claim is what the run is about to spend its budget on. It comes back with
-      selected hypothesis(es) — verify those; do not start the alternatives in
-      parallel unless they are among the selected set.
+      the hypotheses to verify — verify all of them; it does not hand over work
+      that is not meant to be started.
     planning: |-
       Use this FIRST on any study that has no hypothesis yet, procedural tasks included:
       one hypothesis stating what the planned pipeline will show is what makes the result
-      judgeable instead of merely delivered. It picks the single most relevant hypothesis
-      to test first, so plan ONE verification branch after it.
+      judgeable instead of merely delivered. It returns only what is to be verified now
+      — usually one hypothesis — so plan a verification branch for each one it returns.
       Decision-making and compatibility assessment based on gathered facts.
     # Ideation plus choosing what to test first: the most reasoning-bound job
     # in the system — so `high`, unless a run turns it down with
@@ -333,7 +378,11 @@ agents:
     # Declares a Work Order (what it will generate and commit) before acting.
     work_order: true
     callbacks:
-      before_agent: [before_get_task, inject_research_context, user_links]
+      # brief_hypotheses_regime reads the tool inventory the retriever/planner
+      # already collected and tells the generator which job it is doing: aim the
+      # claim at the tools in hand, or — with nothing in hand — spend the effort
+      # on judging the candidates. `{hypothesis_brief?}` in the prompt.
+      before_agent: [before_get_task, inject_research_context, brief_hypotheses_regime, user_links]
       before_model: [redact_link_urls]
       after_model: [expand_link_refs, guard_unknown_tools]
       before_tool: [resolve_link_refs]
@@ -548,9 +597,11 @@ agents:
       after_tool: [register_tool_result_links]
 
   MedicalAgent:
-    # Narrow role — switch it off with MEDICAL__ENABLED=false. The experiment
-    # module's `medical` route follows this, so nothing offers a route to an
-    # agent that is not in the tree.
+    # Narrow role — switch it off with MEDICAL__ENABLED=false or in the web
+    # settings. The experiment module's `medical` route follows this agent
+    # (state_machine.medical_route_available: planner prompt and context,
+    # critique, start_task), so nothing offers a route to an agent that is not
+    # in the tree.
     enabled: "${web.medical_agent_enabled}"
     class: llm
     description: >-

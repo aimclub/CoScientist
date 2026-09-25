@@ -8,6 +8,8 @@
   <link rel="stylesheet" href="/static/css/fonts.css" />
   <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap"
     rel="stylesheet" />
+  <!-- Theme, accent colour and UI font: applied before the first paint. -->
+  <script src="/static/js/appearance.js"></script>
   <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
@@ -20,24 +22,43 @@
       darkMode: "class",
       theme: {
         extend: {
+          // Every colour is a CSS variable (channels in main.css) so the
+          // light theme only swaps the variables, not the markup.
           colors: {
-            "primary": "#00daf3", "surface-dim": "#101319",
-            "surface-container-high": "#272a31", "outline": "#cbd5e1",
-            "surface-variant": "#32353c", "secondary": "#40e56c",
-            "secondary-container": "#02c953", "tertiary": "#eac400",
-            "outline-variant": "#94a3b8", "surface-container-low": "#191c22",
-            "on-surface": "#e1e2eb", "primary-container": "#007e8c",
-            "surface-container": "#1d2026", "surface-container-lowest": "#0b0e14",
-            "on-surface-variant": "#c2c6d8", "surface-container-highest": "#32353c",
-            "error": "#ffb4ab", "on-primary": "#00363d",
-            "surface": "#101319", "on-error": "#690005",
-            "background": "#101319", "on-background": "#e1e2eb",
-            "surface-bright": "#363940", "on-primary-container": "#e9fbff",
-            "on-error-container": "#ffdad6", "error-container": "#93000a",
+            "primary": "rgb(var(--c-primary) / <alpha-value>)",
+            "surface-dim": "rgb(var(--c-surface-dim) / <alpha-value>)",
+            "surface-container-high": "rgb(var(--c-surface-container-high) / <alpha-value>)",
+            "outline": "rgb(var(--c-outline) / <alpha-value>)",
+            "surface-variant": "rgb(var(--c-surface-variant) / <alpha-value>)",
+            "secondary": "rgb(var(--c-secondary) / <alpha-value>)",
+            "secondary-container": "rgb(var(--c-secondary-container) / <alpha-value>)",
+            "tertiary": "rgb(var(--c-tertiary) / <alpha-value>)",
+            "outline-variant": "rgb(var(--c-outline-variant) / <alpha-value>)",
+            "surface-container-low": "rgb(var(--c-surface-container-low) / <alpha-value>)",
+            "on-surface": "rgb(var(--c-on-surface) / <alpha-value>)",
+            "primary-container": "rgb(var(--c-primary-container) / <alpha-value>)",
+            "surface-container": "rgb(var(--c-surface-container) / <alpha-value>)",
+            "surface-container-lowest": "rgb(var(--c-surface-container-lowest) / <alpha-value>)",
+            "on-surface-variant": "rgb(var(--c-on-surface-variant) / <alpha-value>)",
+            "surface-container-highest": "rgb(var(--c-surface-container-highest) / <alpha-value>)",
+            "error": "rgb(var(--c-error) / <alpha-value>)",
+            "on-primary": "rgb(var(--c-on-primary) / <alpha-value>)",
+            "surface": "rgb(var(--c-surface) / <alpha-value>)",
+            "on-error": "rgb(var(--c-on-error) / <alpha-value>)",
+            "background": "rgb(var(--c-background) / <alpha-value>)",
+            "on-background": "rgb(var(--c-on-background) / <alpha-value>)",
+            "surface-bright": "rgb(var(--c-surface-bright) / <alpha-value>)",
+            "on-primary-container": "rgb(var(--c-on-primary-container) / <alpha-value>)",
+            "on-error-container": "rgb(var(--c-on-error-container) / <alpha-value>)",
+            "error-container": "rgb(var(--c-error-container) / <alpha-value>)",
           },
+          // Cyan fill reads fine on white, cyan text does not: the light
+          // theme gives text-primary a deeper shade of the same hue.
+          textColor: { "primary": "rgb(var(--c-primary-text) / <alpha-value>)" },
           fontFamily: {
-            headline: ["Source Sans 3", "sans-serif"], body: ["Source Sans 3", "sans-serif"],
-            label: ["Source Sans 3", "sans-serif"], mono: ["UI Mono", "IBM Plex Mono", "monospace"]
+            // --font-ui: Interface → Font in the settings (appearance.js).
+            headline: ["var(--font-ui)"], body: ["var(--font-ui)"],
+            label: ["var(--font-ui)"], mono: ["UI Mono", "IBM Plex Mono", "monospace"]
           }
         },
       },
@@ -50,9 +71,9 @@
 
   <!-- SideNavBar -->
   <aside id="side-nav"
-    class="w-64 h-full fixed left-0 top-0 border-r border-outline-variant/10 bg-[#191c22] flex flex-col h-screen py-6 font-headline tracking-tight z-50">
+    class="w-64 h-full fixed left-0 top-0 border-r border-outline-variant/10 bg-surface-container-low flex flex-col h-screen py-6 font-headline tracking-tight z-50">
     <div class="px-6 mb-8">
-      <h1 class="text-xl font-bold tracking-widest text-[#00daf3] uppercase">CoScientist</h1>
+      <h1 class="text-xl font-bold tracking-widest text-primary uppercase">CoScientist</h1>
       <p class="text-[10px] text-outline-variant tracking-widest mt-1" id="version-label">MAS v1.0.0</p>
     </div>
     <div class="px-6 mb-4">
@@ -115,13 +136,13 @@
 
   <!-- TopNavBar -->
   <header id="top-nav"
-    class="flex items-center justify-between px-8 py-4 ml-64 w-[calc(100%-16rem)] top-0 sticky z-50 bg-[#101319]/70 backdrop-blur-xl border-b border-outline-variant/15 shadow-[0_24px_48px_-12px_rgba(0,218,243,0.08)]">
+    class="flex items-center justify-between px-8 py-4 ml-64 w-[calc(100%-16rem)] top-0 sticky z-50 bg-background/70 backdrop-blur-xl border-b border-outline-variant/15 shadow-[0_24px_48px_-12px_rgba(0,218,243,0.08)]">
     <div class="flex items-center gap-8">
       <button type="button" id="side-nav-toggle" onclick="toggleSideNav()" title="Show/hide sidebar"
         class="text-outline-variant hover:text-primary transition-colors flex items-center">
         <span id="side-nav-toggle-icon" class="material-symbols-outlined">left_panel_open</span>
       </button>
-      <div data-i18n="nav.orchestrator" class="font-black text-[#00daf3] font-headline tracking-tighter">ORCHESTRATOR
+      <div data-i18n="nav.orchestrator" class="font-black text-primary font-headline tracking-tighter">ORCHESTRATOR
       </div>
       <div
         class="hidden md:flex items-center gap-6 font-headline text-[10px] uppercase tracking-widest font-bold">
@@ -130,6 +151,10 @@
       </div>
     </div>
     <div class="flex items-center gap-4 text-outline-variant">
+      <button type="button" id="side-rail-toggle" onclick="toggleSideRail()" title="Hide the plan column"
+        class="text-outline-variant hover:text-primary transition-colors flex items-center">
+        <span id="side-rail-toggle-icon" class="material-symbols-outlined">right_panel_close</span>
+      </button>
       <button onclick="clearChat()" title="Clear current view (history is preserved)">
         <span
           class="material-symbols-outlined cursor-pointer hover:text-primary transition-colors">delete_sweep</span>
@@ -163,11 +188,11 @@
 
       <!-- Activity Rail: Executive Fleet & Tool Execution HUD -->
       <div id="activity-rail"
-        class="hidden w-full max-w-full min-w-0 border-b border-outline-variant/15 bg-gradient-to-b from-[#11141b]/95 via-[#0d1016]/95 to-[#0b0d13]/95 backdrop-blur-xl px-4 py-2.5 space-y-2 shadow-[inset_0_1px_0_0_rgba(0,218,243,0.12),0_8px_24px_-4px_rgba(0,0,0,0.5)]">
+        class="hidden w-full max-w-full min-w-0 border-b border-outline-variant/15 bg-gradient-to-b from-surface/95 via-surface-container-lowest/95 to-surface-container-lowest/95 backdrop-blur-xl px-4 py-2.5 space-y-2 shadow-[inset_0_1px_0_0_rgba(0,218,243,0.12),0_8px_24px_-4px_rgba(0,0,0,0.5)]">
         
         <!-- Row 1: Agent Fleet -->
         <div class="flex items-center gap-2.5 w-full min-w-0">
-          <div class="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md bg-[#161a23] border border-outline-variant/15 shadow-sm">
+          <div class="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md bg-surface-container-low border border-outline-variant/15 shadow-sm">
             <span class="material-symbols-outlined text-primary text-[14px]">hub</span>
             <span data-i18n="rail.agents" class="text-[9px] font-bold font-mono tracking-widest uppercase text-on-surface-variant">Agents</span>
             <span id="activity-agents-count" class="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-primary/15 text-primary border border-primary/25">0</span>
@@ -188,10 +213,10 @@
 
         <!-- Row 2: Tool Calls -->
         <div class="flex items-center gap-2.5 w-full min-w-0 pt-1.5 border-t border-outline-variant/10">
-          <div class="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md bg-[#161a23] border border-outline-variant/15 shadow-sm">
+          <div class="flex items-center gap-1.5 shrink-0 px-2 py-1 rounded-md bg-surface-container-low border border-outline-variant/15 shadow-sm">
             <span class="material-symbols-outlined text-outline-variant text-[14px]">handyman</span>
             <span data-i18n="rail.tools" class="text-[9px] font-bold font-mono tracking-widest uppercase text-on-surface-variant">Tools</span>
-            <span id="activity-selected-agent-label" class="text-[8px] font-mono text-primary/80 font-medium truncate max-w-[100px]"></span>
+            <span id="activity-selected-agent-label" class="text-[10px] font-mono text-primary font-medium truncate max-w-[140px]"></span>
           </div>
 
           <div class="relative flex-1 min-w-0 flex items-center group/rail">
@@ -211,9 +236,9 @@
       <!-- Chat Feed -->
       <div id="chat-feed"
         class="flex-1 overflow-y-auto p-6 space-y-6 no-scrollbar bg-gradient-to-b from-transparent to-surface-container-lowest/20">
-        <div class="flex flex-col items-center justify-center h-full opacity-50">
-          <span class="material-symbols-outlined text-4xl text-primary/30 mb-3">hub</span>
-          <p data-i18n="chat.sendQuery" class="text-sm text-outline-variant font-medium">Send a query to begin
+        <div class="flex flex-col items-center justify-center h-full">
+          <span class="material-symbols-outlined text-4xl text-primary/40 mb-3">hub</span>
+          <p data-i18n="chat.sendQuery" class="text-sm text-on-surface-variant font-medium">Send a query to begin
             orchestration</p>
         </div>
       </div>
@@ -230,15 +255,15 @@
 
         <!-- Dataset Sandbox Upload Widget (Circular Progress) -->
         <div id="dataset-upload-widget"
-          class="hidden mb-3 bg-[#13151b] border border-outline-variant/15 border-l-[3px] border-l-[#00d2d3] rounded-xl p-3.5 shadow-xl transition-all">
+          class="hidden mb-3 bg-background border border-outline-variant/15 border-l-[3px] border-l-primary rounded-xl p-3.5 shadow-xl transition-all">
           <div class="flex items-center gap-3.5">
             <!-- Circular Progress Ring (Donut Chart) -->
             <div class="relative shrink-0 w-12 h-12 flex items-center justify-center">
               <svg class="w-12 h-12 transform -rotate-90" viewBox="0 0 44 44">
                 <!-- Background Ring Track -->
-                <circle cx="22" cy="22" r="18" fill="none" stroke="#252a36" stroke-width="4"></circle>
+                <circle cx="22" cy="22" r="18" fill="none" style="stroke: rgb(var(--c-surface-container-highest))" stroke-width="4"></circle>
                 <!-- Cyan Progress Arc -->
-                <circle id="dataset-upload-arc" cx="22" cy="22" r="18" fill="none" stroke="#00d2d3" stroke-width="4"
+                <circle id="dataset-upload-arc" cx="22" cy="22" r="18" fill="none" style="stroke: rgb(var(--c-primary))" stroke-width="4"
                   stroke-linecap="round" stroke-dasharray="113.097" stroke-dashoffset="62.20"
                   class="transition-all duration-300"></circle>
               </svg>
@@ -251,7 +276,7 @@
                 <span class="text-[10px] font-bold tracking-wider uppercase text-outline-variant font-mono">DATASET
                   UPLOAD</span>
                 <button type="button" id="dataset-upload-cancel-btn" onclick="cancelDatasetUpload()"
-                  class="px-2.5 py-0.5 text-[11px] font-medium bg-[#222631] hover:bg-[#2c3140] border border-outline-variant/20 rounded-md text-on-surface-variant hover:text-on-surface transition-colors">
+                  class="px-2.5 py-0.5 text-[11px] font-medium bg-surface-container-high hover:bg-surface-container-highest border border-outline-variant/20 rounded-md text-on-surface-variant hover:text-on-surface transition-colors">
                   Cancel
                 </button>
               </div>
@@ -260,7 +285,7 @@
                   Uploading: 1.2 GB / 2.5 GB
                 </span>
                 <button type="button" id="dataset-upload-details-btn" onclick="toggleDatasetUploadDetails()"
-                  class="text-xs font-medium text-[#00d2d3] hover:underline hover:text-cyan-300 transition-colors shrink-0">
+                  class="text-xs font-medium text-primary hover:underline transition-colors shrink-0">
                   Details
                 </button>
               </div>
@@ -271,7 +296,7 @@
           <div id="dataset-upload-details"
             class="hidden mt-3 pt-2.5 border-t border-outline-variant/10 text-[11px] font-mono text-outline-variant space-y-1">
             <div class="flex justify-between"><span class="text-outline-variant/70">Filename:</span><span
-                id="dataset-upload-filename" class="text-on-surface truncate max-w-[220px]">—</span></div>
+                id="dataset-upload-filename" class="text-on-surface truncate max-w-[260px]">—</span></div>
             <div class="flex justify-between"><span class="text-outline-variant/70">Speed:</span><span
                 id="dataset-upload-speed" class="text-on-surface">—</span></div>
             <div class="flex justify-between"><span class="text-outline-variant/70">ETA:</span><span
@@ -315,13 +340,66 @@
       </div>
     </section>
 
-    <!-- Right Sidebar: status panels, then the plan tracker sized to its content -->
-    <aside class="w-80 shrink-0 flex flex-col gap-4 min-h-0 overflow-y-auto no-scrollbar pb-8">
-      <!-- Top panels are capped and scroll on their own, so a long usage list
-           doesn't push the plan tracker below the fold. -->
-      <div class="shrink-0 max-h-[50vh] flex flex-col gap-4 overflow-y-auto no-scrollbar">
+    <!-- Right Sidebar. Order is by how often it is read: the plan (what the run
+         is doing) first, the pending question next, and the spend — an
+         occasional check, not a running concern — folded away at the bottom. -->
+    <!-- Drag to resize the column, double-click to put it back. -->
+    <div id="rail-grip" data-i18n-title="rail.resize" title="Drag to resize · double-click to reset"></div>
+
+    <aside id="side-rail" class="shrink-0 flex flex-col gap-3 min-h-0 overflow-y-auto no-scrollbar pb-8">
+      <!-- Document panel. There is one, deliberately: a message's "Open" button
+           puts its document here, and the next message's button replaces it.
+           Filled by doc_viewer.js; hidden until something is opened. -->
+      <section id="doc-viewer"
+        class="hidden shrink-0 flex flex-col bg-surface-container-low rounded-xl border border-outline-variant/15 overflow-hidden">
+        <header class="flex items-start gap-2 px-3.5 py-2.5 border-b border-outline-variant/15">
+          <span class="material-symbols-outlined text-[18px] text-primary shrink-0 mt-0.5">description</span>
+          <h4 id="doc-viewer-title" class="text-sm font-bold text-on-surface leading-snug min-w-0 flex-1 break-words">
+          </h4>
+          <button type="button" onclick="closeDocument()" data-i18n-title="doc.close" title="Close document"
+            class="text-outline-variant hover:text-on-surface transition-colors shrink-0">
+            <span class="material-symbols-outlined text-base">close</span>
+          </button>
+        </header>
+        <div id="doc-viewer-body" class="md-body px-3.5 py-3 overflow-y-auto max-h-[62vh]"></div>
+        <details id="doc-viewer-list" class="group border-t border-outline-variant/15">
+          <summary
+            class="flex items-center gap-2 px-3.5 py-2 cursor-pointer list-none select-none hover:bg-surface-container/60 transition-colors">
+            <span
+              class="material-symbols-outlined text-base text-outline-variant transition-transform group-open:rotate-90">chevron_right</span>
+            <span data-i18n="doc.sessionDocs"
+              class="text-xs font-bold text-on-surface-variant uppercase tracking-wider">Session documents</span>
+            <span id="doc-viewer-count" class="text-xs font-mono text-outline-variant"></span>
+          </summary>
+          <ol id="doc-viewer-items" class="px-3.5 pb-3 space-y-0.5"></ol>
+        </details>
+      </section>
+
+      <!-- Plan Tracker — task titles, their state and their sub-steps, filled
+           by plan_tracker.js. Starts hidden: it only appears once a plan exists
+           (see render() in plan_tracker.js), and sizes to its own content
+           rather than stretching to fill the column. -->
+      <div id="plan-tracker"
+        class="hidden shrink-0 flex flex-col bg-surface-container-lowest px-3.5 py-3 rounded-xl border border-outline-variant/10">
+        <div class="flex items-center justify-between gap-2 mb-2">
+          <h4 data-i18n="plan.header" class="text-xs font-bold text-on-surface-variant uppercase tracking-wider">Plan
+          </h4>
+          <div class="flex items-center gap-2">
+            <span id="plan-tracker-count" class="text-xs font-mono font-bold text-primary">0/0</span>
+            <button type="button" onclick="openRoadmapEditor()" data-i18n-title="plan.open" title="Open roadmap"
+              class="text-outline-variant hover:text-primary transition-colors flex items-center">
+              <span class="material-symbols-outlined text-base">open_in_full</span>
+            </button>
+          </div>
+        </div>
+        <div class="h-1 w-full rounded-full bg-surface-container-high overflow-hidden mb-2 shrink-0">
+          <div id="plan-tracker-bar" class="h-full bg-secondary transition-all duration-500" style="width:0%"></div>
+        </div>
+        <ol id="plan-tracker-list" class="relative max-h-[45vh] overflow-y-auto space-y-px -mr-2 pr-1"></ol>
+      </div>
+
       <!-- Telemetry — a few recent lines only; kept compact, hidden by default -->
-      <div class="hidden bg-surface-container-lowest px-4 py-3 rounded-xl border border-outline-variant/10 overflow-hidden relative">
+      <div class="hidden shrink-0 bg-surface-container-lowest px-4 py-3 rounded-xl border border-outline-variant/10 overflow-hidden relative">
         <div class="absolute top-3 right-3">
           <span id="telemetry-live"
             class="text-[8px] font-bold text-outline-variant font-mono tracking-tighter uppercase flex items-center gap-1">
@@ -336,53 +414,35 @@
         </div>
       </div>
 
-      <!-- Usage & Cost — what this session has spent, by agent -->
-      <div class="bg-surface-container-lowest p-4 rounded-xl border border-outline-variant/10 overflow-hidden">
-        <div class="flex items-baseline justify-between mb-2">
-          <h4 data-i18n="usage.header" class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">
+      <!-- Usage & Cost — what this session has spent, by agent. Folded by
+           default: the two numbers worth watching (total and elapsed) stay on
+           the summary row, so folding costs nothing and the breakdown is one
+           click away. <details> carries the disclosure semantics itself, so
+           the state is keyboard- and screen-reader-correct for free; the JS
+           only remembers the choice across reloads. -->
+      <details id="usage-panel"
+        class="group shrink-0 mt-auto bg-surface-container-lowest rounded-xl border border-outline-variant/10 overflow-hidden">
+        <summary
+          class="flex items-center gap-2 px-4 py-2.5 cursor-pointer list-none select-none hover:bg-surface-container-low/60 transition-colors">
+          <span
+            class="material-symbols-outlined text-base text-outline-variant transition-transform group-open:rotate-90">chevron_right</span>
+          <h4 data-i18n="usage.header" class="text-xs font-bold text-on-surface-variant uppercase tracking-wider">
             Usage &amp; Cost</h4>
-          <span id="metrics-total" class="text-sm font-mono font-bold text-primary">$0.0000</span>
-        </div>
-        <div class="flex items-center justify-between flex-wrap gap-x-2 gap-y-1 text-[9px] font-mono text-outline-variant mb-2">
-          <div id="metrics-summary">no model calls yet</div>
-          <div id="metrics-duration-wrap" class="flex items-center gap-1 font-mono text-outline-variant shrink-0" title="Execution time">
+          <span class="flex-1"></span>
+          <div id="metrics-duration-wrap" class="flex items-center gap-1 text-xs font-mono text-outline-variant shrink-0"
+            data-i18n-title="usage.duration" title="Run duration">
             <span id="metrics-duration-dot" class="hidden w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></span>
-            <span class="material-symbols-outlined text-[11px] text-outline-variant">schedule</span>
+            <span class="material-symbols-outlined text-[13px] text-outline-variant">schedule</span>
             <span id="metrics-duration" class="font-bold">00:00</span>
           </div>
+          <span id="metrics-total" class="text-sm font-mono font-bold text-primary shrink-0">$0.0000</span>
+        </summary>
+        <div class="px-4 pb-3 pt-1 border-t border-outline-variant/10">
+          <div id="metrics-summary" class="text-xs font-mono text-outline-variant mb-2">no model calls yet</div>
+          <div id="metrics-agents" class="space-y-1 font-mono text-xs max-h-64 overflow-y-auto no-scrollbar"></div>
+          <div id="metrics-note" class="hidden text-[11px] font-mono text-error/70 mt-2 leading-relaxed"></div>
         </div>
-        <div id="metrics-agents" class="space-y-1 font-mono text-[9px] max-h-64 overflow-y-auto no-scrollbar"></div>
-        <div id="metrics-note" class="hidden text-[8px] font-mono text-error/70 mt-2 leading-relaxed"></div>
-      </div>
-
-      <!-- HITL Pending -->
-      <div id="hitl-panel" class="hidden">
-        <!-- Filled dynamically -->
-      </div>
-      </div>
-
-      <!-- Plan Tracker — task titles and their state, filled by plan_tracker.js.
-           Starts hidden: it only appears once a plan exists (see render() in
-           plan_tracker.js), and sizes to its own content rather than
-           stretching to fill the column. -->
-      <div id="plan-tracker"
-        class="hidden shrink-0 flex flex-col bg-surface-container-lowest px-4 py-3 rounded-xl border border-outline-variant/10">
-        <div class="flex items-center justify-between gap-2 mb-2">
-          <h4 data-i18n="plan.header" class="text-[10px] font-bold text-outline-variant uppercase tracking-widest">Plan
-          </h4>
-          <div class="flex items-center gap-2">
-            <span id="plan-tracker-count" class="text-[10px] font-mono font-bold text-primary">0/0</span>
-            <button type="button" onclick="openRoadmapEditor()" data-i18n-title="plan.open" title="Open roadmap"
-              class="text-outline-variant hover:text-primary transition-colors flex items-center">
-              <span class="material-symbols-outlined text-sm">open_in_full</span>
-            </button>
-          </div>
-        </div>
-        <div class="h-1 w-full rounded-full bg-surface-container-high overflow-hidden mb-2 shrink-0">
-          <div id="plan-tracker-bar" class="h-full bg-secondary transition-all duration-500" style="width:0%"></div>
-        </div>
-        <ol id="plan-tracker-list" class="relative max-h-72 overflow-y-auto space-y-0.5 -mr-2 pr-1"></ol>
-      </div>
+      </details>
     </aside>
   </main>
 
@@ -857,6 +917,7 @@
   <script src="/static/js/i18n.js"></script>
   <script src="/static/js/activity_rail.js"></script>
   <script src="/static/js/chat.js"></script>
+  <script src="/static/js/doc_viewer.js"></script>
   <script src="/static/js/hitl.js"></script>
   <script src="/static/js/telemetry.js"></script>
   <script src="/static/js/sessions.js"></script>

@@ -426,7 +426,7 @@ def test_expected_artifact_role_is_closed_enum_and_image_artifacts_need_tool_mim
     ]
     critique = critique_plan(
         plan,
-        settings=ExperimentsSettings(),
+        settings=ExperimentsSettings(route_fedot=True),
         available_tools=inventory,
     )
     # Soft advisory: media/role mismatch must not force plan revision loops.

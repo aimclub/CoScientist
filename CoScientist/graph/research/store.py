@@ -40,6 +40,12 @@ logger = logging.getLogger(__name__)
 
 _REF_RE = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
 _ATTR_CHAR_CAP = 2000
+#: The write-up is the one attribute meant to be read at length, so it is not
+#: held to the cap every other attribute is. Still bounded: `to_view` ships
+#: every node on the page's poll, and an unbounded document there is bandwidth
+#: spent once a second. The file itself is attached beside the node, so the cap
+#: costs a reader nothing.
+_REPORT_CHAR_CAP = 120_000
 _COMMIT_HINT = ("Fix the listed items and call research_commit again. "
                 "NOTHING from this call was saved.")
 
@@ -140,16 +146,26 @@ _STATUS_WORDS = {
     "formulated": "предложена", "under_verification": "проверяется",
     "confirmed": "подтверждена", "refuted": "опровергнута",
     "inconclusive": "проверена — без ответа", "postponed": "отложена",
-    "obtained": "получено", "validated": "проверено", "rejected": "отклонено",
+    # An observation nobody has weighed yet is not a finished thing: it is
+    # waiting to be judged, and the card says so rather than announcing a
+    # result. Its verdicts keep their own words below.
+    "obtained": "проверяется", "validated": "проверено", "rejected": "отклонено",
     "planned": "запланирован", "running": "выполняется", "done": "выполнен",
     "failed": "не удался", "not_met": "ещё не выполнен", "met": "выполнен",
+    # A method's own words — see NODE_TYPES["VerificationMethod"] for why it
+    # has a vocabulary of its own rather than a task's.
+    "proposed": "предложен", "used": "использован",
+    "not_used": "не использован",
     "available": "доступен", "exhausted": "исчерпан",
     "needs_adaptation": "нужна доработка", "being_created": "создаётся",
     "creation_failed": "создать не удалось",
     "draft": "черновик", "approved": "утверждён", "created": "записан",
     "active": "действует", "derived": "сводка",
-    # A plan step's own states, from the task tracker.
-    "todo": "не начат", "in_progress": "в работе", "blocked": "заблокирован",
+    # A plan step's own states, from the task tracker. `in_progress` says the
+    # same thing an experiment task's `running` says, and is worded the same
+    # way: the reader is looking for what is happening NOW, and two words for
+    # one fact made them hunt for a difference that is not there.
+    "todo": "не начат", "in_progress": "выполняется", "blocked": "заблокирован",
 }
 
 _FIELD_WORDS = {
@@ -172,7 +188,178 @@ _FIELD_WORDS = {
 }
 
 #: Never shown: bookkeeping the reader has no use for.
-_HIDDEN_FIELDS = {"_provenance", "selected", "display"}
+_HIDDEN_FIELDS = {"_provenance", "selected", "display",
+                  "contributors", "contributors_more",
+                  "report_artifact_id", "report_stamp", "report_lang"}
+
+#: Never shipped to an AGENT either. `get_context_slice` renders each node as
+#: 240 characters of its attrs dict, which is the whole of what a worker is
+#: told about its neighbours; a participation list would eat that window and
+#: hide the node's actual content behind the names of who touched it.
+_AGENT_HIDDEN = {"contributors", "contributors_more", "_provenance",
+                 "report_artifact_id", "report_stamp", "report_lang"}
+
+
+#: One recorded act of participation. `assignee` is the only basis that is an
+#: INTENTION — the plan named someone — and every other is something the system
+#: watched happen. The panel is required to draw that difference, which is the
+#: whole reason a basis is stored instead of a bare list of names.
+CONTRIB_BASES = ("commit", "status", "delegation", "provenance",
+                 "work_order", "route", "assignee")
+#: Observed, as opposed to merely planned.
+CONTRIB_OBSERVED = frozenset(CONTRIB_BASES) - {"assignee"}
+_MAX_CONTRIBUTORS = 40
+
+#: Sources that write on someone's behalf rather than taking part. A mirror
+#: writes every node of its kind in the graph, so crediting it would say the
+#: same non-agent participated in everything — which is no information at all.
+#: `ExperimentModule` and `ValidatorAgent` are NOT here: they are real actors.
+_MACHINE_SOURCES = frozenset({
+    "plan-mirror", "experiment-plan-mirror", "graph-maintainer",
+    "report-writer", "node-report", "paper-linker",
+})
+
+
+def _strip_reserved(attrs: Dict[str, Any], where: str, warnings: List[str],
+                    allow: bool = False) -> Dict[str, Any]:
+    """Drop the attributes the graph writes about a node, not the ones it claims.
+
+    Dropped rather than refused: the rest of the commit is worth more than the
+    key, and an agent that echoes back a `contributors` list it saw in its
+    context slice should not lose its evidence over it. `schema.RESERVED_ATTRS`
+    says why each one is reserved.
+    """
+    if allow:
+        return attrs
+    taken = [k for k in attrs if k in schema.RESERVED_ATTRS]
+    if not taken:
+        return attrs
+    warnings.append(
+        f"{where}: {', '.join(sorted(taken))} "
+        f"{'is' if len(taken) == 1 else 'are'} written by the graph itself and "
+        f"cannot be set from a commit — the rest of this entry was applied.")
+    return {k: v for k, v in attrs.items() if k not in schema.RESERVED_ATTRS}
+
+
+#: How many instruments a method's card names. The one authority: the card
+#: renders the whole string it is sent, so a second, smaller cap in the page
+#: meant the tail was polled to the browser every 1.5 s and drawn nowhere. The
+#: Tools a method `uses` are folded onto it as chips as well, and the panel
+#: lists those in full — so nothing here is the only place a name appears.
+_MAX_INSTRUMENTS = 8
+
+#: What a method's status used to be called, and what it says now. A study
+#: written before the vocabulary changed does not hold unknown statuses — it
+#: holds statuses worded as a task's, and this is the reading of them.
+#: Re-spoken on LOAD rather than by a migration script: a graph arrives from
+#: three directions (the live session file, an imported bundle, an archived
+#: study) and the loader is the one place all three pass through. Without it
+#: every stored method freezes: `validate_transition` reads `from` off the
+#: node, and no pair starting at `planned` exists any more.
+_LEGACY_METHOD_STATUS = {"planned": "proposed", "running": "proposed",
+                         "done": "used", "failed": "not_used"}
+
+
+def _respeak_method_status(node: Dict[str, Any]) -> None:
+    """Re-word one stored method, and its trail, in today's vocabulary."""
+    if not isinstance(node, dict) or node.get("type") != "VerificationMethod":
+        return
+    node["status"] = _LEGACY_METHOD_STATUS.get(node.get("status"),
+                                               node.get("status"))
+    history = node.get("status_history")
+    if not isinstance(history, list):
+        return
+    trail: List[Dict[str, Any]] = []
+    for entry in history:
+        if not isinstance(entry, dict):
+            trail.append(entry)
+            continue
+        moved = dict(entry)
+        for side in ("from", "to"):
+            if moved.get(side) in _LEGACY_METHOD_STATUS:
+                moved[side] = _LEGACY_METHOD_STATUS[moved[side]]
+        trail.append(moved)
+    # Every entry kept, including the ones that now read as a move from a
+    # status to itself (`planned → running` becomes `proposed → proposed`).
+    # Dropping those was tidier to look at and wrong: the entry carries its own
+    # SOURCE and its own REASON, `_save` writes the shortened trail straight
+    # back over the file, and there is no second copy — so across the studies
+    # on disk it would have deleted 46 transitions, 41 of them with a written
+    # reason, and four that were the only record that a particular agent had
+    # touched the method at all. A row that says an agent noted something
+    # without moving the state is still the record of what it did.
+    node["status_history"] = trail
+
+
+def _named_instruments(value: Any) -> List[str]:
+    """Instrument names out of whatever an author wrote them as.
+
+    The same list reaches the graph as a list, as a comma string and as a
+    semicolon string depending on who wrote it, and a method that names its
+    instruments in the shape the other writer uses is not a method that names
+    none.
+    """
+    if value in (None, "", [], {}):
+        return []
+    if isinstance(value, (list, tuple, set)):
+        parts: List[str] = []
+        for item in value:
+            parts.extend(_named_instruments(item))
+        return parts
+    if isinstance(value, dict):
+        return _mcp_instruments([value])
+    return [p.strip() for p in re.split(r"[;,\n]", str(value)) if p.strip()]
+
+
+def _mcp_instruments(servers: Any) -> List[str]:
+    """`[{"name": "tox", "tools": ["predict_ld50"]}]` → `["tox:predict_ld50"]`.
+
+    This is where the approved experiment plan already records which tools a
+    method will call, and until now the card could not read it: the reader saw
+    a method with no instrument beside a run that had called two.
+    """
+    out: List[str] = []
+    if not isinstance(servers, (list, tuple)):
+        return out
+    for server in servers:
+        if not isinstance(server, dict):
+            out.extend(_named_instruments(server))
+            continue
+        name = str(server.get("name") or server.get("server") or "").strip()
+        tools = [str(t).strip() for t in (server.get("tools") or [])
+                 if str(t).strip()]
+        if name and tools:
+            out.extend(f"{name}:{tool}" for tool in tools)
+        elif name or tools:
+            out.extend([name] if name else tools)
+    return out
+
+
+def _one_name_each(names: List[str]) -> List[str]:
+    """One entry per instrument, whichever way each source named it.
+
+    The same tool arrives twice with two spellings — `uses` gives the Tool
+    node's bare name (`predict_ld50`) and the approved plan gives it qualified
+    (`heracleum-tox:predict_ld50`) — and a card listing both says the method
+    ran two instruments. The qualified form wins: it says which server, which
+    is the part a reader cannot reconstruct. Two servers offering a tool of the
+    same name stay two entries, because neither of them is bare.
+    """
+    out: List[str] = []
+    qualified = {n.split(":")[-1].strip().lower() for n in names
+                 if n and ":" in n}
+    taken: set = set()
+    for name in names:
+        clean = (name or "").strip()
+        key = clean.lower()
+        if not clean or key in taken:
+            continue
+        # A bare name the qualified list already accounts for is the same tool.
+        if ":" not in clean and key in qualified:
+            continue
+        taken.add(key)
+        out.append(clean)
+    return out
 
 
 def _headline(kind: str, attrs: Dict[str, Any]) -> str:
@@ -190,6 +377,18 @@ def _headline(kind: str, attrs: Dict[str, Any]) -> str:
                 return str(value).strip()
         return ""
 
+    if kind == "Report":
+        # The card is a title, the panel is the document. Without this the whole
+        # write-up becomes the label and the card is unreadable.
+        title = text("title", "name")
+        if title:
+            return _short(title, 120)
+        for line in str(attrs.get("content") or "").splitlines():
+            if line.strip().startswith("#"):
+                return _short(line.lstrip("# ").strip(), 120)
+            if line.strip():
+                return _short(line.strip(), 120)
+        return "Результаты исследования"
     if kind == "Resource":
         left, total = attrs.get("remaining"), attrs.get("limit")
         unit = text("resource_type")
@@ -230,7 +429,13 @@ def _headline(kind: str, attrs: Dict[str, Any]) -> str:
         if named:
             return named
     elif kind == "VerificationMethod":
-        described = text("description", "procedure", "method_type")
+        # `name` before `procedure`, and both before `method_type`: the
+        # experiment module writes a title and no description, so with
+        # `method_type` standing second every method it published drew as the
+        # single word "computational" — twenty-three cards on one canvas, all
+        # with the same headline, none of them saying what it was a method OF.
+        described = text("description", "name", "label", "experiment_question",
+                         "procedure", "method_type")
         if described:
             return described
     elif kind == "Conclusion":
@@ -254,12 +459,19 @@ def _headline(kind: str, attrs: Dict[str, Any]) -> str:
 #: Keys a headline already speaks for, per type; repeating them underneath is
 #: the same sentence twice.
 _CONSUMED_BY_HEADLINE = {
+    # The body is the card's whole point and the panel already shows it; listing
+    # it again under details would print the report twice.
+    "Report": {"content"},
     "Resource": {"resource_type", "remaining", "limit"},
     "EmpiricalBase": {"base_type", "volume", "name", "description"},
     "ConfirmationCriteria": {"threshold", "thresholds", "criteria", "content",
                              "confirmation_criteria", "confirm_refute_rule",
                              "success_metric", "rule", "description"},
     "Tool": {"name", "description"},
+    # Whichever of the two supplied the headline, the other is the same
+    # sentence: an agent writes `description` and the experiment module writes
+    # `name`, never both.
+    "VerificationMethod": {"description", "name", "label"},
     "Conclusion": {"synthesis", "content", "description"},
     "Evidence": {"content", "description", "finding", "summary"},
 }
@@ -308,10 +520,13 @@ def _fields(attrs: Dict[str, Any], headline: str,
 #: reader cannot see what was intended and what came of it.
 _STORY_TYPES = ("ResearchQuestion", "Hypothesis", "VerificationMethod",
                 "Evidence", "Conclusion", "Framing", "Outcome", "PlanStep",
-                "ExperimentTask")
+                "ExperimentTask", "Report")
 #: Products of one finding — they belong to whatever they were derived from.
+#: `Report` is NOT among them: folded, the write-up would have become the label
+#: of an attachment chip on the Outcome card, which is where an 18 KB document
+#: goes to be unreadable. It gets a card, and the panel renders its markdown.
 _ARTIFACT_FOLD_TYPES = ("CodeArtifact", "GeneratedData", "Spec",
-                        "EfficiencyJustification", "Report", "Publication")
+                        "EfficiencyJustification", "Publication")
 #: The framing a study starts from: the context star.
 _FRAME_FOLD_TYPES = ("Constraint", "Resource", "EmpiricalBase", "CostModel",
                      "EfficiencyMetric")
@@ -363,7 +578,7 @@ _STAGE_BY_TYPE = {
     # experiment beside it, not the claim itself.
     "Hypothesis": "hypotheses", "ConfirmationCriteria": "hypotheses",
     "VerificationMethod": "experiment", "Evidence": "experiment",
-    "Conclusion": "report", "Outcome": "report",
+    "Conclusion": "report", "Outcome": "report", "Report": "report",
 }
 #: Subtypes and method types that mean "read", not "run". Whole tokens, never
 #: substrings: the schema allows Evidence subtypes literature / experimental /
@@ -415,6 +630,88 @@ _REPORTING_AGENTS = {"ResultAggregatorAgent"}
 #: The bar itself, as opposed to the prose around it. Once a measurement is
 #: aimed at a criterion these stop being editable: a threshold that follows the
 #: result is a result with extra steps.
+#: What makes two nodes of one type the SAME node to whoever reads the graph:
+#: the free-text field the card is built from, tried in order. This is not
+#: `_headline` — that one falls back to whatever key the agent invented, which
+#: is right for DISPLAY and wrong for identity. Enum-ish fields are absent on
+#: purpose: two methods both declaring `method_type: computational` are not one
+#: method, and «dataset» is not the name of a dataset.
+#:
+#: A type that is missing here, or whose fields the draft leaves empty, has no
+#: identity the store can judge and is simply created.
+_IDENTITY_ATTRS: Dict[str, Tuple[str, ...]] = {
+    "ResearchQuestion": ("formulation",),
+    "Hypothesis": ("formulation",),
+    "PlanStep": ("title",),
+    # The plan's own id for the task. An id, not a sentence — two drafts under
+    # one EXP id are one task however the title was reworded that turn. No
+    # fallback to the title: two tasks may legitimately be titled the same.
+    "ExperimentTask": ("experiment_task_id",),
+}
+
+#: Types deliberately NOT above, and why — this list is the rule, not an
+#: oversight, and a type joins it only with a reason of the same kind.
+#:
+#: A sentence is an identity only where a node IS its sentence. It is not one
+#: where the node belongs to something else:
+#:   * `ConfirmationCriteria` — a bar («p < 0.05») says nothing about WHICH
+#:     hypothesis it is the bar for. Keyed on the threshold alone, a criterion
+#:     written for H2 was swallowed by H1's and both `formulated_for` edges
+#:     landed on one node, so meeting the bar for one claim met it for the
+#:     other.
+#:   * `Conclusion` — the judge's verdict sentence repeats verbatim
+#:     («Данных недостаточно для однозначного вывода.»), and the second
+#:     hypothesis judged would have overwritten the first one's card.
+#:   * `Evidence` — two measurements can read alike and still be two
+#:     measurements, each produced by a different method.
+#: nor where the text is a name that is only unique in a context the store
+#: cannot see:
+#:   * `Tool` — «search» is an ordinary MCP tool name, and two servers offering
+#:     one collapsed into a single card whose `location` was the wrong server.
+#:   * `EmpiricalBase`, `Constraint` — two rows of a confirmed research frame
+#:     may carry the same text under different headings, and the frame means
+#:     both.
+#:   * `VerificationMethod` — two methods can share a one-line description and
+#:     differ entirely in `procedure`.
+#: The remaining types (CodeArtifact, GeneratedData, Report, …) are left out
+#: for want of a measured case: a duplicate there has never been reported, and
+#: a rule that has not been needed is a rule that has not been tested.
+
+
+def _name_every_alias(echo: Dict[str, Any], aliases: Any) -> None:
+    """Say which refs ended up on this node, when more than one did.
+
+    Two drafts of one node — the same sentence written twice, or a plan that
+    names one tool from two servers — are recorded once, and the echo used to
+    name only the ref written on the draft that survived. A caller rebuilding
+    a ref->id map from the answer then lost the other ref and, with it,
+    whatever it was bookkeeping under it. `ref` stays as it was so nothing
+    reading it has to change.
+    """
+    named = sorted(a for a in (aliases or ()) if a)
+    if len(named) > 1:
+        echo["refs"] = named
+
+
+def _identity_text(ntype: str, attrs: Dict[str, Any]) -> str:
+    """The words that make this node itself, or "" when it has none.
+
+    Compared as the store will HOLD it, not as the caller wrote it: a long
+    attribute is capped by `_truncate_attrs` on the way in, so a raw draft and
+    its own stored copy are different strings. Keyed on the raw text, a
+    formulation over the cap could never match its own twin and every resend
+    made another node — precisely the case this is here to stop.
+    """
+    for key in _IDENTITY_ATTRS.get(ntype, ()):
+        raw = str(attrs.get(key) or "")
+        if not raw.strip():
+            continue
+        if len(raw) > _ATTR_CHAR_CAP:
+            raw = raw[:_ATTR_CHAR_CAP] + "…[truncated]"
+        return " ".join(raw.split()).casefold()
+    return ""
+
+
 _BAR_ATTRS = frozenset({"threshold", "confirmations_needed", "reproducibility"})
 #: Edges by which a piece of Evidence is attached to a hypothesis. The neutral
 #: `relates_to` counts: the store writes it itself when a worker records a
@@ -439,7 +736,7 @@ _REASON_ATTRS = ("failure_reason", "inconclusive_reason", "not_tested_reason",
                  "postponed_reason")
 #: Outcomes a reader will ask "why" about, and deserves an answer to.
 _UNRESOLVED_STATUSES = {"failed", "refuted", "inconclusive", "rejected",
-                        "creation_failed", "postponed"}
+                        "creation_failed", "postponed", "not_used"}
 #: Verdict on the superseded hypothesis -> how the next one came about.
 _ORIGIN_BY_VERDICT = {"refuted": "modified", "confirmed": "refined",
                       "inconclusive": "retried"}
@@ -466,14 +763,40 @@ def _why(attrs: Dict[str, Any], history: List[Dict[str, Any]]) -> str:
     return ""
 
 
-def _href(kind: str, attrs: Dict[str, Any]) -> str:
-    """Where a folded artifact actually is, so the chip can be opened."""
-    keys = ("location", "path", "uri") if kind == "Tool" else (
-        "path", "uri", "source_ref", "location")
+def _href(kind: str, attrs: Dict[str, Any], scope: Optional[Tuple[str, str]] = None) -> str:
+    """A link the chip can actually open, or "" when there is none.
+
+    Returning "" is the point. This used to hand back whatever string the attr
+    held, so a ``GeneratedData`` node whose ``path`` was
+    ``D:\\projects26\\...\\clusters.json`` rendered as an anchor that navigates
+    nowhere — in one real session, twelve of twelve attachments looked like
+    that. An artifact is openable when it was mirrored (``artifact_id``) or
+    lives in S3; a bare local path is a fact about this machine, and the panel
+    shows it as a field instead.
+    """
+    from CoScientist.utils.report_links import resolve_ref
+
+    # `doi` and `pmcid` sit before `source_ref`: they are the resolved citation
+    # the graph wrote, and `source_ref` is the prose the agent wrote — which may
+    # name three sources and open none of them.
+    keys = ("session_artifact_id", "location", "path", "uri") if kind == "Tool" else (
+        "session_artifact_id", "path", "uri", "doi", "pmcid", "source_ref",
+        "location")
     for key in keys:
         value = attrs.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
+        if not isinstance(value, str) or not value.strip():
+            continue
+        # `session_artifact_id` holds a bare id — and only ours. The experiment
+        # runtime's `artifact_id` is a different namespace entirely and is not
+        # consulted here; treating it as ours pointed a chip at a file that was
+        # never stored under that name.
+        candidate = (
+            f"cos-artifact:{value.strip()}"
+            if key == "session_artifact_id" else value.strip()
+        )
+        resolved = resolve_ref(candidate, scope)
+        if resolved:
+            return resolved
     return ""
 
 
@@ -629,8 +952,19 @@ def _fold_plan(raw_nodes: Dict[str, Dict[str, Any]],
         if kind in _ARTIFACT_FOLD_TYPES:
             # Whatever it was derived from carries it; a product of the study as
             # a whole (a report nobody linked) belongs to the outcome.
-            place(nid, [v for t, v in out.get(nid, []) if t == "derived_from"],
-                  "attachment", OUTCOME_ID)
+            #
+            # Except the one artifact that exists before there is an outcome:
+            # the техническое задание, written from the confirmed frame. It is
+            # about the setting, so it belongs on the setting's card — and it
+            # is the only way a reader can open the document at all, since the
+            # panel makes a link out of an attachment and inert text out of an
+            # attribute.
+            hosts = [v for t, v in out.get(nid, []) if t == "derived_from"]
+            fallback = OUTCOME_ID
+            if kind == "Spec" and all(types.get(v) == "ResearchQuestion"
+                                      for v in hosts):
+                hosts, fallback = [], FRAME_ID
+            place(nid, hosts, "attachment", fallback)
         elif kind == "Tool":
             hosts = [u for t, u in inc.get(nid, []) if t == "uses"]
             for t, u in inc.get(nid, []):
@@ -648,23 +982,167 @@ def _fold_plan(raw_nodes: Dict[str, Dict[str, Any]],
     return host, carried, hosts_of
 
 
-def _folded_view(nid: str, data: Dict[str, Any]) -> Dict[str, Any]:
+def _readable_body(content: Any, scope: Optional[Tuple[str, str]] = None) -> str:
+    """A Report node's markdown, with its artifact references made openable.
+
+    Capped the way it always was — the card rides along on a poll — and the cap
+    is applied AFTER resolution so a reference is never cut in half.
+    """
+    text = str(content or "")
+    if not text:
+        return ""
+    try:
+        from CoScientist.utils.report_links import resolve_artifact_refs
+
+        text = resolve_artifact_refs(text, scope)
+    except Exception:  # noqa: BLE001 — the document outranks one link
+        pass
+    return text[:_REPORT_CHAR_CAP]
+
+
+#: Node kinds whose headline is supposed to NAME A FILE, and may therefore be
+#: replaced by the name of the file actually stored. A ``Tool`` also carries a
+#: ``session_artifact_id`` and is deliberately absent: its headline is the
+#: tool's name, and swapping that for a file name would say less, not more.
+_NAMED_BY_THEIR_FILE = frozenset({"CodeArtifact", "GeneratedData"})
+
+
+def _stored_name(kind: str, attrs: Dict[str, Any],
+                 scope: Optional[Tuple[str, str]] = None) -> str:
+    """The real file name behind this node's artifact, or "" when there is none.
+
+    Only ``session_artifact_id`` is consulted: it is the one attr that names a
+    file this session actually holds, so it is the one whose name we can state
+    as a fact rather than as whatever the plan hoped the file would be called.
+    """
+    if kind not in _NAMED_BY_THEIR_FILE:
+        return ""
+    aid = attrs.get("session_artifact_id")
+    if not isinstance(aid, str) or not aid.strip() or not scope:
+        return ""
+    try:
+        from CoScientist.utils.report_links import artifact_citation
+
+        citation = artifact_citation(scope, aid.strip())
+        return citation["name"] if citation else ""
+    except Exception:  # noqa: BLE001 — a label is not worth a failed render
+        return ""
+
+
+def _folded_view(nid: str, data: Dict[str, Any],
+                 scope: Optional[Tuple[str, str]] = None) -> Dict[str, Any]:
     """A folded node as it appears on the card that carries it."""
     attrs = data.get("attrs") or {}
     kind = data.get("type", "?")
     headline = _headline(kind, attrs)
     status = data.get("status", "")
+    href = _href(kind, attrs, scope)
+    # Label and target from ONE record, whenever there is a record to read.
+    # They used to be independent lookups — `description` for the chip's text,
+    # `session_artifact_id` for its href — and a live session shows what that
+    # costs: a chip reading `metabolite_smiles.json` that downloads a PDF. The
+    # description stays visible as a field, so nothing is hidden, but the name
+    # next to a link is now the name of the file behind it.
+    stored_name = _stored_name(kind, attrs, scope)
+    label = stored_name or headline
     return {
         "id": nid,
         "kind": kind.lower(),
         "type_word": _KIND_WORDS.get(kind, kind),
-        "label": headline,
-        "href": _href(kind, attrs),
-        "fields": _fields(attrs, headline, kind),
+        "label": label,
+        "href": href,
+        # `label`, not `headline`: what the headline no longer says has to be
+        # visible somewhere, so a description the plan wrote and the file did
+        # not match reappears as a field instead of vanishing.
+        "fields": _fields(attrs, label, kind),
         "status": status,
         "status_word": _STATUS_WORDS.get(status, status),
         "source": data.get("source", ""),
     }
+
+
+def _own_artifact(nid: str, attrs: Dict[str, Any],
+                  scope: Optional[Tuple[str, str]] = None) -> Optional[Dict[str, Any]]:
+    """The node's OWN file, when this session holds it.
+
+    `attachments` were only ever built from the nodes a card folds in, so an
+    Evidence citing a paper the run downloaded — or a Report whose markdown is
+    stored — offered no way to open it. `_href` already knew how; nothing was
+    asking it about the node itself.
+
+    Returns None when the bytes are not ours, on the rule `_href` follows: a
+    link that opens nothing is worse than no link.
+    """
+    aid = attrs.get("session_artifact_id")
+    if not isinstance(aid, str) or not aid.strip() or not scope:
+        return None
+    try:
+        from CoScientist.utils.report_links import artifact_citation
+
+        citation = artifact_citation(scope, aid.strip())
+    except Exception:  # noqa: BLE001 — an attachment is not worth a failed render
+        return None
+    if not citation or not citation.get("href"):
+        return None
+    return {
+        # Suffixed on purpose: the panel indexes attachments by id, and a folded
+        # child is keyed by its own node id. A bare `nid` would collide with the
+        # card that carries it.
+        "id": f"{nid}#file",
+        "kind": str(citation.get("kind") or "file"),
+        "type_word": "",
+        # The name of the file behind the link, for the reason `_folded_view`
+        # gives: a row that says one thing and downloads another is a trap.
+        "label": citation.get("name") or aid.strip(),
+        "href": citation["href"],
+        "fields": {},
+        "status": "",
+        "status_word": "",
+        "source": "",
+    }
+
+
+def _node_report_body(attrs: Dict[str, Any],
+                      scope: Optional[Tuple[str, str]] = None) -> str:
+    """The node's write-up, read back from the store and made openable.
+
+    References are resolved HERE rather than when the report was written, for
+    the reason `_readable_body` gives about a Report: the document keeps the
+    session-free form, so an imported bundle resolves its files under whatever
+    scope is reading.
+    """
+    aid = attrs.get("report_artifact_id")
+    if not isinstance(aid, str) or not aid.strip() or not scope:
+        return ""
+    try:
+        from CoScientist.reporting import session_files
+
+        path = session_files.resolve_path(scope, aid.strip())
+        if path is None:
+            return ""
+        return _readable_body(path.read_text(encoding="utf-8"), scope)
+    except Exception:  # noqa: BLE001 — a missing write-up is not a failed render
+        return ""
+
+
+def _contributors_view(attrs: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """The participation record as the panel reads it.
+
+    Observed rows first, then the merely planned, each group oldest first — the
+    order the work happened in. One row per agent per basis; the same agent
+    committing twice is one contributor, not two.
+    """
+    rows = [r for r in (attrs.get("contributors") or []) if isinstance(r, dict)]
+    if not rows:
+        return []
+    ordered = sorted(
+        rows, key=lambda r: (r.get("basis") not in CONTRIB_OBSERVED,
+                             float(r.get("at") or 0)))
+    return [{"agent": str(r.get("agent") or ""),
+             "basis": str(r.get("basis") or ""),
+             "observed": r.get("basis") in CONTRIB_OBSERVED,
+             "exec_id": str(r.get("exec_id") or "")}
+            for r in ordered if r.get("agent")]
 
 
 def _history_view(data: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -772,7 +1250,8 @@ def _supersede_chain(raw_edges: List[Dict[str, Any]]) -> List[List[str]]:
 def _virtual_nodes(raw_nodes: Dict[str, Dict[str, Any]],
                    raw_edges: List[Dict[str, Any]],
                    carried: Dict[str, List[Tuple[str, str]]],
-                   root: Optional[str], research_id: str) -> List[Dict[str, Any]]:
+                   root: Optional[str], research_id: str,
+                   scope: Optional[Tuple[str, str]] = None) -> List[Dict[str, Any]]:
     """The two cards nobody authors: the framing, and what it all added up to.
 
     Both are derived. Materializing them as stored nodes would mean a second
@@ -786,7 +1265,7 @@ def _virtual_nodes(raw_nodes: Dict[str, Dict[str, Any]],
     out: List[Dict[str, Any]] = []
     human = {"human", "user", "operator"}
 
-    members = [(_folded_view(f, raw_nodes[f]), role)
+    members = [(_folded_view(f, raw_nodes[f], scope), role)
                for role, f in carried.get(FRAME_ID, []) if f in raw_nodes]
     root_attrs = dict((raw_nodes.get(root) or {}).get("attrs") or {}) if root else {}
     root_attrs.pop("formulation", None)
@@ -828,7 +1307,7 @@ def _virtual_nodes(raw_nodes: Dict[str, Dict[str, Any]],
                   if d.get("type") == "Hypothesis"}
     settled = {n for n, d in hypotheses.items()
                if d.get("status") in ("confirmed", "refuted", "inconclusive")}
-    spare = [(_folded_view(f, raw_nodes[f]))
+    spare = [(_folded_view(f, raw_nodes[f], scope))
              for _role, f in carried.get(OUTCOME_ID, []) if f in raw_nodes]
     if not (conclusions or settled or spare):
         return out
@@ -983,7 +1462,14 @@ def _gaps(raw_nodes: Dict[str, Dict[str, Any]], raw_edges: List[Dict[str, Any]],
 
 class ResearchGraphStore:
     def __init__(self, directory: Optional[str] = None,
-                 active_file: Optional[str] = None) -> None:
+                 active_file: Optional[str] = None,
+                 scope: Optional[Tuple[str, str]] = None) -> None:
+        #: Which session this blackboard belongs to, or None for the CLI and
+        #: unit-test constructions that have no ADK context. Only the view uses
+        #: it, to build a link to a mirrored artifact — and a link needs the
+        #: scope that is *reading*, so an imported study resolves under its new
+        #: session id without anything being rewritten.
+        self._scope = scope
         self._dir = Path(directory or _default_dir())
         self._path = self._dir / (active_file or _default_file())
         self._lock = threading.RLock()
@@ -1162,7 +1648,9 @@ class ResearchGraphStore:
                status_updates: Optional[List[Dict[str, Any]]] = None,
                autolink_focus: Optional[str] = None,
                partial_edges: bool = False,
-               enforce_permissions: bool = True) -> CommitResult:
+               enforce_permissions: bool = True,
+               allow_reserved: bool = False,
+               exec_id: str = "") -> CommitResult:
         """Transactional write: validate EVERYTHING, then apply all-or-nothing.
 
         `autolink_focus` (a Hypothesis id): any Evidence created in this commit
@@ -1191,9 +1679,11 @@ class ResearchGraphStore:
                                          list(edges or []), list(status_updates or []),
                                          enforce_permissions=enforce_permissions,
                                          autolink_focus=autolink_focus,
-                                         partial_edges=partial_edges)
+                                         partial_edges=partial_edges,
+                                         allow_reserved=allow_reserved)
             if result.ok:
                 self._rejected_commits = 0
+                self._note_authorship(source, result, exec_id)
                 self._save()
             else:
                 # A refused commit writes NOTHING, and used to say so only to the
@@ -1204,6 +1694,129 @@ class ResearchGraphStore:
                 logger.warning("research commit refused (source=%s): %s",
                                source, "; ".join(result.errors[:3]))
             return result
+
+    def _note_authorship(self, source: str, result: "CommitResult",
+                         exec_id: str = "") -> None:
+        """Who wrote this commit, recorded from the commit itself.
+
+        The two bases nothing else can supply: `commit` for a node created here,
+        `status` for one moved here. Called inside the commit's own lock and
+        before its `_save`, so the rows ride the same snapshot write.
+
+        A node created with a per-node `source` (an operator-set frame field
+        arrives as "human") is credited to that source, not to the caller.
+
+        `exec_id`, when the caller knows it, is the activation of the run that
+        made this commit — so the record points at ONE run of the agent rather
+        than at its name. An agent that worked on three nodes in a study is
+        three runs, and a reader following a row wants the one that produced
+        the node in front of them.
+        """
+        if source in _MACHINE_SOURCES:
+            # A mirror is the pen, not the hand: `plan-mirror` writes every
+            # PlanStep in the graph, and crediting it would make the record say
+            # that the same non-agent took part in everything.
+            return
+        try:
+            committed = result.committed or {}
+            rows: List[Dict[str, Any]] = []
+            for e in committed.get("nodes") or []:
+                # An edit, or a draft that turned out to be a node already in
+                # the graph — neither is authorship of it.
+                if e.get("updated_attrs") or e.get("reused") or not e.get("id"):
+                    continue
+                nid = e["id"]
+                wrote = source
+                if self._g.has_node(nid):
+                    wrote = self._g.nodes[nid].get("source") or source
+                if wrote not in _MACHINE_SOURCES:
+                    # Only the caller's own activation. A per-node source such
+                    # as "human" was not that run, and saying it was would
+                    # point the reader at the wrong place in the log.
+                    rows.append({"node_id": nid, "agent": wrote,
+                                 "basis": "commit",
+                                 "exec_id": exec_id if wrote == source else ""})
+            for e in committed.get("status_updates") or []:
+                # `_auto_maintain` marks its own moves; the graph maintainer is
+                # not a participant.
+                if e.get("auto") or not e.get("id"):
+                    continue
+                rows.append({"node_id": e["id"], "agent": source,
+                             "basis": "status", "exec_id": exec_id})
+            if rows:
+                self.add_contributors(rows, source=source, save=False)
+        except Exception:  # noqa: BLE001 — bookkeeping never fails a commit
+            logger.debug("contributors: could not record authorship", exc_info=True)
+
+    def add_contributors(self, entries: List[Dict[str, Any]], *,
+                         source: str = "", save: bool = True) -> Dict[str, int]:
+        """Append who took part in a node, and on what basis we say so.
+
+        Deliberately NOT a commit. The attrs merge in `_commit_locked` is a
+        shallow `{**stored, **incoming}`, so a list routed through it keeps only
+        the last writer's rows — which is precisely the confusion between nodes
+        this record exists to prevent. It also validates nothing, moves no
+        status and writes no edge: participation is an observation about a node,
+        never a change to it.
+
+        `updated_at` is left alone on purpose. `to_view` maps it to the card's
+        end time and the study list sorts on it, so bookkeeping would make an
+        idle study look freshly worked on.
+
+        Each entry is `{node_id, agent, basis, exec_id?}`. Unknown ids and
+        unknown bases are skipped rather than raised: this is called from
+        callbacks and tool paths where nothing may break the run.
+        """
+        wanted = []
+        for e in entries or []:
+            nid = str((e or {}).get("node_id") or "").strip()
+            agent = str((e or {}).get("agent") or "").strip()
+            basis = str((e or {}).get("basis") or "").strip()
+            if not nid or not agent or basis not in CONTRIB_BASES:
+                continue
+            wanted.append((nid, agent, basis,
+                           str(e.get("exec_id") or "").strip()))
+        if not wanted:
+            return {"nodes": 0, "appended": 0}
+
+        touched, appended = set(), 0
+        with self._lock:
+            for nid, agent, basis, exec_id in wanted:
+                if not self._g.has_node(nid):
+                    continue
+                node = self._g.nodes[nid]
+                attrs = dict(node.get("attrs") or {})
+                rows = list(attrs.get("contributors") or [])
+                # The same act recorded twice is one act: a resolver may run
+                # again on the next commit, and an agent that writes forty
+                # times did not participate forty times.
+                seen = {(r.get("agent"), r.get("basis"), r.get("exec_id") or "")
+                        for r in rows if isinstance(r, dict)}
+                if (agent, basis, exec_id) in seen:
+                    continue
+                if len(rows) >= _MAX_CONTRIBUTORS:
+                    # The first ones are the meaningful ones; the rest become a
+                    # count, so a chatty run cannot grow the graph without bound.
+                    attrs["contributors_more"] = int(
+                        attrs.get("contributors_more") or 0) + 1
+                else:
+                    row = {"agent": agent, "basis": basis, "at": time.time()}
+                    if exec_id:
+                        row["exec_id"] = exec_id
+                    rows.append(row)
+                    attrs["contributors"] = rows
+                node["attrs"] = attrs
+                touched.add(nid)
+                appended += 1
+            if touched and save:
+                # One snapshot for the batch: `_save` rewrites the whole graph.
+                # `save=False` is for a caller inside a commit, which is about
+                # to write that snapshot anyway.
+                self._save()
+        if touched:
+            logger.debug("contributors: +%d row(s) on %s (source=%s)",
+                         appended, ", ".join(sorted(touched)), source or "?")
+        return {"nodes": len(touched), "appended": appended}
 
     # ── reads ─────────────────────────────────────────────────────────────────
 
@@ -1319,7 +1932,8 @@ class ResearchGraphStore:
         host, carried, hosts_of = _fold_plan(raw_nodes, raw_edges)
         nodes = self._project_nodes(raw_nodes, raw_edges, carried, research_id)
         drawn = {n["id"] for n in nodes}
-        nodes += _virtual_nodes(raw_nodes, raw_edges, carried, root, research_id)
+        nodes += _virtual_nodes(raw_nodes, raw_edges, carried, root, research_id,
+                                self._scope)
         drawn |= {FRAME_ID, OUTCOME_ID} & {n["id"] for n in nodes}
 
         edges = _reroute(raw_edges, host, hosts_of, drawn)
@@ -1388,13 +2002,14 @@ class ResearchGraphStore:
                 elaborated_by.setdefault(e.get("dst"), []).append(e.get("src"))
                 elaborates[e.get("src")] = e.get("dst")
 
-        # WITH WHAT a method was run — the part of "method" that was missing
+        # WITH WHAT a method is run — the part of "method" that was missing
         # altogether. A method is a method OF a claim, FOR settling it, BY some
-        # instrument; the card used to carry only the first two. Three sources,
-        # best first: the Tools the method declares it `uses`, the tools the
-        # PLAN already named for the step (the planner can read the tool list,
-        # so this is the one part of the method it can answer in advance), and
-        # the calls actually recorded against the method.
+        # instrument; the card used to carry only the first two. Five sources,
+        # best first: the instruments the method itself names, the Tools it
+        # declares it `uses`, the MCP servers and tools the approved experiment
+        # plan pinned to it, the tools the PLAN already named for the step (the
+        # planner can read the tool list, so this is the one part of the method
+        # it can answer in advance), and the calls actually recorded against it.
         step_tools: Dict[str, str] = {}
         for sid, sd in raw_nodes.items():
             if sd.get("type") != "PlanStep":
@@ -1418,23 +2033,23 @@ class ResearchGraphStore:
             if md.get("type") != "VerificationMethod":
                 continue
             ma = md.get("attrs") or {}
-            names = list(declared.get(mid, []))
-            names += [p.strip() for p in
-                      step_tools.get(str(ma.get("plan_task_id") or ""), "").split(",")
-                      if p.strip()]
+            names = _named_instruments(ma.get("instruments"))
+            names += declared.get(mid, [])
+            names += _mcp_instruments(ma.get("mcp_servers"))
+            names += _named_instruments(ma.get("tools"))
+            names += _named_instruments(
+                step_tools.get(str(ma.get("plan_task_id") or ""), ""))
+            # The agent the plan put on it is an instrument too: "by whom" is
+            # as much an answer to "by what means" as a library name is.
+            names += _named_instruments(ma.get("assignee"))
             names += [str(c.get("tool") or "").strip()
                       for c in (ma.get("_provenance") or [])
                       if isinstance(c, dict) and str(c.get("tool") or "").strip()]
-            ordered, seen_names = [], set()
-            for name in names:
-                if name.lower() in seen_names:
-                    continue
-                seen_names.add(name.lower())
-                ordered.append(name)
+            ordered = _one_name_each(names)
             if ordered:
                 # Capped: the card is a headline, and a method that called
                 # twenty tools is better read in the panel.
-                instruments[mid] = ", ".join(ordered[:6])
+                instruments[mid] = ", ".join(ordered[:_MAX_INSTRUMENTS])
 
         nodes: List[Dict[str, Any]] = []
         for nid in sorted(drawn_ids, key=_id_order):
@@ -1447,7 +2062,7 @@ class ResearchGraphStore:
             why = _why(attrs, history)
             chips, attachments, criterion = [], [], ""
             for role, folded in carried.get(nid, []):
-                view = _folded_view(folded, raw_nodes[folded])
+                view = _folded_view(folded, raw_nodes[folded], self._scope)
                 if role == "chip":
                     chips.append(view)
                 elif role == "criterion":
@@ -1455,6 +2070,10 @@ class ResearchGraphStore:
                     attachments.append(view)
                 else:
                     attachments.append(view)
+            own = _own_artifact(nid, attrs, self._scope)
+            if own:
+                # First: it is this card's own file, not something it carries.
+                attachments.insert(0, own)
             node = {
                 "id": nid,
                 "run_id": research_id,
@@ -1469,8 +2088,25 @@ class ResearchGraphStore:
                 "status_word": _STATUS_WORDS.get(status, status),
                 "executor_agent": d.get("source", ""),
                 "input": _fields(attrs, headline, kind),
-                "output": headline,
+                # For a write-up the card is the title and the panel is the
+                # document; `reportBlock` renders this as markdown. Stored
+                # references become URLs here rather than when the node was
+                # written: the node keeps the session-free form, so an imported
+                # bundle resolves its figures under whatever scope is reading.
+                "output": (_readable_body(attrs.get("content"), self._scope)
+                           if kind == "Report" else headline),
                 "provenance": attrs.get("_provenance") or [],
+                # A node's own write-up, inlined the way a Report's body is:
+                # the browser has no way to fetch an artifact's TEXT. Read from
+                # the store by id rather than kept on the node — `_truncate_attrs`
+                # caps an ordinary attribute at 2 000 characters, and every card
+                # rides along on a 1.5-second poll.
+                "report": _node_report_body(attrs, self._scope),
+                "report_stamp": str(attrs.get("report_stamp") or ""),
+                # Who took part, and on what basis we say so. Observed first,
+                # planned last: a plan's assignee is an intention, and drawing
+                # it as an executor is the confusion this record exists to end.
+                "contributors": _contributors_view(attrs),
                 "t_start": d.get("created_at"),
                 "t_end": d.get("updated_at"),
                 "status_history": history,
@@ -1624,7 +2260,8 @@ class ResearchGraphStore:
                        edge_drafts: List[Any], status_drafts: List[Any],
                        enforce_permissions: bool = True,
                        autolink_focus: Optional[str] = None,
-                       partial_edges: bool = False) -> CommitResult:
+                       partial_edges: bool = False,
+                       allow_reserved: bool = False) -> CommitResult:
         if not (node_drafts or edge_drafts or status_drafts):
             return CommitResult(ok=False, errors=[
                 "empty commit — provide nodes, edges and/or status_updates"],
@@ -1634,15 +2271,62 @@ class ResearchGraphStore:
         creates: List[Dict[str, Any]] = []     # {ref, type, status, attrs}
         merges: List[Dict[str, Any]] = []      # {id, attrs}
         refs: Dict[str, int] = {}              # ref -> index into creates
+        # (type, identity text) -> (index into creates, index into the drafts),
+        # so a sentence repeated inside ONE commit lands on one node too.
+        staged: Dict[Tuple[str, str], Tuple[int, int]] = {}
+        # ref -> an EXISTING node id, for a draft the store read as a
+        # change rather than a creation. The edges drawn from that ref
+        # still have to land somewhere, and it is not a new node.
+        pinned: Dict[str, str] = {}
 
         # -- nodes: creations and attrs-merges -------------------------------
         for i, d in enumerate(node_drafts):
             if not isinstance(d, dict):
                 errors.append(f"nodes[{i}]: must be an object")
                 continue
-            if d.get("id") and not d.get("type"):
-                errors.extend(self._stage_merge(source, i, d, merges))
-                continue
+            # An id is an IDENTITY: naming one means THIS node, whatever else
+            # the draft carries. That used to hold only when `type` was ABSENT,
+            # so {"id": "H3", "type": "Hypothesis", "attrs": {…}} — the form a
+            # model writes when it is being helpful — fell through to the
+            # create branch, where the id is never read again. The store
+            # answered `ok: true` with a brand-new node and the agent, seeing
+            # its change had not landed, sent it again. On
+            # session_d9765b9e6de44530a3540da3aa0cd4c0 that silence turned one
+            # hypothesis into ten.
+            if d.get("id"):
+                known = self._canon_node(str(d["id"]))
+                if known is not None:
+                    want = schema.normalize_node_type(d.get("type") or "")
+                    stored = self._g.nodes[known].get("type")
+                    if want and want != stored:
+                        errors.append(
+                            f"nodes[{i}]: '{known}' is a {stored}, not a {want}. "
+                            f"To change it, write "
+                            f'{{"id": "{known}", "attrs": {{…}}}}; to record a '
+                            f"new {want}, leave the id out.")
+                        continue
+                    if d.get("status"):
+                        warnings.append(
+                            f"nodes[{i}]: a status on an update of '{known}' is "
+                            f"ignored — move a node through `status_updates`.")
+                    errors.extend(self._stage_merge(
+                        source, i, d, merges, enforce_permissions,
+                        warnings, allow_reserved))
+                    continue
+                if not d.get("type"):
+                    # No such node and nothing to create from: `_stage_merge`
+                    # owns that message, and it lists the ids that do exist.
+                    errors.extend(self._stage_merge(
+                        source, i, d, merges, enforce_permissions,
+                        warnings, allow_reserved))
+                    continue
+                # An id that names nothing, next to a type, is a model
+                # numbering its own draft. Create it — but say the id was not
+                # honoured, so the next call does not point at it.
+                warnings.append(
+                    f"nodes[{i}]: there is no node '{str(d['id']).strip()}', so "
+                    f"this was recorded as a NEW node; ids are minted by the "
+                    f"store, never chosen by the caller.")
             ntype = schema.normalize_node_type(d.get("type", ""))
             spec = schema.NODE_TYPES.get(ntype)
             status = schema.normalize_token(
@@ -1653,11 +2337,25 @@ class ResearchGraphStore:
             if not isinstance(attrs, dict):
                 errors.append(f"nodes[{i}]: attrs must be an object")
                 attrs = {}
+            attrs = _strip_reserved(attrs, f"nodes[{i}]", warnings,
+                                    allow_reserved)
             if "subtype" in attrs:
                 attrs["subtype"] = schema.normalize_token(str(attrs["subtype"]))
             errors.extend(f"nodes[{i}]: {e}" for e in
                           schema.validate_node_draft(source, ntype, status, attrs,
                                                      enforce_permissions=enforce_permissions))
+            # The same sentence, said twice, is one node — a reader sees one
+            # card per node, so a second copy only makes it impossible to tell
+            # which of them the edges belong to. Whether the first copy is
+            # already in the graph or earlier in this very list, the answer is
+            # to reuse it, not to refuse: a refusal costs the agent the rest of
+            # an otherwise sound commit, and re-sending what is already
+            # recorded has to be a no-op, not a loss.
+            said = _identity_text(ntype, attrs)
+            twin = self._twin_of(ntype, attrs)
+            earlier = staged.get((ntype, said)) if said and twin is None else None
+            at = earlier[0] if earlier else None
+
             ref = d.get("ref")
             if ref is not None:
                 ref = str(ref)
@@ -1669,13 +2367,75 @@ class ResearchGraphStore:
                     errors.append(f"nodes[{i}]: duplicate ref '{ref}' in this commit "
                                   "(refs are matched case-insensitively)")
                     ref = None
+                elif (named := self._canon_node(ref)) is not None:
+                    # A ref is a LOCAL alias for a node created in THIS call.
+                    # Putting an existing node's id there reads, to a model, as
+                    # "the node I mean" — and the store read it as "a new node,
+                    # call it that". Both the live run and its repair loop did
+                    # this; nothing in the answer said otherwise.
+                    #
+                    # One shape of it is not ambiguous at all: a draft of a
+                    # type whose identity the store knows, carrying none of
+                    # that identity — a Hypothesis with no formulation, a
+                    # PlanStep with no title — is not a new node under any
+                    # reading. That is the live payload
+                    # `{"type": "Hypothesis", "ref": "h1", "attrs":
+                    # {"selected": "true"}}`: the agent marking H1 as the one
+                    # it picked. Refusing it would cost the criterion and the
+                    # method it was committed with.
+                    if (ntype in _IDENTITY_ATTRS and not said
+                            and self._g.nodes[named].get("type") == ntype):
+                        warnings.append(
+                            f"nodes[{i}]: ref '{ref}' names the existing "
+                            f"{ntype} {named} and the draft says nothing that "
+                            f"would make it a new one, so it was read as a "
+                            f"change to {named}. Write "
+                            f'{{"id": "{named}", "attrs": {{…}}}} to say so.')
+                        errors.extend(self._stage_merge(
+                            source, i, {"id": named, "attrs": attrs}, merges,
+                            enforce_permissions, warnings, allow_reserved))
+                        pinned[ref] = named
+                        continue
+                    errors.append(
+                        f"nodes[{i}]: ref '{ref}' is the id of an existing node "
+                        f"({named}). A ref only names a node created in THIS "
+                        f"call. To change {named}, write "
+                        f'{{"id": "{named}", "attrs": {{…}}}}. To record '
+                        f"something new, pick a ref that is not an existing id.")
+                    ref = None
                 else:
-                    refs[ref] = len(creates)
-            creates.append({"ref": ref, "type": ntype, "status": status,
-                            "attrs": attrs, "source": d.get("source")})
+                    # Both refs of a doubled draft point at the one node, so
+                    # the edges from either of them land on it.
+                    refs[ref] = len(creates) if at is None else at
 
-        # -- one active hypothesis per commit --------------------------------
-        self._normalize_hypothesis_selection(creates, warnings)
+            if earlier is not None:
+                warnings.append(
+                    f"nodes[{i}]: the same {ntype} is already nodes[{earlier[1]}] "
+                    f"in this commit — recorded once.")
+                first = creates[earlier[0]]
+                # The LATER draft wins, the same way a live twin takes the new
+                # attributes: a model that says a thing twice in one breath is
+                # correcting itself, and the correction came second.
+                first["attrs"] = {**first["attrs"], **attrs}
+                continue
+            if twin is not None:
+                warnings.append(
+                    f"nodes[{i}]: {twin} already says this, so it was reused "
+                    f"instead of recording a second copy. To change {twin}, "
+                    f'write {{"id": "{twin}", "attrs": {{…}}}}.')
+                errors.extend(self._stage_merge(
+                    source, i, {"id": twin, "attrs": attrs}, merges,
+                    enforce_permissions, warnings, allow_reserved))
+            elif said:
+                staged[(ntype, said)] = (len(creates), i)
+            creates.append({"ref": ref, "type": ntype, "status": status,
+                            "attrs": attrs, "source": d.get("source"),
+                            "twin": twin})
+
+        # The hypothesis ceiling is applied further down, once the commit's
+        # status_updates are staged too: a commit that closes a branch AND
+        # proposes a new hypothesis is one move, and judging its halves apart
+        # made the new one wait for a slot the same commit had just freed.
 
         # -- edges: resolve endpoints against existing nodes + this commit ---
         staged_edges: List[Dict[str, Any]] = []
@@ -1684,8 +2444,10 @@ class ResearchGraphStore:
                 errors.append(f"edges[{j}]: must be an object")
                 continue
             etype = schema.normalize_token(d.get("type", ""))
-            src, e1 = self._resolve_endpoint(d.get("from"), j, "from", refs, warnings)
-            dst, e2 = self._resolve_endpoint(d.get("to"), j, "to", refs, warnings)
+            src, e1 = self._resolve_endpoint(d.get("from"), j, "from", refs,
+                                             warnings, pinned)
+            dst, e2 = self._resolve_endpoint(d.get("to"), j, "to", refs,
+                                             warnings, pinned)
             edge_errs = [e for e in (e1, e2) if e]
             if src is None or dst is None:
                 (warnings if partial_edges else errors).extend(edge_errs)
@@ -1816,7 +2578,17 @@ class ResearchGraphStore:
                 continue
             if not tr_errs:
                 staged_status.append({"id": nid, "type": ntype, "from": cur,
-                                      "to": new, "reason": d.get("reason")})
+                                      "to": new, "reason": d.get("reason"),
+                                      "index": k})
+
+        # -- verification slots: the whole commit at once ---------------------
+        # After the loop, not inside it. Inside, each update could only see the
+        # ones staged BEFORE it, so the same swap — close one branch, open
+        # another — passed or was refused depending on the order it was written
+        # in. `graph_bridge._sync_uncovered_hypotheses` builds its list in node
+        # id order and does not get to choose that order.
+        taken = self._charge_slots(staged_status, errors)
+        self._normalize_hypothesis_selection(creates, warnings, taken)
 
         if errors:
             return CommitResult(ok=False, errors=errors, warnings=warnings,
@@ -1827,9 +2599,30 @@ class ResearchGraphStore:
         committed: Dict[str, List[Dict[str, Any]]] = {"nodes": [], "edges": [],
                                                       "status_updates": []}
         ref_ids: Dict[str, str] = {}
-        for c in creates:
+        # Every alias that resolved to this draft, not just the one written on
+        # it: two drafts saying the same thing are recorded once, and BOTH
+        # their refs have to reach that node or the edges from the second would
+        # be drawn to nothing.
+        aliases: Dict[int, List[str]] = {}
+        for alias, idx in refs.items():
+            aliases.setdefault(idx, []).append(alias)
+        for k, c in enumerate(creates):
+            if c.get("twin"):
+                # Already in the graph; its attrs were staged as a merge above.
+                # The refs still have to resolve, or every edge the agent drew
+                # to this node would be lost with it — and the echo still has
+                # to name it, so the caller learns which node its draft turned
+                # out to be instead of assuming a new one.
+                echo = {"id": c["twin"], "type": c["type"], "reused": True}
+                for alias in aliases.get(k, ()):
+                    ref_ids[alias] = c["twin"]
+                if c["ref"]:
+                    echo["ref"] = c["ref"]
+                _name_every_alias(echo, aliases.get(k, ()))
+                committed["nodes"].append(echo)
+                continue
             nid = self._next_id(c["type"])
-            attrs = self._truncate_attrs(c["attrs"], warnings)
+            attrs = self._truncate_attrs(c["attrs"], warnings, c["type"])
             # A per-node source (e.g. "human" for an operator-set frame field)
             # overrides the commit's default source; edges/status keep the default.
             node_source = c.get("source") or source
@@ -1840,17 +2633,24 @@ class ResearchGraphStore:
                                  "source": node_source, "at": now}],
             )
             self._g.add_node(nid, **node.model_dump())
-            if c["ref"]:
-                ref_ids[c["ref"]] = nid
+            for alias in aliases.get(k, ()):
+                ref_ids[alias] = nid
             echo = {"id": nid, "type": c["type"], "status": c["status"]}
             if c["ref"]:
                 echo["ref"] = c["ref"]
+            _name_every_alias(echo, aliases.get(k, ()))
             committed["nodes"].append(echo)
+        reused = {e["id"] for e in committed["nodes"] if e.get("reused")}
         for m in merges:
             node = self._g.nodes[m["id"]]
             node["attrs"] = {**(node.get("attrs") or {}),
-                             **self._truncate_attrs(m["attrs"], warnings)}
+                             **self._truncate_attrs(m["attrs"], warnings,
+                                                   node.get("type", ""))}
             node["updated_at"] = now
+            if m["id"] in reused:
+                # Already named in the echo as the node a draft turned out to
+                # be; saying it twice would read as two nodes.
+                continue
             committed["nodes"].append({"id": m["id"], "type": node.get("type"),
                                        "updated_attrs": sorted(m["attrs"])})
         seen_edges = set()
@@ -2080,56 +2880,146 @@ class ResearchGraphStore:
                 outstanding.append(src)
         return sorted(outstanding)
 
-    def _normalize_hypothesis_selection(self, creates: List[Dict[str, Any]],
-                                        warnings: List[str]) -> None:
-        """Store invariant: at most N hypotheses enter the run as active per commit.
+    def max_active_hypotheses(self) -> int:
+        """How many hypotheses the run may verify at once — the one ceiling.
 
-        N = ``settings.web.max_active_hypotheses`` (default 1).
-
-        A generator agent naturally proposes several hypotheses at once; if they
-        all land as ``formulated``, every one of them shows up as READY and the
-        orchestrator starts verifying them — which may not be desired. So
-        exactly N (the agent's own picks: ``attrs.selected``, else the highest
-        ``attrs.priority``, else the first N) stay ``formulated`` and the rest
-        are created as ``postponed``: they remain in the graph as the ranked
-        backlog, invisible to the READY trigger, and the orchestrator can revive
-        one (postponed→formulated) once an active branch has a verdict.
-
-        Deterministic and mechanical — it never drops or rewrites a hypothesis,
-        only decides which ones are offered for verification next.
+        `settings.web.max_active_hypotheses` (default 1) is the single place the
+        number is set: the generator's prompt asks for up to this many, this
+        store admits up to this many, and `queries.ready_hypotheses` offers up
+        to this many for verification. Three readers, one number — when they
+        disagreed, the graph filled with hypotheses nothing would ever test.
         """
         from CoScientist.config import get_settings
-        max_active = max(1, min(5, get_settings().web.max_active_hypotheses))
+
+        return max(1, min(5, get_settings().web.max_active_hypotheses))
+
+    #: A hypothesis in one of these states holds a verification slot: it is
+    #: either offered for verification or being verified. Every other state is
+    #: either a verdict or a shelf.
+    _BUSY = ("formulated", "under_verification")
+
+    def _active_hypotheses(self) -> List[str]:
+        """Hypotheses already occupying a verification slot in the graph."""
+        return [n for n, d in self._g.nodes(data=True)
+                if d.get("type") == "Hypothesis"
+                and d.get("status") in self._BUSY]
+
+    def _charge_slots(self, staged_status: List[Dict[str, Any]],
+                      errors: List[str]) -> int:
+        """Refuse the status updates that would put the run over its ceiling.
+
+        Returns how many slots are taken once the surviving updates apply —
+        the occupancy the newly created hypotheses then have to fit into.
+
+        Entering the busy set is what costs a slot, whichever door it comes
+        through. Charging only `postponed → formulated` left the other one
+        open: `inconclusive → under_verification` is an ordinary move (the
+        validator writes `inconclusive` on every verdict it refuses to
+        confirm, and reopening such a branch is the orchestrator's documented
+        scheduling step), and it walked straight past the ceiling.
+        """
+        max_active = self.max_active_hypotheses()
+        taken = len(self._active_hypotheses())
+        # One node, one outcome. `from` is read from the GRAPH for every update,
+        # so two verdicts naming the same hypothesis both saw it as busy and
+        # both were counted as freeing a slot: `taken` went negative and bought
+        # room that does not exist — two hypotheses went active under a ceiling
+        # of one, with no error and no warning. The apply loop runs the updates
+        # in order and the last one lands, so the last one is what may be
+        # counted; a dict keeps that value at the position the node first
+        # appeared, which is the order the refusals below are handed out in.
+        final: Dict[str, Dict[str, Any]] = {}
+        for s in staged_status:
+            if s["type"] == "Hypothesis":
+                final[s["id"]] = s
+        entering: List[Dict[str, Any]] = []
+        for s in final.values():
+            was, now = s["from"] in self._BUSY, s["to"] in self._BUSY
+            if was and not now:
+                taken -= 1        # this branch closes and frees its slot
+            elif now and not was:
+                entering.append(s)
+        room = max(0, max_active - taken)
+        for s in entering[room:]:
+            errors.append(
+                f"status_updates[{s['index']}]: {s['id']} cannot be made "
+                f"active — this commit would leave the run holding "
+                f"{taken + room} of {max_active} hypotheses under "
+                f"verification. Close a branch "
+                f"(confirmed/refuted/inconclusive) in the same commit, or "
+                f"raise the limit in the settings.")
+        return taken + min(len(entering), room)
+
+    def _normalize_hypothesis_selection(self, creates: List[Dict[str, Any]],
+                                        warnings: List[str],
+                                        taken: int = 0) -> None:
+        """Store invariant: the RUN never holds more than N active hypotheses.
+
+        N = ``settings.web.max_active_hypotheses`` (default 1). `taken` is what
+        `_charge_slots` worked out — the occupancy once this commit's own
+        status updates apply, so a commit that closes a branch leaves room for
+        the hypothesis it proposes in the same breath.
+
+        The slots already taken in the graph count. They did not use to: the
+        ceiling looked at one commit's drafts only, so an agent told to «commit
+        at most three per call, make more calls if you need more» produced one
+        active hypothesis per call and the run ended up verifying several at
+        once while the setting said one.
+
+        Surplus is created ``postponed``, never dropped — the agent's work is
+        its own, and the operator can see what was proposed. But postponed is a
+        dead end by the schema (there is no ``postponed → under_verification``),
+        so a hypothesis filed here will not be tested until something revives
+        it. That is why this is a guard rail and not a plan: the generator is
+        asked for at most N in the first place, and reaching this code means
+        something went past that.
+        """
+        max_active = self.max_active_hypotheses()
 
         active = [c for c in creates
-                  if c["type"] == "Hypothesis" and c["status"] == "formulated"]
-        if len(active) <= max_active:
+                  if c["type"] == "Hypothesis" and c["status"] == "formulated"
+                  and not c.get("twin")]
+        room = max(0, max_active - taken)
+        if len(active) <= room:
             return
-        # Sort by priority_rank (lower = higher priority) and keep top N.
+        # Sort by priority_rank (lower = higher priority) and keep the top ones
+        # that still fit.
         ranked = sorted(active, key=lambda c: priority_rank(c["attrs"]))
-        primary_set = set(id(c) for c in ranked[:max_active])
+        primary_set = set(id(c) for c in ranked[:room])
         for c in active:
             if id(c) in primary_set:
                 continue
             c["status"] = "postponed"
             c["attrs"].setdefault(
                 "postponed_reason",
-                "альтернативная гипотеза — отложена в очередь, пока "
-                "проверяются выбранные")
-        kept_labels = ", ".join(
-            f'"{self._label(c, 60) or c.get("ref") or "?"}"'
-            for c in ranked[:max_active])
+                "сверх предела одновременно проверяемых гипотез — отложена, "
+                "пока проверяются выбранные")
+        proposed = (f"{len(active)} hypotheses were proposed as active at once"
+                    if len(active) > 1 else "this hypothesis was proposed as active")
+        held = (f", and {taken} of the {max_active} slots "
+                f"{'is' if taken == 1 else 'are'} already taken in the graph"
+                if taken else "")
+        if room:
+            kept = ", ".join(f'"{self._label(c, 60) or c.get("ref") or "?"}"'
+                             for c in ranked[:room])
+            outcome = (f"so {kept} stay 'formulated' and the remaining "
+                       f"{len(active) - room} were created as 'postponed'")
+        else:
+            outcome = (f"so all {len(active)} were created as 'postponed' — the "
+                       f"run has no free slot right now")
         warnings.append(
-            f"{len(active)} hypotheses were proposed as active at once; only "
-            f"{max_active} may be verified at a time, so {kept_labels} "
-            f"stay 'formulated' and the other "
-            f"{len(active) - max_active} were created as 'postponed' (backlog). "
-            f"To choose which ones are verified, mark them with "
-            f"attrs.selected=true or a higher attrs.priority; the orchestrator "
-            f"can revive a postponed one later.")
+            f"{proposed}; only {max_active} may be verified at a time{held}, "
+            f"{outcome}. A postponed hypothesis is NOT verified: the graph gives "
+            f"it no route to a verdict until someone revives it "
+            f"(postponed→formulated), and the study stays open while it sits. "
+            f"Propose at most {max_active} so nothing is stranded, and mark your "
+            f"pick with attrs.selected=true or a higher attrs.priority.")
 
     def _stage_merge(self, source: str, i: int, draft: Dict[str, Any],
-                     merges: List[Dict[str, Any]]) -> List[str]:
+                     merges: List[Dict[str, Any]],
+                     enforce_permissions: bool = True,
+                     warnings: Optional[List[str]] = None,
+                     allow_reserved: bool = False) -> List[str]:
         """Validate an attrs-merge entry ({"id": …, "attrs": {…}}) — how e.g.
         the researcher enriches an existing EmpiricalBase (spec §2)."""
         nid = self._canon_node(draft["id"])
@@ -2142,6 +3032,10 @@ class ResearchGraphStore:
         if not isinstance(attrs, dict) or not attrs:
             return [f"nodes[{i}]: an attrs object with the fields to merge is "
                     f"required to update '{nid}'."]
+        attrs = _strip_reserved(attrs, f"nodes[{i}]", warnings, allow_reserved)
+        if not attrs:
+            return []
+        draft = dict(draft, attrs=attrs)
         # A role that does not own the node may still owe it one field — the
         # reason a branch was left untested, what the evidence failed to
         # settle. Those are granted one (type, attribute) at a time, and only
@@ -2149,7 +3043,7 @@ class ResearchGraphStore:
         granted = {a for t, a in (perm.update_fields if perm else ()) if t == ntype}
         owns_type = perm is not None and (ntype in perm.update_attrs
                                           or ntype in perm.create)
-        if not owns_type and not (granted and set(attrs) <= granted):
+        if enforce_permissions and not owns_type and not (granted and set(attrs) <= granted):
             allowed = ", ".join(sorted(perm.update_attrs | perm.create)) if perm else "none"
             if granted:
                 allowed += f"; on {ntype} only attrs.{', attrs.'.join(sorted(granted))}"
@@ -2200,7 +3094,9 @@ class ResearchGraphStore:
 
     def _resolve_endpoint(self, value: Any, j: int, side: str,
                           refs: Dict[str, int],
-                          warnings: List[str]) -> Tuple[Optional[Tuple[str, str]], Optional[str]]:
+                          warnings: List[str],
+                          pinned: Optional[Dict[str, str]] = None,
+                          ) -> Tuple[Optional[Tuple[str, str]], Optional[str]]:
         v = str(value or "").strip()
         if not v:
             return None, f"edges[{j}]: missing '{side}'"
@@ -2223,6 +3119,12 @@ class ResearchGraphStore:
             r = _match_ref(v[1:])
             if r is not None:
                 return ("ref", r), None
+            # A ref the node loop resolved to a node already in the graph: the
+            # draft was a change, not a creation, and an edge drawn from it
+            # belongs on that node.
+            for alias, nid in (pinned or {}).items():
+                if alias.lower() == v[1:].lower():
+                    return ("id", nid), None
             return None, (f"edges[{j}]: no ref '{v[1:]}' among the nodes created in "
                           f"this call (refs: {', '.join(sorted(refs)) or 'none'}).")
         node = _match_node(v)
@@ -2247,6 +3149,23 @@ class ResearchGraphStore:
             return name
         up = name.upper()
         return up if self._g.has_node(up) else None
+
+    def _twin_of(self, ntype: str, attrs: Dict[str, Any]) -> Optional[str]:
+        """The live node this draft would duplicate, or None.
+
+        Identity is the text, not the id: an agent re-sending a hypothesis it
+        already recorded has no id to give — the answer it got named a `ref`,
+        not the node — so the only thing the two drafts share is what they say.
+        """
+        said = _identity_text(ntype, attrs)
+        if not said:
+            return None
+        for nid, data in self._g.nodes(data=True):
+            if data.get("type") != ntype:
+                continue
+            if _identity_text(ntype, data.get("attrs") or {}) == said:
+                return str(nid)
+        return None
 
     def _next_id(self, node_type: str) -> str:
         prefix = schema.NODE_TYPES[node_type].prefix
@@ -2277,12 +3196,18 @@ class ResearchGraphStore:
                 "to list them.")
 
     def _truncate_attrs(self, attrs: Dict[str, Any],
-                        warnings: List[str]) -> Dict[str, Any]:
+                        warnings: List[str],
+                        kind: str = "") -> Dict[str, Any]:
         out = {}
         for k, v in (attrs or {}).items():
-            if isinstance(v, str) and len(v) > _ATTR_CHAR_CAP:
-                out[k] = v[:_ATTR_CHAR_CAP] + "…[truncated]"
-                warnings.append(f"attr '{k}' exceeded {_ATTR_CHAR_CAP} chars "
+            # The write-up is the one attribute meant to be long. Held to the
+            # 2 000-character cap, an 18 KB report reached the page as its first
+            # two paragraphs and an ellipsis.
+            cap = (_REPORT_CHAR_CAP if kind == "Report" and k == "content"
+                   else _ATTR_CHAR_CAP)
+            if isinstance(v, str) and len(v) > cap:
+                out[k] = v[:cap] + "…[truncated]"
+                warnings.append(f"attr '{k}' exceeded {cap} chars "
                                 "and was truncated.")
             else:
                 out[k] = v
@@ -2293,7 +3218,11 @@ class ResearchGraphStore:
         for key in _LABEL_ATTRS:
             if attrs.get(key):
                 return _short(attrs[key], n)
-        return _short(json.dumps(attrs, ensure_ascii=False, default=str), n) if attrs else ""
+        # The last resort prints the record itself, so it must not print the
+        # bookkeeping: a node whose only attrs were a participation list would
+        # be labelled with the names of everyone who touched it.
+        said = {k: v for k, v in attrs.items() if k not in _HIDDEN_FIELDS}
+        return _short(json.dumps(said, ensure_ascii=False, default=str), n) if said else ""
 
     def _node_public(self, node_id: str) -> Dict[str, Any]:
         d = self._g.nodes[node_id]
@@ -2303,7 +3232,8 @@ class ResearchGraphStore:
             "status": d.get("status"),
             "source": d.get("source"),
             "attrs": {k: _short(v, 400) if isinstance(v, str) else v
-                      for k, v in (d.get("attrs") or {}).items()},
+                      for k, v in (d.get("attrs") or {}).items()
+                      if k not in _AGENT_HIDDEN},
         }
 
     @staticmethod
@@ -2396,6 +3326,7 @@ class ResearchGraphStore:
             data = json.loads(self._path.read_text(encoding="utf-8"))
             g = nx.MultiDiGraph()
             for node in data.get("nodes", []):
+                _respeak_method_status(node)
                 g.add_node(node["id"], **node)
             for edge in data.get("edges", []):
                 e = dict(edge)
@@ -2434,6 +3365,7 @@ def get_research_graph(
             graph = ResearchGraphStore(
                 directory=str(directory),
                 active_file=_default_file(),
+                scope=key,
             )
             _research_graphs[key] = graph
         return graph

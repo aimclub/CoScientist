@@ -81,7 +81,7 @@
         const el = document.getElementById(targetId);
         if (!el) return;
         if (a.name === name) {
-          el.className = "flex items-center gap-3 py-3 px-4 bg-[#272a31] rounded-lg transition-all duration-200 border-l-2 border-[#00daf3] cursor-pointer";
+          el.className = "flex items-center gap-3 py-3 px-4 bg-surface-container-high rounded-lg transition-all duration-200 border-l-2 border-primary cursor-pointer";
           const icon = el.querySelector('.material-symbols-outlined');
           if (icon) icon.className = "material-symbols-outlined text-primary text-lg animate-pulse";
           const label = el.querySelector('[data-i18n]');
@@ -545,11 +545,11 @@
             : selected
               ? 'ring-1 ring-primary/60 border-primary bg-surface-container-high/95 text-on-surface rail-chip-selected'
               : fresh
-                ? 'border-outline-variant/25 bg-[#161a23] text-on-surface hover:border-primary/40 hover:bg-[#1b202c]'
-                : 'border-outline-variant/10 bg-[#12151c]/60 text-outline-variant/70 hover:text-on-surface hover:border-outline-variant/30';
+                ? 'border-outline-variant/25 bg-surface-container-low text-on-surface hover:border-primary/40 hover:bg-surface-container'
+                : 'border-outline-variant/10 bg-surface-container-lowest/60 text-outline-variant/70 hover:text-on-surface hover:border-outline-variant/30';
 
           const beacon = busy
-            ? `<span class="relative flex h-2 w-2 mr-0.5 shrink-0"><span class="rail-ping-anim absolute inline-flex h-full w-full rounded-full bg-[#00daf3] opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-[#00daf3]"></span></span>`
+            ? `<span class="relative flex h-2 w-2 mr-0.5 shrink-0"><span class="rail-ping-anim absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span><span class="relative inline-flex rounded-full h-2 w-2 bg-primary"></span></span>`
             : '';
 
           const pulse = busy ? ' animate-pulse text-primary' : (selected ? ' text-primary' : '');
@@ -595,10 +595,10 @@
           toolsBox.innerHTML = tools.map(tool => {
             const running = selectedFresh && tool.calls > tool.done;
             const tone = tool.errors
-              ? 'border-error/50 bg-error/15 text-[#ffb4ab] hover:border-error/70'
+              ? 'border-error/50 bg-error/15 text-error hover:border-error/70'
               : running
                 ? 'border-primary/60 bg-primary/15 text-primary shadow-[0_0_12px_rgba(0,218,243,0.25)]'
-                : 'border-secondary/35 bg-secondary/10 text-[#40e56c] hover:border-secondary/60 hover:bg-secondary/15';
+                : 'border-secondary/35 bg-secondary/10 text-secondary hover:border-secondary/60 hover:bg-secondary/15';
 
             const iconClass = running
               ? 'text-primary animate-spin'
@@ -661,3 +661,132 @@
       applySideNavState();
     }
 
+    // ── The right rail: plan, pending question, spend ──────────────────────
+    // Hidden or resized per browser, the same way the left one is hidden and
+    // the graph page's detail panel is resized.
+    const RAIL_DEFAULT = 320, RAIL_MIN = 260;
+
+    function setSideRailWidth(px, save) {
+      const max = Math.max(RAIL_MIN, Math.round(window.innerWidth * 0.6));
+      const width = Math.min(max, Math.max(RAIL_MIN, Math.round(px)));
+      document.documentElement.style.setProperty('--rail-w', width + 'px');
+      if (save) {
+        try { localStorage.setItem(SIDE_RAIL_WIDTH_KEY, String(width)); } catch (_) { }
+      }
+      return width;
+    }
+
+    // Collapse the rail WITHOUT recording a preference. The plan gate below
+    // closes the column while the planner is still drafting, and the reader's
+    // own choice has to survive that: persisting here would make a run in
+    // planner mode silently turn the rail off for good.
+    function showSideRail(collapsed) {
+      document.body.classList.toggle('rail-collapsed', collapsed);
+      const icon = document.getElementById('side-rail-toggle-icon');
+      const button = document.getElementById('side-rail-toggle');
+      if (icon) icon.textContent = collapsed ? 'right_panel_open' : 'right_panel_close';
+      if (button) button.title = t(collapsed ? 'rail.show' : 'rail.hide');
+    }
+
+    function applySideRailState() {
+      showSideRail(localStorage.getItem(SIDE_RAIL_KEY) === 'off');
+    }
+
+    function toggleSideRail() {
+      const collapsed = document.body.classList.contains('rail-collapsed');
+      localStorage.setItem(SIDE_RAIL_KEY, collapsed ? 'on' : 'off');
+      applySideRailState();
+    }
+
+    function initSideRail() {
+      let saved = null;
+      try { saved = parseInt(localStorage.getItem(SIDE_RAIL_WIDTH_KEY), 10); } catch (_) { }
+      if (saved) setSideRailWidth(saved, false);
+      applySideRailState();
+
+      const grip = document.getElementById('rail-grip');
+      if (!grip) return;
+      // The rail is the LAST column, so its width is the distance from the
+      // pointer to the right edge of the window.
+      const widthFrom = event => window.innerWidth - event.clientX;
+      grip.addEventListener('pointerdown', event => {
+        event.preventDefault();
+        grip.setPointerCapture(event.pointerId);
+        grip.classList.add('on');
+        document.body.classList.add('resizing');
+        const move = ev => setSideRailWidth(widthFrom(ev), false);
+        const up = ev => {
+          grip.removeEventListener('pointermove', move);
+          grip.removeEventListener('pointerup', up);
+          grip.removeEventListener('pointercancel', up);
+          grip.classList.remove('on');
+          document.body.classList.remove('resizing');
+          setSideRailWidth(widthFrom(ev), true);
+        };
+        grip.addEventListener('pointermove', move);
+        grip.addEventListener('pointerup', up);
+        grip.addEventListener('pointercancel', up);
+      });
+      grip.addEventListener('dblclick', () => setSideRailWidth(RAIL_DEFAULT, true));
+      window.addEventListener('resize', () => setSideRailWidth(
+        parseInt(getComputedStyle(document.documentElement).getPropertyValue('--rail-w'), 10)
+        || RAIL_DEFAULT, false));
+    }
+
+    // =========================================================================
+    // Layout — plan gate (start mode "planner")
+    // =========================================================================
+    // While the planner is still drafting, the right panel stays closed and
+    // Usage & Cost is left out. Once the plan is approved the panel opens with
+    // the plan on top and usage below it. planApproved is per session: set from
+    // the snapshot's history, then live by the approval (or by any non-planner
+    // agent starting, which covers runs with HITL off). Starts unapproved so a
+    // page load in planner mode does not flash the panel before the snapshot.
+    let planApproved = false;
+
+    function planGateActive() {
+      return appSettings.general.startMode === 'planner' && !planApproved;
+    }
+
+    function refreshPlanGate() {
+      const wasGated = document.body.classList.contains('plan-gated');
+      const gated = planGateActive();
+      document.body.classList.toggle('plan-gated', gated);
+      document.body.classList.toggle('plan-first', appSettings.general.startMode === 'planner');
+      if (gated) showSideRail(true);
+      else if (wasGated) applySideRailState();
+    }
+
+    // The session was (re)loaded: approved if its history already shows the
+    // planner's plan accepted or the work carried on past the planner.
+    function resetPlanGate(messages) {
+      const plannerRequests = new Set();
+      planApproved = (messages || []).some(message => {
+        if (message.type === 'hitl_request' && message.agent_name === 'PlannerAgent') {
+          plannerRequests.add(message.request_id);
+        } else if (message.type === 'hitl_response' || message.type === 'hitl_timeout') {
+          return plannerRequests.has(message.request_id)
+            && (message.type === 'hitl_timeout' ? !message.paused : message.action === 'approve');
+        } else if (message.type === 'agent_event' || message.type === 'agent_output') {
+          return isPostPlanAgent(message.author || message.agent);
+        }
+        return false;
+      });
+      refreshPlanGate();
+    }
+
+    function isPostPlanAgent(name) {
+      return !!name && name !== 'user' && !PLAN_AGENTS.includes(name);
+    }
+
+    // The plan was accepted in this session: open the panel for the user.
+    function releasePlanGate() {
+      if (planApproved) return;
+      planApproved = true;
+      const wasGated = document.body.classList.contains('plan-gated');
+      refreshPlanGate();
+      if (wasGated) {
+        localStorage.setItem(SIDE_RAIL_KEY, 'on');
+        applySideRailState();
+      }
+    }

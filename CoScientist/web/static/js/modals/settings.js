@@ -40,6 +40,19 @@
               },
               { id: 'contextInit', path: 'general.contextInitEnabled', type: 'toggle', scope: 'session', env: 'RESEARCH_FRAME' },
               { id: 'maxHypotheses', path: 'hypothesesAgent.maxActiveHypotheses', type: 'number', min: 1, max: 5, scope: 'session', env: 'HYPOTHESES__MAX_ACTIVE' },
+              // The agent is attached when a session's tree is built; off also
+              // takes the medical route out of running experiments, hence the
+              // field's own scope hint.
+              { id: 'medicalAgent', path: 'medicalAgent.enabled', type: 'toggle', scope: 'session', scopeHintKey: 'settings.f.medicalAgent.scopeHint', env: 'MEDICAL__ENABLED' },
+              // Purely a runtime gate: NirReportAgent is attached whenever a
+              // normcontrol server is configured, and this decides whether the
+              // operator is offered the GOST report at the end of a run. Greyed
+              // out where there is no server to submit the document to.
+              {
+                id: 'nirReport', path: 'nirReport.enabled', type: 'toggle', scope: 'instant',
+                env: 'NIR__ENABLED',
+                inactive: d => !getSettingPath(d, 'nirReport.available'),
+              },
             ],
           },
           {
@@ -63,6 +76,13 @@
         groups: [{
           fields: [
             { id: 'language', type: 'language', scope: 'browser' },
+            { id: 'theme', type: 'theme', scope: 'browser' },
+            {
+              id: 'lightDim', type: 'lightDim', scope: 'browser',
+              inactive: () => currentTheme === 'light' ? null : { key: 'settings.inactive.lightOnly' },
+            },
+            { id: 'accent', type: 'accent', scope: 'browser' },
+            { id: 'font', type: 'font', scope: 'browser' },
             { id: 'autoNaming', path: 'general.autoNamingEnabled', type: 'toggle', scope: 'instant', env: 'AUTO_NAMING__ENABLED' },
             { id: 'showInternal', type: 'browserToggle', scope: 'browser', env: 'SHOW_INTERNAL__ENABLED' },
           ],
@@ -143,6 +163,15 @@
                   return null;
                 },
               },
+            ],
+          },
+          {
+            // Session scope: FedotAgent is attached (or not) when the next
+            // session's agent tree is built, and the planner prompt with it.
+            // Off also reaches a running session, hence its own scope hint.
+            heading: 'experimentRoutes',
+            fields: [
+              { id: 'experimentRouteFedot', path: 'experimentModule.routeFedot', type: 'toggle', scope: 'session', scopeHintKey: 'settings.f.experimentRouteFedot.scopeHint', env: 'EXPERIMENTS__ROUTE_FEDOT' },
             ],
           },
         ],
@@ -316,6 +345,7 @@
         });
       });
       if (data.defaults) settingsDefaults = data.defaults;
+      refreshPlanGate();
     }
 
     async function loadSettings() {
@@ -370,6 +400,8 @@
     }
 
     function resetSettingsSection(sectionId) {
+      // The appearance lives in this browser, not in the server defaults.
+      if (sectionId === 'interface') resetAppearance();
       if (!settingsDefaults || !settingsDraft) return;
       EDITABLE_FIELDS.filter(f => f.section === sectionId).forEach(f => {
         const value = getSettingPath(settingsDefaults, f.path);
@@ -513,7 +545,8 @@
       const label = escHtml(t(`settings.f.${field.id}.label`));
       const desc = i18n[`settings.f.${field.id}.desc`] ? t(`settings.f.${field.id}.desc`) : '';
       const wide = field.type === 'cards' || field.type === 'chips';
-      const scopeHint = field.scope ? `${t(`settings.scope.${field.scope}`)} — ${t(`settings.scope.${field.scope}.hint`)}` : '';
+      // scopeHintKey: a field whose effect does not fit its scope's stock hint.
+      const scopeHint = field.scope ? `${t(`settings.scope.${field.scope}`)} — ${t(field.scopeHintKey || `settings.scope.${field.scope}.hint`)}` : '';
       const scope = field.scope ? `
         <span class="material-symbols-outlined text-[14px] text-outline-variant/70 cursor-help"
           role="img" aria-label="${escHtml(scopeHint)}" title="${escHtml(scopeHint)}">${SETTINGS_SCOPES[field.scope]}</span>` : '';
@@ -539,7 +572,7 @@
                 <span data-default-marker class="hidden w-1.5 h-1.5 rounded-full bg-primary/70"></span>
                 ${scope}${envInfo}
               </div>
-              ${desc ? `<p class="text-[11.5px] text-on-surface-variant/75 mt-1 leading-relaxed">${desc}</p>` : ''}
+              ${desc ? `<p class="text-[12px] text-on-surface-variant/75 mt-1 leading-relaxed">${desc}</p>` : ''}
               ${inactiveNote}
               <p data-error class="hidden text-[11px] text-error mt-1.5 flex items-center gap-1"></p>
             </div>
@@ -655,6 +688,53 @@
                 </button>`).join('')}
             </div>`;
         }
+        case 'theme':
+          return `
+            <div role="radiogroup" class="inline-flex gap-0.5 p-0.5 rounded-md bg-surface-container-high border border-outline-variant/20">
+              ${['dark', 'light'].map(theme => `
+                <button type="button" role="radio" aria-checked="${currentTheme === theme}" data-action="theme" data-theme="${theme}"
+                  class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded text-[11px] font-semibold transition-colors ${currentTheme === theme ? 'bg-primary text-on-primary' : 'text-on-surface-variant hover:text-on-surface'}">
+                  <span class="material-symbols-outlined text-sm">${theme === 'dark' ? 'dark_mode' : 'light_mode'}</span>${escHtml(t(`settings.f.theme.opt.${theme}`))}
+                </button>`).join('')}
+            </div>`;
+        case 'lightDim':
+          // 0 = brightest, 100 = most muted; shown as brightness, so reversed.
+          return `
+            <div class="flex items-center gap-3">
+              <span class="material-symbols-outlined text-sm text-outline-variant">brightness_low</span>
+              <input id="sf-${field.id}" type="range" min="0" max="100" step="5" value="${100 - currentLightDim}" data-appearance="lightDim" ${dis}
+                class="w-36 accent-primary cursor-pointer disabled:cursor-not-allowed" />
+              <span class="material-symbols-outlined text-sm text-outline-variant">brightness_high</span>
+              <span data-light-dim-value class="w-9 text-right text-[11px] font-mono text-on-surface-variant">${100 - currentLightDim}%</span>
+            </div>`;
+        case 'accent': {
+          // "Theme" swatch = no override: each theme keeps its own cyan.
+          const swatch = (value, color, label) => `
+            <button type="button" role="radio" aria-checked="${currentAccent === value}" aria-label="${escHtml(label)}" title="${escHtml(label)}"
+              data-action="accent" data-accent="${value || ''}"
+              class="w-6 h-6 rounded-full border border-outline-variant/30 transition-shadow ${currentAccent === value ? 'ring-2 ring-offset-2 ring-offset-surface-container-lowest ring-on-surface' : 'hover:ring-2 hover:ring-outline-variant/40'}"
+              style="background:${color}"></button>`;
+          const custom = currentAccent && !ACCENT_PRESETS.includes(currentAccent);
+          return `
+            <div role="radiogroup" class="flex items-center gap-2 flex-wrap justify-end">
+              ${swatch(null, `rgb(${currentTheme === 'light' ? '0 200 212' : '0 218 243'})`, t('settings.f.accent.default'))}
+              ${ACCENT_PRESETS.map(hex => swatch(hex, hex, hex)).join('')}
+              <label title="${escHtml(t('settings.f.accent.custom'))}"
+                class="relative w-6 h-6 rounded-full cursor-pointer border border-outline-variant/30 flex items-center justify-center overflow-hidden ${custom ? 'ring-2 ring-offset-2 ring-offset-surface-container-lowest ring-on-surface' : ''}"
+                style="background:${custom ? currentAccent : 'conic-gradient(#f43f5e, #f59e0b, #10b981, #06b6d4, #3b82f6, #8b5cf6, #f43f5e)'}">
+                <input id="sf-${field.id}" type="color" data-appearance="accent" value="${currentAccent || '#00D9E5'}"
+                  aria-label="${escHtml(t('settings.f.accent.custom'))}" class="absolute inset-0 opacity-0 cursor-pointer" />
+              </label>
+            </div>`;
+        }
+        case 'font':
+          return `
+            <select id="sf-${field.id}" data-appearance="font" class="${inputCls} min-w-[11rem]">
+              ${Object.entries(UI_FONTS).map(([id, font]) => `
+                <option value="${id}" ${currentFont === id ? 'selected' : ''} style="font-family:${escHtml(font.stack)}">
+                  ${escHtml(id === 'system' ? t('settings.f.font.system') : font.name)}${id === DEFAULT_FONT ? ` · ${escHtml(t('settings.f.font.default'))}` : ''}
+                </option>`).join('')}
+            </select>`;
         case 'env':
           return `
             <div class="text-right">
@@ -791,6 +871,8 @@
             break;
           }
           case 'language': applyLanguage(btn.dataset.lang); break;
+          case 'theme': setTheme(btn.dataset.theme); renderSettings(); break;
+          case 'accent': setAccent(btn.dataset.accent || null); renderSettings(); break;
           case 'danger-ask': settingsDanger.pending = btn.dataset.target; settingsDanger.message = ''; renderSettings(); break;
           case 'danger-cancel': settingsDanger.pending = null; renderSettings(); break;
           case 'danger-confirm':
@@ -807,12 +889,21 @@
           setShowInternal(e.target.checked);
           return;
         }
+        // The colour picker previews on `input`; redraw once it is closed.
+        if (e.target.dataset.appearance === 'accent') { setAccent(e.target.value); renderSettings(); return; }
+        if (e.target.dataset.appearance === 'font') { setFont(e.target.value); return; }
         const field = SETTINGS_FIELD_BY_ID[e.target.dataset.field];
         if (field && field.type === 'toggle') updateSettingDraft(field, e.target.checked, true);
       });
 
       body.addEventListener('input', (e) => {
         const el = e.target;
+        if (el.dataset.appearance === 'accent') { setAccent(el.value); return; }
+        if (el.dataset.appearance === 'lightDim') {
+          setLightDim(100 - Number(el.value));
+          el.parentElement.querySelector('[data-light-dim-value]').textContent = `${el.value}%`;
+          return;
+        }
         const field = SETTINGS_FIELD_BY_ID[el.dataset.field];
         if (!field) return;
         if (field.type === 'number' || field.type === 'timeout') updateSettingDraft(field, parseSettingNumber(el.value), false);
@@ -899,7 +990,7 @@
         if (pending) {
           confirmBlock = `
             <div class="mt-3 p-3 rounded-md bg-error-container/20 border border-error/20 space-y-2">
-              <p class="text-[11.5px] text-on-surface">${escHtml(tf(`settings.danger.${target}.confirm`, { name: session }))}</p>
+              <p class="text-[12px] text-on-surface">${escHtml(tf(`settings.danger.${target}.confirm`, { name: session }))}</p>
               <div class="flex flex-wrap items-center gap-2">
                 <button type="button" id="settings-danger-confirm" data-action="danger-confirm" ${settingsDanger.busy ? 'disabled' : ''}
                   class="px-3 py-1.5 rounded-md text-[11px] font-bold bg-error text-on-error hover:brightness-110 disabled:opacity-40 disabled:cursor-not-allowed">
@@ -914,7 +1005,7 @@
             <div class="flex items-start justify-between gap-6">
               <div class="min-w-0">
                 <p class="text-[13px] font-semibold text-on-surface">${escHtml(t(`settings.danger.${target}.label`))}</p>
-                <p class="text-[11.5px] text-on-surface-variant/75 mt-1 leading-relaxed">${escHtml(t(`settings.danger.${target}.desc`))}</p>
+                <p class="text-[12px] text-on-surface-variant/75 mt-1 leading-relaxed">${escHtml(t(`settings.danger.${target}.desc`))}</p>
                 ${noSession ? `<p class="text-[11px] text-tertiary/90 mt-1.5">${escHtml(t('settings.danger.noSession'))}</p>` : ''}
               </div>
               <button type="button" data-action="danger-ask" data-target="${target}" ${noSession || pending || settingsDanger.busy ? 'disabled' : ''} class="${btnCls}">

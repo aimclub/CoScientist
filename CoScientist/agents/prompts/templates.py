@@ -97,14 +97,12 @@ _RESEARCH_EXAMPLES = {
         'research_commit(nodes=[{"type":"Hypothesis","ref":"h","attrs":'
         '{"formulation":"…","priority":"high","selected":"true",'
         '"rationale":"why THIS one first"}}, '
-        '{"type":"Hypothesis","ref":"alt","status":"postponed","attrs":'
-        '{"formulation":"alternative …","priority":"medium"}},   '
-        '# alternatives go in as postponed backlog\n  '
-        '{"type":"VerificationMethod","ref":"vm","attrs":{"method_type":"computational"}}, '
+        '{"type":"VerificationMethod","ref":"vm","attrs":{"method_type":"computational",'
+        '"description":"what the method IS, in one line",'
+        '"instruments":"NGS panel; scanpy; ExperimentAgent"}}, '
         '{"type":"ConfirmationCriteria","ref":"cc","attrs":{"threshold":"…"}}, '
         '{"type":"Tool","ref":"t","status":"needs_adaptation","attrs":{"name":"NGS panel"}}], '
         'edges=[{"type":"motivates","from":"Q1","to":"#h"}, '
-        '{"type":"motivates","from":"Q1","to":"#alt"}, '
         '{"type":"tested_by","from":"#h","to":"#vm"}, '
         '{"type":"formulated_for","from":"#cc","to":"#h"}, '
         '{"type":"requires","from":"#h","to":"#t"}, {"type":"uses","from":"#vm","to":"#t"}])'
@@ -113,17 +111,18 @@ _RESEARCH_EXAMPLES = {
     # that found a finding is named and closed in the same commit. The example
     # showed only `supports`/`relates_to`, and with no hypotheses in the graph
     # yet that left `relates_to` to the bare question as the single thing the
-    # agent ever wrote: the planned "collect the literature" method stayed
-    # `planned` and its own evidence floated unattached beside it.
+    # agent ever wrote: the "collect the literature" method stayed `proposed`
+    # and its own evidence floated unattached beside it.
     "ResearchAgent": (
         'research_commit(nodes=[{"type":"Evidence","ref":"e","attrs":'
         '{"subtype":"literature","content":"…","source_ref":"DOI…"}}], '
         'edges=[{"type":"produces","from":"VM1","to":"#e"}, '
         '{"type":"supports","from":"#e","to":"H2"}], '
-        'status_updates=[{"id":"VM1","status":"done"}])   '
+        'status_updates=[{"id":"VM1","status":"used"}])   '
         '# VM1 = the literature-review method you ran. If the plan never wrote '
         'one, open it in the SAME commit — {"type":"VerificationMethod",'
-        '"ref":"vm","attrs":{"method_type":"literature_review"}} with '
+        '"ref":"vm","attrs":{"method_type":"literature_review",'
+        '"description":"…","instruments":"PubMed; Semantic Scholar"}} with '
         '{"type":"tested_by","from":"Q1","to":"#vm"} (or from the hypothesis) '
         'and produce your evidence from "#vm". Fall back to '
         '{"type":"relates_to","from":"#e","to":"Q1"} only when there is no '
@@ -134,7 +133,7 @@ _RESEARCH_EXAMPLES = {
         '{"subtype":"literature","content":"PubMed finding…"}}], '
         'edges=[{"type":"produces","from":"VM1","to":"#e"}, '
         '{"type":"supports","from":"#e","to":"H2"}], '
-        'status_updates=[{"id":"VM1","status":"done"}])   '
+        'status_updates=[{"id":"VM1","status":"used"}])   '
         '# VM1 = the review you ran; open one in the same commit if the plan '
         'never wrote it (see the ResearchAgent example).'
     ),
@@ -154,7 +153,7 @@ _RESEARCH_EXAMPLES = {
         '{"subtype":"computational","content":"AUC=0.91"}}], '
         'edges=[{"type":"produces","from":"VM1","to":"#e"}, '
         '{"type":"supports","from":"#e","to":"H2"}], '
-        'status_updates=[{"id":"VM1","status":"done"}])'
+        'status_updates=[{"id":"VM1","status":"used"}])'
     ),
     "ValidatorAgent": (
         'research_commit('
@@ -239,127 +238,158 @@ def render_research_protocol(ctx: PromptContext) -> str:
 
 @_register("hypotheses")
 def hypotheses(ctx: PromptContext) -> str:
-    # How many hypotheses may be active simultaneously (formulated, not
-    # postponed) — configurable from the web UI, default 1.
+    # ONE ceiling for the whole system. The operator sets how many hypotheses
+    # the run may verify at once, and that same number is how many this agent
+    # may propose — asking for more than the run can verify is precisely what
+    # filled the graph with hypotheses nothing would ever test. The store admits
+    # this many (ResearchGraphStore.max_active_hypotheses) and the READY digest
+    # offers this many (queries.ready_hypotheses); three readers, one number.
     from CoScientist.config import get_settings
     max_active: int = max(1, min(5, get_settings().web.max_active_hypotheses))
     single = max_active == 1
-    # How many to PROPOSE, as opposed to how many may be active at once. Two is
-    # the standing ceiling: past that the surplus are usually the same claim
-    # reworded, and each one still buys a verification branch, so a study that
-    # branches five ways finishes none of them. Raising the active limit IS the
-    # operator asking for more, so the ceiling follows it up rather than
-    # contradicting the selection scaffolding below.
-    propose_cap = max(2, max_active)
-    propose_rule = ("ONE or TWO hypotheses. Not five." if propose_cap == 2 else
-                    f"at most {propose_cap} hypotheses, and prefer ONE or TWO.")
+    propose_rule = (
+        "exactly ONE hypothesis." if single else
+        f"UP TO {max_active} hypotheses — fewer whenever the situation calls "
+        f"for fewer. ONE is a complete answer and the usual one; a second is "
+        f"worth a branch only under the test below.")
 
     # The "one active hypothesis" rule is the same either way; only HOW the
     # selection is recorded differs — with the research graph it is a status on
     # the committed nodes, without it, it is just the shape of the answer. Naming
     # graph tools when the graph is off would make the model call a tool it does
     # not have.
-    if ctx.has_tool("research_graph"):
-        research_example = '''\n\nExample research_commit call:
-research_commit(
-    nodes=[
-        {"type": "Hypothesis", "ref": "h1", "attrs": {"formulation": "...", "status": "formulated", "priority": "high", "selected": "true"}},
-        {"type": "Hypothesis", "ref": "h2", "attrs": {"formulation": "...", "status": "postponed", "priority": "medium"}},
-        {"type": "VerificationMethod", "ref": "vm1", "attrs": {"method_type": "computational", "description": "..."}},
-        {"type": "ConfirmationCriteria", "ref": "cc1", "attrs": {"threshold": "..."}}
-    ],
-    edges=[
-        {"type": "motivates", "from": "Q1", "to": "#h1"},
-        {"type": "motivates", "from": "Q1", "to": "#h2"},
-        {"type": "tested_by", "from": "#h1", "to": "#vm1"},
-        {"type": "evaluated_by", "from": "#vm1", "to": "#cc1"}
-    ]
-)
-ALWAYS pass `nodes` and `edges` as explicit named arguments (lists of dictionaries) in your `research_commit` tool call.'''
-        if single:
-            selection = '''### ONE ACTIVE HYPOTHESIS (hard rule)
-The research verifies ONE hypothesis at a time — verifying several at once burns
-the budget and lets the evidence of one branch contaminate the verdict of another.
-So, in your single `research_commit`:
+    # What makes a SECOND hypothesis admissible. Only rendered when the run may
+    # hold more than one — at a ceiling of one there is nothing to distinguish,
+    # and the rule would read as an invitation.
+    rivalry = '' if single else f'''
+### WHAT MAKES HYPOTHESIS #2 AN ALTERNATIVE (and not the next step)
 
-- the SELECTED hypothesis is created with the default status (`formulated`) plus
-  `"selected": "true"` and a high `"priority"` in its attrs — this is the one the
-  orchestrator will verify;
-- EVERY alternative is created with `"status": "postponed"` and its own
-  `"priority"` — it stays in the graph as a ranked backlog and the orchestrator
-  can revive it (postponed→formulated) once the selected branch has a verdict;
-- build the full verification frame (VerificationMethod + ConfirmationCriteria +
-  any Tool it needs) for the SELECTED hypothesis. For the postponed alternatives
-  a formulation + rationale is enough — do not equip branches nobody will run yet.
+{"Hypothesis #2 is a RIVAL EXPLANATION" if max_active == 2 else
+ f"Hypotheses #2..#{max_active} are RIVAL EXPLANATIONS"} of the SAME outcome, not
+a later stage of one pipeline. A second hypothesis is admissible only if all
+three hold:
 
-If you commit several hypotheses as active anyway, the graph keeps only the
-highest-priority one active and postpones the others automatically, and tells you
-so in the commit warnings — better to make the choice yourself, deliberately.'''
-            answer_head = ("Start with exactly this line (real ids from your commit, "
-                           "one hypothesis):\n\nSELECTED HYPOTHESIS: <H-id> — "
-                           "<formulation in one sentence>")
-            answer_backlog = ("- BACKLOG (postponed): the alternatives as a ranked "
-                              "one-line list, explicitly\n  marked as NOT to be "
-                              "started now.")
-        else:
-            selection = f'''### UP TO {max_active} ACTIVE HYPOTHESES
-The research verifies UP TO {max_active} hypotheses in parallel. Select the
-{max_active} most promising ones to verify simultaneously.
-So, in your single `research_commit`:
+1. SAME OUTCOME, SAME MEASUREMENT. H1 and H2 predict DIFFERENT VALUES of the
+   SAME measurement on the SAME data. Sharing the procedure is what makes them
+   rivals — it is not a reason to merge them. They are one hypothesis phrased
+   twice only when they predict the SAME result.
+2. ONE RUN DECIDES BOTH. Name the single VerificationMethod that separates them
+   and the value that makes one true and the other false ("median LD50 gap ≥ 10×
+   → H1; < 2× → H2"). If no single result can support one and undermine the
+   other, they are not alternatives, and a second independent claim is not
+   allowed here.
+3. THEY CANNOT BOTH BE TRUE. State the incompatibility in the rationale: "H2
+   rivals H1: H1 attributes the effect to X, H2 to Y; the same run settles both."
 
-- the SELECTED hypotheses (up to {max_active}) are created with the default status
-  (`formulated`) plus `"selected": "true"` and a `"priority"` in their attrs —
-  these are the ones the orchestrator will verify in parallel;
-- EVERY alternative beyond {max_active} is created with `"status": "postponed"` and
-  its own `"priority"` — it stays in the graph as a ranked backlog and the
-  orchestrator can revive it (postponed→formulated) once an active branch has a
-  verdict;
-- build the full verification frame (VerificationMethod + ConfirmationCriteria +
-  any Tool it needs) for EACH selected hypothesis. For the postponed alternatives
-  a formulation + rationale is enough — do not equip branches nobody will run yet.
+Admissible shapes for #2: a DIFFERENT CAUSE of the same effect ("the ranking is
+driven by lipophilicity, not by the scaffold"); the NULL ("the clusters do not
+separate at all: every median within 2×"); a DIFFERENT WINNER ("the most toxic
+cluster is not the furanocoumarins").
 
-If you commit more than {max_active} hypotheses as active, the graph keeps only the
-top {max_active} by priority and postpones the others automatically, and tells you
-so in the commit warnings — better to make the choice yourself, deliberately.'''
-            answer_head = (f"Start with exactly these lines (real ids from your commit, "
-                           f"up to {max_active} hypotheses):\n\n"
-                           + "\n".join(f"SELECTED HYPOTHESIS {i+1}: <H-id> — "
-                                      "<formulation in one sentence>"
-                                      for i in range(max_active)))
-            answer_backlog = ("- BACKLOG (postponed): the alternatives as a ranked "
-                              "one-line list, explicitly\n  marked as NOT to be "
-                              "started now.")
+NOT hypotheses — these are steps of H1's VerificationMethod, never commit them:
+"the dataset will hold ≥ 25 compounds with valid SMILES"; "clustering will yield
+≥ 3 clusters with silhouette ≥ 0.3"; "the synthesis cost of the leaders will be
+under $5000". If your #2 begins with the next operation of the user's pipeline,
+delete it and fold it into H1's method.
+'''
+
+    # The rule that replaces the old backlog scaffolding. `postponed` is a dead
+    # end in the schema — there is no transition out of it except back to
+    # `formulated` — so a hypothesis filed there is never verified and the study
+    # cannot close while it sits. Hence: commit only what will be tested.
+    has_graph = ctx.has_tool("research_graph")
+    no_backlog = '''
+### EVERYTHING YOU HAND OVER WILL BE VERIFIED
+There is no backlog here and nothing is parked for later. Hand over only what
+you would spend a verification branch on; an idea you are not ready to test
+belongs in your answer as a remark, not in the list of hypotheses.''' + ('''
+
+A hypothesis recorded as `postponed` has no route to a verdict at all — the
+graph offers it no path except back to `formulated` — so it stays in the
+research unverified, holds the study open, and the operator sees a hypothesis
+nothing is testing. The single exception is a claim that can only be settled in
+a physical laboratory: record that one `postponed` with the reason, because this
+system cannot run it at all (see below).''' if has_graph else '')
+
+    if has_graph:
+        example_nodes = [
+            '        {"type": "Hypothesis", "ref": "h_new", "attrs": {"formulation": "...", '
+            '"priority": "high", "selected": "true"}},'
+        ]
+        example_edges = ['        {"type": "motivates", "from": "Q1", "to": "#h_new"},']
+        if not single:
+            example_nodes.append(
+                '        {"type": "Hypothesis", "ref": "h_rival", "attrs": {"formulation": '
+                '"...", "priority": "high", "rationale": "rivals h_new: same measurement, '
+                'opposite value"}},')
+            example_edges.append(
+                '        {"type": "motivates", "from": "Q1", "to": "#h_rival"},')
+        example_nodes += [
+            '        {"type": "VerificationMethod", "ref": "vm_new", "attrs": '
+            '{"method_type": "computational", "description": "...", '
+            '"instruments": "server:tool; library; Agent"}},',
+            '        {"type": "ConfirmationCriteria", "ref": "cc_new", "attrs": '
+            '{"threshold": "..."}}',
+        ]
+        example_edges.append('        {"type": "tested_by", "from": "#h_new", "to": "#vm_new"},')
+        if not single:
+            # One method decides both — that is what makes them rivals.
+            example_edges.append(
+                '        {"type": "tested_by", "from": "#h_rival", "to": "#vm_new"},')
+        example_edges.append(
+            '        {"type": "evaluated_by", "from": "#vm_new", "to": "#cc_new"}')
+        research_example = ('\n\nExample research_commit call:\nresearch_commit(\n'
+                            '    nodes=[\n' + "\n".join(example_nodes) + '\n    ],\n'
+                            '    edges=[\n' + "\n".join(example_edges) + '\n    ]\n)\n'
+                            'ALWAYS pass `nodes` and `edges` as explicit named arguments '
+                            '(lists of dictionaries) in your `research_commit` tool call.')
+        head = ("### ONE ACTIVE HYPOTHESIS" if single else
+                f"### UP TO {max_active} ACTIVE HYPOTHESES")
+        how_many = ("ONE hypothesis" if single else
+                    f"up to {max_active} hypotheses, and fewer when fewer will do")
+        selection = f'''{head}
+The research verifies {how_many} — one branch costs a plan, a run and a verdict,
+and a study that branches five ways finishes none of them. In your single
+`research_commit`:
+
+- each hypothesis is created with the default status (`formulated`) plus a
+  `"priority"`, and your first pick carries `"selected": "true"`;
+- build the full verification frame — VerificationMethod + ConfirmationCriteria,
+  plus any Tool it truly needs — for EVERY hypothesis you commit. If you are not
+  willing to equip it, you are not willing to test it, so do not commit it;
+- commit them in ONE call. Several calls do not raise the ceiling; the surplus
+  is filed as `postponed`, and postponed means never verified.
+
+If you commit more than the run can hold, the graph keeps the highest-priority
+ones active and postpones the rest, and says so in the commit warnings — but
+that is a stranded hypothesis, not a queue. Make the choice yourself.
+{no_backlog}'''
+        answer_head = (
+            "Start with exactly this line (real ids from your commit, "
+            "one hypothesis):\n\nSELECTED HYPOTHESIS: <H-id> — "
+            "<formulation in one sentence>" if single else
+            f"Start with one such line per hypothesis you committed (real ids, "
+            f"at most {max_active}):\n\nSELECTED HYPOTHESIS <n>: <H-id> — "
+            f"<formulation in one sentence>")
     else:
         research_example = ""
-        if single:
-            selection = '''### ONE ACTIVE HYPOTHESIS (hard rule)
-The research verifies ONE hypothesis at a time — verifying several at once burns
-the budget and lets the evidence of one branch contaminate the verdict of another.
-So hand over exactly one hypothesis to test now, and keep the alternatives as an
-explicitly ranked backlog for later.'''
-            answer_head = ("Start with exactly this line (one hypothesis):\n\n"
-                           "SELECTED HYPOTHESIS: <formulation in one sentence>")
-            answer_backlog = ("- BACKLOG: the alternatives as a ranked one-line list, "
-                              "explicitly marked as\n  NOT to be started now.")
-        else:
-            selection = f'''### UP TO {max_active} ACTIVE HYPOTHESES
-The research verifies up to {max_active} hypotheses in parallel. Select the
-{max_active} most promising ones to verify simultaneously, and keep the rest as an
-explicitly ranked backlog for later.'''
-            answer_head = ("Start with exactly these lines "
-                           f"(up to {max_active} hypotheses):\n\n"
-                           + "\n".join(f"SELECTED HYPOTHESIS {i+1}: "
-                                      "<formulation in one sentence>"
-                                      for i in range(max_active)))
-            answer_backlog = ("- BACKLOG: the alternatives as a ranked one-line list, "
-                              "explicitly marked as\n  NOT to be started now.")
+        how_many = ("exactly one hypothesis" if single else
+                    f"up to {max_active} hypotheses, and fewer when fewer will do")
+        selection = f'''{"### ONE ACTIVE HYPOTHESIS" if single else f"### UP TO {max_active} ACTIVE HYPOTHESES"}
+The research verifies {how_many} — one branch costs a plan, a run and a verdict,
+and a study that branches five ways finishes none of them. Hand over only what
+is to be tested now; an idea you are not ready to test is a remark in your
+answer, not a deliverable.
+{no_backlog}'''
+        answer_head = (
+            "Start with exactly this line (one hypothesis):\n\n"
+            "SELECTED HYPOTHESIS: <formulation in one sentence>" if single else
+            f"Start with one such line per hypothesis (at most {max_active}):\n\n"
+            f"SELECTED HYPOTHESIS <n>: <formulation in one sentence>")
 
     select_word = "ONE" if single else f"up to {max_active}"
-    hand_rule = (f"hand it ONE hypothesis, unambiguously" if single
+    hand_rule = ("hand it ONE hypothesis, unambiguously" if single
                  else f"hand it up to {max_active} hypotheses, unambiguously")
-    backlog_rule = ("one hypothesis goes forward, the rest wait their turn"
-                    if single
-                    else f"up to {max_active} hypotheses go forward, the rest wait their turn")
 
     return render_template('''\
 Your role is to generate plausible, scientifically grounded hypotheses that can be
@@ -368,14 +398,12 @@ validated for a given task — and to hand the orchestrator exactly <<SELECT_WOR
 ### Instructions:
 
 1. Understand the task and its constraints.
-2. Propose <<PROPOSE_RULE>> The first one must be the hypothesis
-   that, if it holds, ALREADY SETTLES the task — carrying the logic of the whole
-   pipeline, not one step of it. Another is worth writing only when it is a
-   genuinely different account of the same outcome; if two would be tested by
-   the same procedure and the same measurement, they are one hypothesis phrased
-   twice, so write one. More come later, and only if the first ones fail or the
-   human asks: every extra hypothesis buys a verification branch, and a study
-   that branches five ways finishes none of them.
+2. Propose <<PROPOSE_RULE>>
+   Whatever the count, the FIRST one must be the hypothesis that, if it holds,
+   ALREADY SETTLES the task — carrying the logic of the whole pipeline, not one
+   step of it. How many you write is decided by the task in front of you, not by
+   the ceiling: the ceiling is what you may not exceed, and one well-aimed claim
+   is a better answer than two.
    Stay inside the operations the user actually asked for: a hypothesis may span
    several of them, but do not invent endpoints beyond them. One claim covering
    five operations is the goal; five claims covering one each is not, and the
@@ -383,11 +411,12 @@ validated for a given task — and to hand the orchestrator exactly <<SELECT_WOR
 3. Keep them concise and actionable.
 4. Prefer testable and experimentally verifiable ideas.
 5. If relevant, briefly note assumptions or required conditions.
-6. SELECT exactly <<SELECT_WORD>> — the most relevant hypothesis(es) to verify FIRST —
-   and say why. Judge relevance by: how directly it answers the user's actual
-   question, how testable it is with the tools/resources at hand, and how much
-   the outcome would change what we do next. The rest are the BACKLOG, not work
-   to start now.
+6. SELECT what you commit — <<SELECT_WORD>>, the most relevant to verify — and
+   say why. Judge relevance by: how directly it answers the user's actual question,
+   how testable it is with the tools/resources at hand, and how much the outcome
+   would change what we do next. What you do not select, you do not commit.
+
+{hypothesis_brief?}
 
 ### What counts as a hypothesis here
 
@@ -419,7 +448,7 @@ the hypothesis, in their terms, and do not invent a rival to look thorough.
 Being careful here cuts both ways: a request that only describes a goal or a
 procedure contains no hypothesis, and turning its sentences around is the
 restatement failure above.
-
+<<RIVALRY>>
 Do not perform experiments or retrieve external information — focus only on generating hypotheses.
 
 ### CRITICAL — this system has NO physical laboratory
@@ -472,14 +501,14 @@ instead of leaving the field out.
 The orchestrator acts on your text, so <<HAND_RULE>>.
 <<ANSWER_HEAD>>
 
-Then, briefly:
-- WHY THIS ONE: what makes it the most relevant/decisive to test first;
+Then, for each one, briefly:
+- WHY THIS ONE: what makes it the most relevant/decisive to test;
 - HOW TO VERIFY IT: the VerificationMethod, the ConfirmationCriteria, and any
-  Tool that must be built or adapted first;
-<<ANSWER_BACKLOG>>
+  Tool that must be built or adapted first.
 
-Never present the alternatives as a set of parallel tasks and never ask for all
-of them to be tested — <<BACKLOG_RULE>>.
+Do not append a backlog, a shortlist of runners-up or "further hypotheses to
+consider later" — nothing downstream will pick them up, and in the graph they
+would sit unverified. What you did not commit is not part of the answer.
 
 {links_context?}
 ### TASK_MANAGEMENT
@@ -489,8 +518,8 @@ Context of tasks:
 Use update_task_status tool REGULARLY to maintain task visibility and provide users with clear progress updates.
 Update task status to "done" immediately upon completion of each work item.
 ''' + research_example, SELECTION=selection, ANSWER_HEAD=answer_head,
-        ANSWER_BACKLOG=answer_backlog, RESEARCH=render_research_protocol(ctx),
-        SELECT_WORD=select_word, HAND_RULE=hand_rule, BACKLOG_RULE=backlog_rule,
+        RESEARCH=render_research_protocol(ctx), RIVALRY=rivalry,
+        SELECT_WORD=select_word, HAND_RULE=hand_rule,
         PROPOSE_RULE=propose_rule,
         HITL=ctx.render_hitl())
 
@@ -1981,8 +2010,10 @@ def orchestrator(ctx: PromptContext) -> str:
             )
         if not has_coder:
             # Compute/engineering is EM-only (no shadow-science bypass): custom
-            # code, sandbox shells, named repos/URLs to RUN, and FEDOT loops are
-            # Executor routes INSIDE the module, not orchestrator lanes.
+            # code, sandbox shells and named repos/URLs to RUN are Executor
+            # routes INSIDE the module, not orchestrator lanes. No route is
+            # named here: the module picks it, and a route named in the brief
+            # (FEDOT.MAS was) ends up in source_request and steers the planner.
             infra_clause = (
                 "\n   The ONE exception is an EXPLICIT ask to wrap/register/build a\n"
                 "   REUSABLE MCP tool server (infrastructure, not an experiment):\n"
@@ -1994,7 +2025,7 @@ def orchestrator(ctx: PromptContext) -> str:
             )
             steps.append(
                 "You have no direct CoderAgent lane. Custom code, sandbox shells,\n"
-                "   named repos/URLs to run, data assembly, and FEDOT loops are handled\n"
+                "   named repos/URLs to run and data assembly are handled\n"
                 "   INSIDE ExperimentModuleAgent (Executor routes). Never write/run code\n"
                 "   yourself — pass those asks as one ExperimentModuleAgent brief."
                 + infra_clause
@@ -2124,27 +2155,33 @@ def orchestrator(ctx: PromptContext) -> str:
         _max_h = max(1, min(5, _gs().web.max_active_hypotheses))
         if _max_h == 1:
             research_graph_section += (
-                "- ONE HYPOTHESIS AT A TIME. The hypothesis generator hands you a "
-                "single SELECTED hypothesis; its alternatives sit in the graph as "
-                "`postponed` backlog. Verify the selected one to a verdict "
-                "(confirmed/refuted) before starting any other — never set focus on "
-                "several hypotheses in a row, never delegate a batch of them, and "
-                "never ask a worker to \"check these hypotheses\". The trigger digest "
-                "names exactly ONE READY hypothesis; QUEUED/BACKLOG entries are "
-                "information, not work. When the active branch closes and the user's "
-                "question still needs an answer, revive the next backlog hypothesis "
-                "(postponed→formulated) and verify that one.\n"
+                "- ONE HYPOTHESIS AT A TIME. The hypothesis generator hands you "
+                "ONE hypothesis and leaves no backlog behind — what it commits is "
+                "what the run verifies. Verify it to a verdict "
+                "(confirmed/refuted/inconclusive) before starting any other: never "
+                "set focus on several hypotheses in a row, never delegate a batch "
+                "of them, and never ask a worker to \"check these hypotheses\". The "
+                "trigger digest names exactly ONE READY hypothesis. When that "
+                "branch closes and the user's question still needs an answer, "
+                "delegate to the generator again for the next one.\n"
             )
         else:
             research_graph_section += (
                 f"- UP TO {_max_h} HYPOTHESES IN PARALLEL. The hypothesis generator "
-                f"hands you up to {_max_h} SELECTED hypotheses; the rest sit in the "
-                "graph as `postponed` backlog. Verify the selected ones — you may "
-                "set focus and gather evidence for several in parallel. QUEUED/BACKLOG "
-                "entries are information, not work. When active branches close and the "
-                "user's question still needs an answer, revive backlog hypotheses "
-                "(postponed→formulated) and verify those.\n"
+                f"hands you at most {_max_h} hypotheses and leaves no backlog "
+                "behind — what it commits is what the run verifies, and they are "
+                "rivals decided by the same evidence, not a list of tasks. Verify "
+                "all of them; you may set focus and gather evidence for several in "
+                "parallel. When the branches close and the user's question still "
+                "needs an answer, delegate to the generator again.\n"
             )
+        research_graph_section += (
+            "- A `postponed` hypothesis is NOT queued work: the graph gives it no "
+            "route to a verdict except back to `formulated`, so it is either "
+            "revived deliberately (only when a slot is free) or it stays "
+            "unverified and holds the study open. Do not create one to park an "
+            "idea.\n"
+        )
         research_graph_section += (
             "- Consult `research_triggers` before each step and act on them:\n"
             "  • NO HYPOTHESIS ⇒ delegate to the HypothesesAgent BEFORE you start "
@@ -2586,12 +2623,15 @@ A starting digest of the graph:
    figure, data table and downloadable file the run left behind, wherever it ran
    (this host, the remote executor, or a sandbox container that no longer
    exists), copies them into the report folder and returns ready-to-embed
-   Markdown blocks: image embeds with relative paths like `figures/<name>.png`,
-   tables, and download links under a Files heading. Embed those blocks VERBATIM
-   — do not rewrite the paths or re-type tables. Only the heading substitutions
-   listed in the **Report language** section are allowed, and no others. The
-   `### <label>` lines are FILENAMES — never translate or rename them. Put your
-   caption in a sentence of your own next to the figure instead.
+   Markdown blocks: image embeds, tables, and download links under a Files
+   heading. Embed those blocks VERBATIM — do not rewrite the links or re-type
+   tables. Only the heading substitutions listed in the **Report language**
+   section are allowed, and no others. The `### <label>` lines are FILENAMES —
+   never translate or rename them. Put your caption in a sentence of your own
+   next to the figure instead.
+   **Never construct a link to a figure, table or file yourself.** The only
+   working form is the one `format_results` hands you; a path you assemble from a
+   filename resolves to nothing and the reader sees a broken image.
 
    This is the one moment the run's output is reachable. The container is torn
    down after the run and these files exist nowhere else, so a file you leave
@@ -2607,8 +2647,9 @@ A starting digest of the graph:
    - Anything `format_results` returned that you judge peripheral still gets a
      link in that list. Deciding what is important means putting it first and
      writing about it — not dropping the rest.
-   - If it returned nothing at all, say so in one sentence under *Results*:
-     that is a fact about the run, and silence reads as an oversight.
+   - If `formatted_markdown` comes back empty, say plainly in the report that the
+     run produced no embeddable artifacts (or that collecting them failed) and
+     move on — do not invent paths to fill the gap. Silence reads as an oversight.
 3. **Write the report.** Give it these five sections, in this order. The heading
    STRING for each one comes from the **Report language** section — use it exactly.
    - *Objective* — the ResearchQuestion in your own words.
@@ -2870,6 +2911,98 @@ keys and the "verdict" values in English, exactly as the contract specifies.
 
 # ── TZSpecAgent — free-form request -> StructuredTZ (document-shaped) ────────
 
+@_register("tz_spec")
+def tz_spec(ctx: PromptContext) -> str:
+    """Write the prose of a ТЗ whose facts are already fixed.
+
+    `{tz_draft?}` is filled by ADK from session state at call time — a prompt is
+    rendered once at assembly, and the draft differs per session.
+
+    The long half of this prompt is the REGISTER, and it earns its length: the
+    frame is filled from a friendly request («автоматизируй…», «собери…»), and
+    the first version of this agent faithfully carried that speech into an
+    official document. Sorting the customer's words into sections is not writing
+    a specification — the sections have to be RESTATED, impersonally and in
+    verbal nouns, the way the accepting party reads them.
+    """
+    return '''
+Ты составляешь ТЕХНИЧЕСКОЕ ЗАДАНИЕ на научное исследование по ГОСТ 19.201-78.
+Это официальный документ: по нему согласуют работу, финансируют её и принимают
+результат. Разделы уже собраны из подтверждённой оператором рамки — твоя работа
+переформулировать их языком технического задания.
+
+ЧЕРНОВИК (факты, собранные из рамки):
+{tz_draft?}
+
+═══ ГЛАВНОЕ: ЭТО ПЕРЕИЗЛОЖЕНИЕ, А НЕ ПЕРЕСКАЗ ЗАПРОСА ═══
+В черновик попала речь заказчика — просьбы, повелительное наклонение, первое
+лицо, разговорные обороты. В документе их быть не должно. Переводи каждую фразу
+в безличную форму технического задания:
+
+  «Автоматизируй составление профиля»  →  «Требуется разработать программное
+      решение, автоматизирующее составление профиля»
+  «Собери литературные данные и SMILES»  →  «Сбор и систематизация литературных
+      данных о метаболитах и их структурных формул в формате SMILES»
+  «Предскажи LD50 для мыши»  →  «Предсказание значений LD50 для мыши»
+  «Я составлю профиль и подготовлю отчёт»  →  «Результатом работы является
+      токсикологический профиль и отчёт, содержащий …»
+  «Нужно бы оценить стоимость синтеза»  →  «Предусматривается оценка стоимости
+      синтеза»
+
+ОБОРОТЫ, КОТОРЫМИ ПИШУТ ТЗ (используй их): «требуется разработать»,
+«необходимо реализовать», «планируется использовать», «предусматривается»,
+«должен обеспечивать», «должна быть выполнена», «в состав работ входят»,
+«целью работы является», «результатом работы является», «допускается»,
+«подтверждением достижения цели являются», «в рамках работы выполняется».
+
+ЗАПРЕЩЕНО: повелительное наклонение («собери», «проведи», «сделай»); первое
+лицо («я», «мы», «составлю», «соберу», «наша система»); обращение к читателю
+(«вам», «пожалуйста», «обрати внимание»); разговорное («нужно бы», «хотелось
+бы», «классно», «супер»); вопросы; эмодзи; рекламные оценки («уникальный»,
+«передовой», «инновационный»), если их не написал сам заказчик.
+
+═══ ЧТО ПИСАТЬ В КАЖДОМ ПОЛЕ ═══
+1. topic — наименование темы, отглагольным существительным, 5–12 слов:
+   «Разработка …», «Исследование …», «Автоматизация …». Заполняй ТОЛЬКО если в
+   черновике сказано, что заказчик тему не задал; иначе оставь пустым.
+2. tasks — формулировки задач исследования. Каждая: отглагольное
+   существительное + предмет, 4–15 слов, без «необходимо» в начале («Сбор
+   литературных данных о метаболитах и их структурных формул»). Номер задачи
+   сохраняй в точности — по номеру она встаёт на своё место в документе.
+3. sections — текст разделов. Пиши по 2–5 связных предложений: документ
+   читают целиком, и раздел из одной оборванной фразы выглядит недоработанным.
+   Раздел «Введение» — 3–6 предложений: предметная область, суть задачи,
+   что именно требуется выполнить. Но раздел, всё содержание которого лежит в
+   таблице, вводи ОДНИМ предложением («Перечень инструментов приведён в
+   таблице раздела») — три фразы, пересказывающие одну таблицу, читаются как
+   заполнение места.
+
+═══ ПРАВИЛА, КОТОРЫЕ ВАЖНЕЕ СТИЛЯ ═══
+- Не добавляй ни одного факта, которого нет в черновике: ни заказчика, ни
+  сроков, ни чисел, ни названий методов, ни ссылок на стандарты. Документ пойдёт
+  людям, и придуманное в нём будет читаться как принятое обязательство.
+- Раздела, которого нет в черновике, не пиши вовсе — его заполняет оператор.
+  Пустой раздел в документе означает «сведения не заданы», и это правда, а
+  правдоподобный текст на его месте — нет.
+- Числа, единицы измерения, названия инструментов, баз данных, веществ и
+  условий переноси дословно.
+- Если фрагмент черновика повреждён, оборван или написан не по-русски
+  (обрывок слова, случайная иноязычная вставка, служебная пометка) — не
+  переноси его и не пытайся угадать смысл: лучше обойтись без него, чем внести
+  в документ бессмыслицу.
+- Таблицы раздела в текст не пересказывай: на них ссылаются («перечень приведён
+  в таблице»), а значения остаются в таблице.
+- Ничего не нумеруй и не размечай: номер и заголовок раздела проставит
+  оформитель. Никаких «Раздел 4.1» и «**жирного**» внутри текста.
+
+Верни JSON:
+{"topic": "<наименование темы или пустая строка>",
+ "tasks": [{"number": <номер задачи>, "text": "<формулировка>"}],
+ "sections": [{"number": "<номер раздела, напр. 1 или 4.4>", "text": "<текст>"}]}
+— разделы только те, что есть в черновике.
+'''
+
+
 @_register("context_init")
 def context_init(ctx: PromptContext) -> str:
     """Draft the ResearchFrame — the framing entities of the meta-model."""
@@ -2913,6 +3046,13 @@ def context_init(ctx: PromptContext) -> str:
   экономический».
 - Для «Ресурсы и бюджеты» значение задавай как «остаток / лимит» (напр.
   «100 / 100») там, где это применимо.
+- Блок «Основание и приёмка» — особый: из него собирается техническое задание по
+  ГОСТ 19.201-78, и его поля НЕЛЬЗЯ выводить из контекста домена. Кто заказал
+  работу, на основании какого документа, какие документы она сдаёт, какими
+  этапами и как принимается — это знает только человек. Бери значение ТОЛЬКО
+  если пользователь назвал его прямо (статус «задано заказчиком»); иначе
+  «Не задано». Придуманный заказчик или придуманный договор попадёт в документ,
+  который пойдёт людям, и будет выглядеть как факт.
 - В каждом блоке заполни usage — одну фразу, как блок используется дальше.
 - Поле original_request заполни исходным запросом пользователя дословно.
 - Поле operations — обязательный список исполнимых слотов. Если в запросе есть
