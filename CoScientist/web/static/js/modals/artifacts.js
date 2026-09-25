@@ -201,13 +201,17 @@
         const kind = isDir ? 'dir' : (entry.kind || 'binary');
         const link = artifactsFetched.get(fetchedKey(full));
         const icon = KIND_ICONS[kind] || 'description';
-        // Three separate things: look at it here, keep a durable link to it,
-        // save it. Only the middle one goes through storage.
+        // Three different wants, three actions. Reading and saving go straight
+        // through us; only the durable link needs storage, because only it has
+        // to outlive the container.
         const look = (kind === 'binary' || isDir) ? ''
           : `<button class="art-get" onclick="event.stopPropagation();openArtifactFile('${escAttr(full)}')">смотреть</button>`;
-        const action = link
+        const save = `<a class="art-get" download onclick="event.stopPropagation()"
+             href="${escAttr(viewUrl(full, true, isDir))}">скачать</a>`;
+        const share = link
           ? `<a class="art-open" href="${escAttr(link)}" target="_blank" rel="noopener">ссылка ↗</a>`
-          : `<button class="art-get" onclick="event.stopPropagation();fetchArtifact('${escAttr(full)}', this)">забрать</button>`;
+          : `<button class="art-get art-share" onclick="event.stopPropagation();fetchArtifact('${escAttr(full)}', this)"
+               title="Скопировать в хранилище и получить ссылку, которую можно вставить в отчёт">ссылку</button>`;
         const onclick = isDir
           ? ` onclick="loadArtifacts('${escAttr(full)}')"`
           : (kind === 'binary' ? '' : ` onclick="openArtifactFile('${escAttr(full)}')"`);
@@ -216,7 +220,8 @@
             <span class="art-name">${escHtml(entry.name || '')}</span>
             <span class="art-size">${isDir ? '' : humanSize(entry.size)}</span>
             ${look}
-            ${action}
+            ${save}
+            ${share}
           </div>`;
       }).join('');
     }
@@ -250,19 +255,19 @@
         const result = await response.json();
         if (result.status !== 'success') {
           button.disabled = false;
-          button.textContent = 'забрать';
-          artifactsNote(result.message || 'Забрать не удалось.', 'error');
+          button.textContent = 'ссылку';
+          artifactsNote(result.message || 'Скопировать не удалось.', 'error');
           return;
         }
         artifactsFetched.set(fetchedKey(path), result.url);
         // Redraw rather than patch the row: the button becomes a link, and the
         // next visit to this folder should already show it as fetched.
         renderArtifacts();
-        artifactsNote(`Забрано: ${path} (${humanSize(result.size_bytes)}). Ссылка не протухает.`);
+        artifactsNote(`Ссылка на ${path} готова (${humanSize(result.size_bytes)}) и не протухает — её можно вставить в отчёт.`);
       } catch (error) {
         button.disabled = false;
-        button.textContent = 'забрать';
-        artifactsNote('Забрать не удалось: ' + error, 'error');
+        button.textContent = 'ссылку';
+        artifactsNote('Скопировать не удалось: ' + error, 'error');
       }
     }
 
@@ -283,11 +288,14 @@
     // knows which folder to return to.
     let artifactsViewing = null;
 
-    function viewUrl(path, download) {
+    function viewUrl(path, download, isDir) {
       const base = artifactsSession();
       return `${base}/view?path=${encodeURIComponent(path)}`
         + (artifactsWorkspace ? `&sandbox_id=${encodeURIComponent(artifactsWorkspace)}` : '')
-        + (download ? '&download=1' : '');
+        + (download ? '&download=1' : '')
+        // The sandbox serves a directory as a ZIP; saying so up front is what
+        // gives the saved file a name the operating system understands.
+        + (isDir ? '&dir=1' : '');
     }
 
     function closeArtifactFile() {

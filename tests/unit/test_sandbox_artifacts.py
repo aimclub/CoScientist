@@ -555,3 +555,37 @@ def test_a_folder_is_a_folder_in_the_panel_not_a_file_to_harvest():
     rows = seen["listing"]
     assert "loadArtifacts('/workspace/results')" in rows, "a folder must open"
     assert "openArtifactFile('/workspace/train.py')" in rows, "a file must be readable"
+
+
+def test_saving_a_file_does_not_go_through_storage():
+    """Storage is for a link that outlives the container, not for a download."""
+    seen = _open_the_panel(
+        [{"sandbox_id": "w", "status": "running", "task": "", "browsable": True}],
+        entries=[{"name": "meta.json", "type": "file", "size": 4608,
+                  "kind": "text", "path": "/workspace/meta.json"}],
+    )
+
+    assert "download" in seen["listing"], "every row must offer a direct save"
+    assert "download=1" in seen["listing"].replace("&amp;", "&")
+
+
+def test_a_folder_is_saved_as_a_zip_with_a_name_to_match(monkeypatch):
+    """The sandbox serves a directory as one archive; the file should say so."""
+    from starlette.testclient import TestClient
+
+    from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
+    from CoScientist.web.app import create_app
+
+    monkeypatch.setattr(
+        sandbox, "read_sandbox_file",
+        lambda path, *, max_bytes, **k: {"status": "ok", "data": b"PK\x03\x04",
+                                         "truncated": False},
+        raising=False)
+
+    with TestClient(create_app()) as client:
+        answer = client.get("/api/users/u1/sessions/s1/sandbox/view"
+                            "?path=/workspace/events&dir=1")
+
+    assert answer.status_code == 200
+    assert 'filename="events.zip"' in answer.headers["content-disposition"]
+    assert "attachment" in answer.headers["content-disposition"]

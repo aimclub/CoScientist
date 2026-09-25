@@ -1387,7 +1387,8 @@ def create_app() -> FastAPI:
     async def view_session_sandbox_file(user_id: str, session_id: str,
                                         path: str,
                                         sandbox_id: Optional[str] = None,
-                                        download: int = 0):
+                                        download: int = 0,
+                                        dir: int = 0):
         """Serve one workspace file to the browser, for reading rather than keeping.
 
         The transfer through S3 is for files that must outlive the container —
@@ -1400,6 +1401,10 @@ def create_app() -> FastAPI:
         from CoScientist.web.preview import cap_for, kind_of, media_type_of
 
         name = path.rsplit("/", 1)[-1] or "file"
+        # A directory comes back from the sandbox as one ZIP, so that is what
+        # the reader is saving and what it should be called.
+        if dir:
+            name, download = f"{name}.zip", 1
         kind = kind_of(name)
         # A checkpoint is not something to look at, and reading one to say so
         # would move gigabytes. Downloading it, however, is fair.
