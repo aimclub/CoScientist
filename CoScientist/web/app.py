@@ -225,9 +225,29 @@ _DOWNLOAD_MAX_BYTES = 256 * 1024 * 1024
 
 
 def _ascii_name(name: str) -> str:
-    """A filename safe to put in a header: no quotes, no newlines, no non-ASCII."""
+    """A filename safe to put in a header: no quotes, no newlines, no non-ASCII.
+
+    Non-ASCII is dropped rather than replaced: `отчёт_v2.txt` keeps `_v2.txt`,
+    which is at least a name, where a row of question marks is not.
+    """
     cleaned = "".join(ch for ch in str(name) if ch.isprintable() and ch not in '"\\')
-    return cleaned.encode("ascii", "replace").decode("ascii") or "file"
+    return cleaned.encode("ascii", "ignore").decode("ascii")
+
+
+def _disposition(kind: str, name: str) -> str:
+    """``Content-Disposition`` that keeps the name a Russian-speaking run gives.
+
+    The header is ASCII, so a wholly Cyrillic name has no ASCII form worth
+    offering. RFC 5987's ``filename*`` carries the real one, and the plain
+    ``filename`` stays only for a client that cannot read it — as a fallback
+    that is still a filename. This is the shape the session-file endpoint
+    settled on; the two should not answer differently.
+    """
+    stem = _ascii_name(Path(str(name)).stem).strip(" ._-")
+    suffix = _ascii_name(Path(str(name)).suffix)
+    ascii_name = f"{stem or 'file'}{suffix}"
+    return (f'{kind}; filename="{ascii_name}"; '
+            f"filename*=UTF-8''{quote(str(name))}")
 
 
 def _readable_links(text: str, scope: SessionKey) -> str:
@@ -1536,7 +1556,7 @@ def create_app() -> FastAPI:
 
         disposition = "attachment" if download else "inline"
         headers = {
-            "Content-Disposition": f'{disposition}; filename="{_ascii_name(name)}"',
+            "Content-Disposition": _disposition(disposition, name),
             # Sent as text, read as text: no sniffing an .html back into
             # something the browser would run on our origin.
             "X-Content-Type-Options": "nosniff",

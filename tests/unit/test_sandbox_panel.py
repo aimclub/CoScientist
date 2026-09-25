@@ -504,7 +504,9 @@ def test_downloading_a_binary_is_allowed_where_showing_it_is_not(monkeypatch):
     assert "attachment" in answer.headers["content-disposition"]
 
 
-def test_a_non_ascii_name_does_not_break_the_download_header(monkeypatch):
+def test_a_cyrillic_name_survives_the_download_rather_than_becoming_question_marks(
+        monkeypatch):
+    """A run that writes in Russian names its files in Russian."""
     from starlette.testclient import TestClient
 
     from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
@@ -517,9 +519,14 @@ def test_a_non_ascii_name_does_not_break_the_download_header(monkeypatch):
 
     with TestClient(create_app()) as client:
         answer = client.get("/api/users/u1/sessions/s1/sandbox/view"
-                            "?path=/workspace/отчёт.txt")
+                            "?path=/workspace/отчёт.txt&download=1")
 
     assert answer.status_code == 200
+    disposition = answer.headers["content-disposition"]
+    # The real name, percent-encoded, for a client that reads RFC 5987 …
+    assert "filename*=UTF-8''%D0%BE%D1%82%D1%87%D1%91%D1%82.txt" in disposition
+    # … and a fallback that is still a filename, not a row of question marks.
+    assert 'filename="file.txt"' in disposition
 
 
 def test_the_listing_says_what_each_entry_is(monkeypatch):
@@ -595,3 +602,22 @@ def test_a_folder_is_saved_as_a_zip_with_a_name_to_match(monkeypatch):
     assert answer.status_code == 200
     assert 'filename="events.zip"' in answer.headers["content-disposition"]
     assert "attachment" in answer.headers["content-disposition"]
+
+
+def test_a_mixed_name_keeps_the_part_a_header_can_carry(monkeypatch):
+    """`отчёт_v2.csv` is not nameless — `_v2.csv` beats a stand-in."""
+    from starlette.testclient import TestClient
+
+    from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
+    from CoScientist.web.app import create_app
+
+    monkeypatch.setattr(
+        sandbox, "read_sandbox_file",
+        lambda path, *, max_bytes, **k: {"status": "ok", "data": b"a,b\n", "truncated": False},
+        raising=False)
+
+    with TestClient(create_app()) as client:
+        answer = client.get("/api/users/u1/sessions/s1/sandbox/view"
+                            "?path=/workspace/отчёт_v2.csv&download=1")
+
+    assert 'filename="v2.csv"' in answer.headers["content-disposition"]
