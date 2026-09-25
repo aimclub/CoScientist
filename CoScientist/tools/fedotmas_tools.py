@@ -125,18 +125,14 @@ class FedotMASToolset(BaseToolset):
             )
             try:
                 config = await mas.generate_config(task_description)
-                # Published the instant it exists — the /fedot-demo bridge draws
-                # the pipeline shape before a single agent has run. BEFORE the
-                # guardrails on purpose: a config they reject (an unused agent,
-                # say) is exactly the one you want to look at, and run_end below
-                # carries the reason. Checked after, the page showed an empty
-                # canvas for a pipeline that had in fact been generated.
-                live.publish_config(config.model_dump())
                 guardrail_errors = run_config_guardrails(config)
                 if guardrail_errors:
                     raise ValueError(
                         f"Invalid pipeline config: {'; '.join(guardrail_errors)}"
                     )
+                # Published the instant it exists — the /fedot-demo bridge draws
+                # the pipeline shape before a single agent has run.
+                live.publish_config(config.model_dump())
                 result = await mas.build_and_run(
                     config, task_description, timeout=FEDOT_TIMEOUT_S
                 )

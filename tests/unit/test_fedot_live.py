@@ -230,24 +230,21 @@ def test_a_page_opened_after_fedot_tool_finished_still_shows_the_run(monkeypatch
     assert _types(_drain(bus.subscribe(A))) == ["run_start", "config", "run_end"]
 
 
-def test_a_pipeline_the_guardrails_reject_is_still_drawn_and_the_reason_shown(monkeypatch):
-    """Observed: pool_generator and pipeline_generator both finished, the guardrails
-    rejected the config ("Unused agents … ['summarizer']"), and the page — which
-    draws on the `config` event — showed an empty canvas for a pipeline that existed."""
+def test_a_config_the_guardrails_reject_ends_the_run_with_the_reason(monkeypatch):
+    """The run stops before anything executes and the viewer is told why."""
+    import asyncio
+
     bus = FedotLiveBroadcaster()
     ft = _stub_fedot(monkeypatch, bus)
     reason = "Unused agents not referenced in pipeline: ['summarizer']"
     monkeypatch.setattr(ft, "run_config_guardrails", lambda config: [reason])
     view = bus.subscribe(A)
 
-    import asyncio
-
     tool_context = SimpleNamespace(state={GRAPH_SCOPE_USER_KEY: A[0], GRAPH_SCOPE_SESSION_KEY: A[1]})
     result = asyncio.run(ft.fedot_toolset.fedot_tool("do the thing", tool_context=tool_context))
 
     events = _drain(view)
-    assert _types(events) == ["run_start", "config", "run_end"]
-    assert events[1]["config"]["agents"], "the rejected config is what gets drawn"
+    assert events[0]["type"] == "run_start" and events[-1]["type"] == "run_end"
     assert events[-1]["status"] == "error" and reason in events[-1]["error"]
     assert result["status"] == "error" and "result" not in result   # nothing was run
 
