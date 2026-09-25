@@ -329,6 +329,70 @@ def _readable_links(text: str, scope: SessionKey) -> str:
         return text
 
 
+_MARKDOWN_PAGE = """<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta content="width=device-width, initial-scale=1.0" name="viewport" />
+  <title>__TITLE__</title>
+  <link rel="stylesheet" href="/static/css/fonts.css" />
+  <script src="/static/js/appearance.js"></script>
+  <link rel="stylesheet" href="/static/css/main.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+  <style>
+    body { margin: 0; background: rgb(var(--c-background)); color: rgb(var(--c-on-surface));
+           font-family: var(--font-ui); }
+    main { max-width: 860px; margin: 0 auto; padding: 32px 16px 64px; }
+    .bar { display: flex; justify-content: flex-end; font-size: 12px; margin-bottom: 16px; }
+    .bar a, .md-body a { color: rgb(var(--c-primary-text)); }
+    .md-body img { max-width: 100%; }
+    .md-body pre { overflow-x: auto; }
+    .md-body table { display: block; overflow-x: auto; border-collapse: collapse; }
+    .md-body th, .md-body td { border: 1px solid rgb(var(--c-outline-variant) / .35); padding: 4px 8px; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="bar"><a href="__RAW__">Raw .md</a></div>
+    <article id="doc" class="md-body"></article>
+  </main>
+  <script id="doc-source" type="application/json">__SOURCE__</script>
+  <script>
+    const source = JSON.parse(document.getElementById('doc-source').textContent);
+    const doc = document.getElementById('doc');
+    if (window.marked && window.DOMPurify) {
+      marked.setOptions({ gfm: true });
+      doc.innerHTML = DOMPurify.sanitize(marked.parse(source));
+    } else {
+      // Offline: the CDN is out of reach, and plain text still beats nothing.
+      doc.style.whiteSpace = 'pre-wrap';
+      doc.textContent = source;
+    }
+  </script>
+</body>
+</html>
+"""
+
+
+def _markdown_page(text: str, *, title: str, raw_href: str) -> str:
+    """A markdown artifact as a page a person can read, in the app's theme.
+
+    Rendered in the browser with the same marked + DOMPurify the chat uses, so
+    the server needs no markdown library. The source travels as JSON with every
+    ``<`` escaped, which is what keeps a ``</script>`` in it from closing the tag.
+    """
+    from html import escape
+
+    source = json.dumps(text).replace("<", "\\u003c")
+    return (
+        _MARKDOWN_PAGE
+        .replace("__TITLE__", escape(title))
+        .replace("__RAW__", escape(raw_href))
+        .replace("__SOURCE__", source)
+    )
+
+
 def _mint_artifact_url(bucket: str, key: str) -> str | None:
     """Mint a fresh download URL for one object. Runs in a worker thread.
 
@@ -1858,7 +1922,9 @@ def create_app() -> FastAPI:
 
     @app.get("/api/users/{user_id}/sessions/{session_id}/artifacts/{artifact_id}")
     async def get_session_artifact(
+        request: Request,
         user_id: str, session_id: str, artifact_id: str, fallback: str = "",
+        raw: bool = False,
     ):
         """Serve one file this session mirrored into its own directory.
 
@@ -1911,6 +1977,25 @@ def create_app() -> FastAPI:
             or mimetypes.guess_type(artifact_id)[0]
             or "application/octet-stream"
         )
+        # A link to a markdown file is clicked by a person, who wants it read,
+        # not its `**` and `#`. Only a navigation asks for text/html; the doc
+        # panel's fetch() sends */* and keeps getting the bytes, as does ?raw=1.
+        is_markdown = (
+            media_type in ("text/markdown", "text/x-markdown")
+            or artifact_id.lower().endswith((".md", ".markdown"))
+        )
+        if is_markdown and not raw and "text/html" in request.headers.get("accept", ""):
+            return HTMLResponse(
+                _markdown_page(
+                    # `cos-artifact:` refs inside resolve against this session,
+                    # exactly as the same text would in the chat.
+                    _readable_links(path.read_text(encoding="utf-8", errors="replace"), key),
+                    title=record.get("label") or record.get("filename") or artifact_id,
+                    raw_href="?raw=1",
+                ),
+                headers={"Cache-Control": "private, no-cache", "Vary": "Accept"},
+            )
+
         # Show what a browser can show; hand the rest over as a download under
         # the name the tool gave it, not the hashed id.
         inline = media_type.startswith(("image/", "text/")) or media_type == "application/pdf"
@@ -1932,6 +2017,9 @@ def create_app() -> FastAPI:
                 # The id is the content hash, so the bytes behind it can never
                 # change. Unlike /api/artifact/, whose 302 target expires.
                 "Cache-Control": "private, max-age=31536000, immutable",
+                # The same URL answers a navigation to a markdown file with a
+                # rendered page; a cache must not hand one to the other.
+                "Vary": "Accept",
             },
         )
 

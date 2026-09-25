@@ -170,9 +170,10 @@
         class="w-8 h-8 rounded-md text-outline-variant hover:text-on-surface hover:bg-surface-container transition-colors flex items-center justify-center">
         <span class="material-symbols-outlined text-[20px]" aria-hidden="true">groups</span>
       </button>
-      <button type="button" id="checkpoints-btn" onclick="openCheckpointsModal()" data-i18n-aria="topbar.checkpoints"
+      <!-- Hidden until checkpoint restore is finished; the modal and its script stay wired. -->
+      <button type="button" id="checkpoints-btn" hidden onclick="openCheckpointsModal()" data-i18n-aria="topbar.checkpoints"
         data-i18n-title="topbar.checkpoints" aria-label="Checkpoints" title="Checkpoints"
-        class="relative w-8 h-8 rounded-md text-outline-variant hover:text-on-surface hover:bg-surface-container transition-colors flex items-center justify-center">
+        class="hidden relative w-8 h-8 rounded-md text-outline-variant hover:text-on-surface hover:bg-surface-container transition-colors items-center justify-center">
         <span class="material-symbols-outlined text-[20px]" aria-hidden="true">history</span>
         <span id="checkpoints-count"
           class="hidden absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-primary text-on-primary text-[8px] font-bold items-center justify-center">0</span>
