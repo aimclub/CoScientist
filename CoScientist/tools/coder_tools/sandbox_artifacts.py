@@ -34,13 +34,16 @@ def transfer_sandbox_artifact(
     remote_path: str,
     *,
     session_id: Optional[str] = None,
+    sandbox_id: Optional[str] = None,
     tool_context: Any = None,
     max_bytes: int = DEFAULT_MAX_BYTES,
 ) -> Dict[str, Any]:
     """Copy one sandbox path into durable storage and return how to open it.
 
     ``remote_path`` may name a file or a directory; the sandbox serves a
-    directory as a ZIP, so the result is one object either way.
+    directory as a ZIP, so the result is one object either way. ``sandbox_id``
+    names a workspace other than the session's own; without it the transfer
+    goes through whichever sandbox this session is bound to.
     """
     from CoScientist.graph.session_scope import session_key
     from CoScientist.reporting.s3_upload import upload_and_ref
@@ -59,7 +62,8 @@ def transfer_sandbox_artifact(
     with tempfile.TemporaryDirectory(prefix="sandbox-artifact-") as tmp:
         local = Path(tmp) / (Path(remote).name or "artifact")
         fetched = sandbox.download_sandbox_file(
-            remote, str(local), session_id=session_id, tool_context=tool_context,
+            remote, str(local), session_id=session_id, sandbox_id=sandbox_id,
+            tool_context=tool_context,
         )
         if fetched.get("status") != "ok":
             return _error(

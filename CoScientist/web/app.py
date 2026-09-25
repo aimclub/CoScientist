@@ -9,7 +9,7 @@ from collections import defaultdict, OrderedDict
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 from urllib.parse import urlparse
 from uuid import uuid4
 from weakref import WeakKeyDictionary
@@ -1311,19 +1311,45 @@ def create_app() -> FastAPI:
             return JSONResponse({"status": "cancelled", "detail": str(exc)}, status_code=200)
 
     # --- Artifact delivery (report links) ---
+    @app.get("/api/users/{user_id}/sessions/{session_id}/sandbox/tasks")
+    async def list_session_sandbox_tasks(user_id: str, session_id: str):
+        """Every workspace the sandbox still holds, so the reader can choose one.
+
+        The session's own container is one of many on that machine, and the
+        sandbox addresses each by task id — the same id its console carries in
+        `?task_id=`. Offering the list turns "look at ours" into "look at any".
+        """
+        from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
+
+        result = await asyncio.to_thread(
+            sandbox.list_sandbox_tasks, session_id=session_id,
+        )
+        if result.get("status") != "ok":
+            return JSONResponse(
+                {"status": "error",
+                 "message": result.get("error") or "Песочница не ответила.",
+                 "workspaces": []},
+                status_code=502,
+            )
+        return JSONResponse({"status": "ok",
+                             "sandbox_id": result.get("sandbox_id"),
+                             "workspaces": result.get("workspaces", [])})
+
     @app.get("/api/users/{user_id}/sessions/{session_id}/sandbox/files")
     async def list_session_sandbox_files(user_id: str, session_id: str,
-                                         path: str = "/workspace"):
-        """What the sandbox of this session actually holds, for a human to see.
+                                         path: str = "/workspace",
+                                         sandbox_id: Optional[str] = None):
+        """What a sandbox workspace actually holds, for a human to see.
 
         The agents have had `list_sandbox_files` all along; the person watching
         the run had no way to look, and no way to reach a file the agent never
-        mentioned.
+        mentioned. Without ``sandbox_id`` this reads the session's own sandbox.
         """
         from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
 
         result = await asyncio.to_thread(
             sandbox.list_sandbox_files, path, session_id=session_id,
+            sandbox_id=(sandbox_id or None),
         )
         if result.get("status") != "ok":
             return JSONResponse(
@@ -1351,9 +1377,11 @@ def create_app() -> FastAPI:
         path = str((body or {}).get("path") or "").strip()
         if not path:
             raise HTTPException(status_code=400, detail="path is required")
+        target = str((body or {}).get("sandbox_id") or "").strip() or None
 
         result = await asyncio.to_thread(
             transfer_sandbox_artifact, path, session_id=session_id,
+            sandbox_id=target,
         )
         return JSONResponse(result,
                             status_code=200 if result.get("status") == "success" else 502)

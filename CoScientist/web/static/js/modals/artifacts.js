@@ -9,13 +9,73 @@
 
     const SANDBOX_ROOT = '/workspace';
     let artifactsPath = SANDBOX_ROOT;
-    // Fetched during this visit: path → durable link, so a second click opens
-    // the file instead of copying it across again.
+    // Which workspace is being read: '' means the one bound to this session,
+    // anything else is a task id the sandbox still holds. The sandbox addresses
+    // containers by task id, so a neighbouring run is one parameter away.
+    let artifactsWorkspace = '';
+    // Fetched during this visit: workspace + path → durable link, so a second
+    // click opens the file instead of copying it across again.
     const artifactsFetched = new Map();
+
+    function fetchedKey(path) {
+      return `${artifactsWorkspace}\u0000${path}`;
+    }
 
     function openArtifactsModal() {
       if (typeof toggleAttachMenu === 'function') toggleAttachMenu(false);
       document.getElementById('artifacts-modal').classList.remove('hidden');
+      loadWorkspaces();
+      loadArtifacts(SANDBOX_ROOT);
+    }
+
+    // What the workspace list says about a task, in the words a reader uses.
+    const WORKSPACE_STATUS = {
+      running: 'работает', cooldown: 'остывает', soft_stopping: 'останавливается',
+      queued: 'в очереди', completed: 'завершён', failed: 'упал',
+      stopped: 'остановлен', error: 'ошибка',
+    };
+
+    function workspaceLabel(workspace) {
+      const id = String(workspace.sandbox_id || '');
+      const status = WORKSPACE_STATUS[workspace.status] || workspace.status || '';
+      const task = String(workspace.task || '').replace(/\s+/g, ' ').trim();
+      const head = workspace.current ? 'текущая' : id.slice(0, 8);
+      const tail = task ? ` — ${task.slice(0, 60)}` : '';
+      return `${head} · ${status}${tail}`;
+    }
+
+    async function loadWorkspaces() {
+      const select = document.getElementById('artifacts-workspace');
+      const base = artifactsSession();
+      if (!base) { select.innerHTML = ''; return; }
+      select.innerHTML = '<option value="">песочница этой сессии</option>';
+
+      let payload;
+      try {
+        const response = await fetch(`${base}/tasks`, { cache: 'no-store' });
+        payload = await response.json();
+      } catch (error) {
+        return;  // The listing below reports the real trouble; one message is enough.
+      }
+      if (payload.status !== 'ok') return;
+
+      const workspaces = payload.workspaces || [];
+      if (!workspaces.length) return;
+      select.innerHTML = workspaces.map(workspace => {
+        const id = escAttr(workspace.sandbox_id);
+        // A finished container is gone from the sandbox, so its files cannot be
+        // listed; keep it visible and say why rather than hide it.
+        const dead = workspace.browsable ? '' : ' disabled';
+        const selected = workspace.sandbox_id === artifactsWorkspace
+          || (workspace.current && !artifactsWorkspace) ? ' selected' : '';
+        const note = workspace.browsable ? '' : ' (контейнера уже нет)';
+        return `<option value="${id}"${dead}${selected}>`
+             + `${escHtml(workspaceLabel(workspace))}${note}</option>`;
+      }).join('');
+    }
+
+    function pickWorkspace(sandboxId) {
+      artifactsWorkspace = sandboxId || '';
       loadArtifacts(SANDBOX_ROOT);
     }
 
@@ -61,8 +121,9 @@
 
       let payload;
       try {
-        const response = await fetch(
-          `${base}/files?path=${encodeURIComponent(artifactsPath)}`, { cache: 'no-store' });
+        const query = `path=${encodeURIComponent(artifactsPath)}`
+          + (artifactsWorkspace ? `&sandbox_id=${encodeURIComponent(artifactsWorkspace)}` : '');
+        const response = await fetch(`${base}/files?${query}`, { cache: 'no-store' });
         payload = await response.json();
       } catch (error) {
         body.innerHTML = '';
@@ -107,7 +168,7 @@
       body.innerHTML = up + sorted.map(entry => {
         const isDir = entry.type === 'directory';
         const full = entry.path || `${artifactsPath}/${entry.name}`;
-        const link = artifactsFetched.get(full);
+        const link = artifactsFetched.get(fetchedKey(full));
         const icon = isDir ? 'folder' : 'description';
         const action = link
           ? `<a class="art-open" href="${escAttr(link)}" target="_blank" rel="noopener">открыть ↗</a>`
@@ -138,7 +199,7 @@
         const response = await fetch(`${base}/fetch`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ path }),
+          body: JSON.stringify({ path, sandbox_id: artifactsWorkspace || null }),
         });
         const result = await response.json();
         if (result.status !== 'success') {
@@ -147,7 +208,7 @@
           artifactsNote(result.message || 'Забрать не удалось.', 'error');
           return;
         }
-        artifactsFetched.set(path, result.url);
+        artifactsFetched.set(fetchedKey(path), result.url);
         // Redraw rather than patch the row: the button becomes a link, and the
         // next visit to this folder should already show it as fetched.
         renderArtifacts();

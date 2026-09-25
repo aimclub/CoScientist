@@ -135,7 +135,9 @@ def test_the_panel_is_wired_into_the_page():
     # It talks to the endpoints that exist, not to invented ones. The URL is
     # assembled from a session-scoped base, so check the parts.
     assert "/sandbox" in module.text
-    assert "/files?path=" in module.text and "/fetch" in module.text
+    assert "/files?" in module.text and "path=" in module.text
+    assert "/fetch" in module.text
+    assert "/tasks" in module.text, "and asks which workspaces exist"
 
 
 def test_the_panel_asks_for_the_open_session_not_a_global_sandbox():
@@ -148,3 +150,125 @@ def test_the_panel_asks_for_the_open_session_not_a_global_sandbox():
         module = client.get("/static/js/modals/artifacts.js").text
 
     assert "activeSession" in module and "activeUser" in module
+
+
+# ---------------------------------------------------------------------------
+# Choosing which workspace to look at
+# ---------------------------------------------------------------------------
+
+class _Answer:
+    """The bare shape of an httpx response the client actually touches."""
+
+    def __init__(self, payload):
+        self._payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self._payload
+
+
+def _sandbox_status(monkeypatch, payload):
+    from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
+
+    monkeypatch.setattr(sandbox, "resolve_sandbox_url", lambda *a, **k: "http://sbx",
+                        raising=False)
+    monkeypatch.setattr(sandbox, "read_binding", lambda *a, **k: "task-ours",
+                        raising=False)
+    monkeypatch.setattr(sandbox.httpx, "get", lambda *a, **k: _Answer(payload),
+                        raising=False)
+    return sandbox
+
+
+def test_every_workspace_the_sandbox_holds_is_offered_ours_first(monkeypatch):
+    """The reader's own container is one of many; the others are one id away."""
+    sandbox = _sandbox_status(monkeypatch, {
+        "current_task": {"task_id": "task-other", "status": "running",
+                         "task": "train a transformer"},
+        "active_tasks": [{"task_id": "task-other", "status": "running"}],
+        "queue": [{"task_id": "task-waiting", "status": "queued", "task": "next up"}],
+        "completed_tasks": [{"task_id": "task-ours", "status": "cooldown",
+                             "summary": "ours"}],
+    })
+
+    out = sandbox.list_sandbox_tasks(session_id="s1")
+
+    assert out["status"] == "ok"
+    ids = [w["sandbox_id"] for w in out["workspaces"]]
+    assert ids[0] == "task-ours", "the session's own sandbox leads the list"
+    assert set(ids) == {"task-ours", "task-other", "task-waiting"}
+    # One task appearing in two sections of one answer is still one workspace.
+    assert len(ids) == len(set(ids))
+
+
+def test_a_workspace_whose_container_is_gone_is_marked_unbrowsable(monkeypatch):
+    """`/files` answers 409 for it; saying so beats an empty listing."""
+    sandbox = _sandbox_status(monkeypatch, {
+        "current_task": None, "active_tasks": [], "queue": [],
+        "completed_tasks": [{"task_id": "task-ours", "status": "running"},
+                            {"task_id": "task-done", "status": "completed"}],
+    })
+
+    by_id = {w["sandbox_id"]: w for w in
+             sandbox.list_sandbox_tasks(session_id="s1")["workspaces"]}
+
+    assert by_id["task-ours"]["browsable"] is True
+    assert by_id["task-done"]["browsable"] is False
+
+
+def test_the_session_sandbox_is_listed_even_when_it_fell_off_the_recent_list(monkeypatch):
+    """Twenty runs later it is still the one the reader means by "current"."""
+    sandbox = _sandbox_status(monkeypatch, {
+        "current_task": None, "active_tasks": [], "queue": [], "completed_tasks": [],
+    })
+    monkeypatch.setattr(sandbox, "_fetch_task",
+                        lambda api, target: {"status": "cooldown", "task": "ours"},
+                        raising=False)
+
+    workspaces = sandbox.list_sandbox_tasks(session_id="s1")["workspaces"]
+
+    assert [w["sandbox_id"] for w in workspaces] == ["task-ours"]
+    assert workspaces[0]["current"] is True
+
+
+def test_a_chosen_workspace_reaches_the_sandbox_client(monkeypatch):
+    """The dropdown is pointless if the id stops at the web layer."""
+    from starlette.testclient import TestClient
+
+    from CoScientist.tools.coder_tools import openhands_sandbox as sandbox
+    from CoScientist.web.app import create_app
+
+    seen = {}
+
+    def listing(path, **kwargs):
+        seen.update(path=path, sandbox_id=kwargs.get("sandbox_id"))
+        return {"status": "ok", "path": path, "entries": []}
+
+    monkeypatch.setattr(sandbox, "list_sandbox_files", listing, raising=False)
+
+    with TestClient(create_app()) as client:
+        client.get("/api/users/u1/sessions/s1/sandbox/files"
+                   "?path=/workspace&sandbox_id=task-other")
+
+    assert seen["sandbox_id"] == "task-other"
+
+
+def test_the_transfer_honours_the_chosen_workspace(monkeypatch):
+    """Otherwise "забрать" would quietly pull the file from a different run."""
+    seen = {}
+
+    def download(remote, local, **kwargs):
+        seen["sandbox_id"] = kwargs.get("sandbox_id")
+        open(local, "wb").close()
+        return {"status": "ok", "size_bytes": 0, "sandbox_id": kwargs.get("sandbox_id")}
+
+    monkeypatch.setattr(
+        "CoScientist.tools.coder_tools.openhands_sandbox.download_sandbox_file",
+        download, raising=False)
+    _stub_upload(monkeypatch)
+
+    sandbox_artifacts.transfer_sandbox_artifact(
+        "/workspace/metrics.csv", session_id="s1", sandbox_id="task-other")
+
+    assert seen["sandbox_id"] == "task-other"

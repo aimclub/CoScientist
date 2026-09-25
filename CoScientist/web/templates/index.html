@@ -443,6 +443,11 @@
         </button>
       </div>
       <div class="flex items-center gap-2 mb-2">
+        <span class="material-symbols-outlined text-sm text-outline-variant">deployed_code</span>
+        <select id="artifacts-workspace" onchange="pickWorkspace(this.value)"
+          class="flex-1 bg-surface-container-high border-outline-variant/20 rounded text-[10px] text-on-surface py-1.5"></select>
+      </div>
+      <div class="flex items-center gap-2 mb-2">
         <span class="material-symbols-outlined text-sm text-outline-variant">folder_open</span>
         <code id="artifacts-path" class="text-[11px] text-on-surface/80">/workspace</code>
         <button onclick="loadArtifacts(artifactsPath)"
