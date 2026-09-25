@@ -272,3 +272,128 @@ def test_the_transfer_honours_the_chosen_workspace(monkeypatch):
         "/workspace/metrics.csv", session_id="s1", sandbox_id="task-other")
 
     assert seen["sandbox_id"] == "task-other"
+
+
+# ---------------------------------------------------------------------------
+# The panel's own logic, driven in a stub DOM
+# ---------------------------------------------------------------------------
+
+#: The panel is served as plain script, so it can be run against a handful of
+#: stubs. Worth the harness: the bug it guards against — listing the files
+#: before deciding whose files to list — is invisible to a source assertion.
+_PROBE = r"""
+const fs = require('fs'), vm = require('vm');
+const source = fs.readFileSync(process.argv[2], 'utf8');
+
+const nodes = {};
+function node(id) {
+  if (!nodes[id]) nodes[id] = {
+    id, innerHTML: '', textContent: '', className: '',
+    classList: { add() {}, remove() {}, toggle() {} },
+  };
+  return nodes[id];
+}
+const asked = [];
+const context = {
+  console,
+  activeUser: { id: 'u1' }, activeSession: { id: 's1' },
+  document: { getElementById: node },
+  escHtml: (v) => String(v == null ? '' : v),
+  async fetch(url) {
+    asked.push(url);
+    if (url.endsWith('/tasks')) {
+      return { json: async () => ({ status: 'ok', workspaces: JSON.parse(process.argv[3]) }) };
+    }
+    return { json: async () => ({ status: 'ok', path: '/workspace', entries: [] }) };
+  },
+};
+vm.createContext(context);
+vm.runInContext(source + '\n;globalThis.__open = openArtifactsModal;', context);
+context.__open().then(() => console.log(JSON.stringify({
+  asked,
+  options: nodes['artifacts-workspace'].innerHTML,
+  note: nodes['artifacts-note'].textContent,
+})));
+"""
+
+
+def _open_the_panel(workspaces):
+    """Open the panel against a sandbox holding ``workspaces``; report what it did."""
+    import json
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is needed to drive the panel's script")
+
+    from starlette.testclient import TestClient
+
+    from CoScientist.web.app import create_app
+
+    with TestClient(create_app()) as client:
+        module = client.get("/static/js/modals/artifacts.js").text
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        probe = f"{tmp}/probe.js"
+        panel = f"{tmp}/artifacts.js"
+        open(probe, "w").write(_PROBE)
+        open(panel, "w").write(module)
+        out = subprocess.run([node, probe, panel, json.dumps(workspaces)],
+                             capture_output=True, text=True, timeout=60)
+    assert out.returncode == 0, out.stderr
+    return json.loads(out.stdout.strip().splitlines()[-1])
+
+
+def test_opening_the_panel_reads_a_real_workspace_not_the_missing_binding():
+    """The session need not own the sandbox it is watching.
+
+    A run started elsewhere leaves this session with no binding, and asking for
+    "our sandbox" then answers "No sandbox is bound to this session" over a
+    machine visibly full of files. The workspace is chosen first, and the
+    listing names it.
+    """
+    seen = _open_the_panel([
+        {"sandbox_id": "fb82e9d3-2068", "status": "running",
+         "task": "## Задача: пайплайн", "current": False, "browsable": True},
+    ])
+
+    listing = [url for url in seen["asked"] if "/files?" in url]
+    assert listing, "the panel must list some workspace"
+    assert "sandbox_id=fb82e9d3-2068" in listing[0]
+    # And the list was fetched first — the choice cannot follow the listing.
+    assert seen["asked"].index([u for u in seen["asked"] if u.endswith("/tasks")][0]) == 0
+
+
+def test_the_session_own_sandbox_still_wins_when_it_has_one():
+    seen = _open_the_panel([
+        {"sandbox_id": "ours", "status": "cooldown", "task": "", "current": True,
+         "browsable": True},
+        {"sandbox_id": "theirs", "status": "running", "task": "", "browsable": True},
+    ])
+
+    listing = [url for url in seen["asked"] if "/files?" in url]
+    assert "sandbox_id=ours" in listing[0]
+
+
+def test_a_stopped_container_stays_selectable_and_says_so():
+    """Refusing the row here guesses; the sandbox is the one that knows."""
+    seen = _open_the_panel([
+        {"sandbox_id": "live", "status": "running", "task": "", "browsable": True},
+        {"sandbox_id": "gone", "status": "completed", "task": "", "browsable": False},
+    ])
+
+    assert "disabled" not in seen["options"]
+    assert "контейнер остановлен" in seen["options"]
+
+
+def test_the_heading_of_a_markdown_prompt_does_not_fill_the_dropdown():
+    """The prompt arrives as markdown; its marks cost width and say nothing."""
+    seen = _open_the_panel([
+        {"sandbox_id": "one", "status": "running", "browsable": True,
+         "task": "## Задача: Полный пайплайн Этапа 1 — Эволюционная оптимизация чего-то ещё"},
+    ])
+
+    assert "##" not in seen["options"]
+    assert "Задача: Полный пайплайн" in seen["options"]

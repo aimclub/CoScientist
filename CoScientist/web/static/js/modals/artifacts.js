@@ -21,10 +21,13 @@
       return `${artifactsWorkspace}\u0000${path}`;
     }
 
-    function openArtifactsModal() {
+    async function openArtifactsModal() {
       if (typeof toggleAttachMenu === 'function') toggleAttachMenu(false);
       document.getElementById('artifacts-modal').classList.remove('hidden');
-      loadWorkspaces();
+      // The list first, then the listing: which workspace to read comes out of
+      // the list, and firing both at once read the session's binding — which,
+      // for a session whose sandbox was started elsewhere, is nothing at all.
+      await loadWorkspaces();
       loadArtifacts(SANDBOX_ROOT);
     }
 
@@ -38,9 +41,12 @@
     function workspaceLabel(workspace) {
       const id = String(workspace.sandbox_id || '');
       const status = WORKSPACE_STATUS[workspace.status] || workspace.status || '';
-      const task = String(workspace.task || '').replace(/\s+/g, ' ').trim();
-      const head = workspace.current ? 'текущая' : id.slice(0, 8);
-      const tail = task ? ` — ${task.slice(0, 60)}` : '';
+      // The prompt arrives as the markdown the agent was handed; its heading
+      // marks say nothing here and eat the width the id and status need.
+      const task = String(workspace.task || '')
+        .replace(/[#*`>]/g, ' ').replace(/\s+/g, ' ').trim();
+      const head = workspace.current ? `текущая (${id.slice(0, 8)})` : id.slice(0, 8);
+      const tail = task ? ` — ${task.slice(0, 40)}` : '';
       return `${head} · ${status}${tail}`;
     }
 
@@ -61,15 +67,25 @@
 
       const workspaces = payload.workspaces || [];
       if (!workspaces.length) return;
+
+      // Read something on open rather than nothing: this session's own sandbox
+      // if it has one, otherwise whatever the sandbox says is still openable.
+      // Nothing is "the session's sandbox" implicitly any more — the request
+      // always names a task id, because the session may not have a binding.
+      if (!workspaces.some(w => w.sandbox_id === artifactsWorkspace)) {
+        const chosen = workspaces.find(w => w.current && w.browsable)
+          || workspaces.find(w => w.browsable) || workspaces[0];
+        artifactsWorkspace = chosen.sandbox_id;
+      }
+
       select.innerHTML = workspaces.map(workspace => {
         const id = escAttr(workspace.sandbox_id);
-        // A finished container is gone from the sandbox, so its files cannot be
-        // listed; keep it visible and say why rather than hide it.
-        const dead = workspace.browsable ? '' : ' disabled';
-        const selected = workspace.sandbox_id === artifactsWorkspace
-          || (workspace.current && !artifactsWorkspace) ? ' selected' : '';
-        const note = workspace.browsable ? '' : ' (контейнера уже нет)';
-        return `<option value="${id}"${dead}${selected}>`
+        const selected = workspace.sandbox_id === artifactsWorkspace ? ' selected' : '';
+        // A container the sandbox has already torn down cannot be listed, but
+        // saying so is the sandbox's call, not a guess made here: the row stays
+        // selectable and the refusal, when it comes, is shown in full.
+        const note = workspace.browsable ? '' : ' · контейнер остановлен';
+        return `<option value="${id}"${selected}>`
              + `${escHtml(workspaceLabel(workspace))}${note}</option>`;
       }).join('');
     }
@@ -132,9 +148,13 @@
       }
       if (payload.status !== 'ok') {
         body.innerHTML = '';
-        // The usual cause is an honest one — no sandbox has been started for
-        // this session yet — so say that rather than "failed".
-        artifactsNote(payload.message || 'Песочница недоступна.', 'error');
+        // The usual causes are honest ones — no sandbox started for this
+        // session, or a container already torn down — so say which, rather
+        // than "failed".
+        const message = String(payload.message || 'Песочница недоступна.');
+        artifactsNote(/\b409\b/.test(message)
+          ? 'Контейнер этой задачи уже остановлен — файлы из него недоступны.'
+          : message, 'error');
         return;
       }
       renderArtifacts(payload.entries || []);

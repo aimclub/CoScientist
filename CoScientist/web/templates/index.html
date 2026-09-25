@@ -434,18 +434,16 @@
           </div>
           <div>
             <h3 class="font-headline font-bold text-on-surface text-sm uppercase tracking-wider">Артефакты песочницы</h3>
-            <p class="text-[10px] text-outline-variant mt-1">Что прогон оставил после себя. «Забрать» копирует файл в
-              хранилище и даёт ссылку, которая не протухает — её можно вставить в отчёт или открыть позже.</p>
           </div>
         </div>
         <button onclick="closeArtifactsModal()" class="text-outline-variant hover:text-on-surface transition-colors">
           <span class="material-symbols-outlined text-lg">close</span>
         </button>
       </div>
-      <div class="flex items-center gap-2 mb-2">
-        <span class="material-symbols-outlined text-sm text-outline-variant">deployed_code</span>
+      <div class="flex items-center gap-2 mb-2 min-w-0">
+        <span class="material-symbols-outlined text-sm text-outline-variant shrink-0">deployed_code</span>
         <select id="artifacts-workspace" onchange="pickWorkspace(this.value)"
-          class="flex-1 bg-surface-container-high border-outline-variant/20 rounded text-[10px] text-on-surface py-1.5"></select>
+          class="flex-1 min-w-0 max-w-full truncate bg-surface-container-high border-outline-variant/20 rounded text-[10px] text-on-surface py-1.5"></select>
       </div>
       <div class="flex items-center gap-2 mb-2">
         <span class="material-symbols-outlined text-sm text-outline-variant">folder_open</span>
