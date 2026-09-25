@@ -1110,12 +1110,8 @@ _cb("hitl_before_tool", "before_tool", factory=lambda ctx: _hitl_before_tool())
 _cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
 # Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.
 _cb("guard_unknown_tools", "after_model", factory=_guard_unknown_tools)
-from CoScientist.agents.callbacks.pilot_delegation import (
-    require_pilot_tool,
-    require_pilot_tool_call,
-)
-_cb("require_pilot_tool", "before_model", func=require_pilot_tool)
-_cb("require_pilot_tool_call", "after_model", func=require_pilot_tool_call)
+from CoScientist.agents.callbacks.pilot_delegation import require_pilot_delegations
+_cb("require_pilot_delegations", "after_model", func=require_pilot_delegations)
 # End the planner's turn once its plan is registered, so it cannot loop
 # re-registering to undo create_plan's own normalisation.
 _cb("finish_after_plan_registered", "after_model",

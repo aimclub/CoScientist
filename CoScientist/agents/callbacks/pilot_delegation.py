@@ -1,73 +1,45 @@
-"""Require observed tool calls for the isolated Synapse scientific pilot.
+"""Verify the isolated pilot from observed ADK tool events.
 
-The pilot's model can answer in prose after tool discovery while merely saying
-it delegated work. Limit each model turn to the next required tool and fail the
-invocation if the provider ignores ``tool_choice=required``. Ordinary agent
-profiles do not install these callbacks.
+The pilot keeps the normal tool roster and lets the orchestrator choose its
+order. A final answer is valid only after each required tool has actually
+been called and returned a successful response in the current invocation.
 """
 
-from google.genai import types
+_REQUIRED = ("retrieve_tools", "ResearchAgent", "TaskExecutorAgent")
 
 
-_ORDER = ("retrieve_tools", "ResearchAgent", "TaskExecutorAgent")
-
-
-def _next_tool(callback_context):
+def _completed_delegations(callback_context):
     invocation = callback_context._invocation_context
-    observed = set()
+    called = set()
+    completed = set()
     for event in invocation.session.events:
         if event.invocation_id != invocation.invocation_id:
             continue
+        called.update(call.name for call in event.get_function_calls())
         for response in event.get_function_responses():
+            if response.name not in called:
+                continue
             body = response.response
-            if (
-                response.name == "retrieve_tools"
-                and isinstance(body, dict)
-                and body.get("status") in {"error", "failed"}
+            if isinstance(body, dict) and (
+                body.get("error") or body.get("status") in {"error", "failed"}
             ):
-                raise RuntimeError("Pilot delegation contract: retrieve_tools failed")
-            if (
-                isinstance(body, dict)
-                and not body.get("error")
-                and body.get("status") not in {"error", "failed"}
-            ):
-                observed.add(response.name)
-    return next((name for name in _ORDER if name not in observed), None)
+                continue
+            completed.add(response.name)
+    return completed
 
 
-def require_pilot_tool(callback_context, llm_request):
-    """Offer only the next missing pilot tool and require a function call."""
-    name = _next_tool(callback_context)
-    if name is None:
-        return None
-    declarations = [
-        declaration
-        for tool in llm_request.config.tools or []
-        for declaration in tool.function_declarations or []
-        if declaration.name == name
-    ]
-    if len(declarations) != 1:
-        raise RuntimeError(f"Pilot delegation contract: {name} is unavailable")
-    llm_request.config.tools = [types.Tool(function_declarations=declarations)]
-    llm_request.config.tool_config = types.ToolConfig(
-        function_calling_config=types.FunctionCallingConfig(
-            mode=types.FunctionCallingConfigMode.ANY
-        )
-    )
-    return None
-
-
-def require_pilot_tool_call(callback_context, llm_response):
-    """Fail closed if a provider returns prose while a real call is required."""
+def require_pilot_delegations(callback_context, llm_response):
+    """Reject a final answer until all pilot tools have real call/response pairs."""
     if llm_response.partial:
         return None
-    name = _next_tool(callback_context)
-    if name is None:
-        return None
     parts = getattr(llm_response.content, "parts", None) or []
-    calls = [part.function_call.name for part in parts if part.function_call]
-    if calls != [name]:
+    if any(part.function_call for part in parts):
+        return None
+    completed = _completed_delegations(callback_context)
+    missing = [name for name in _REQUIRED if name not in completed]
+    if missing:
         raise RuntimeError(
-            f"Pilot delegation contract: expected {name} call, got {calls or 'prose'}"
+            "Pilot delegation contract: final response before observed "
+            "call and successful response for " + ", ".join(missing)
         )
     return None
