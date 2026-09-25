@@ -51,7 +51,7 @@ TOOL_TIERS: dict[str, Tier] = {
     # The old name of the one above. PR 367 renamed it; the prompt still
     # offers it as the fallback for a server that predates the rename, and an
     # unlisted tool is priced COMPUTE — an approval prompt for a RAG read.
-    "explore_chemistry_database": Tier.READ,
+    "explore_scientific_database": Tier.READ,
     "explore_my_papers": Tier.READ,
     # medical
     "search_pubmed": Tier.READ,

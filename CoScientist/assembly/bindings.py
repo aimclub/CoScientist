@@ -235,8 +235,8 @@ REGISTRY.register_tool(ToolEntry(
             ),
         ),
         ToolDoc(
-            name="explore_chemistry_database",
-            signature="explore_chemistry_database(task)",
+            name="explore_scientific_database",
+            signature="explore_scientific_database(task)",
             purpose="RAG search over an internal scientific literature database.",
         ),
         ToolDoc(

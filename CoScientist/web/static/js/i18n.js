@@ -225,6 +225,10 @@ const i18n = {
     en: 'Not used: nobody is asked, so there is nothing to wait for.',
     ru: 'Не действует: подтверждение не запрашивается, ждать нечего.'
   },
+  'settings.inactive.nirUnavailable': {
+    en: 'Not available: no normcontrol server is configured (MCP__NORMCONTROL_URL).',
+    ru: 'Недоступно: не настроен сервер нормоконтроля (MCP__NORMCONTROL_URL).'
+  },
   'settings.inactive.lightOnly': { en: 'Applies to the light theme only.', ru: 'Действует только в светлой теме.' },
   'settings.inactive.parentOff': {
     en: 'Works only while "{parent}" is on.',
@@ -317,9 +321,25 @@ const i18n = {
     en: 'Whether this agent runs is decided by the start mode.',
     ru: 'Участие этого агента определяет режим запуска.'
   },
+  'settings.agents.lock.unavailable': {
+    en: 'Not available: no normcontrol server is configured (MCP__NORMCONTROL_URL).',
+    ru: 'Недоступен: не настроен сервер нормоконтроля (MCP__NORMCONTROL_URL).'
+  },
+  'settings.agents.lock.setting': {
+    en: 'Switched by a server setting that the interface does not change.',
+    ru: 'Включается настройкой сервера, которую интерфейс не меняет.'
+  },
   'settings.agents.enabledRef': {
-    en: 'Without an override it follows the setting {ref}.',
-    ru: 'Без переопределения следует настройке {ref}.'
+    en: 'Setting: {ref}.',
+    ru: 'Настройка: {ref}.'
+  },
+  'settings.agents.enabledSetting': {
+    en: 'The switch is the {env} setting: the runtime reads it too.',
+    ru: 'Переключатель — это настройка {env}: её же читает среда выполнения.'
+  },
+  'settings.agents.sharedWith': {
+    en: 'Switched together with: {names}.',
+    ru: 'Включается и выключается вместе с: {names}.'
   },
   'settings.agents.cascade': {
     en: 'These stop being called as well: {names}.',
@@ -413,11 +433,10 @@ const i18n = {
 
   // Groups inside sections
   'settings.group.planning': { en: 'Planning', ru: 'Планирование' },
-  'settings.group.modules': { en: 'Optional modules', ru: 'Дополнительные модули' },
   'settings.group.search': { en: 'Web search', ru: 'Поиск в сети' },
   'settings.group.code': { en: 'Code execution', ru: 'Выполнение кода' },
+  'settings.group.modules': { en: 'Optional modules', ru: 'Дополнительные модули' },
   'settings.group.toolSelection': { en: 'Tool selection', ru: 'Подбор инструментов' },
-  'settings.group.experimentRoutes': { en: 'Experiment routes', ru: 'Маршруты экспериментов' },
   'settings.group.toolSelection.desc': {
     en: 'How TaskExecutorAgent decides which of the found MCP tools to use.',
     ru: 'Как TaskExecutorAgent решает, какие из найденных MCP-инструментов использовать.'
@@ -539,6 +558,11 @@ const i18n = {
     en: 'Before the run, an agent drafts the question, constraints and success criteria and records them in the research graph. With approvals on, you can edit the frame in a form.',
     ru: 'Перед стартом агент формулирует вопрос, ограничения и критерии успеха и заносит их в граф исследования. При включённых подтверждениях рамку можно поправить в форме.'
   },
+  'settings.f.contextInitReasoning.label': { en: 'Research frame reasoning', ru: 'Ризонинг рамки исследования' },
+  'settings.f.contextInitReasoning.desc': {
+    en: 'How much the agents that draft the frame and the technical specification think before answering. Higher is more careful, slower and more expensive.',
+    ru: 'Сколько думают агенты, которые составляют рамку и техническое задание. Чем выше, тем тщательнее, но медленнее и дороже.'
+  },
   'settings.f.maxHypotheses.label': { en: 'Hypotheses queued for testing', ru: 'Гипотез в очереди на проверку' },
   'settings.f.maxHypotheses.desc': {
     en: 'How many of the hypotheses proposed in one batch go straight into the testing queue; the rest are set aside, and the orchestrator can bring them back later. Testing itself still goes one hypothesis at a time: the next one starts after the current one has a verdict.',
@@ -561,6 +585,11 @@ const i18n = {
   'settings.f.nirReport.desc': {
     en: 'At the end of a run, offer to produce a normative DOCX report alongside the short Markdown one, built through the "Автонормоконтроль" service. You are asked first and fill in the title-page details; declining or ignoring the question changes nothing. Needs MCP__NORMCONTROL_URL — the switch is inactive without it. Costs a strong model and dozens of pages of generation.',
     ru: 'В конце прогона предлагать собрать нормативный документ DOCX в дополнение к краткому отчёту в Markdown — через сервис «Автонормоконтроль». Сначала спросят и попросят реквизиты титульного листа; отказ или игнорирование вопроса ничего не меняет. Требуется MCP__NORMCONTROL_URL — без него переключатель неактивен. Стоит сильной модели и десятков страниц генерации.'
+  },
+  'settings.f.nirReportReasoning.label': { en: 'R&D report reasoning', ru: 'Ризонинг отчёта о НИР' },
+  'settings.f.nirReportReasoning.desc': {
+    en: 'How much the agent that writes the report thinks. The profile sets high: the report has to stay faithful to the measured numbers.',
+    ru: 'Сколько думает агент, который пишет отчёт. В профиле задан высокий: отчёт должен точно следовать измеренным значениям.'
   },
   'settings.f.critic.label': { en: 'Review the plan with a critic', ru: 'Проверять план критиком' },
   'settings.f.critic.desc': {
@@ -697,6 +726,15 @@ const i18n = {
   'settings.f.experimentRouteFedot.desc': {
     en: 'Off: the experiment plan never offers FEDOT.MAS, and MCP tools are called directly by ExperimentAgent (ReAct). On: FEDOT.MAS is kept for the rare task that has to chain several tools in one search loop. An experiment module served as a separate A2A service reads only the environment variable.',
     ru: 'Выключено: план эксперимента не предлагает FEDOT.MAS, и MCP-инструменты вызывает напрямую ExperimentAgent (ReAct). Включено: FEDOT.MAS остаётся для редкой задачи, которой нужно связать несколько инструментов в одном цикле поиска. Модуль экспериментов, запущенный отдельным A2A-сервисом, читает только переменную окружения.'
+  },
+  'settings.f.fedotFallback.label': { en: 'FEDOT.MAS fallback', ru: 'Резервный маршрут FEDOT.MAS' },
+  'settings.f.fedotFallback.desc': {
+    en: 'When neither tool ranker finds a usable MCP tool, the task goes to FedotAgent instead of CoderAgent.',
+    ru: 'Если ни один ранжировщик не нашёл подходящего MCP-инструмента, задача уходит FedotAgent, а не CoderAgent.'
+  },
+  'settings.f.fedotFallback.scopeHint': {
+    en: 'The agent is added for sessions that first run after saving; turning it off also stops the fallback in sessions already running.',
+    ru: 'Агент добавляется для сессий, впервые запущенных после сохранения; выключение останавливает резервный маршрут и в уже запущенных сессиях.'
   },
   'settings.f.experimentRouteFedot.scopeHint': {
     en: 'Turning it on applies to sessions that first run after saving; turning it off also stops FEDOT.MAS in sessions already running.',

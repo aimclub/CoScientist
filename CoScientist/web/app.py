@@ -590,6 +590,11 @@ def _apply_frontend_settings(frontend: dict) -> None:
         web.executor_tool_keep_score = float(task_exec["keepScore"])
     if "abstainScore" in task_exec:
         web.executor_tool_abstain_score = float(task_exec["abstainScore"])
+    # EXECUTOR__FEDOT_FALLBACK: FedotAgent's switch in the main profile (Settings →
+    # Agents). Attached when the next tree is built; ExecutorSwitchAgent reads
+    # it on every call, so off also stops the fallback in a running session.
+    if "fedotFallback" in task_exec:
+        web.fedot_fallback_enabled = bool(task_exec["fedotFallback"])
 
     # MEDICAL__ENABLED. The next session's tree attaches MedicalAgent on it
     # (orchestrator roster, experiment executor, planner prompt). Off also takes
@@ -714,6 +719,7 @@ def _current_settings() -> dict:
         "taskExecutorAgent": {
             "keepScore": web.executor_tool_keep_score,
             "abstainScore": web.executor_tool_abstain_score,
+            "fedotFallback": web.fedot_fallback_enabled,
         },
         "coderAgent": {
             "sandboxUrl": web.sandbox_url,

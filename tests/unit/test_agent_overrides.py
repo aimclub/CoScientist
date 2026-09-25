@@ -46,11 +46,14 @@ def test_an_override_switches_an_ordinary_agent_off_and_back_on():
     assert "ResearchAgent" not in [a.name for a in cfg.enabled_subordinates("OrchestratorAgent")]
 
 
-@pytest.mark.parametrize("name", ["OrchestratorAgent", "ToolRetrieverAgent", "PlannerAgent"])
-def test_root_internal_and_start_mode_agents_ignore_an_enabled_override(name):
+@pytest.mark.parametrize("name", [
+    "OrchestratorAgent", "ToolRetrieverAgent", "PlannerAgent", "MedicalAgent", "ContextInitAgent",
+])
+def test_root_internal_start_mode_and_setting_agents_ignore_an_enabled_override(name):
     """The root is the run's only entry point, internal agents are a
-    composite's stages, and the start mode attaches or removes the planner
-    pipeline itself: a UI switch must not fight any of them."""
+    composite's stages, the start mode attaches or removes the planner
+    pipeline itself, and an `enabled: ${setting}` agent is switched by that
+    setting, which the runtime reads too: an override must not fight any of them."""
     agent = load_config().agent(name)
     declared = agent.declared_enabled()
     _override(name, enabled=not declared)
@@ -89,8 +92,8 @@ def test_apply_keeps_only_valid_differences():
     apply_agent_settings({
         "defaultReasoning": "nonsense",
         "overrides": {
-            "MedicalAgent": {"enabled": False},
-            "ResearchAgent": {"reasoning": "Low", "model": "  coder "},
+            "MedicalAgent": {"enabled": False, "reasoning": "low"},
+            "ResearchAgent": {"enabled": False, "reasoning": "Low", "model": "  coder "},
             "HypothesesAgent": {"reasoning": "extreme"},
             "Empty": {},
         },
@@ -98,8 +101,9 @@ def test_apply_keeps_only_valid_differences():
     assert current_agent_settings() == {
         "defaultReasoning": "",
         "overrides": {
-            "MedicalAgent": {"enabled": False},
-            "ResearchAgent": {"reasoning": "low", "model": "coder"},
+            # MedicalAgent is switched by MEDICAL__ENABLED: the dead `enabled` goes.
+            "MedicalAgent": {"reasoning": "low"},
+            "ResearchAgent": {"enabled": False, "reasoning": "low", "model": "coder"},
         },
     }
 
@@ -121,3 +125,15 @@ def test_the_catalog_shows_declared_values_not_overridden_ones():
     assert entry["hasModel"] and entry["lock"] is None
     root = next(a for a in agents_catalog()["agents"] if a["root"])
     assert root["lock"] == "root"
+
+
+def test_a_setting_backed_agent_names_the_field_its_switch_edits():
+    """Settings → Agents is the one place agents are switched: for an agent
+    whose `enabled` is a setting, the row edits that setting, not an override."""
+    by_name = {a["name"]: a for a in agents_catalog()["agents"]}
+    assert by_name["MedicalAgent"]["enabledSetting"] == "medicalAgent.enabled"
+    assert by_name["MedicalAgent"]["lock"] is None
+    assert by_name["ContextInitAgent"]["enabledSetting"] == "general.contextInitEnabled"
+    assert by_name["FedotAgent"]["enabledSetting"] == "taskExecutorAgent.fedotFallback"
+    assert by_name["NirReportAgent"]["enabledSetting"] == "nirReport.enabled"
+    assert by_name["ResearchAgent"]["enabledSetting"] is None

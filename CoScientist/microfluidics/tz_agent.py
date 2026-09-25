@@ -288,6 +288,7 @@ class TZSessionAgent(SessionAgent):
                 disallow_transfer_to_parent=True,
                 disallow_transfer_to_peers=True,
             )
+            self._adopt(worker)
             self._workers[group.key] = worker
         return worker
 
@@ -318,8 +319,17 @@ class TZSessionAgent(SessionAgent):
                 disallow_transfer_to_parent=True,
                 disallow_transfer_to_peers=True,
             )
+            self._adopt(worker)
             self._workers[key] = worker
         return worker
+
+    def _adopt(self, worker: LlmAgent) -> None:
+        """Make ``worker`` this agent's subordinate. It is not in
+        ``sub_agents`` (the workers are built on demand), so without this the
+        tool-activity plugin sees no parent and the ToolsViewer shows every
+        worker as a separate root instead of a branch under this agent. Both
+        transfer flags are off, so ADK offers no transfer back to it."""
+        worker.parent_agent = self
 
     def _worker_ctx(self, ctx: InvocationContext, worker: LlmAgent) -> InvocationContext:
         """A branch of its own for ``worker`` (as ParallelAgent does): it sees

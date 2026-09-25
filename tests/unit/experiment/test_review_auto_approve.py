@@ -127,7 +127,7 @@ def test_the_tab_reaches_the_reviewer_without_a_restart(_clean_env):
     }, echoed
 
 
-def test_the_tools_tab_switches_fedot_for_the_next_session(monkeypatch):
+def test_the_agents_tab_switches_fedot_for_the_next_session(monkeypatch):
     """The FEDOT.MAS route lands on the one switch every route decision reads,
     and reads back, so the modal does not show a stale toggle."""
     from CoScientist.experiments.runtime.state_machine import fedot_route_available
@@ -145,7 +145,7 @@ def test_the_tools_tab_switches_fedot_for_the_next_session(monkeypatch):
     assert _current_settings()["experimentModule"]["routeFedot"] is True
 
 
-def test_the_research_tab_switches_the_medical_agent(monkeypatch):
+def test_the_agents_tab_switches_the_medical_agent(monkeypatch):
     """MEDICAL__ENABLED from the browser: it lands on the flag MedicalAgent's
     `enabled` reads, takes the experiment medical route with it, and reads back."""
     from CoScientist.experiments.runtime.state_machine import medical_route_available
@@ -163,10 +163,10 @@ def test_the_research_tab_switches_the_medical_agent(monkeypatch):
     assert medical_route_available() is True
 
 
-def test_the_medical_switch_is_in_the_research_tab_with_its_own_scope_hint():
+def test_the_medical_switch_is_in_the_agents_tab_with_its_own_scope_hint():
     modal = _read(WEB / "modals" / "settings.js")
-    research = modal[modal.index("id: 'research'"):modal.index("id: 'interface'")]
-    row = research[research.index("id: 'medicalAgent'"):]
+    agents = modal[modal.index("id: 'agents'"):modal.index("id: 'models'")]
+    row = agents[agents.index("id: 'medicalAgent'"):]
     row = row[:row.index("},")]
     assert "path: 'medicalAgent.enabled'" in row
     assert "env: 'MEDICAL__ENABLED'" in row
@@ -174,10 +174,10 @@ def test_the_medical_switch_is_in_the_research_tab_with_its_own_scope_hint():
     assert "'settings.f.medicalAgent.scopeHint'" in _read(WEB / "i18n.js")
 
 
-def test_the_fedot_switch_is_in_the_tools_tab_and_session_scoped():
+def test_the_fedot_switch_is_in_the_agents_tab_and_session_scoped():
     modal = _read(WEB / "modals" / "settings.js")
-    tools = modal[modal.index("id: 'tools'"):]
-    row = tools[tools.index("id: 'experimentRouteFedot'"):]
+    agents = modal[modal.index("id: 'agents'"):modal.index("id: 'models'")]
+    row = agents[agents.index("id: 'experimentRouteFedot'"):]
     row = row[:row.index("},")]
     assert "path: 'experimentModule.routeFedot'" in row
     assert "scope: 'session'" in row
@@ -337,3 +337,17 @@ def test_a_timed_out_review_with_no_deadline_still_audits():
     assert _window_word(None) == "none"
     assert _window_word(0) == "none"
     assert _window_word(300.0) == "300"
+
+
+def test_the_research_frame_and_the_nir_report_are_in_the_research_tab_with_reasoning():
+    """Both are stages of a study, not agents to pick: their switches and the
+    reasoning of the agents behind them live in Research flow, and the Agents
+    list leaves those agents out (the agentReasoning fields name them)."""
+    modal = _read(WEB / "modals" / "settings.js")
+    research = modal[modal.index("id: 'research'"):modal.index("id: 'approvals'")]
+    agents = modal[modal.index("id: 'agents'"):modal.index("id: 'models'")]
+    for field in ("contextInit", "nirReport"):
+        assert f"id: '{field}'" in research and f"id: '{field}'" not in agents
+    assert "id: 'contextInitReasoning', type: 'agentReasoning', agentsOf: 'general.contextInitEnabled'" in research
+    assert "id: 'nirReportReasoning', type: 'agentReasoning', agentsOf: 'nirReport.enabled'" in research
+    assert "!AGENTS_SHOWN_ELSEWHERE.has(a.enabledSetting)" in modal

@@ -582,7 +582,7 @@ def _research(
             else:
                 steps.append(
                     f"{n}. If there are NO user-uploaded papers, ALWAYS call `explore_scientific_database` before other literature tools. "
-                    "If that name is not in your tool list, call `explore_chemistry_database` instead. "
+                    "If that name is not in your tool list, call `explore_scientific_database` instead. "
                     "Do this even if you plan to use `search_papers` or `download_papers_from_search` afterwards. "
                     "Do not treat the RAG answer as the end of a literature review."
                 )
@@ -675,7 +675,7 @@ RULES
 --------------------------------------------------
 
 <<PREFER_LINE>><<FORBIDDEN_PAPERS_RULE>>- Stop once sufficient evidence is obtained. An internal-database
-  (`explore_scientific_database` / `explore_chemistry_database`) answer alone
+  (`explore_scientific_database` / `explore_scientific_database`) answer alone
   is NOT sufficient for a literature / publication review — still
   call `search_papers`.
 - If a literature tool returned papers or hits, finish with those findings.
@@ -689,7 +689,7 @@ RULES
 - Use tools to answer, it is prohibited to answer directly without them
 - Never invent tool names. Copy them exactly from the tool list.
   For the internal scientific literature database use
-  `explore_scientific_database(task=…)` (or `explore_chemistry_database` if
+  `explore_scientific_database(task=…)` (or `explore_scientific_database` if
   that is the name in your tool list). For OpenAlex use `search_papers(keywords=…)`.
 - For every reported numeric condition, yield, purity, price, or performance
   value, include the real URL/patent/standard identifier and a locator

@@ -44,7 +44,7 @@ def test_capture_literature_smiles_stores_state_for_rag_tool():
     ctx = _ctx()
     tool_response = {"answer": _ANSWER_TEXT, "metadata": {}}
 
-    capture_literature_smiles(_tool("explore_chemistry_database"), {}, ctx, tool_response)
+    capture_literature_smiles(_tool("explore_scientific_database"), {}, ctx, tool_response)
 
     assert ctx.state["literature_smiles"] == [
         "Cc1cccc(CC(C)NCC(=O)Nc2ccccc2)c1",
@@ -57,7 +57,7 @@ def test_capture_literature_smiles_stores_state_for_rag_tool():
 def test_capture_literature_smiles_accumulates_across_calls():
     ctx = _ctx()
     capture_literature_smiles(
-        _tool("explore_chemistry_database"), {}, ctx, {"answer": "See CN(C)CCSc1ncccc1Cl."}
+        _tool("explore_scientific_database"), {}, ctx, {"answer": "See CN(C)CCSc1ncccc1Cl."}
     )
     capture_literature_smiles(
         _tool("explore_my_papers"),

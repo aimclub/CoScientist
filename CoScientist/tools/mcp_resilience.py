@@ -19,6 +19,15 @@ transport fails at once), retries listing with backoff, and — only for a
 toolset declared read-only (``retry_calls=True``) — retries a tool call whose
 transport was lost. Tool-level errors (``McpError``) and timeouts are not
 retried: the server answered, and a slow call repeated is just slower.
+
+One ``McpError`` is the exception: "Session terminated". It is what the MCP
+client reports when the server answers 404 to our ``mcp-session-id`` — the
+server was restarted and forgot the session (observed 2026-09-25: the
+economics container was brought back up after a HITL pause, and every call
+kept failing). The transport itself is healthy, so ADK keeps handing out the
+pooled dead session forever. On that error every tool of the toolset drops
+the pooled sessions and repeats the call once on a fresh one; this is safe for
+side-effecting tools too, because a 404 means the server never ran the call.
 """
 from __future__ import annotations
 
@@ -27,6 +36,7 @@ import logging
 import os
 from typing import Any, List, Optional
 
+from google.adk.dependencies._mcp import McpError
 from google.adk.tools.base_tool import BaseTool
 from google.adk.tools.mcp_tool import McpToolset
 from google.adk.tools.mcp_tool.mcp_tool import MCPTool, McpTool
@@ -48,7 +58,50 @@ async def _backoff(attempt: int) -> None:
     await asyncio.sleep(MCP_RETRY_BACKOFF * (2 ** (attempt - 1)))
 
 
-class _RetryingMcpTool(McpTool):
+def _is_session_terminated(exc: BaseException) -> bool:
+    """True if ``exc`` (or its cause chain) is the server forgetting our session."""
+    seen = set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        if isinstance(exc, McpError) and "Session terminated" in str(exc):
+            return True
+        exc = exc.__cause__ or exc.__context__
+    return False
+
+
+async def _drop_pooled_sessions(manager: Any) -> None:
+    """Close every pooled session of ``manager`` so the next call reconnects.
+
+    All of them, not just the failed one: they all point at the same server,
+    and a restarted server has forgotten every one.
+    """
+    async with manager._session_lock:  # pylint: disable=protected-access
+        for key, (_, exit_stack, loop) in list(manager._sessions.items()):  # pylint: disable=protected-access
+            await manager._cleanup_session(key, exit_stack, loop)  # pylint: disable=protected-access
+
+
+class _ReconnectingMcpTool(McpTool):
+    """An McpTool that reconnects once when the server has forgotten its session."""
+
+    async def _run_async_impl(self, *, args, tool_context, credential):
+        try:
+            return await super()._run_async_impl(
+                args=args, tool_context=tool_context, credential=credential
+            )
+        except McpError as exc:
+            if not _is_session_terminated(exc) or _is_cancelling():
+                raise
+            logger.warning(
+                "MCP tool %s: server forgot the session (restarted?), reconnecting",
+                self.name,
+            )
+            await _drop_pooled_sessions(self._mcp_session_manager)
+            return await super()._run_async_impl(
+                args=args, tool_context=tool_context, credential=credential
+            )
+
+
+class _RetryingMcpTool(_ReconnectingMcpTool):
     """An McpTool that repeats a call whose transport was lost.
 
     Only ever set on tools of a read-only toolset: ``ConnectionError`` here
@@ -116,10 +169,12 @@ class ResilientMcpToolset(McpToolset):
                     "MCP tool listing failed (attempt %d/%d), retrying: %s",
                     attempt, MCP_RETRY_ATTEMPTS, exc,
                 )
+                if _is_session_terminated(exc):
+                    await _drop_pooled_sessions(self._mcp_session_manager)
                 await _backoff(attempt)
-        if self._retry_calls:
-            for tool in tools:
-                if type(tool) in (McpTool, MCPTool):
-                    # Built by ADK's get_tools; the subclass adds behavior only.
-                    tool.__class__ = _RetryingMcpTool
+        tool_cls = _RetryingMcpTool if self._retry_calls else _ReconnectingMcpTool
+        for tool in tools:
+            if type(tool) in (McpTool, MCPTool):
+                # Built by ADK's get_tools; the subclass adds behavior only.
+                tool.__class__ = tool_cls
         return tools

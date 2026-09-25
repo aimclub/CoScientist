@@ -28,11 +28,11 @@ _PAPER_STATE_KEY = "uploaded_paper_s3_keys"
 # current deployed names AND older ones we've seen, to survive a rename on
 # either side without silently going dark. Confirmed live 2026-08-31:
 # paper_analysis v3.1.1 exposes explore_scientific_database (renamed from
-# explore_chemistry_database) + explore_my_papers + find_papers_in_db +
+# explore_scientific_database) + explore_my_papers + find_papers_in_db +
 # find_relevant_data_in_db; papers_search v3.1.0 exposes search_entity +
 # search_papers + download_papers_from_search.
 _SMILES_SOURCE_TOOLS = {
-    "explore_chemistry_database",  # pre-3.x name — kept for older deployments
+    "explore_scientific_database",  # pre-3.x name — kept for older deployments
     "explore_scientific_database",
     "explore_my_papers",
     "find_papers_in_db",
@@ -256,7 +256,7 @@ def capture_literature_smiles(
 
     ADK only keeps the LLM's paraphrase of a tool result under output_key —
     the raw response is gone once the agent turn ends. Molecule-bearing
-    literature tools (explore_chemistry_database, explore_my_papers,
+    literature tools (explore_scientific_database, explore_my_papers,
     search_papers, download_papers_from_search) are prompted to copy SMILES
     verbatim into their answer, but nothing marks which substring is one, and
     a paraphrase could still drop or mangle it. Scanning the raw tool_response

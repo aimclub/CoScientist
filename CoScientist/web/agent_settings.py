@@ -79,11 +79,38 @@ def _model_names() -> Dict[str, Optional[str]]:
     }
 
 
-def _lock_reason(cfg: AgentConfig) -> Optional[str]:
+# `enabled: "${...}"` references and the appSettings path of the field that
+# edits each one. Such an agent is switched in the Agents section through that
+# setting, never through an override: the runtime reads the same setting (the
+# medical and FEDOT routes, the reranker fallback, the research-frame seed),
+# so an override would switch the agent and leave the route behind.
+# `nir_buildable` is the deployment (a normcontrol server) rather than a
+# switch; the operator's switch for NirReportAgent is whether it is offered.
+ENABLED_SETTING_FIELDS: Dict[str, str] = {
+    "context_init.enabled": "general.contextInitEnabled",
+    "web.medical_agent_enabled": "medicalAgent.enabled",
+    "web.fedot_fallback_enabled": "taskExecutorAgent.fedotFallback",
+    "experiments.route_fedot": "experimentModule.routeFedot",
+    "nir_buildable": "nirReport.enabled",
+}
+
+
+def _enabled_ref(cfg: AgentConfig) -> Optional[str]:
+    return str(cfg.enabled).strip()[2:-1].strip() if _is_setting_ref(cfg.enabled) else None
+
+
+def _lock_reason(cfg: AgentConfig, declared_enabled: bool) -> Optional[str]:
     if cfg.root:
         return "root"
     if cfg.internal:
         return "internal"
+    ref = _enabled_ref(cfg)
+    if ref is not None:
+        if ref not in ENABLED_SETTING_FIELDS:
+            return "setting"
+        if ref == "nir_buildable" and not declared_enabled:
+            return "unavailable"
+        return None
     if not cfg.enabled_overridable():
         return "startMode"
     return None
@@ -122,10 +149,11 @@ def agents_catalog() -> Dict[str, Any]:
             "parents": parents.get(name, []),
             "subordinates": list(cfg.subordinates) + list(cfg.children),
             "enabled": declared_enabled,
-            # The setting that decides `enabled` in the YAML, if any: the
-            # modal says the switch overrides it.
-            "enabledRef": str(cfg.enabled)[2:-1] if _is_setting_ref(cfg.enabled) else None,
-            "lock": _lock_reason(cfg),
+            # The setting that decides `enabled` in the YAML, if any, and the
+            # appSettings field the switch then edits instead of an override.
+            "enabledRef": _enabled_ref(cfg),
+            "enabledSetting": ENABLED_SETTING_FIELDS.get(_enabled_ref(cfg) or ""),
+            "lock": _lock_reason(cfg, declared_enabled),
             "hasModel": has_model,
             "model": (cfg.model or system.defaults.model) if has_model else None,
             "reasoning": _reasoning_label(cfg.declared_reasoning()) if has_model else None,
@@ -183,11 +211,20 @@ def apply_agent_settings(section: Dict[str, Any]) -> None:
         block.default_reasoning = value if isinstance(value, str) else None
 
     if "overrides" in section:
+        try:
+            system: Optional[SystemConfig] = load_config()
+        except Exception:  # noqa: BLE001 — keep what was sent; is_enabled decides
+            system = None
         overrides: Dict[str, AgentOverride] = {}
         for name, raw in (section.get("overrides") or {}).items():
             if not isinstance(raw, dict):
                 continue
             enabled = raw.get("enabled")
+            # An agent the switch cannot override keeps no dead `enabled`
+            # (an old save or an imported file): it would read as a change.
+            cfg = system.agents.get(str(name)) if system is not None else None
+            if cfg is not None and not cfg.enabled_overridable():
+                enabled = None
             reasoning = raw.get("reasoning")
             if reasoning not in (None, ""):
                 if normalize_reasoning(reasoning) is None:

@@ -175,7 +175,7 @@
             class="w-full text-left flex items-baseline gap-2 px-1.5 py-1 rounded transition-colors
                    ${active ? 'bg-primary/10 text-on-surface' : 'text-on-surface-variant hover:bg-surface-container-high/50'}">
             <span class="text-[11px] leading-snug flex-1 min-w-0 break-words">${escHtml(title)}</span>
-            ${item.agent ? `<span class="text-[10px] font-mono text-outline-variant shrink-0">${escHtml(item.agent)}</span>` : ''}
+            ${item.agent ? `<span class="text-[10px] text-outline-variant shrink-0" title="${escHtml(item.agent)}">${escHtml((window.StatusIndicator && StatusIndicator.agentName) ? (StatusIndicator.agentName(item.agent) || item.agent) : item.agent)}</span>` : ''}
           </button>
         </li>`;
     }).join('');

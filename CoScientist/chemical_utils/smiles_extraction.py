@@ -1,7 +1,7 @@
 """Pull SMILES molecules AND reaction SMILES out of free-text RAG/literature
 answers.
 
-The paper-analysis MCP tools (`explore_chemistry_database`, `explore_my_papers`)
+The paper-analysis MCP tools (`explore_scientific_database`, `explore_my_papers`)
 are prompted to copy SMILES strings verbatim into their text answer (see
 mcp-servers/paper-analysis-mcp-server/prompts.py, rule 7), but they hand back
 plain prose — nothing marks *which* substring is a SMILES, or whether it names
