@@ -135,12 +135,16 @@ class UnknownFirstModel(PilotModel):
     async def generate_content_async(self, llm_request, stream=False):
         if not self._unknown_sent:
             self._unknown_sent = True
+            self._calls = 1  # retrieve_tools is included in the same response.
             yield LlmResponse(
                 content=types.Content(
                     role="model",
                     parts=[
                         types.Part.from_function_call(
                             name="invented_subagent", args={}
+                        ),
+                        types.Part.from_function_call(
+                            name="retrieve_tools", args={"query": "surfactants"}
                         )
                     ],
                 )
@@ -150,7 +154,7 @@ class UnknownFirstModel(PilotModel):
             yield response
 
 
-def test_unknown_orchestrator_tool_gets_adk_error_then_model_retries():
+def test_unknown_orchestrator_tool_returns_error_then_model_retries():
     async def run_profile(profile: str):
         seen = []
 
@@ -211,6 +215,7 @@ def test_unknown_orchestrator_tool_gets_adk_error_then_model_retries():
         unknown = [r for r in responses if r.name == "invented_subagent"]
         assert calls == ["invented_subagent", *CALLS]
         assert len(unknown) == 1 and "error" in unknown[0].response
+        assert all(name in str(unknown[0].response) for name in CALLS)
         assert [r.name for r in responses] == ["invented_subagent", *CALLS]
         assert seen == list(CALLS)
         assert events[-1].content.parts[0].text == "Pilot delegation completed"
