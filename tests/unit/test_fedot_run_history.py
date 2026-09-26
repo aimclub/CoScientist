@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+from CoScientist.config import get_settings
 from CoScientist.tools import fedot_runs
 from CoScientist.tools.fedot_live import FedotLiveBroadcaster, FedotLivePlugin
 
@@ -20,6 +21,7 @@ def isolate(tmp_path, monkeypatch):
     monkeypatch.setenv("WEB_STATE_DIR", str(tmp_path / "web"))
     monkeypatch.setenv("GRAPH_SNAPSHOT_DIR", str(tmp_path / "graphs"))
     monkeypatch.setenv("RESEARCH_GRAPH_DIR", str(tmp_path / "research"))
+    monkeypatch.setattr(get_settings().web, "fedot_fallback_enabled", True)
 
 
 def record(scope, task="first", status="success"):

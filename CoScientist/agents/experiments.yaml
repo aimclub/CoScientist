@@ -229,6 +229,7 @@ agents:
   ExperimentPlannerAgent:
     class: custom:experiment_review
     model: main
+    reasoning: medium
     include_contents: none
     description: Build a strict ExperimentPlan and obtain explicit human approval.
     prompt: experiment_planner
@@ -247,6 +248,7 @@ agents:
 
   ExperimentExecutorAgent:
     class: llm
+    reasoning: low
     include_contents: none
     description: >-
       Thin control-plane executor; delegates one route per attempt while all
@@ -272,6 +274,7 @@ agents:
   ExperimentResultReviewAgent:
     class: custom:experiment_review
     model: main
+    reasoning: medium
     description: Summarize typed TaskResults and require explicit result acceptance.
     prompt: experiment_result_summary
     output_key: experiment_summary

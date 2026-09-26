@@ -622,6 +622,11 @@ async def build_mcp_server(
         status "running" with the job_id to check later; or the existing job for
         this repo (already running/done) unless force_rebuild is set.
     """
+    from CoScientist.capabilities import alembic_enabled, capability_disabled
+
+    if not alembic_enabled():
+        return capability_disabled("Alembic MCP builder", "EXPERIMENTS__ROUTE_ALEMBIC")
+
     repo_url = (repo_url or "").strip()
     if not re.match(r"^(https?://|git@)\S+/\S+", repo_url):
         return {"status": "error",

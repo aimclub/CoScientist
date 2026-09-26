@@ -522,6 +522,36 @@ def _fedot_live(settings: ExperimentsSettings, route_agents: Collection[str] | N
     return fedot_route_available(settings, route_agents=route_agents)
 
 
+def alembic_route_available(
+    settings: ExperimentsSettings | None = None, *, system: Any = None,
+    route_agents: Collection[str] | None = None,
+) -> bool:
+    """Whether this run may delegate an Alembic build.
+
+    The feature switch and the assembled tree must agree.  Checking both
+    prevents an approved plan or an older cached tree from bypassing a setting
+    changed after that tree was built.
+    """
+    if not _settings(settings).route_alembic:
+        return False
+    agent = ROUTE_AGENT_BY_ROUTE[ExecutionRoute.ALEMBIC_BUILD.value]
+    if route_agents is not None and agent not in route_agents:
+        return False
+    if system is None and route_agents is None:
+        return True
+    try:
+        return _route_agent_attached(agent, system)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Alembic route: agent tree unreadable (%s) - treating it as off", exc)
+        return False
+
+
+def _alembic_live(
+    settings: ExperimentsSettings, route_agents: Collection[str] | None,
+) -> bool:
+    return alembic_route_available(settings, route_agents=route_agents)
+
+
 def medical_route_available(
     *, system: Any = None, route_agents: Collection[str] | None = None,
 ) -> bool:
@@ -581,7 +611,7 @@ def _route_enabled(route: str, settings: ExperimentsSettings) -> bool:
     if route == ExecutionRoute.FEDOT_MAS.value:
         return fedot_route_available(settings)
     if route == ExecutionRoute.ALEMBIC_BUILD.value:
-        return settings.route_alembic
+        return alembic_route_available(settings)
     if route == ExecutionRoute.MEDICAL.value:
         return medical_route_available()
     return route in {
@@ -775,6 +805,15 @@ def start_task(
             "reason": "FEDOT unavailable (EXPERIMENTS__ROUTE_FEDOT off or FedotAgent "
                       "not attached to ExperimentExecutorAgent)",
         })
+    if route == ExecutionRoute.ALEMBIC_BUILD.value and not _alembic_live(cfg, route_agents):
+        exc = ExperimentRuntimeError(
+            "route_disabled",
+            "Route 'alembic_build' is switched off: McpBuilderAgent is not in "
+            "this run (EXPERIMENTS__ROUTE_ALEMBIC off, or not attached to "
+            "ExperimentExecutorAgent).",
+        )
+        _block_unstartable(state, task_id, exc)
+        raise exc
     if route == ExecutionRoute.MEDICAL.value and not _medical_live(route_agents):
         planned = task_runtime["planned_route"]
         if planned != ExecutionRoute.MEDICAL.value and _route_live(planned, cfg, route_agents):

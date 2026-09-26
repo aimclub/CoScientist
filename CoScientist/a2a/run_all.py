@@ -49,6 +49,8 @@ def _build_apps() -> list[tuple[str, object, int]]:
     system = build_system(config)
     specs: list[tuple[str, object, int]] = []
     for agent_cfg in config.a2a_agents():
+        if not agent_cfg.is_enabled():
+            continue
         key = agent_cfg.a2a.key
         if agent_cfg.root:
             # Served in remote mode: delegations go to the sub-agent servers.

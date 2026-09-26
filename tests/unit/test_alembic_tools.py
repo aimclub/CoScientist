@@ -8,12 +8,14 @@ deterministically.
 import asyncio
 import time
 
+import pytest
 from dotenv import load_dotenv
 
 load_dotenv()
 
 import CoScientist.assembly.bindings  # noqa: E402,F401  (registration side effect)
 from CoScientist.assembly.registry import REGISTRY  # noqa: E402
+from CoScientist.config import get_settings  # noqa: E402
 
 from CoScientist.tools import alembic_tools  # noqa: E402
 from CoScientist.tools.alembic_tools import (  # noqa: E402
@@ -26,6 +28,11 @@ from CoScientist.tools.alembic_tools import (  # noqa: E402
 
 def setup_function():
     alembic_tools._JOBS.clear()
+
+
+@pytest.fixture(autouse=True)
+def _enable_alembic_for_tool_mechanics(monkeypatch):
+    monkeypatch.setattr(get_settings().experiments, "route_alembic", True)
 
 
 def _noop_runner(rec):
@@ -54,6 +61,14 @@ def test_build_mcp_server_rejects_invalid_repo_url():
     assert result["status"] == "error"
     assert "repo_url" in result["error"]
     assert alembic_tools._JOBS == {}  # no job was started
+
+
+def test_build_mcp_server_refuses_a_direct_call_when_capability_is_off(monkeypatch):
+    monkeypatch.setattr(get_settings().experiments, "route_alembic", False)
+    result = asyncio.run(build_mcp_server("https://github.com/whitead/synspace"))
+    assert result["status"] == "error"
+    assert result["error_code"] == "capability_disabled"
+    assert alembic_tools._JOBS == {}
 
 
 # ── build_mcp_server: reuse instead of rebuilding ────────────────────────────

@@ -135,8 +135,24 @@ def test_a_setting_backed_agent_names_the_field_its_switch_edits():
     assert by_name["MedicalAgent"]["lock"] is None
     assert by_name["ContextInitAgent"]["enabledSetting"] == "general.contextInitEnabled"
     assert by_name["FedotAgent"]["enabledSetting"] == "taskExecutorAgent.fedotFallback"
+    assert by_name["McpBuilderAgent"]["enabledSetting"] == "experimentModule.routeAlembic"
     assert by_name["NirReportAgent"]["enabledSetting"] == "nirReport.enabled"
     assert by_name["ResearchAgent"]["enabledSetting"] is None
+
+
+def test_a_model_alias_changes_only_the_llm_not_the_agent_contract(monkeypatch):
+    from CoScientist.agents import common
+
+    cfg = load_config().agent("ResearchAgent")
+    contract = (cfg.prompt, tuple(cfg.tools), cfg.callbacks.model_dump())
+    calls = []
+    monkeypatch.setattr(common, "make_llm", lambda *a, **kw: calls.append((a, kw)))
+
+    apply_agent_settings({"overrides": {"ResearchAgent": {"model": "nir"}}})
+    assembler._resolve_model(cfg, load_config())
+
+    assert calls[-1][0][0] == get_settings().llm.nir_model
+    assert (cfg.prompt, tuple(cfg.tools), cfg.callbacks.model_dump()) == contract
 
 
 # ── Tool budgets: a limiter callback's number, per agent ─────────────────────

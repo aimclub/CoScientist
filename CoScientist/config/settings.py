@@ -403,7 +403,7 @@ class WebSettings(BaseModel):
     # The main profile's FEDOT.MAS reranker fallback (ExecutorSwitchAgent). The
     # Experiment Module's route decisions do not read it: their switch is
     # EXPERIMENTS__ROUTE_FEDOT.
-    fedot_fallback_enabled: bool = _os.getenv("EXECUTOR__FEDOT_FALLBACK", "true").lower() in ("true", "1", "yes")
+    fedot_fallback_enabled: bool = _os.getenv("EXECUTOR__FEDOT_FALLBACK", "false").lower() in ("true", "1", "yes")
     # The clinical specialist: PubMed/PICO, study taxonomy and DICOM. A narrow
     # role, and a study that needs none of it pays for the agent in the
     # orchestrator's roster and in the router's choices — so it switches off.

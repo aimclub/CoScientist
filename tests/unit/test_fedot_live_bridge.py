@@ -26,6 +26,11 @@ from CoScientist.tools import fedotmas_tools as ft
 from CoScientist.tools.fedot_live import fedot_live
 
 
+@pytest.fixture(autouse=True)
+def _enable_fedot_for_bridge_tests(monkeypatch):
+    monkeypatch.setattr(get_settings().web, "fedot_fallback_enabled", True)
+
+
 class _Server:
     def __init__(self, sid):
         self.name, self.url, self.description, self.protocol = (
@@ -111,6 +116,17 @@ def bus():
         yield queue
     finally:
         fedot_live.unsubscribe(queue)
+
+
+def test_a_direct_tool_call_is_refused_before_engine_start_when_disabled(monkeypatch):
+    monkeypatch.setattr(get_settings().web, "fedot_fallback_enabled", False)
+    monkeypatch.setattr(get_settings().experiments, "route_fedot", False)
+    engine_cls, seen = _engine()
+
+    result = _run(monkeypatch, engine_cls)
+
+    assert result["error_code"] == "capability_disabled"
+    assert "run" not in seen
 
 
 def test_the_page_is_told_the_shape_before_the_first_agent_runs(monkeypatch, bus):

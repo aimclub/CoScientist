@@ -192,6 +192,10 @@ def test_the_modules_own_methods_survive_the_overlay():
     assert "snapshot_experiment_discovered_capabilities" in reranker.callbacks.after_agent
 
     executor = config.agent("ExperimentExecutorAgent")
+    assert config.agent("OrchestratorAgent").resolved_reasoning() == "low"
+    assert config.agent("ExperimentPlannerAgent").resolved_reasoning() == "medium"
+    assert executor.resolved_reasoning() == "low"
+    assert config.agent("ExperimentResultReviewAgent").resolved_reasoning() == "medium"
     assert executor.callbacks.before_agent[0] == "skip_when_experiment_stage_complete"
     assert executor.callbacks.before_tool == ["guard_experiment_route"]
     assert executor.callbacks.after_tool == ["mark_experiment_route_returned"]

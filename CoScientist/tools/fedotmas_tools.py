@@ -75,8 +75,15 @@ class FedotMASToolset(BaseToolset):
         Returns:
             Result of the executed MAS pipeline.
         """
+        from CoScientist.capabilities import capability_disabled, fedot_mas_enabled
         from CoScientist.graph.session_scope import session_key
         from CoScientist.config import get_settings as get_app_settings
+
+        if not fedot_mas_enabled(tool_context):
+            return capability_disabled(
+                "FEDOT.MAS",
+                "EXPERIMENTS__ROUTE_FEDOT or EXECUTOR__FEDOT_FALLBACK",
+            )
 
         state = tool_context.state if tool_context is not None else {}
         experiment_context = state.get("experiment_context") or {}
