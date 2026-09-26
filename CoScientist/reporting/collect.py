@@ -225,6 +225,32 @@ def _unique_dest(folder: Path, name: str, artifact_id: str) -> Path:
     return folder / f"{stem}-{Path(artifact_id).stem[-8:]}{suffix}"
 
 
+def _is_session_paperwork(record: Dict[str, Any]) -> bool:
+    """What the run wrote ABOUT itself, as opposed to what it produced.
+
+    The chat's document panel (``reporting/documents.py``) keeps its paperwork
+    — work orders, agents' reports and answers, the research frame, the plan
+    review, a node's write-up — in the same session store as the run's outputs,
+    because that store already exports and deduplicates. And ``finalize``
+    mirrors ``report.md`` there too. Read as artifacts, they filled a live
+    report's Files section: fifteen entries, fourteen of them paperwork and one
+    of them a result.
+
+    The kinds come from the documents module itself, so a new document kind is
+    excluded here without anyone remembering to add it.
+    """
+    kind = str(record.get("source_kind") or "")
+    if not kind:
+        return False
+    if kind == "report":            # finalize's copy of report.md
+        return True
+    try:
+        from CoScientist.reporting.documents import KIND_PREFIX, UNLISTED_KINDS
+    except Exception:  # noqa: BLE001 — a report is not worth an import error
+        KIND_PREFIX, UNLISTED_KINDS = "doc:", frozenset({"node_report"})
+    return kind.startswith(KIND_PREFIX) or kind in UNLISTED_KINDS
+
+
 def _kind_from_name(name: str) -> str:
     """Fallback classification when the store has no record to read."""
     if _looks_like(name, _IMAGE_EXTS):
@@ -470,6 +496,12 @@ def collect_artifacts(
         manifest = session_files.load_manifest(index_session, index_user)
         scope = (index_user or "", index_session or "")
         for artifact_id, record in manifest.items():
+            if _is_session_paperwork(record):
+                # Claimed, so the URL pass never fetches it either — and not
+                # listed as "not collected" when it failed: it was never a
+                # result the reader was owed.
+                mirrored_ids.add(artifact_id)
+                continue
             if record.get("state") != session_files.STATE_STORED:
                 # Never silent: a figure that did not survive says why, in the
                 # report, instead of simply not being there.
