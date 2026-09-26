@@ -13,4 +13,3 @@ def test_agent_model_control_is_a_repeatable_select_with_custom_escape_hatch():
     assert "agentsWithCustomModel.delete(name)" in source
     assert "<datalist id=\"settings-agent-models\">" not in source
     assert "settings.agents.modelScope" in source
-
