@@ -196,7 +196,6 @@
     card.dataset.toolId = tool.id;
     const meta = node('div', 'card-meta');
     meta.append(badge(categoryLabel(tool.category), 'category'));
-    meta.append(badge(tool.status === 'available' ? text('live') : text('saved'), tool.status));
     if (tool.role === 'supporting') meta.append(badge(text('supporting'), 'supporting'));
     if (!tool.available_to_agents) meta.append(badge(text('agentLimited'), 'supporting'));
     card.append(meta);
@@ -247,8 +246,7 @@
     const kicker = node('div', 'featured-kicker');
     kicker.append(badge(text('fedot'), 'available'));
     copy.append(kicker, node('h2', '', localized(featured.display_name, featured.name)), node('p', 'featured-description', localized(featured.description)));
-    const status = badge(featured.discovery_status === 'reachable' ? text('live') : text('saved'), `featured-status ${featured.discovery_status === 'reachable' ? 'available' : 'saved'}`);
-    header.append(copy, status);
+    header.append(copy);
     card.append(header);
     const list = node('div', 'featured-tools');
     const primary = tools.slice(0, 2);

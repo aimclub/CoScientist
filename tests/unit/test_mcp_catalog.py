@@ -170,6 +170,8 @@ def test_page_assets_and_navigation_are_wired():
     assert "details[data-details-id]" in script  # open cards survive polling/language changes
     assert "Рекомендуемое" not in script
     assert "badge(text('featured')" not in script
+    assert "badge(tool.status" not in script
+    assert "featured-status" not in script
     assert "lang === 'en' && tool.original_description" in script
 
 

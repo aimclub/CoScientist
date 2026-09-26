@@ -3823,6 +3823,11 @@ def _handle_hitl_response(runtime: WebRuntime, key: SessionKey, data: dict):
             "Ignoring RequestInput response from the wrong session"
         )
         return
+    # The first decision wins. The wait event wakes the run asynchronously, so
+    # a double click (or a stale card) can otherwise overwrite the response
+    # before the continuation pops it from pending_hitl.
+    if info.get("response") is not None:
+        return
 
     # Store the response data
     response = {
