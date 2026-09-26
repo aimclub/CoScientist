@@ -1,5 +1,55 @@
     body {
-      font-family: 'Inter', sans-serif;
+      font-family: 'Source Sans 3', sans-serif;
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    /* Typographic hierarchy (matches the Alembic page): sentence case and
+       semibold instead of tiny bold wide-tracked capitals everywhere. The
+       brand <h1> and mono micro-labels keep their capitals. */
+    .uppercase:not(.font-mono):not(h1) {
+      text-transform: none !important;
+    }
+
+    .tracking-widest:not(.font-mono):not(h1),
+    .tracking-wider:not(.font-mono):not(h1) {
+      letter-spacing: 0.01em !important;
+    }
+
+    .font-bold {
+      font-weight: 600 !important;
+    }
+
+    .font-black {
+      font-weight: 700 !important;
+    }
+
+    h1.font-bold {
+      font-weight: 700 !important;
+    }
+
+    button[class~="text-[10px]"] {
+      font-size: 13px !important;
+    }
+
+    /* Source Sans has a lower x-height than Inter, so step body sizes up. */
+    .text-sm {
+      font-size: 15px !important;
+      line-height: 1.45 !important;
+    }
+
+    .text-xs {
+      font-size: 13px !important;
+    }
+
+    #agent-nav>div {
+      padding-top: 0.6rem !important;
+      padding-bottom: 0.6rem !important;
+    }
+
+    /* Brand stays capitalised as the one accent, with a calmer tracking. */
+    h1.tracking-widest {
+      letter-spacing: 0.14em !important;
     }
 
     /* Readability floor: the dashboard leans on Tailwind arbitrary sizes as
@@ -27,6 +77,33 @@
     [class~="text-[10px]"].tracking-widest,
     [class~="text-[11px]"].tracking-widest {
       letter-spacing: 0.04em !important;
+    }
+
+    .font-mono.tracking-widest,
+    .font-mono.tracking-wider,
+    .font-mono.tracking-tighter {
+      letter-spacing: 0.02em !important;
+    }
+
+    /* Monospace only where fixed width carries meaning: numbers, ids, agent and
+       tool names, timestamps, code. Everything that reads as a word — section
+       labels, prose, form labels, user text — uses the UI face. (In `font-mono`
+       the Cyrillic already falls back to Source Sans via the "UI Mono" face,
+       but Latin words in these elements would still be monospace.) */
+    p.font-mono,
+    label.font-mono,
+    textarea.font-mono,
+    input.font-mono,
+    .font-mono.italic,
+    .font-mono.uppercase,
+    .font-mono[class*="tracking-"],
+    .si-activity-header {
+      font-family: 'Source Sans 3', sans-serif !important;
+    }
+
+    .font-mono.uppercase {
+      font-size: 11px !important;
+      letter-spacing: 0.08em !important;
     }
 
     .material-symbols-outlined {
@@ -315,7 +392,7 @@
       background: rgba(140, 144, 161, 0.15);
       border-radius: 4px;
       padding: 0.1em 0.35em;
-      font-family: 'JetBrains Mono', monospace;
+      font-family: 'IBM Plex Mono', monospace;
       font-size: 0.85em;
     }
 
