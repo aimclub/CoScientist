@@ -135,7 +135,7 @@
     ModuleC_Reactor: { ru: 'Эксперименты на реакторе', en: 'Reactor experiments' },
     ReactorAgent: { ru: 'Эксперименты на реакторе', en: 'Reactor experiments' },
     ReportAgent: { ru: 'Итоговый отчёт', en: 'Final report' },
-    OrchestratorAgent: { ru: 'Агент-координатор', en: 'Orchestrator agent' },
+    OrchestratorAgent: { ru: 'Агент-оркестратор', en: 'Orchestrator agent' },
     PlannerAgent: { ru: 'Агент-планировщик', en: 'Planner agent' },
     PlanningPipelineAgent: { ru: 'Агент-планировщик', en: 'Planner agent' },
     PlanCriticAgent: { ru: 'Агент-критик', en: 'Plan critic agent' },
