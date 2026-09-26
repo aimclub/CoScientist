@@ -416,10 +416,13 @@ async def _probe_endpoint(endpoint: Mapping[str, Any], semaphore: asyncio.Semaph
             }
 
 
-def _localized(value: Any, fallback: str) -> Dict[str, str]:
+def _localized(value: Any, fallback: str, *, ru_fallback: Optional[str] = None) -> Dict[str, str]:
     if not isinstance(value, Mapping):
-        return {"ru": fallback, "en": fallback}
-    return {"ru": str(value.get("ru") or fallback), "en": str(value.get("en") or fallback)}
+        return {"ru": ru_fallback or fallback, "en": fallback}
+    return {
+        "ru": str(value.get("ru") or ru_fallback or fallback),
+        "en": str(value.get("en") or fallback),
+    }
 
 
 def _assemble_catalog(
@@ -434,6 +437,7 @@ def _assemble_catalog(
     presentation = _load_presentation()
     server_meta = presentation.get("servers") or {}
     tool_meta = presentation.get("tools") or {}
+    tool_defaults = presentation.get("tool_defaults") or {}
     checked_at = checked_at or _utc_now()
     registry_tools: Dict[str, List[Dict[str, Any]]] = {}
     for raw in registry.get("tools") or []:
@@ -507,13 +511,28 @@ def _assemble_catalog(
             input_schema = _plain_json(current.get("input_schema") or {})
             output_schema = _plain_json(current.get("output_schema")) if current.get("output_schema") else None
             stable_registry_key = f"{registry_id}:{name}" if registry_id else None
-            override_tool = tool_meta.get(stable_registry_key) or tool_meta.get(f"{server_id}:{name}") or {}
+            override_tool = (
+                tool_meta.get(stable_registry_key)
+                or tool_meta.get(f"{server_id}:{name}")
+                or tool_defaults.get(name)
+                or {}
+            )
             category = str(override_tool.get("category") or _category(registry_record or endpoint, current))
             role = str(override_tool.get("role") or _role(name))
-            title = _localized(override_tool.get("display_name"), _human_name(name))
+            english_title = _human_name(name)
+            title = _localized(
+                override_tool.get("display_name"),
+                english_title,
+                ru_fallback=f"Инструмент «{name}»",
+            )
+            english_summary = _short_description(description) or english_title
             summary = _localized(
                 override_tool.get("description"),
-                _short_description(description) or _human_name(name),
+                english_summary,
+                ru_fallback=(
+                    f"Выполняет операцию «{title['ru']}» через MCP-сервер "
+                    f"«{server_title['ru']}»."
+                ),
             )
             source = "live" if name in live else ("registry" if name in indexed_by_name else "snapshot")
             allowed = endpoint.get("tool_filter")

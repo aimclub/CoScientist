@@ -16,7 +16,7 @@
       live: 'Проверено сейчас', saved: 'Сохранённое описание', scientific: 'Научные', supporting: 'Служебные',
       shown: 'Показано {shown} из {total}', empty: 'По заданным фильтрам инструменты не найдены.', details: 'Технические сведения',
       machineName: 'Машинное имя', server: 'Сервер', source: 'Источник описания', parameters: 'Параметры', unknownSchema: 'Параметры не описаны',
-      original: 'Исходное описание', agentLimited: 'Ограниченный доступ', featured: 'Рекомендуемое', fedot: 'FEDOT', more: 'Ещё операции ({count})',
+      original: 'Исходное описание', agentLimited: 'Ограниченный доступ', fedot: 'FEDOT', more: 'Ещё операции ({count})',
       registryUnavailable: 'Реестр Tool RAG сейчас недоступен. Показаны сведения подключённых серверов и последний сохранённый снимок.',
       attentionNotice: '{count} подключений требуют внимания: сервер не ответил или его текущий список расходится с индексом.',
       firstLoad: 'Каталог строится. Страница обновится автоматически по мере получения ответов серверов.',
@@ -35,7 +35,7 @@
       live: 'Checked now', saved: 'Saved description', scientific: 'Scientific', supporting: 'Supporting',
       shown: 'Showing {shown} of {total}', empty: 'No tools match the selected filters.', details: 'Technical details',
       machineName: 'Machine name', server: 'Server', source: 'Metadata source', parameters: 'Parameters', unknownSchema: 'Parameters are not described',
-      original: 'Original description', agentLimited: 'Restricted access', featured: 'Featured', fedot: 'FEDOT', more: 'More operations ({count})',
+      original: 'Original description', agentLimited: 'Restricted access', fedot: 'FEDOT', more: 'More operations ({count})',
       registryUnavailable: 'The Tool RAG registry is unavailable. Connected server metadata and the last saved snapshot are shown.',
       attentionNotice: '{count} connections need attention: a server did not respond or its current tools differ from the index.',
       firstLoad: 'The catalogue is being built. This page will update as servers respond.',
@@ -178,7 +178,9 @@
       dl.append(dd);
     });
     box.append(dl);
-    if (tool.original_description && tool.original_description !== localized(tool.summary)) {
+    // The registry contract is commonly authored in English. Keep it available
+    // in the English view, but do not mix it into the Russian catalogue.
+    if (lang === 'en' && tool.original_description && tool.original_description !== localized(tool.summary)) {
       box.append(node('div', '', `${text('original')}: ${tool.original_description}`));
     }
     const schemaTitle = node('div', '', text('parameters'));
@@ -243,7 +245,7 @@
     const header = node('div', 'featured-header');
     const copy = node('div');
     const kicker = node('div', 'featured-kicker');
-    kicker.append(badge(text('featured'), 'category'), badge(text('fedot'), 'available'));
+    kicker.append(badge(text('fedot'), 'available'));
     copy.append(kicker, node('h2', '', localized(featured.display_name, featured.name)), node('p', 'featured-description', localized(featured.description)));
     const status = badge(featured.discovery_status === 'reachable' ? text('live') : text('saved'), `featured-status ${featured.discovery_status === 'reachable' ? 'available' : 'saved'}`);
     header.append(copy, status);

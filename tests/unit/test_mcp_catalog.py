@@ -73,6 +73,10 @@ def test_live_list_is_current_and_registry_difference_is_explicit():
         "live_only": ["new_live"],
         "indexed_only": ["removed"],
     }
+    new_tool = next(tool for tool in result["tools"] if tool["name"] == "new_live")
+    assert new_tool["display_name"]["ru"] == "Инструмент «new_live»"
+    assert new_tool["summary"]["ru"].startswith("Выполняет операцию")
+    assert new_tool["display_name"]["en"] == "New live"
 
 
 def test_unavailable_server_keeps_saved_metadata_without_claiming_availability():
@@ -164,6 +168,9 @@ def test_page_assets_and_navigation_are_wired():
     assert 'name: "ToolCatalogue"' in rail and "window.open('/tools'" in rail
     assert "'/api/mcp-tools/refresh'" in script
     assert "details[data-details-id]" in script  # open cards survive polling/language changes
+    assert "Рекомендуемое" not in script
+    assert "badge(text('featured')" not in script
+    assert "lang === 'en' && tool.original_description" in script
 
 
 def test_refresh_remains_available_in_memory_when_snapshot_disk_is_read_only(tmp_path, monkeypatch):
