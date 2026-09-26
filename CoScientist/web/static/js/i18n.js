@@ -1452,6 +1452,7 @@ const i18n = {
   'experiments.running': { en: 'running', ru: 'в работе' },
   'experiments.failed': { en: 'failed', ru: 'с ошибкой' },
   'experiments.delegates': { en: 'delegates', ru: 'делегирует' },
+  'experiments.delegatedTask': { en: 'Task and answer', ru: 'Задача и ответ' },
   'experiments.runningDots': { en: 'running…', ru: 'выполняется…' },
   'experiments.args': { en: 'Arguments', ru: 'Аргументы' },
   'experiments.output': { en: 'Output', ru: 'Результат' },

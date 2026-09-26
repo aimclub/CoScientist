@@ -18,6 +18,7 @@ able to break a run: every dispatch is guarded.
 
 from __future__ import annotations
 
+import contextvars
 import copy
 import json
 import logging
@@ -40,6 +41,16 @@ _FULL_LIMIT = 2_000_000
 _DESCRIPTION_LIMIT = 200
 
 _sink: Optional[ToolActivitySink] = None
+
+# The delegation a nested AgentTool run was launched by: the calling agent,
+# its runtime instance (session id) and the call id. ADK runs a call's
+# before-tool callbacks and the tool itself in one task of their own, and an
+# AgentTool drives its nested Runner inside that task, so everything the
+# delegated agent does sees this value — and sibling calls never see each
+# other's. The nested session has no link back to its caller otherwise.
+_delegation_caller: contextvars.ContextVar[Optional[dict]] = contextvars.ContextVar(
+    "tool_activity_delegation_caller", default=None,
+)
 
 
 def set_tool_activity_sink(sink: Optional[ToolActivitySink]) -> None:
@@ -130,6 +141,21 @@ def _agent_instance(tool_context: Any) -> Optional[str]:
 def _parent_agent_instance(tool_context: Any) -> Optional[str]:
     """Return the runtime identity of a nested callback's caller, if known."""
     return _agent_instance(getattr(tool_context, "_parent_ctx", None))
+
+
+def _delegating_caller(context: Any, parent: Optional[str]) -> Optional[dict]:
+    """The delegation that launched the nested run ``context`` belongs to.
+
+    Only a run in a session other than the caller's is a delegated one, and
+    only when ``parent`` names the caller — an agent nested in-process below
+    the delegated agent has a parent of its own.
+    """
+    caller = _delegation_caller.get()
+    if caller is None or caller["instance"] == _agent_instance(context):
+        return None
+    if parent is not None and parent != caller["agent"]:
+        return None
+    return caller
 
 
 def _call_id(tool_context: Any) -> Optional[str]:
@@ -415,7 +441,10 @@ class ToolActivityPlugin(BasePlugin):
         # An in-process sub-agent runs in its parent's own session, so it
         # shares the parent's runtime identity.
         parent_instance = _parent_agent_instance(callback_context) or (instance if parent else None)
-        if not parent:
+        caller = None if parent else _delegating_caller(callback_context, None)
+        if caller is not None:
+            parent, parent_instance = caller["agent"], caller["instance"]
+        elif not parent:
             parent = _parent_agent_name(callback_context, author)
         payload = {
             "phase": "agent_start",
@@ -425,6 +454,8 @@ class ToolActivityPlugin(BasePlugin):
             "parent_instance": parent_instance,
             "agent_class": getattr(getattr(agent, "__class__", None), "__name__", "Agent"),
         }
+        if caller is not None and caller["call_id"]:
+            payload["spawn_call_id"] = caller["call_id"]
         await self._dispatch(callback_context, payload)
         return None
 
@@ -445,20 +476,28 @@ class ToolActivityPlugin(BasePlugin):
         author = _agent_name(tool_context)
         target = _delegation_target(tool, tool_args)
         parent = _parent_agent_name(tool_context, author)
+        instance = _agent_instance(tool_context)
+        call_id = _call_id(tool_context)
+        parent_instance = _parent_agent_instance(tool_context)
+        if parent_instance is None:
+            caller = _delegating_caller(tool_context, parent)
+            parent_instance = caller["instance"] if caller else None
         payload = {
             "phase": "call",
             "author": author,
-            "agent_instance": _agent_instance(tool_context),
+            "agent_instance": instance,
             "tool": getattr(tool, "name", "?"),
-            "call_id": _call_id(tool_context),
+            "call_id": call_id,
             "args": preview,
             "args_truncated": truncated,
             "parent": parent,
-            "parent_instance": _parent_agent_instance(tool_context),
+            "parent_instance": parent_instance,
         }
         if target:
             payload["is_delegation"] = True
             payload["target_agent"] = target
+            # Lives only in this call's task; no reset needed.
+            _delegation_caller.set({"agent": author, "instance": instance, "call_id": call_id})
         description = _short_description(tool)
         if description:
             payload["description"] = description

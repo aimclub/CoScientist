@@ -240,7 +240,9 @@
       if (isInternalAgent(author)) return;
       const node = agentNode(author, data.agent_instance);
       if (data.agent_class) node.agentClass = data.agent_class;
-      const spawnUid = data.phase === 'agent_start' ? findDelegationSpawn(author, data.parent, data.parent_instance) : null;
+      const spawnUid = data.phase === 'agent_start'
+        ? findDelegationSpawn(author, data.parent, data.parent_instance, data.spawn_call_id)
+        : null;
       resolveAndLinkParent(node.key, data.parent, spawnUid, data.parent_instance);
       node.status = (data.phase === 'agent_start') ? 'running' : 'idle';
       if (data.timestamp) {
@@ -296,9 +298,15 @@
     // A child starts after its AgentTool call was announced.  Pair it with an
     // as-yet-unclaimed delegation from the same runtime parent, so concurrent
     // launches of the same named agent remain next to their own hand-off row.
-    function findDelegationSpawn(target, parent, parentInstance) {
+    // The server names the spawning call (`spawn_call_id`) when it knows it;
+    // the name-based search below is the fallback for events without it.
+    function findDelegationSpawn(target, parent, parentInstance, spawnCallId = null) {
       if (!parent) return null;
       const parentKey = agentKey(parent, parentInstance);
+      if (spawnCallId) {
+        const rec = toolCallRecords.find(r => r.callId === spawnCallId && r.authorKey === parentKey);
+        if (rec) return rec.uid;
+      }
       const claimed = new Set(agentSpawnCall.values());
       for (let i = toolCallRecords.length - 1; i >= 0; i--) {
         const rec = toolCallRecords[i];
@@ -540,9 +548,20 @@
       renderExperimentFeed();
     }
 
-    function toggleAgentNode(name) {
-      if (collapsedAgents.has(name)) collapsedAgents.delete(name);
-      else collapsedAgents.add(name);
+    // The key travels URI-encoded in `data-agent-key`: it may hold a NUL
+    // (name/instance separator), which an HTML attribute cannot carry.
+    function toggleAgentNode(el, ev) {
+      if (ev && ev.type === 'keydown') {
+        if (ev.key !== 'Enter' && ev.key !== ' ') return;
+        ev.preventDefault();
+      }
+      // Finishing a mouse selection of the agent name must not fold the branch.
+      const sel = window.getSelection && window.getSelection();
+      if (ev && ev.type === 'click' && sel && !sel.isCollapsed
+          && el.contains(sel.anchorNode)) return;
+      const key = decodeURIComponent(el.dataset.agentKey || '');
+      if (collapsedAgents.has(key)) collapsedAgents.delete(key);
+      else collapsedAgents.add(key);
       renderExperimentFeed();
     }
 
@@ -646,6 +665,19 @@
       const icon = btn.querySelector('.material-symbols-outlined');
       try {
         await tvWriteClipboard(rec.name);
+        if (icon) icon.textContent = 'check';
+      } catch {
+        if (icon) icon.textContent = 'error';
+      }
+      setTimeout(() => { if (icon) icon.textContent = 'content_copy'; }, 1200);
+    }
+
+    async function copyTvAgentName(btn) {
+      const node = agentNodes.get(decodeURIComponent(btn.dataset.agentKey || ''));
+      if (!node) return;
+      const icon = btn.querySelector('.material-symbols-outlined');
+      try {
+        await tvWriteClipboard(tvAgentName(node.name));
         if (icon) icon.textContent = 'check';
       } catch {
         if (icon) icon.textContent = 'error';
@@ -910,12 +942,32 @@
         : String(name || '').replace(/Agent$/, '');
     }
 
-    // One branch of the call tree: the agent's own tool calls, each child
-    // branch nested and indented directly under the `delegates` card that
-    // spawned it. Two agents delegated to in parallel therefore stay next to
-    // their own hand-off rows instead of both piling up after the parent's
-    // last call, where neither could be told apart.
-    function renderAgentNode(key, visited = new Set()) {
+    // A delegated agent's hand-off, shown inside its own block: what it was
+    // asked and what it answered, folded like a tool card body.
+    function renderSpawnRow(rec) {
+      const open = tvOpenCards.has(rec.uid);
+      const st = TV_STATUS[rec.status] || TV_STATUS.running;
+      return `
+        <div class="rounded-md border ${st.border} ${st.bg} overflow-hidden">
+          <div role="button" tabindex="0" aria-expanded="${open}"
+            onclick="toggleToolCard('${rec.uid}', event)" onkeydown="toggleToolCard('${rec.uid}', event)"
+            class="w-full flex items-center gap-2 px-2.5 py-1.5 text-left cursor-pointer hover:bg-surface-variant/20 transition-colors">
+            <span class="material-symbols-outlined text-[14px] text-outline-variant shrink-0">${open ? 'expand_more' : 'chevron_right'}</span>
+            <span class="material-symbols-outlined text-[14px] text-primary/70 shrink-0">assignment</span>
+            <span class="text-[11px] font-bold text-on-surface shrink-0">${t('experiments.delegatedTask')}</span>
+            <span class="flex-1 min-w-0 truncate text-[10px] font-mono text-outline-variant/70">${escHtml(tvArgsSummary(rec.args))}</span>
+            <span class="shrink-0 text-[9px] font-mono ${st.tone}">${rec.status === 'running' ? 'running…' : tvDuration(rec)}</span>
+          </div>
+          ${open ? renderToolCardBody(rec) : ''}
+        </div>`;
+    }
+
+    // One branch of the call tree: the agent's own tool calls, in order. A
+    // delegation whose agent is known is shown as that agent's own block, in
+    // the delegation's place, with the hand-off (`spawnRec`) inside it — two
+    // agents delegated to in parallel therefore stay where they were launched.
+    // A delegation whose agent never reported stays a `delegates` card.
+    function renderAgentNode(key, visited = new Set(), spawnRec = null) {
       const node = agentNodes.get(key);
       if (!node || isInternalAgent(node.name) || visited.has(key)) return '';
       visited.add(key);
@@ -941,7 +993,8 @@
         }
       });
       const running = calls.filter(rec => rec.status === 'running').length;
-      const failed = calls.filter(rec => rec.status === 'error').length;
+      const failed = calls.filter(rec => rec.status === 'error').length
+        + (spawnRec && spawnRec.status === 'error' ? 1 : 0);
       const done = calls.length - running;
       const isAgentRunning = node.status === 'running' || running > 0;
       const pills = [
@@ -949,7 +1002,10 @@
         failed ? `<span class="text-error">${failed} failed</span>` : '',
         (!running && calls.length) ? `<span class="text-secondary">${done - failed}/${calls.length} ok</span>` : '',
       ].filter(Boolean).join('<span class="text-outline-variant/30">·</span>');
-      const collapsed = collapsedAgents.has(key);
+      // Nothing to unfold — no calls of its own and no visible child — means
+      // no chevron and no toggle: the header is just a label.
+      const expandable = calls.length > 0 || children.length > 0 || !!spawnRec;
+      const collapsed = expandable && collapsedAgents.has(key);
       const lastActive = calls.length
         ? (calls[calls.length - 1].endedAt || calls[calls.length - 1].startedAt)
         : (node.lastActive || node.firstSeenAt);
@@ -961,24 +1017,38 @@
 
       const body = collapsed ? '' : `
         <div class="px-2 pb-2 space-y-1.5">
-          ${calls.map(rec => renderToolCard(rec) + nestBranches(childrenByCall.get(rec.uid) || [])).join('')}
+          ${spawnRec ? renderSpawnRow(spawnRec) : ''}
+          ${calls.map(rec => {
+            const spawned = childrenByCall.get(rec.uid) || [];
+            if (!rec.isDelegation || !spawned.length) return renderToolCard(rec) + nestBranches(spawned);
+            return spawned.map((child, i) => renderAgentNode(child, new Set(visited), i === 0 ? rec : null)).join('');
+          }).join('')}
           ${nestBranches(tailChildren)}
         </div>`;
 
       const cleanName = escHtml(tvAgentName(node.name));
+      const encodedKey = escHtml(encodeURIComponent(key));
 
       return `
         <div class="rounded-lg border border-outline-variant/15 bg-surface-container-low/40">
-          <button type="button" onclick="toggleAgentNode(${JSON.stringify(key)})"
-            class="w-full flex items-center gap-2 px-2.5 py-2 text-left hover:bg-surface-variant/20 transition-colors">
-            <span class="material-symbols-outlined text-[14px] text-outline-variant shrink-0">${collapsed ? 'chevron_right' : 'expand_more'}</span>
+          <div ${expandable ? `role="button" tabindex="0" aria-expanded="${!collapsed}" data-agent-key="${encodedKey}"
+            onclick="toggleAgentNode(this, event)" onkeydown="toggleAgentNode(this, event)"` : ''}
+            class="group w-full flex items-center gap-2 px-2.5 py-2 text-left ${expandable ? 'cursor-pointer hover:bg-surface-variant/20' : ''} transition-colors">
+            ${expandable
+              ? `<span class="material-symbols-outlined text-[14px] text-outline-variant shrink-0">${collapsed ? 'chevron_right' : 'expand_more'}</span>`
+              : '<span class="w-[14px] shrink-0" aria-hidden="true"></span>'}
             <span class="material-symbols-outlined text-[14px] text-primary shrink-0">${agentIcon(node.name)}</span>
-            <span class="text-[11px] font-bold uppercase tracking-wider text-on-surface shrink-0" title="${escHtml(node.name)}" translate="no">${cleanName}</span>
-            ${calls.length ? `<span class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-primary/10 text-primary shrink-0">${calls.length} call${calls.length === 1 ? '' : 's'}</span>` : `<span class="text-[8px] font-mono uppercase px-1.5 py-0.5 rounded bg-outline-variant/10 text-outline-variant/60 shrink-0">0 calls</span>`}
+            <span class="text-[11px] font-bold uppercase tracking-wider text-on-surface shrink-0 select-text cursor-text" title="${escHtml(node.name)}" translate="no">${cleanName}</span>
+            <button type="button" data-agent-key="${encodedKey}" onclick="event.stopPropagation(); copyTvAgentName(this)"
+              onkeydown="event.stopPropagation()" title="${t('common.copy')}"
+              class="shrink-0 -ml-1 flex items-center text-outline-variant opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-primary transition-opacity">
+              <span class="material-symbols-outlined text-[12px]">content_copy</span>
+            </button>
+            ${calls.length ? `<span class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-primary/10 text-primary shrink-0">${calls.length} call${calls.length === 1 ? '' : 's'}</span>` : ''}
             <span class="flex-1"></span>
             <span class="flex items-center gap-1.5 text-[9px] font-mono shrink-0">${pills}</span>
             <span class="shrink-0 text-[9px] font-mono text-outline-variant/60">${safeTimeStr(lastActive)}</span>
-          </button>
+          </div>
           ${body}
         </div>`;
     }
@@ -1043,6 +1113,7 @@
     window.toggleTvBlock = toggleTvBlock;
     window.copyTvBlock = copyTvBlock;
     window.copyTvToolName = copyTvToolName;
+    window.copyTvAgentName = copyTvAgentName;
     window.addExperimentAgentEvent = addExperimentAgentEvent;
     window.addExperimentToolCall = addExperimentToolCall;
     window.addExperimentToolResponse = addExperimentToolResponse;

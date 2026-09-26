@@ -117,14 +117,15 @@
   const AGENTS = {
     // Microfluidics profile: keep the stable runtime ids, but show the role
     // a researcher actually needs to understand.
-    RootOrchestrator: { ru: 'Руководитель исследования', en: 'Research lead' },
+    RootOrchestrator: { ru: 'Оркестратор', en: 'Research lead' },
     ModuleA_TZLiterature: { ru: 'Постановка задачи и литература', en: 'Specification & literature' },
     TZAgent: { ru: 'Подготовка технического задания', en: 'Specification preparation' },
-    TZSpecAgent: { ru: 'Техническое задание', en: 'Technical specification' },
+    // Its workers (TZSpecAgent_task, …) fill the ТЗ part by part.
+    TZSpecAgent: { ru: 'Техническое задание', en: 'Technical specification', worker: 'Агент технического задания' },
     TZQueryGenAgent: { ru: 'Составление поисковых запросов', en: 'Literature queries' },
     LiteratureOrchestrator: { ru: 'Анализ литературы', en: 'Literature analysis' },
     LiteratureSynthesisAgent: { ru: 'Итоги литературного анализа', en: 'Literature summary' },
-    EvidenceVerifierAgent: { ru: 'Проверка источников', en: 'Source verification' },
+    EvidenceVerifierAgent: { ru: 'Агент-верификатор', en: 'Verifier agent' },
     RouteSelectionAgent: { ru: 'Выбор маршрута синтеза', en: 'Route selection' },
     ModuleB_Design: { ru: 'Молекула и экономика', en: 'Molecule & economics' },
     MolDesignAgent: { ru: 'Подбор молекулы', en: 'Molecule selection' },
@@ -338,7 +339,8 @@
 
   /** Agents are always named in Russian, whatever the interface language.
    *  Workers built at run time are named after the one that spawns them
-   *  (TZSpecAgent_task_fill → TZSpecAgent) and take its name. */
+   *  (TZSpecAgent_task_fill → TZSpecAgent) and take its `worker` label,
+   *  or its own name when it has none. */
   function agentLabel(name, capitalize = false) {
     if (!name) return '';
     let candidate = String(name);
@@ -346,7 +348,8 @@
       candidate = candidate.slice(0, candidate.lastIndexOf('_'));
     }
     const known = AGENTS[candidate];
-    let label = known ? (known.ru || known.en || '') : '';
+    const isWorker = candidate !== String(name);
+    let label = known ? ((isWorker && known.worker) || known.ru || known.en || '') : '';
     if (!label) {
       label = 'Агент-' + String(name).replace(/Agent$/, '').toLowerCase();
     }

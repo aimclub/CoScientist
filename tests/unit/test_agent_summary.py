@@ -154,8 +154,8 @@ def test_a_model_named_without_a_provider_goes_through_the_openai_route():
     a provider it knows, and an OpenAI-compatible base is the route for it."""
     assert m._routable("google/gemini-2.0-flash-lite-001", "https://openrouter.ai/api/v1") \
         == "openai/google/gemini-2.0-flash-lite-001"
-    assert m._routable("openrouter/deepseek/deepseek-v4-flash-0731", "https://openrouter.ai/api/v1") \
-        == "openrouter/deepseek/deepseek-v4-flash-0731", "a routable name is left alone"
+    assert m._routable("openrouter/deepseek/deepseek-v4.1-flash", "https://openrouter.ai/api/v1") \
+        == "openrouter/deepseek/deepseek-v4.1-flash", "a routable name is left alone"
 
 
 def test_a_retired_small_model_falls_back_to_the_main_model(monkeypatch):
