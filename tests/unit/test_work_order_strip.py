@@ -28,6 +28,7 @@ import pytest
 
 WEB = Path(__file__).resolve().parents[2] / "CoScientist" / "web"
 JS = WEB / "static" / "js"
+CHAT_JS = JS / "chat.js"
 
 _HARNESS = r"""
 const fs = require('fs'), path = require('path'), vm = require('vm');
@@ -138,6 +139,30 @@ def test_a_live_card_opens_because_silence_approves_nothing(cards):
     person, countdown or not, and must not hide what they are asked to judge."""
     assert "open" in _strip(cards["live_report"])
     assert "open" in _strip(cards["live_order"])
+
+
+def test_report_document_button_stays_visible_outside_the_strip(cards):
+    """Folding report details must not fold away the way into the Markdown.
+
+    Both a pending report and the same report in replay/history keep their
+    document button before the collapsible strip, so it is visible whether the
+    strip itself is open or closed.
+    """
+    for key in ("live_report", "history_report", "empty_compact_report"):
+        html = cards[key]
+        assert html.count("<button>doc</button>") == 1, key
+        if "<details data-wo-strip" in html:
+            assert html.index("<button>doc</button>") < html.index("<details data-wo-strip"), key
+
+
+def test_report_document_button_opens_the_shared_right_panel():
+    """The real chat button must call the document viewer, not a download."""
+    source = CHAT_JS.read_text(encoding="utf-8")
+    block = source.split("function documentBlock(event)", 1)[1].split(
+        "function thinkingBlock", 1)[0]
+    assert "data-doc-id" in block
+    assert "onclick=\"openDocument(" in block
+    assert "t('doc.open')" in block
 
 
 def test_the_line_says_what_is_inside(cards):
