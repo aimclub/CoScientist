@@ -5,9 +5,8 @@ got `FEDOT.MAS Demo (agent graph)` in Latin — the array's own fallback string,
 which `applyLanguage` leaves in place when the key is missing. Every other row
 in that rail is translated, so the two new ones read as unfinished.
 
-And the demo row is a reverse proxy to a process that is not running by
-default. `httpx.ConnectError` came back as a JSON body with status 502, which
-in the new browser tab the row opens is a page of raw JSON.
+The viewer is now vendored and both pages require a session/run to read data.
+Even with the old standalone backend unavailable, the page and assets work.
 """
 from __future__ import annotations
 
@@ -91,46 +90,29 @@ def client(tmp_path, monkeypatch):
         yield c
 
 
-def test_a_browser_gets_a_page_and_a_script_gets_json(client):
-    page = client.get("/fedot-demo/", headers={"Accept": "text/html,*/*"})
-    assert page.status_code == 502, "a missing demo is not a working one"
-    assert page.headers["content-type"].startswith("text/html")
-    body = page.text
-    # What the operator needs in order to do something about it.
-    assert "git submodule update --init infrastructure/fedot-mas-gui" in body
-    assert "uv pip install -r gui/requirements.txt" in body, "no way to build it"
-    assert "gui/run.py" in body, "no way to start it"
-    assert "FEDOT_GUI_URL" in body and "127.0.0.1:4173" in body
-    assert "/fedot-trace" in body, "no way back to the thing that does work"
-
-    data = client.get("/fedot-demo/api/run", headers={"Accept": "application/json"})
-    assert data.status_code == 502
-    assert data.headers["content-type"].startswith("application/json")
-    assert "not answering" in data.json()["detail"]
+def test_demo_is_vendored_and_does_not_need_another_backend(client):
+    page = client.get("/fedot-demo/")
+    assert page.status_code == 200
+    assert 'id="fedot-runs"' in page.text
+    for name in ("app.js", "styles.css"):
+        response = client.get("/fedot-demo/" + name)
+        assert response.status_code == 200
+        assert "no-cache" in response.headers["cache-control"]
+    assert client.post("/fedot-demo/api/run", json={}).status_code == 405
 
 
-def test_the_page_says_which_address_it_tried(client, monkeypatch):
-    """The default is not the only one: a demo may run anywhere."""
-    monkeypatch.setenv("FEDOT_GUI_URL", "http://10.0.0.9:9999")
-    from CoScientist.web.app import create_app
-
-    with TestClient(create_app()) as fresh:
-        body = fresh.get("/fedot-demo/", headers={"Accept": "text/html"}).text
-    assert "10.0.0.9:9999" in body and "127.0.0.1:4173" not in body
+def test_demo_redirect_preserves_session_and_run(client):
+    response = client.get("/fedot-demo?user_id=u&session_id=s&run_id=r", follow_redirects=False)
+    assert response.headers["location"] == "/fedot-demo/?user_id=u&session_id=s&run_id=r"
 
 
-def test_the_trace_page_and_the_live_stream_stand_on_their_own(client):
-    """Neither depends on the gui-demo: the trace page reads Langfuse, and the
-    stream is fed by fedot_tool itself."""
+def test_trace_and_stream_reject_unscoped_access(client):
     page = client.get("/fedot-trace")
     assert page.status_code == 200 and "FEDOT.MAS Trace" in page.text
-    # Self-hosted typography, like every other page.
     assert "/static/css/fonts.css" in page.text
-
-    trace = client.get("/api/fedot-langfuse-trace")
-    assert trace.status_code == 200
-    # Unconfigured is an empty state, never an error the page has to handle.
-    assert trace.json()["status"] in {"unconfigured", "empty", "ok", "error"}
+    assert "/static/js/fedot_runs.js" in page.text
+    for url in ("/api/fedot-langfuse-trace", "/api/fedot-live-stream"):
+        assert client.get(url).status_code == 400
 
 
 def test_the_front_end_is_never_served_from_a_stale_cache(client):
@@ -154,4 +136,3 @@ def test_the_front_end_is_never_served_from_a_stale_cache(client):
     # The page itself is stricter still, and stays that way.
     page = client.get("/")
     assert "no-store" in page.headers.get("cache-control", "")
-

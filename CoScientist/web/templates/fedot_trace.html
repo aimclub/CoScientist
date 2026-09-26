@@ -52,9 +52,11 @@
   <a id="langfuse-link" href="#" target="_blank" style="display:none">Open in Langfuse ↗</a>
   <button class="refresh" onclick="load()">Refresh</button>
 </header>
+<div id="fedot-runs"></div>
 <main>
   <div id="content"><div class="empty">Loading…</div></div>
 </main>
+<script src="/static/js/fedot_runs.js"></script>
 <script>
 function fmtDur(startIso, endIso) {
   if (!startIso || !endIso) return '';
@@ -108,68 +110,51 @@ function toggle(id) {
   document.getElementById(id).classList.toggle('open');
 }
 
+let selectedRun = null, requestVersion = 0, refreshTimer = null;
 async function load() {
+  if (!selectedRun) return;
+  const version = ++requestVersion;
   const box = document.getElementById('content');
-  const lfLink = document.getElementById('langfuse-link');
+  const query = new URLSearchParams(location.search);
+  query.set('run_id', selectedRun.run_id);
   try {
-    const r = await fetch('/api/fedot-langfuse-trace');
-    const data = await r.json();
-
-    if (data.status === 'unconfigured') {
-      box.innerHTML = '<div class="empty">Langfuse is not configured — set LANGFUSE_PUBLIC_KEY / '
-        + 'LANGFUSE_SECRET_KEY in .env.</div>';
-      lfLink.style.display = 'none';
-      return;
-    }
-    if (data.status === 'empty') {
-      box.innerHTML = '<div class="empty">No FEDOT.MAS runs traced yet. Trigger one via the '
-        + 'fedot_tool or /api/fedot-debug-run.</div>';
-      lfLink.style.display = 'none';
-      return;
-    }
-    if (data.status === 'error') {
-      box.innerHTML = '<div class="empty">Failed to load trace from Langfuse: ' + escapeHtml(data.detail || '') + '</div>';
-      lfLink.style.display = 'none';
-      return;
-    }
-
-    if (data.langfuse_url) {
-      lfLink.href = data.langfuse_url;
-      lfLink.style.display = '';
-    } else {
-      lfLink.style.display = 'none';
-    }
-
-    const observations = data.observations || [];
-    const byParent = new Map();
-    const roots = [];
-    for (const o of observations) {
-      if (o.parent_id) {
-        if (!byParent.has(o.parent_id)) byParent.set(o.parent_id, []);
-        byParent.get(o.parent_id).push(o);
-      } else {
-        roots.push(o);
+    const response = await fetch('/api/fedot-langfuse-trace?' + query, {cache: 'no-store'});
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const data = await response.json();
+    if (version !== requestVersion) return;
+    const byParent = new Map(), roots = [];
+    for (const observation of data.observations || []) {
+      if (!observation.parent_id) roots.push(observation);
+      else {
+        if (!byParent.has(observation.parent_id)) byParent.set(observation.parent_id, []);
+        byParent.get(observation.parent_id).push(observation);
       }
     }
-
-    const meta = '<div class="meta">'
-      + '<span><b>' + escapeHtml(data.name || 'trace') + '</b></span>'
-      + '<span>' + escapeHtml(data.timestamp || '') + '</span>'
-      + (data.latency != null ? '<span>latency: ' + data.latency + 's</span>' : '')
-      + (data.total_cost != null ? '<span>cost: $' + Number(data.total_cost).toFixed(4) + '</span>' : '')
-      + '</div>';
-
-    if (!roots.length) {
-      box.innerHTML = meta + '<div class="empty">Trace has no observations yet.</div>';
-      return;
+    const expanded = new Set(Array.from(box.querySelectorAll('.detail.open'), node => node.id));
+    box.innerHTML = '<div class="meta">Локальный журнал · ' + escapeHtml(selectedRun.run_id)
+      + ' · ' + escapeHtml(data.run.status) + '</div><div class="tree">'
+      + roots.map(o => renderNode(o, byParent, 0)).join('') + '</div>';
+    for (const node of box.querySelectorAll('.detail')) {
+      if (expanded.has(node.id)) node.classList.add('open');
     }
-    box.innerHTML = meta + '<div class="tree">' + roots.map(o => renderNode(o, byParent, 0)).join('') + '</div>';
-  } catch (e) {
-    box.innerHTML = '<div class="empty">Failed to load trace: ' + escapeHtml(String(e)) + '</div>';
+  } catch (error) {
+    if (version === requestVersion) box.textContent = 'Не удалось загрузить трейсы: ' + error.message;
   }
 }
-load();
-setInterval(load, 5000);
+const picker = window.FedotRuns({
+  host: document.getElementById('fedot-runs'),
+  onReset(meta) {
+    requestVersion++;
+    selectedRun = meta;
+    clearTimeout(refreshTimer); refreshTimer = null;
+    document.getElementById('content').textContent = meta ? 'Загрузка журнала…' : 'Выберите запуск FEDOT в этой сессии.';
+    if (meta) load();
+  },
+  onEvent() {
+    if (!refreshTimer) refreshTimer = setTimeout(() => { refreshTimer = null; load(); }, 500);
+  },
+  onStatus() { load(); },
+});
 </script>
 </body>
 </html>

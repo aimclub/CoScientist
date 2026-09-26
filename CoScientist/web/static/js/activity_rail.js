@@ -107,9 +107,9 @@
       } else if (name === "MCPBuilder") {
         window.open('/alembic/', '_blank');
       } else if (name === "FedotTrace") {
-        window.open('/fedot-trace', '_blank');
+        if (activeUser && activeSession) window.open(`/fedot-trace?user_id=${encodeURIComponent(activeUser.id)}&session_id=${encodeURIComponent(activeSession.id)}`, '_blank');
       } else if (name === "FedotDemo") {
-        window.open('/fedot-demo/', '_blank');
+        if (activeUser && activeSession) window.open(`/fedot-demo/?user_id=${encodeURIComponent(activeUser.id)}&session_id=${encodeURIComponent(activeSession.id)}`, '_blank');
       } else if (name === "PaperStatistics") {
         window.open('/stats', '_blank');
       } else if (name === "SandboxArtifacts") {

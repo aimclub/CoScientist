@@ -75,6 +75,45 @@ class FedotMASToolset(BaseToolset):
         Returns:
             Result of the executed MAS pipeline.
         """
+        from CoScientist.graph.session_scope import session_key
+        from CoScientist.config import get_settings as get_app_settings
+
+        state = tool_context.state if tool_context is not None else {}
+        experiment_context = state.get("experiment_context") or {}
+        experiment_runtime = state.get("experiment_runtime") or {}
+        if not isinstance(experiment_context, dict):
+            experiment_context = {}
+        if not isinstance(experiment_runtime, dict):
+            experiment_runtime = {}
+        task = ((state.get("experiment_active_envelope") or {}).get("task") or {})
+        invocation = getattr(tool_context, "_invocation_context", None)
+        live = fedot_live.begin_run(
+            session_key(tool_context), task=task_description,
+            engine=str(get_app_settings().experiments.fedot_engine).lower(),
+            experiment_run_id=experiment_context.get("experiment_run_id") or experiment_runtime.get("run_id"),
+            user_turn_id=state.get("experiment_user_turn_id") or getattr(invocation, "invocation_id", None),
+            task_id=task.get("id") or task.get("task_id"),
+        )
+        outcome = {"status": "error", "error": "FEDOT execution did not finish"}
+        try:
+            outcome = await self._execute_fedot(task_description, tool_context, live)
+            outcome["fedot_run_id"] = live.run_id
+            return outcome
+        except asyncio.CancelledError:
+            outcome = {"status": "cancelled", "error": "FEDOT execution cancelled"}
+            raise
+        except Exception as exc:
+            outcome = {"status": "error", "error": str(exc)}
+            raise
+        finally:
+            result = outcome.get("result")
+            result_state = getattr(result, "state", None)
+            if result_state is None and isinstance(result, dict):
+                result_state = result.get("state", result)
+            live.event({"type": "run_end", **outcome,
+                        "state": result_state if isinstance(result_state, dict) else {}})
+
+    async def _execute_fedot(self, task_description, tool_context, live):
         state = tool_context.state if tool_context is not None else {}
         filtered_tools = state.get('filtered_tools') or []
         candidates = filtered_tools or state.get('accumulated_tools') or []
@@ -196,7 +235,6 @@ class FedotMASToolset(BaseToolset):
             fedot_timeout_s = float(env_timeout) if env_timeout else None
         result = None
         status, err = "success", None
-        fedot_live.event({"type": "run_start"})
         try:
             # openai/<id> for config validation; the patched engine strips it
             # again on the wire to the OpenAI-compatible proxy.
@@ -211,6 +249,12 @@ class FedotMASToolset(BaseToolset):
             # EXPERIMENTS__FEDOT_ENGINE=maw switches engines for a re-measure.
             engine = str(get_app_settings().experiments.fedot_engine).lower()
             engine_cls = PatchedMAS if engine == "mas" else PatchedMAW
+            langfuse = None
+            if LangfusePlugin is not None:
+                langfuse = LangfusePlugin(
+                    trace_name="coscientist:fedot", user_id=live.scope[0],
+                    session_id=live.scope[1], metadata={"fedot_run_id": live.run_id},
+                )
             mas = engine_cls(
                 mcp_servers=servers_payload,
                 # UsageMetricsPlugin bills FEDOT.MAS sub-agents' own LLM traffic
@@ -219,14 +263,13 @@ class FedotMASToolset(BaseToolset):
                 plugins=[
                     LoggingPlugin(),
                     WebSearchLimitPlugin(max_calls_per_agent=web_search_limit),
-                    *([LangfusePlugin(trace_name="coscientist:fedot")]
-                      if LangfusePlugin is not None else []),
+                    *([langfuse] if langfuse is not None else []),
                     # Recovers a config the model answered with but ADK could not
                     # store — the single largest cause of FEDOT route failures here.
                     MetaJsonRecoveryPlugin(),
                     # Narrates the run to /api/fedot-live-stream, which the
-                    # /fedot-demo page draws. No subscribers, no cost.
-                    FedotLivePlugin(fedot_live),
+                    # /fedot-demo page draws. Persist even with no viewers.
+                    FedotLivePlugin(live, trace_plugin=langfuse),
                     cap,
                     UsageMetricsPlugin(),
                 ],
@@ -251,7 +294,7 @@ class FedotMASToolset(BaseToolset):
                     # Published the instant it exists, so the bridge draws the
                     # shape before a single agent has run.
                     try:
-                        fedot_live.publish_config(config.model_dump())
+                        live.publish_config(config.model_dump())
                     except Exception as exc:  # noqa: BLE001 — a demo, not a run
                         import logging
                         logging.getLogger(__name__).debug(
@@ -264,9 +307,6 @@ class FedotMASToolset(BaseToolset):
             status, err = "timeout", f"FEDOT.MAS exceeded {fedot_timeout_s}s"
         except Exception as e:
             status, err = "error", f"FEDOT.MAS run failed: {e}"
-        finally:
-            fedot_live.event({"type": "run_end", "status": status, "error": err})
-
         # Fallback (F010.A4): scan the final MAS state for presigned URLs the
         # plugin's after_tool hook may have missed (only when a result actually
         # came back). Cheap safety net on top of ArtifactCapturePlugin, not a
