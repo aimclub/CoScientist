@@ -2129,6 +2129,26 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return JSONResponse({"session": session})
 
+    # Hiding only takes sessions out of the picker; nothing is deleted.
+    @app.post("/api/users/{user_id}/sessions/hide-old")
+    async def hide_old_user_sessions(user_id: str, data: dict):
+        keep = data.get("keep", [])
+        if not isinstance(keep, list) or not all(isinstance(item, str) for item in keep):
+            raise HTTPException(status_code=400, detail="'keep' must be a list of session ids.")
+        try:
+            hidden = runtime.registry.hide_old_sessions(user_id, keep)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"hidden": hidden})
+
+    @app.post("/api/users/{user_id}/sessions/unhide-all")
+    async def unhide_user_sessions(user_id: str):
+        try:
+            shown = runtime.registry.unhide_sessions(user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"shown": shown})
+
     # --- Automatic stage checkpoints ---
     @app.get("/api/users/{user_id}/sessions/{session_id}/checkpoints")
     async def get_session_checkpoints(user_id: str, session_id: str):

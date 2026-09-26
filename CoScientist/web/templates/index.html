@@ -99,6 +99,13 @@
             <button type="button" role="menuitem" onclick="runSessionMenu(renameCurrentSession)" class="session-menu-item">
               <span class="material-symbols-outlined text-[18px]" aria-hidden="true">edit</span><span data-i18n="nav.sessionRename">Rename…</span></button>
             <div class="my-1 border-t border-outline-variant/15" role="separator"></div>
+            <button type="button" role="menuitem" onclick="runSessionMenu(hideOldSessions)" class="session-menu-item">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">visibility_off</span><span data-i18n="nav.sessionHideOld">Hide old sessions</span></button>
+            <button type="button" role="menuitemcheckbox" id="session-show-hidden-btn" aria-checked="false" onclick="runSessionMenu(toggleShowHiddenSessions)" class="session-menu-item">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">check_box_outline_blank</span><span data-i18n="nav.sessionShowHidden">Show hidden sessions</span><span id="session-hidden-count" class="ml-auto text-outline-variant tabular-nums"></span></button>
+            <button type="button" role="menuitem" id="session-unhide-all-btn" onclick="runSessionMenu(unhideAllSessions)" class="session-menu-item hidden">
+              <span class="material-symbols-outlined text-[18px]" aria-hidden="true">visibility</span><span data-i18n="nav.sessionUnhideAll">Unhide all</span></button>
+            <div class="my-1 border-t border-outline-variant/15" role="separator"></div>
             <button type="button" role="menuitem" onclick="runSessionMenu(saveCurrentSession)" class="session-menu-item">
               <span class="material-symbols-outlined text-[18px]" aria-hidden="true">save</span><span data-i18n="nav.sessionSave">Save to disk</span></button>
             <button type="button" role="menuitem" onclick="runSessionMenu(openSavedSessionsModal)" class="session-menu-item">

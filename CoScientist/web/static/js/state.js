@@ -25,6 +25,7 @@ const SIDE_NAV_KEY = 'coscientist.side_nav';
 const RIGHT_PANEL_KEY = 'coscientist.right_panel';
 const LANG_STORAGE_KEY = 'coscientist.lang';
 const SHOW_INTERNAL_KEY = 'coscientist.show_internal';
+const SHOW_HIDDEN_SESSIONS_KEY = 'coscientist.show_hidden_sessions';
 const SIDE_RAIL_KEY = 'coscientist.side_rail';
 const SIDE_RAIL_WIDTH_KEY = 'coscientist.side_rail_width';
 

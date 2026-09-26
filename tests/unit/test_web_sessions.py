@@ -506,3 +506,25 @@ def test_truncated_tool_result_is_stashed_and_fetchable_on_demand():
             f"/api/users/{user['id']}/sessions/{session['id']}/tool-activity/no-such-call"
         )
         assert missing.status_code == 404
+
+
+
+def test_old_sessions_can_be_hidden_at_once_and_shown_again():
+    app = create_app()
+    with TestClient(app) as client:
+        user = _create_user(client, "Gleb")
+        old = _create_session(client, user["id"], "Old run")
+        current = _create_session(client, user["id"], "Current")
+        base = f"/api/users/{user['id']}/sessions"
+
+        response = client.post(f"{base}/hide-old", json={"keep": [current["id"]]})
+        assert response.status_code == 200
+        assert response.json() == {"hidden": 1}
+        listed = {item["id"]: item.get("hidden", False) for item in client.get(base).json()["sessions"]}
+        assert listed == {old["id"]: True, current["id"]: False}
+
+        assert client.post(f"{base}/hide-old", json={"keep": "nope"}).status_code == 400
+        assert client.post("/api/users/user_missing/sessions/hide-old", json={}).status_code == 404
+
+        assert client.post(f"{base}/unhide-all").json() == {"shown": 1}
+        assert not any(item.get("hidden") for item in client.get(base).json()["sessions"])

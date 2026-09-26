@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from threading import RLock
-from typing import Any, Optional
+from typing import Any, Iterable, Optional
 from uuid import uuid4
 
 
@@ -180,6 +180,40 @@ class LocalSessionRegistry:
             self._users[user_id]["last_session_id"] = session_id
             self._save()
             return dict(session)
+
+    def hide_old_sessions(self, user_id: str, keep: Iterable[str] = ()) -> int:
+        """Hide every session of the user from the picker except ``keep``.
+
+        Only a display flag: history, graphs and artifacts stay on disk, and
+        ``updated_at`` is left alone. A running session is never hidden.
+        Returns how many sessions became hidden.
+        """
+        self.require_user(user_id)
+        keep = set(keep)
+        with self._lock:
+            count = 0
+            for (owner_id, session_id), session in self._sessions.items():
+                if owner_id != user_id or session_id in keep or session.get("hidden"):
+                    continue
+                if session.get("status") == "processing":
+                    continue
+                session["hidden"] = True
+                count += 1
+            if count:
+                self._save()
+            return count
+
+    def unhide_sessions(self, user_id: str) -> int:
+        """Return every hidden session of the user to the picker."""
+        self.require_user(user_id)
+        with self._lock:
+            count = 0
+            for (owner_id, _), session in self._sessions.items():
+                if owner_id == user_id and session.pop("hidden", None):
+                    count += 1
+            if count:
+                self._save()
+            return count
 
     def require_user(self, user_id: str) -> dict[str, Any]:
         user = self.get_user(user_id)

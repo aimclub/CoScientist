@@ -492,6 +492,19 @@ async def import_session(
     user = runtime.registry.get_user(target_user_id) or runtime.registry.ensure_user(target_user_id)
     user_id = user["id"]
 
+    # Delivered text (chat events, the Report node) carries links already
+    # resolved against the exporting scope. Point them at the new one.
+    rebase = _session_link_rebaser(
+        manifest.get("original_user_id"), manifest.get("original_session_id"),
+        user_id, session_id,
+    )
+    adk_session_data = rebase(adk_session_data)
+    agent_events = rebase(agent_events)
+    tool_full_values = rebase(tool_full_values)
+    research_graph_data = rebase(research_graph_data)
+    execution_graph_data = rebase(execution_graph_data)
+    agent_summaries_data = rebase(agent_summaries_data)
+
     # --- Create ADK session ---
     initial_state: Dict[str, Any] = {
         "active_tasks": [],
@@ -588,6 +601,39 @@ async def import_session(
     zf.close()
 
     return {"user": user, "session": session}
+
+
+def _session_link_rebaser(
+    old_user_id: Any, old_session_id: Any, user_id: str, session_id: str
+):
+    """A function that rewrites old-scope session links inside JSON data.
+
+    ``cos-artifact:`` references need no help, but anything resolved before
+    export — ``/api/users/<u>/sessions/<s>/...``, relative or absolute — names
+    the exporting user and session, which do not exist here.
+    """
+    from urllib.parse import quote
+
+    if not old_user_id or not old_session_id:
+        return lambda data: data
+
+    def prefix(u: str, s: str) -> str:
+        return f"/api/users/{quote(str(u), safe='')}/sessions/{quote(str(s), safe='')}/"
+
+    old, new = prefix(old_user_id, old_session_id), prefix(user_id, session_id)
+    if old == new:
+        return lambda data: data
+
+    def rebase(data: Any) -> Any:
+        if isinstance(data, str):
+            return data.replace(old, new) if old in data else data
+        if isinstance(data, list):
+            return [rebase(item) for item in data]
+        if isinstance(data, dict):
+            return {key: rebase(value) for key, value in data.items()}
+        return data
+
+    return rebase
 
 
 def _restore_graph_files(

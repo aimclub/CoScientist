@@ -9,11 +9,77 @@
       document.getElementById('existing-user-block').classList.toggle('hidden', knownUsers.length === 0);
     }
 
+    function showHiddenSessions() {
+      try { return localStorage.getItem(SHOW_HIDDEN_SESSIONS_KEY) === '1'; } catch (_) { return false; }
+    }
+
+    // Sessions the picker offers: hidden ones only when asked for, and the
+    // active one always, so the picker never lies about what is on screen.
+    function visibleSessions(sessions = knownSessions) {
+      if (showHiddenSessions()) return sessions;
+      return sessions.filter(item => !item.hidden || (activeSession && activeSession.id === item.id));
+    }
+
     function populateSessionSelector() {
       renderSessionTitle();
-      document.getElementById('session-select').innerHTML = knownSessions.map(session =>
-        `<option value="${escHtml(session.id)}" ${activeSession && activeSession.id === session.id ? 'selected' : ''}>${escHtml(session.title)}</option>`
-      ).join('') || `<option value="">${t('identity.noSessions')}</option>`;
+      document.getElementById('session-select').innerHTML = visibleSessions().map(session => {
+        const label = session.hidden ? `${session.title} ${t('sessions.hiddenMark')}` : session.title;
+        return `<option value="${escHtml(session.id)}" ${activeSession && activeSession.id === session.id ? 'selected' : ''}>${escHtml(label)}</option>`;
+      }).join('') || `<option value="">${t('identity.noSessions')}</option>`;
+      renderHiddenSessionControls();
+    }
+
+    function renderHiddenSessionControls() {
+      const count = knownSessions.filter(item => item.hidden).length;
+      const showBtn = document.getElementById('session-show-hidden-btn');
+      if (showBtn) {
+        const on = showHiddenSessions();
+        showBtn.setAttribute('aria-checked', String(on));
+        showBtn.querySelector('.material-symbols-outlined').textContent = on ? 'check_box' : 'check_box_outline_blank';
+        document.getElementById('session-hidden-count').textContent = count ? String(count) : '';
+      }
+      const unhideBtn = document.getElementById('session-unhide-all-btn');
+      if (unhideBtn) unhideBtn.classList.toggle('hidden', count === 0);
+    }
+
+    function toggleShowHiddenSessions() {
+      try { localStorage.setItem(SHOW_HIDDEN_SESSIONS_KEY, showHiddenSessions() ? '0' : '1'); } catch (_) { }
+      populateSessionSelector();
+    }
+
+    // Hides every session in one go so only sessions started from now on
+    // are listed. Nothing is deleted. The open session stays in the picker
+    // while it is open (visibleSessions), and a still-empty one is kept
+    // visible, since it is the "new" one. The server never hides a running
+    // session.
+    async function hideOldSessions() {
+      if (!activeUser) return openIdentityModal();
+      try {
+        // A fresh list: `empty` on the cached copy goes stale after the first message.
+        const fresh = activeSession ? (await loadSessions(activeUser)).find(item => item.id === activeSession.id) : null;
+        const keep = fresh && fresh.empty ? [fresh.id] : [];
+        const data = await apiJson(`/api/users/${encodeURIComponent(activeUser.id)}/sessions/hide-old`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ keep })
+        });
+        try { localStorage.setItem(SHOW_HIDDEN_SESSIONS_KEY, '0'); } catch (_) { }
+        await loadSessions(activeUser);
+        if (activeSession) activeSession = knownSessions.find(item => item.id === activeSession.id) || activeSession;
+        populateSessionSelector();
+        addSystemMsg(data.hidden
+          ? t('sessions.hiddenOld', { count: data.hidden })
+          : t('sessions.nothingToHide'));
+      } catch (error) { addSystemMsg(t('sessions.hideError', { error: error.message })); }
+    }
+
+    async function unhideAllSessions() {
+      if (!activeUser) return;
+      try {
+        await apiJson(`/api/users/${encodeURIComponent(activeUser.id)}/sessions/unhide-all`, { method: 'POST' });
+        await loadSessions(activeUser);
+        if (activeSession) activeSession = knownSessions.find(item => item.id === activeSession.id) || activeSession;
+        populateSessionSelector();
+      } catch (error) { addSystemMsg(t('sessions.hideError', { error: error.message })); }
     }
 
     // The session's name in the top bar, after "Orchestrator /": which run
@@ -36,7 +102,7 @@
       menu.classList.toggle('hidden', !open);
       button.setAttribute('aria-expanded', String(open));
       if (open) {
-        const first = menu.querySelector('[role="menuitem"]');
+        const first = menu.querySelector('[role^="menuitem"]');
         if (first) first.focus();
       }
     }
@@ -58,7 +124,7 @@
     document.addEventListener('keydown', event => {
       const menu = document.getElementById('session-menu');
       if (!menu || menu.classList.contains('hidden')) return;
-      const items = [...menu.querySelectorAll('[role="menuitem"]')];
+      const items = [...menu.querySelectorAll('[role^="menuitem"]')];
       const index = items.indexOf(document.activeElement);
       if (event.key === 'Escape') {
         setSessionMenuOpen(false);
@@ -123,14 +189,16 @@
       activeUser = user;
       const sessions = await loadSessions(user);
       let selected = preferredSessionId ? sessions.find(item => item.id === preferredSessionId) : null;
+      // Fallback picks come from what the picker shows, not from hidden sessions.
+      const shown = showHiddenSessions() ? sessions : sessions.filter(item => !item.hidden);
       if (!selected && startFresh) {
-        selected = sessions.find(item => item.status === 'processing')
-          || (sessions.length > 0 && sessions[0].empty ? sessions[0] : null)
+        selected = shown.find(item => item.status === 'processing')
+          || (shown.length > 0 && shown[0].empty ? shown[0] : null)
           || await createBlankSession(user);
       }
       if (!selected) {
-        selected = sessions.find(item => item.id === user.last_session_id)
-          || sessions[0]
+        selected = shown.find(item => item.id === user.last_session_id)
+          || shown[0]
           || await createBlankSession(user);
       }
       await activateSession(user, selected);
