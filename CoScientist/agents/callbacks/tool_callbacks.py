@@ -684,11 +684,11 @@ _SHELL_PROGRAMS = frozenset({
 _TOOL_ALIASES: Dict[str, Sequence[str]] = {
     "download_papers": ("download_papers_from_search",),
     "explore_literature": (
-        "search_papers", "explore_chemistry_database", "tavily_search",
+        "search_papers", "explore_scientific_database", "tavily_search",
     ),
     "explore_papers": ("explore_my_papers", "search_papers"),
     "explore_scientific_database": (
-        "search_papers", "explore_chemistry_database", "tavily_search",
+        "search_papers", "explore_scientific_database", "tavily_search",
     ),
     "pubmed_search": ("search_papers", "tavily_search"),
     "search_literature": ("search_papers", "tavily_search"),
@@ -700,7 +700,7 @@ _QUERY_TARGETS = frozenset({
     "download_papers_from_search", "search_papers", "tavily_search",
 })
 _QUESTION_TARGETS = frozenset({
-    "explore_chemistry_database", "explore_my_papers",
+    "explore_scientific_database", "explore_my_papers",
 })
 
 

@@ -9,13 +9,18 @@ import asyncio
 import time
 
 import pytest
+from google.adk.dependencies._mcp import McpError
 from google.adk.tools.mcp_tool import McpToolset
 from google.adk.tools.mcp_tool.mcp_session_manager import StreamableHTTPConnectionParams
 from google.adk.tools.mcp_tool.mcp_tool import McpTool
 from google.adk.tools.mcp_tool.session_context import SessionContext
 
 from CoScientist.tools import mcp_resilience
-from CoScientist.tools.mcp_resilience import ResilientMcpToolset, _RetryingMcpTool
+from CoScientist.tools.mcp_resilience import (
+    ResilientMcpToolset,
+    _ReconnectingMcpTool,
+    _RetryingMcpTool,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -145,7 +150,7 @@ def test_a_tool_error_is_not_repeated(monkeypatch):
     assert len(calls) == 1
 
 
-@pytest.mark.parametrize("retry_calls, expected", [(True, _RetryingMcpTool), (False, McpTool)])
+@pytest.mark.parametrize("retry_calls, expected", [(True, _RetryingMcpTool), (False, _ReconnectingMcpTool)])
 def test_only_a_read_only_toolset_gets_retrying_tools(monkeypatch, retry_calls, expected):
     async def listing(self, readonly_context=None):
         return [_tool(McpTool)]
@@ -153,3 +158,74 @@ def test_only_a_read_only_toolset_gets_retrying_tools(monkeypatch, retry_calls, 
     monkeypatch.setattr(McpToolset, "get_tools", listing)
     tools = asyncio.run(_toolset(retry_calls=retry_calls).get_tools())
     assert type(tools[0]) is expected
+
+
+def _session_terminated():
+    from mcp.types import ErrorData
+    return McpError(ErrorData(code=32600, message="Session terminated"))
+
+
+class _PoolManager:
+    """Just enough of MCPSessionManager for _drop_pooled_sessions."""
+
+    def __init__(self):
+        self._session_lock = asyncio.Lock()
+        self._sessions = {"k": (object(), None, None)}
+        self.cleaned = []
+
+    async def _cleanup_session(self, key, exit_stack, loop):
+        self.cleaned.append(key)
+        self._sessions.pop(key)
+
+
+def test_a_forgotten_session_is_dropped_and_the_call_repeated_once(monkeypatch):
+    calls = []
+
+    async def restarted_server(self, *, args, tool_context, credential):
+        calls.append(args)
+        if len(calls) == 1:
+            raise _session_terminated()
+        return {"ok": True}
+
+    monkeypatch.setattr(McpTool, "_run_async_impl", restarted_server)
+    tool = _tool(_ReconnectingMcpTool)
+    tool._mcp_session_manager = _PoolManager()
+    result = asyncio.run(tool._run_async_impl(args={"q": 1}, tool_context=None, credential=None))
+    assert result == {"ok": True}
+    assert calls == [{"q": 1}, {"q": 1}]
+    assert tool._mcp_session_manager.cleaned == ["k"]
+
+
+def test_other_mcp_errors_are_not_repeated(monkeypatch):
+    from mcp.types import ErrorData
+    calls = []
+
+    async def failing(self, *, args, tool_context, credential):
+        calls.append(args)
+        raise McpError(ErrorData(code=-32602, message="bad arguments"))
+
+    monkeypatch.setattr(McpTool, "_run_async_impl", failing)
+    tool = _tool(_ReconnectingMcpTool)
+    tool._mcp_session_manager = _PoolManager()
+    with pytest.raises(McpError):
+        asyncio.run(tool._run_async_impl(args={}, tool_context=None, credential=None))
+    assert len(calls) == 1
+    assert tool._mcp_session_manager.cleaned == []
+
+
+def test_listing_on_a_forgotten_session_reconnects(monkeypatch):
+    calls = []
+
+    async def restarted_server(self, readonly_context=None):
+        calls.append(1)
+        if len(calls) == 1:
+            # ADK wraps the listing failure the way _execute_with_session does.
+            raise ConnectionError("Failed to get tools") from _session_terminated()
+        return []
+
+    monkeypatch.setattr(McpToolset, "get_tools", restarted_server)
+    toolset = _toolset()
+    manager = _PoolManager()
+    toolset._mcp_session_manager = manager
+    assert asyncio.run(toolset.get_tools()) == []
+    assert manager.cleaned == ["k"]

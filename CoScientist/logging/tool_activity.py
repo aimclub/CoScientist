@@ -410,13 +410,19 @@ class ToolActivityPlugin(BasePlugin):
 
     async def before_agent_callback(self, *, agent, callback_context) -> None:
         author = getattr(agent, "name", "unknown")
-        parent = getattr(getattr(agent, "parent_agent", None), "name", None) or _parent_agent_name(callback_context, author)
+        instance = _agent_instance(callback_context)
+        parent = getattr(getattr(agent, "parent_agent", None), "name", None)
+        # An in-process sub-agent runs in its parent's own session, so it
+        # shares the parent's runtime identity.
+        parent_instance = _parent_agent_instance(callback_context) or (instance if parent else None)
+        if not parent:
+            parent = _parent_agent_name(callback_context, author)
         payload = {
             "phase": "agent_start",
             "author": author,
-            "agent_instance": _agent_instance(callback_context),
+            "agent_instance": instance,
             "parent": parent,
-            "parent_instance": _parent_agent_instance(callback_context),
+            "parent_instance": parent_instance,
             "agent_class": getattr(getattr(agent, "__class__", None), "__name__", "Agent"),
         }
         await self._dispatch(callback_context, payload)

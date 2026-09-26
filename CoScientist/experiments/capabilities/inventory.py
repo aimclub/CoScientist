@@ -36,7 +36,7 @@ _DECLARED_FAMILY_TOOLS: tuple[tuple[str, str, str, str], ...] = (
      "Crawl a site starting from a URL when one page is not enough."),
     (FAMILY_RESEARCH, RESEARCH_SERVER_ID, "explore_scientific_database",
      "RAG search over an internal scientific literature database."),
-    (FAMILY_RESEARCH, RESEARCH_SERVER_ID, "explore_chemistry_database",
+    (FAMILY_RESEARCH, RESEARCH_SERVER_ID, "explore_scientific_database",
      "RAG search over an internal scientific literature database."),
     (FAMILY_RESEARCH, RESEARCH_SERVER_ID, "explore_my_papers",
      "Answers questions using user-uploaded or previously downloaded papers."),

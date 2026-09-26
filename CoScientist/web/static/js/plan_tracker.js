@@ -78,6 +78,12 @@
   // What to call the work, rather than what to call the agent: "Генерация
   // гипотез" reads as a step, "агент генерации гипотез" reads as a job title.
   // An agent with no entry falls back to the role table in status_indicator.
+  /** The agent's Russian role name, as the rail and the chat show it. */
+  function agentRole(agent) {
+    return (window.StatusIndicator && StatusIndicator.agentName)
+      ? (StatusIndicator.agentName(agent) || String(agent || '')) : String(agent || '');
+  }
+
   function substepLabel(agent) {
     const key = 'substep.' + agent;
     if (typeof i18n !== 'undefined' && i18n[key]) return t(key);
@@ -217,10 +223,11 @@
           <li class="flex flex-wrap items-baseline gap-x-1.5 py-0.5">
             <span class="material-symbols-outlined text-[14px] shrink-0 ${view.iconClass}">${view.icon}</span>
             <span class="text-[10px] font-mono text-outline-variant tabular-nums shrink-0">${escHtml(number)}</span>
-            <span class="text-[11px] leading-snug min-w-0 flex-1 break-words ${view.textClass}">${escHtml(substepLabel(step.agent))}</span>
+            <span class="text-[11px] leading-snug min-w-0 flex-1 break-words ${view.textClass}"
+              title="${escHtml(step.agent)}">${escHtml(substepLabel(step.agent))}</span>
             ${tools}
-            <span class="w-full pl-[38px] text-[10px] font-mono text-outline-variant/70 truncate"
-              title="${escHtml(step.agent)}">${escHtml(step.agent)}</span>
+            ${agentRole(step.agent).toLowerCase() === substepLabel(step.agent).toLowerCase() ? '' : `
+            <span class="w-full pl-[38px] text-[10px] text-outline-variant/70 truncate">${escHtml(agentRole(step.agent))}</span>`}
           </li>`;
 
   }

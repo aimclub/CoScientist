@@ -42,6 +42,10 @@
                 ],
               },
               { id: 'contextInit', path: 'general.contextInitEnabled', type: 'toggle', scope: 'session', env: 'RESEARCH_FRAME', envAliases: ['CONTEXT_INIT__ENABLED'] },
+              // Reasoning of the agents this switch attaches (the frame and the
+              // technical specification), kept in agents.overrides like any
+              // other agent's. These agents are not listed under Agents.
+              { id: 'contextInitReasoning', type: 'agentReasoning', agentsOf: 'general.contextInitEnabled', scope: 'session', parent: 'contextInit' },
               { id: 'maxHypotheses', path: 'hypothesesAgent.maxActiveHypotheses', type: 'number', min: 1, max: 5, scope: 'session', env: 'HYPOTHESES__MAX_ACTIVE' },
               { id: 'autoNaming', path: 'general.autoNamingEnabled', type: 'toggle', scope: 'instant', env: 'AUTO_NAMING__ENABLED' },
             ],
@@ -61,22 +65,17 @@
             ],
           },
           {
-            // Agents and stages a study may or may not need.
             heading: 'modules',
             fields: [
-              // The agent is attached when a session's tree is built; off also
-              // takes the medical route out of running experiments, hence the
-              // field's own scope hint.
-              { id: 'medicalAgent', path: 'medicalAgent.enabled', type: 'toggle', scope: 'session', scopeHintKey: 'settings.f.medicalAgent.scopeHint', env: 'MEDICAL__ENABLED' },
-              // Purely a runtime gate: NirReportAgent is attached whenever a
-              // normcontrol server is configured, and this decides whether the
-              // operator is offered the GOST report at the end of a run. Greyed
-              // out where there is no server to submit the document to.
+              // A runtime gate: NirReportAgent is attached whenever a normcontrol
+              // server is configured, and this decides whether the operator is
+              // offered the GOST report at the end of a run. Greyed out where
+              // there is no server to submit the document to.
               {
-                id: 'nirReport', path: 'nirReport.enabled', type: 'toggle', scope: 'instant',
-                env: 'NIR__ENABLED',
-                inactive: d => !getSettingPath(d, 'nirReport.available'),
+                id: 'nirReport', path: 'nirReport.enabled', type: 'toggle', scope: 'instant', env: 'NIR__ENABLED',
+                inactive: d => (getSettingPath(d, 'nirReport.available') ? null : { key: 'settings.inactive.nirUnavailable' }),
               },
+              { id: 'nirReportReasoning', type: 'agentReasoning', agentsOf: 'nirReport.enabled', scope: 'session', parent: 'nirReport' },
             ],
           },
         ],
@@ -147,6 +146,23 @@
               { id: 'agentOverrides', path: 'agents.overrides', type: 'agents', scope: 'session', env: 'AGENTS__OVERRIDES' },
             ],
           },
+          {
+            // The settings some agents' `enabled` refers to in system.yaml
+            // (catalog `enabledSetting`). They have no rows of their own: the
+            // agent's switch in the list above edits them, because the runtime
+            // reads them too and an override would leave it behind. Listed here
+            // for Save, reset, search markers and the .env file.
+            hidden: true,
+            fields: [
+              // Off also takes the medical route out of running experiments.
+              { id: 'medicalAgent', path: 'medicalAgent.enabled', type: 'toggle', scope: 'session', scopeHintKey: 'settings.f.medicalAgent.scopeHint', env: 'MEDICAL__ENABLED' },
+              // FedotAgent: the reranker fallback in the main profile, the
+              // FEDOT.MAS route in the experiments profile. Off also reaches a
+              // running session, hence the scope hints.
+              { id: 'fedotFallback', path: 'taskExecutorAgent.fedotFallback', type: 'toggle', scope: 'session', scopeHintKey: 'settings.f.fedotFallback.scopeHint', env: 'EXECUTOR__FEDOT_FALLBACK' },
+              { id: 'experimentRouteFedot', path: 'experimentModule.routeFedot', type: 'toggle', scope: 'session', scopeHintKey: 'settings.f.experimentRouteFedot.scopeHint', env: 'EXPERIMENTS__ROUTE_FEDOT' },
+            ],
+          },
         ],
       },
       {
@@ -199,15 +215,6 @@
                   return null;
                 },
               },
-            ],
-          },
-          {
-            // Session scope: FedotAgent is attached (or not) when the next
-            // session's agent tree is built, and the planner prompt with it.
-            // Off also reaches a running session, hence its own scope hint.
-            heading: 'experimentRoutes',
-            fields: [
-              { id: 'experimentRouteFedot', path: 'experimentModule.routeFedot', type: 'toggle', scope: 'session', scopeHintKey: 'settings.f.experimentRouteFedot.scopeHint', env: 'EXPERIMENTS__ROUTE_FEDOT' },
             ],
           },
         ],
@@ -265,7 +272,7 @@
     ];
 
     const SETTINGS_FIELDS = SETTINGS_SECTIONS.flatMap(section =>
-      section.groups.flatMap(group => group.fields.map(field => ({ ...field, section: section.id }))));
+      section.groups.flatMap(group => group.fields.map(field => ({ ...field, section: section.id, hidden: !!group.hidden }))));
     const SETTINGS_FIELD_BY_ID = Object.fromEntries(SETTINGS_FIELDS.map(f => [f.id, f]));
     // Fields whose value is sent on Save (read-only .env values are not).
     const EDITABLE_TYPES = new Set(['toggle', 'number', 'text', 'cards', 'segmented', 'chips', 'timeout', 'select', 'agents']);
@@ -456,6 +463,13 @@
         const value = getSettingPath(settingsDefaults, f.path);
         if (value !== undefined) setSettingPath(settingsDraft, f.path, cloneSettings(value));
       });
+      const map = cloneSettings(agentOverrides());
+      const launched = getSettingPath(settingsDefaults, 'agents.overrides') || {};
+      SETTINGS_FIELDS.filter(f => f.section === sectionId && f.type === 'agentReasoning')
+        .forEach(f => reasoningAgents(f).forEach(agent => {
+          map[agent.name] = { ...(map[agent.name] || {}), reasoning: (launched[agent.name] || {}).reasoning };
+        }));
+      setSettingPath(settingsDraft, 'agents.overrides', normalizeOverrides(map));
       settingsStatus = null;
       renderSettings();
     }
@@ -532,7 +546,7 @@
           <span class="material-symbols-outlined text-sm">info</span>${escHtml(t(browserOnly ? 'settings.banner.browser' : 'settings.banner'))}
         </p>
         <div class="space-y-6">
-          ${section.groups.map((group, i) => renderSettingsGroup(group, `${section.id}:${i}`)).join('')}
+          ${section.groups.map((group, i) => (group.hidden ? '' : renderSettingsGroup(group, `${section.id}:${i}`))).join('')}
         </div>`;
     }
 
@@ -570,8 +584,13 @@
 
     function renderSettingsSearch() {
       const blocks = SETTINGS_SECTIONS.map(section => {
-        const matches = SETTINGS_FIELDS.filter(f => f.section === section.id && f.type !== 'danger' && fieldMatchesQuery(f, settingsQuery));
-        if (!matches.length) return '';
+        // The agent list is searched agent by agent: an agent's switch is its
+        // row, whatever setting stands behind it.
+        const matches = SETTINGS_FIELDS.filter(f => f.section === section.id && !f.hidden
+          && f.type !== 'danger' && f.type !== 'agents' && fieldMatchesQuery(f, settingsQuery));
+        const agents = section.id === 'agents' && agentsCatalog
+          ? listedAgents().filter(a => (!a.internal || agentsShowInternal) && agentMatchesQuery(a, settingsQuery)) : [];
+        if (!matches.length && !agents.length) return '';
         return `
           <section>
             <button type="button" data-action="section" data-section="${section.id}"
@@ -580,6 +599,7 @@
             </button>
             <div class="bg-surface-container-lowest rounded-lg border border-outline-variant/10 divide-y divide-outline-variant/10">
               ${matches.map(f => renderSettingRow(f, { search: true })).join('')}
+              ${agents.map(renderAgentRow).join('')}
             </div>
           </section>`;
       }).join('');
@@ -798,6 +818,8 @@
             </select>`;
         case 'agents':
           return renderAgentsControl();
+        case 'agentReasoning':
+          return renderAgentReasoningControl(field, disabled);
         case 'envTransfer':
           return renderEnvTransfer();
         case 'env':
@@ -818,6 +840,12 @@
       if (settingsDraft) {
         body.querySelectorAll('[data-row]').forEach(row => {
           const field = SETTINGS_FIELD_BY_ID[row.dataset.row];
+          if (field.type === 'agentReasoning') {
+            const dirty = agentReasoningDirty(field);
+            row.classList.toggle('border-l-primary', dirty);
+            row.classList.toggle('bg-primary/[0.03]', dirty);
+            return;
+          }
           if (!field.path || !EDITABLE_TYPES.has(field.type)) return;
           const draftValue = getSettingPath(settingsDraft, field.path);
           const dirty = !sameValue(draftValue, getSettingPath(settingsSaved, field.path));
@@ -843,7 +871,9 @@
         const marker = document.querySelector(`[data-nav-marker="${section.id}"]`);
         if (!marker) return;
         const hasError = errors.some(f => f.section === section.id);
-        const hasDirty = dirty.some(f => f.section === section.id);
+        const hasDirty = dirty.some(f => f.section === section.id && !(f.type === 'agents' && agentsCatalog))
+          || (section.id === 'agents' && agentsCatalog && listedAgentsDirty())
+          || SETTINGS_FIELDS.some(f => f.section === section.id && f.type === 'agentReasoning' && agentReasoningDirty(f));
         marker.classList.toggle('hidden', !hasError && !hasDirty);
         marker.classList.toggle('bg-error', hasError);
         marker.classList.toggle('bg-primary', !hasError && hasDirty);
@@ -1058,28 +1088,140 @@
       return out;
     }
 
+    // The rows live in the Agents section or in search results; redraw
+    // whichever is on screen.
+    function refreshAgentRows() {
+      if (!settingsQuery && document.getElementById('settings-agents-list')) renderAgentsList();
+      else renderSettings();
+    }
+
+    // Agents configured in another section (an agentReasoning field names the
+    // setting that switches them): not repeated in the Agents list.
+    const AGENTS_SHOWN_ELSEWHERE = new Set(
+      SETTINGS_FIELDS.filter(f => f.type === 'agentReasoning').map(f => f.agentsOf));
+
+    function listedAgents() {
+      return agentsCatalog
+        ? agentsCatalog.agents.filter(a => !AGENTS_SHOWN_ELSEWHERE.has(a.enabledSetting)) : [];
+    }
+
+    // The agents with a model of their own that an agentReasoning field tunes.
+    function reasoningAgents(field) {
+      return agentsCatalog
+        ? agentsCatalog.agents.filter(a => a.enabledSetting === field.agentsOf && a.hasModel) : [];
+    }
+
+    // agents.overrides is one map; the Agents marker counts only its own rows.
+    function listedAgentsDirty() {
+      const saved = (settingsSaved && getSettingPath(settingsSaved, 'agents.overrides')) || {};
+      return listedAgents().some(agent => !sameValue(saved[agent.name], agentOverrides()[agent.name]));
+    }
+
+    function agentReasoningDirty(field) {
+      const saved = (settingsSaved && getSettingPath(settingsSaved, 'agents.overrides')) || {};
+      return reasoningAgents(field).some(agent =>
+        ((saved[agent.name] || {}).reasoning || '') !== ((agentOverrides()[agent.name] || {}).reasoning || ''));
+    }
+
+    // The reasoning <select> of one agent: "as in the profile (level)" first.
+    function renderReasoningSelect(agent, cls, disabled) {
+      const value = (agentOverrides()[agent.name] || {}).reasoning || '';
+      const inherited = agent.reasoning
+        || getSettingPath(settingsDraft, 'agents.defaultReasoning') || agentsCatalog.defaults.reasoning;
+      return `
+        <select data-agent-reasoning="${escHtml(agent.name)}" ${disabled ? 'disabled' : ''}
+          aria-label="${escHtml(`${t('settings.agents.reasoning')}: ${agentTitle(agent.name)}`)}" class="${cls}">
+          <option value="">${escHtml(tf('settings.agents.inheritWith', { value: t(`settings.reasoning.${inherited || 'inherit'}`) }))}</option>
+          ${REASONING_LEVELS.map(level => `<option value="${level}" ${value === level ? 'selected' : ''}>${escHtml(t(`settings.reasoning.${level}`))}</option>`).join('')}
+        </select>`;
+    }
+
+    function renderAgentReasoningControl(field, disabled) {
+      if (!agentsCatalog) {
+        return `<span class="text-[11px] ${agentsCatalogError ? 'text-error' : 'text-outline-variant'}">${escHtml(agentsCatalogError
+          ? tf('settings.agents.loadFailed', { error: agentsCatalogError })
+          : t('settings.agents.loading'))}</span>`;
+      }
+      const agents = reasoningAgents(field);
+      const cls = 'bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs rounded-md pl-2.5 pr-8 py-1.5 min-w-[11rem] focus:ring-1 focus:ring-primary/40 disabled:cursor-not-allowed';
+      // Named per agent only when there is more than one to tell apart.
+      return `
+        <div class="flex flex-col items-end gap-2">
+          ${agents.map(agent => `
+            <label class="flex items-center gap-2 text-[11px] text-on-surface-variant">
+              ${agents.length > 1 ? escHtml(agentTitle(agent.name)) : ''}
+              ${renderReasoningSelect(agent, cls, disabled)}
+            </label>`).join('')}
+        </div>`;
+    }
+
+    // The form field an agent's switch edits when system.yaml ties its
+    // `enabled` to a setting (catalog `enabledSetting`), else null.
+    function agentSettingField(agent) {
+      return agent && agent.enabledSetting
+        ? SETTINGS_FIELDS.find(f => f.path === agent.enabledSetting) || null : null;
+    }
+
+    // The override keys that count for this agent: `enabled` is dead for an
+    // agent the backend will not override (locked, or switched by a setting).
+    function liveOverride(agent) {
+      const override = { ...(agentOverrides()[agent.name] || {}) };
+      if (agent.lock || agentSettingField(agent)) delete override.enabled;
+      return override;
+    }
+
     function setAgentOverride(name, key, value) {
       const agent = catalogAgent(name);
       const map = cloneSettings(agentOverrides());
       map[name] = { ...(map[name] || {}) };
-      // Equal to the declared value is not an override: drop it.
-      const declared = agent ? agent[key] : undefined;
-      if (value === '' || value == null || value === declared) delete map[name][key];
-      else map[name][key] = value;
+      const field = key === 'enabled' ? agentSettingField(agent) : null;
+      if (field) {
+        delete map[name].enabled;
+        setSettingPath(settingsDraft, field.path, value);
+      } else {
+        // Equal to the declared value is not an override: drop it.
+        const declared = agent ? agent[key] : undefined;
+        if (value === '' || value == null || value === declared) delete map[name][key];
+        else map[name][key] = value;
+      }
       updateSettingDraft(SETTINGS_FIELD_BY_ID.agentOverrides, normalizeOverrides(map), false);
-      renderAgentsList();
+      refreshAgentRows();
     }
 
     function resetAgentOverride(name) {
       const map = cloneSettings(agentOverrides());
       delete map[name];
+      const field = agentSettingField(catalogAgent(name));
+      const launched = field && settingsDefaults ? getSettingPath(settingsDefaults, field.path) : undefined;
+      if (launched !== undefined) setSettingPath(settingsDraft, field.path, launched);
       updateSettingDraft(SETTINGS_FIELD_BY_ID.agentOverrides, normalizeOverrides(map), false);
-      renderAgentsList();
+      refreshAgentRows();
     }
 
     function effectiveEnabled(agent) {
+      if (agent.lock) return agent.enabled;
+      const field = agentSettingField(agent);
+      if (field) return !!getSettingPath(settingsDraft, field.path);
       const override = agentOverrides()[agent.name];
-      return override && typeof override.enabled === 'boolean' && !agent.lock ? override.enabled : agent.enabled;
+      return override && typeof override.enabled === 'boolean' ? override.enabled : agent.enabled;
+    }
+
+    // Changed against the profile: an override, or a setting-backed switch
+    // away from the value the server was launched with.
+    function agentChanged(agent) {
+      if (Object.keys(liveOverride(agent)).length) return true;
+      const field = agentSettingField(agent);
+      if (!field || agent.lock || !settingsDefaults) return false;
+      const launched = getSettingPath(settingsDefaults, field.path);
+      return launched !== undefined && !sameValue(getSettingPath(settingsDraft, field.path), launched);
+    }
+
+    function agentMatchesQuery(agent, query) {
+      const field = agentSettingField(agent);
+      return !query || [
+        agent.name, agentTitle(agent.name), agent.description,
+        field ? t(`settings.f.${field.id}.label`) : '', field ? field.env : '',
+      ].join(' ').toLowerCase().includes(query);
     }
 
     // Agents that stop being called when `name` is off: its subordinates (and
@@ -1110,7 +1252,7 @@
           ? tf('settings.agents.loadFailed', { error: agentsCatalogError })
           : t('settings.agents.loading'))}</p>`;
       }
-      const internalCount = agentsCatalog.agents.filter(a => a.internal).length;
+      const internalCount = listedAgents().filter(a => a.internal).length;
       return `
         <div class="space-y-3">
           <div class="flex flex-wrap items-center gap-3">
@@ -1133,7 +1275,7 @@
     }
 
     function agentsChangedText() {
-      const n = Object.keys(agentOverrides()).length;
+      const n = agentsCatalog ? listedAgents().filter(agentChanged).length : Object.keys(agentOverrides()).length;
       return n ? tf('settings.agents.changed', { n }) : '';
     }
 
@@ -1147,20 +1289,25 @@
 
     function renderAgentRows() {
       const query = agentsFilter.trim().toLowerCase();
-      const rows = agentsCatalog.agents.filter(agent => {
-        if (agent.internal && !agentsShowInternal) return false;
-        return !query || `${agent.name} ${agent.description}`.toLowerCase().includes(query);
-      });
+      const rows = listedAgents().filter(agent => (!agent.internal || agentsShowInternal) && agentMatchesQuery(agent, query));
       if (!rows.length) {
         return `<p class="px-4 py-6 text-center text-[12px] text-outline-variant">${escHtml(t('settings.agents.none'))}</p>`;
       }
       return rows.map(renderAgentRow).join('');
     }
 
+    // Agents are named by their Russian role (the StatusIndicator table); the
+    // runtime id stays next to it, since overrides are keyed by it.
+    function agentTitle(name) {
+      return (window.StatusIndicator && StatusIndicator.agentName)
+        ? (StatusIndicator.agentName(name) || name) : name;
+    }
+
     function renderAgentRow(agent) {
-      const override = agentOverrides()[agent.name] || {};
-      const changed = Object.keys(override).length > 0;
+      const override = liveOverride(agent);
+      const changed = agentChanged(agent);
       const enabled = effectiveEnabled(agent);
+      const settingField = agentSettingField(agent);
       const locked = !!agent.lock;
       const id = `sf-agent-${agent.name}`;
       const badge = (text, tone) =>
@@ -1171,7 +1318,7 @@
         agent.internal ? badge(t('settings.agents.badge.internal')) : '',
       ].join('');
       const calledBy = agent.parents.length
-        ? `<span class="text-[10px] text-outline-variant">${escHtml(tf('settings.agents.calledBy', { names: agent.parents.join(', ') }))}</span>` : '';
+        ? `<span class="text-[10px] text-outline-variant">${escHtml(tf('settings.agents.calledBy', { names: agent.parents.map(agentTitle).join(', ') }))}</span>` : '';
 
       const notes = [];
       if (locked) {
@@ -1179,17 +1326,22 @@
           + (agent.lock === 'startMode'
             ? ` <button type="button" data-action="section" data-section="research" class="underline hover:text-on-surface">${escHtml(t('settings.goto'))}</button>`
             : ''));
-      } else if (agent.enabledRef) {
+      } else if (settingField) {
+        // One setting may switch several agents (the research frame: the frame
+        // and the technical specification); say so, and when it takes effect.
+        const peers = agentsCatalog.agents.filter(a => a !== agent && a.enabledSetting === agent.enabledSetting);
+        notes.push(escHtml(tf('settings.agents.enabledSetting', { env: settingField.env })));
+        if (peers.length) notes.push(escHtml(tf('settings.agents.sharedWith', { names: peers.map(a => agentTitle(a.name)).join(', ') })));
+        if (settingField.scopeHintKey) notes.push(escHtml(t(settingField.scopeHintKey)));
+      }
+      if (locked && agent.enabledRef && agent.lock === 'setting') {
         notes.push(escHtml(tf('settings.agents.enabledRef', { ref: agent.enabledRef })));
       }
       if (!enabled && !locked) {
         const lost = agentsCutOffBy(agent.name);
-        if (lost.length) notes.push(escHtml(tf('settings.agents.cascade', { names: lost.join(', ') })));
+        if (lost.length) notes.push(escHtml(tf('settings.agents.cascade', { names: lost.map(agentTitle).join(', ') })));
       }
 
-      const reasoningValue = override.reasoning || '';
-      const inherited = agent.reasoning
-        || getSettingPath(settingsDraft, 'agents.defaultReasoning') || agentsCatalog.defaults.reasoning;
       const modelValue = override.model || '';
       const resolved = agentsCatalog.models[modelValue || agent.model];
       // Two columns, label over control: reasoning, then the model with the
@@ -1198,11 +1350,7 @@
         <div class="mt-2.5 pl-[52px] grid grid-cols-1 sm:grid-cols-2 gap-3 ${enabled ? '' : 'opacity-50'}">
           <label class="flex flex-col gap-1 min-w-0 text-[10px] text-outline-variant">
             ${escHtml(t('settings.agents.reasoning'))}
-            <select data-agent-reasoning="${escHtml(agent.name)}"
-              class="w-full bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs rounded-md pl-2.5 pr-8 py-1.5 focus:ring-1 focus:ring-primary/40">
-              <option value="">${escHtml(tf('settings.agents.inheritWith', { value: t(`settings.reasoning.${inherited || 'inherit'}`) }))}</option>
-              ${REASONING_LEVELS.map(level => `<option value="${level}" ${reasoningValue === level ? 'selected' : ''}>${escHtml(t(`settings.reasoning.${level}`))}</option>`).join('')}
-            </select>
+            ${renderReasoningSelect(agent, 'w-full bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs rounded-md pl-2.5 pr-8 py-1.5 focus:ring-1 focus:ring-primary/40', false)}
           </label>
           <label class="flex flex-col gap-1 min-w-0 text-[10px] text-outline-variant">
             ${escHtml(t('settings.agents.model'))}
@@ -1217,10 +1365,11 @@
         <div data-agent-row="${escHtml(agent.name)}" class="px-4 py-3 border-l-2 ${changed ? 'border-l-primary bg-primary/[0.03]' : 'border-l-transparent'}">
           <div class="flex items-start gap-3">
             ${renderSwitch(`id="${escHtml(id)}" data-agent-enabled="${escHtml(agent.name)}"
-              aria-label="${escHtml(tf('settings.agents.toggle', { name: agent.name }))}"`, enabled, locked, `shrink-0 mt-0.5 ${locked ? 'opacity-50' : ''}`)}
+              aria-label="${escHtml(tf('settings.agents.toggle', { name: agentTitle(agent.name) }))}"`, enabled, locked, `shrink-0 mt-0.5 ${locked ? 'opacity-50' : ''}`)}
             <div class="min-w-0 flex-1 ${enabled ? '' : 'opacity-70'}">
               <div class="flex items-center gap-2 flex-wrap">
-                <label for="${escHtml(id)}" class="font-mono text-[12px] text-on-surface" translate="no">${escHtml(agent.name)}</label>
+                <label for="${escHtml(id)}" class="text-[12px] font-medium text-on-surface">${escHtml(agentTitle(agent.name))}</label>
+                <span class="font-mono text-[10px] text-outline-variant" translate="no">${escHtml(agent.name)}</span>
                 ${badges}${calledBy}
               </div>
               ${agent.description ? `<p class="text-[11px] text-on-surface-variant/80 mt-0.5 leading-snug line-clamp-2" title="${escHtml(agent.description)}">${escHtml(agent.description)}</p>` : ''}

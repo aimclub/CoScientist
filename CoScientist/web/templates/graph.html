@@ -8,6 +8,7 @@
   <!-- Placement only: ELK computes coordinates, vis-network draws. -->
   <script src="/static/elk.bundled.js"></script>
   <script src="/static/js/i18n.js"></script>
+  <script src="/static/status_indicator.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/4.3.0/marked.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
   <style>
@@ -541,7 +542,7 @@
         // Its tool calls are folded into the card; the count says there is
         // something to open, and how much.
         const calls = Array.isArray(n.calls) ? n.calls.length : 0;
-        const name = String(n.executor_agent || n.label || "").slice(0, 30);
+        const name = String(n.executor_agent ? shortAgent(n.executor_agent) : (n.label || "")).slice(0, 30);
         return (n.stage ? n.stage + ". " : "") + name
           + (n.runs > 1 ? "  (" + t('graph.detail.runOf', { run: n.run, runs: n.runs }) + ")" : "") + tail
           + (calls ? "\n🛠 " + t('graph.count.calls', { count: calls }) : "");
@@ -676,13 +677,16 @@
       if (foot) L.push("<i>" + visSafe(foot) + "</i>");
       return L.join("\n");
     }
-    const shortAgent = a => String(a).replace(/Agent$/, "");
+    // Agents are shown by their Russian role name — the same table the main
+    // window uses (status_indicator.js); runtime ids stay in the data.
+    const shortAgent = a => (window.StatusIndicator && StatusIndicator.agentName)
+      ? (StatusIndicator.agentName(a) || String(a)) : String(a).replace(/Agent$/, "");
     // The tooltip used to print the raw identifiers — "type: hypothesis · status:
     // under_verification" — while the card beside it said the same thing in the
     // reader's own words. Research nodes carry those words from the server.
     const titleOf = n => [
       t('graph.tooltip.type', { kind: RESEARCH_KINDS.has(n.kind) ? rTypeName(n) : (n.kind || "") }),
-      n.executor_agent ? t('graph.tooltip.source', { agent: n.executor_agent }) : "",
+      n.executor_agent ? t('graph.tooltip.source', { agent: shortAgent(n.executor_agent) }) : "",
       t('graph.tooltip.status', { status: RESEARCH_KINDS.has(n.kind) ? rStatusWord(n) : (n.status || "") }),
       Array.isArray(n.calls) && n.calls.length ? t('graph.tooltip.toolCalls', { count: n.calls.length }) : "",
       n.why ? t('graph.why.title') + ": " + String(n.why).slice(0, 200) : "",
@@ -2027,7 +2031,7 @@
       if (!body) body = `<div class="empty">${esc(t('graph.detail.empty'))}</div>`;
       const head = `<div class="dhead"><span class="close" onclick="closeDetail()">✕</span>`
         + `<h3>${R_ICON[n.kind]||"•"} ${esc(rTypeName(n))}${n.index ? " " + n.index : ""}</h3>`
-        + `<div class="sub">${esc(n.id)}${n.executor_agent ? esc(" · " + t('graph.detail.by', { agent: n.executor_agent })) : ""}</div>`
+        + `<div class="sub">${esc(n.id)}${n.executor_agent ? esc(" · " + t('graph.detail.by', { agent: shortAgent(n.executor_agent) })) : ""}</div>`
         // The same word must not be green on the card and amber in the
         // panel, so the badge reads off the same three-way scale.
         + (() => { const sc = statusInk(n.status); return `<span class="badge" style="background:${rgba(sc,.18)};color:${sc};border:1px solid ${sc}">${st.g} ${esc(rStatusWord(n))}</span></div>`; })();
@@ -2115,7 +2119,7 @@
               : "";
             const mark = c.observed ? "●" : "○";
             return `<div class="prov${c.observed ? "" : " dim"}"${jump}>`
-              + `<span class="tool">${mark} ${esc(c.agent || "")}</span>`
+              + `<span class="tool">${mark} ${esc(c.agent ? shortAgent(c.agent) : "")}</span>`
               + `<span class="jump">${basis}</span></div>`;
           }).join("");
     }
@@ -2666,7 +2670,7 @@
     // on the prompt, an answer on the answer, and a call nobody owns on itself.
     function showDetailClassic(n){
       const isAgent = n.kind === "agent" || n.kind === "agent_call";
-      const name = String(n.executor_agent || n.label || t('graph.detail.agent'));
+      const name = n.executor_agent ? shortAgent(n.executor_agent) : String(n.label || t('graph.detail.agent'));
       const title = isAgent ? (n.stage ? n.stage + ". " : "") + name
         : n.kind === "goal" ? "❯ " + t('graph.detail.request') : n.kind === "result" ? "✔ " + t('graph.detail.answer')
         : String(n.label || n.kind || "");

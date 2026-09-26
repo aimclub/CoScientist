@@ -149,7 +149,7 @@
     CoderAgent: { ru: 'Агент-инженер', en: 'Engineer agent' },
     DatasetCollectorAgent: { ru: 'Агент сбора данных', en: 'Data collector agent' },
     MedicalAgent: { ru: 'Агент медицинского анализа', en: 'Medical analyst agent' },
-    McpBuilderAgent: { ru: 'Агент сборки инструментов', en: 'Tool builder agent' },
+    McpBuilderAgent: { ru: 'Агент сборки MCP', en: 'Tool builder agent' },
     ToolPreparerAgent: { ru: 'Агент подготовки инструментов', en: 'Tool preparer agent' },
     // The tool pipeline fans out into half a dozen internal agents. Naming each
     // one tells a user nothing — they are all the same activity to them.
@@ -1418,15 +1418,15 @@
             <span class="text-[9px] font-mono font-normal text-outline-variant">(${stage.done} / ${stage.total})</span>
           </div>
           ${pipeline.stages.map((item, i) => {
-            const norm = i < stage.done ? 'done' : (i === st.stage ? 'active' : 'todo');
-            const icon = norm === 'done' ? 'check' : (norm === 'active' ? 'autorenew' : 'radio_button_unchecked');
-            const itemTone = norm === 'active' ? 'text-primary font-medium' : 'text-outline-variant';
-            return `<div class="flex items-center gap-2 text-[10px] ${itemTone}">
+      const norm = i < stage.done ? 'done' : (i === st.stage ? 'active' : 'todo');
+      const icon = norm === 'done' ? 'check' : (norm === 'active' ? 'autorenew' : 'radio_button_unchecked');
+      const itemTone = norm === 'active' ? 'text-primary font-medium' : 'text-outline-variant';
+      return `<div class="flex items-center gap-2 text-[10px] ${itemTone}">
               <span class="material-symbols-outlined text-[13px] shrink-0 ${norm === 'active' ? 'si-icon' : ''}">${icon}</span>
               <span class="font-mono text-[9px] opacity-75 shrink-0">${i + 1}.</span>
               <span class="truncate">${esc(item.title || item.agent)}</span>
             </div>`;
-          }).join('')}
+    }).join('')}
         </div>` : ''}
         ${hasPlan ? `
         <div class="p-2.5 rounded-lg border border-outline-variant/15 bg-surface-container-lowest/80 ${planExpanded ? 'space-y-2' : ''}">

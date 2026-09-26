@@ -56,7 +56,7 @@ def test_capture_literature_reactions_stores_state_for_rag_tool():
     ctx = _ctx()
     tool_response = {"answer": _ANSWER_TEXT, "metadata": {}}
 
-    capture_literature_reactions(_tool("explore_chemistry_database"), {}, ctx, tool_response)
+    capture_literature_reactions(_tool("explore_scientific_database"), {}, ctx, tool_response)
 
     assert len(ctx.state["literature_reactions"]) == 1
     assert ">>" in ctx.state["literature_reactions"][0]
@@ -66,7 +66,7 @@ def test_capture_literature_reactions_stores_state_for_rag_tool():
 def test_capture_literature_reactions_accumulates_and_dedupes_across_calls():
     ctx = _ctx()
     tool_response = {"answer": _ANSWER_TEXT}
-    capture_literature_reactions(_tool("explore_chemistry_database"), {}, ctx, tool_response)
+    capture_literature_reactions(_tool("explore_scientific_database"), {}, ctx, tool_response)
     capture_literature_reactions(_tool("explore_my_papers"), {}, ctx, tool_response)  # same reaction again
 
     assert len(ctx.state["literature_reactions"]) == 1  # deduped, not doubled

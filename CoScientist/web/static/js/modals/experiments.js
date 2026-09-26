@@ -213,7 +213,9 @@
       if (agentParent.has(childKey)) return;
 
       const parent = resolveNonInternalParent(parentHint) || resolveNonInternalParent(STATIC_PARENT_MAP.get(child));
-      const parentKey = parent ? agentNode(parent, parentInstance).key : null;
+      // The runtime identity belongs to the hinted parent itself; an ancestor
+      // found by skipping internal agents may run in another (outer) session.
+      const parentKey = parent ? agentNode(parent, parent === parentHint ? parentInstance : null).key : null;
       if (parent && parent !== child && !isInternalAgent(parent) && !isAncestor(childKey, parentKey)) {
         agentParent.set(childKey, parentKey);
         resolveAndLinkParent(parentKey);

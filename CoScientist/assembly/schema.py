@@ -337,13 +337,17 @@ class AgentConfig(BaseModel):
         return self
 
     def enabled_overridable(self) -> bool:
-        """Whether the operator may switch this agent on or off from the UI.
+        """Whether an ``enabled`` override (settings.agents.overrides) applies.
 
         Not the root (the run has no other entry point), not plumbing
-        (`internal`: a composite's stage, invisible to the operator), and not
-        an agent the start mode attaches or removes on its own.
+        (`internal`: a composite's stage, invisible to the operator), not an
+        agent the start mode attaches or removes on its own, and not one whose
+        ``enabled`` is a "${settings.path}" reference: that setting is its
+        switch, and the code that reads it at run time (the medical and FEDOT
+        routes, the research-frame seed) would never see an override.
         """
-        return not (self.root or self.internal or self.name in MODE_CONTROLLED_AGENTS)
+        return not (self.root or self.internal or self.name in MODE_CONTROLLED_AGENTS
+                    or _is_setting_ref(self.enabled))
 
     def declared_enabled(self) -> bool:
         """``enabled`` as system.yaml (and the settings it references) says."""

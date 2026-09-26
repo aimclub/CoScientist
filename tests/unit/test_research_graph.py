@@ -2224,7 +2224,7 @@ _PLAN_STEPS = [
      "assignee": "HypothesesAgent", "status": "DONE"},
     {"id": "TASK-2", "title": "Collect the metabolite SMILES", "description": "from papers",
      "assignee": "TaskExecutorAgent", "status": "IN_PROGRESS",
-     "tools": ["explore_chemistry_database", "name2smiles"]},
+     "tools": ["explore_scientific_database", "name2smiles"]},
     {"id": "TASK-3", "title": "Predict LD50 per cluster", "description": "and the AD",
      "assignee": "TaskExecutorAgent", "status": "TODO",
      "tools": ["predict_general_toxicity"]},
@@ -2257,7 +2257,7 @@ def test_the_plan_becomes_one_step_per_task_not_one_method(store):
     # The one part of the method the PLAN can already answer: the planner reads
     # the tool list, so the instruments come across with the step.
     assert (nodes[steps[1]]["attrs"] or {})["tools"] == \
-        "explore_chemistry_database, name2smiles"
+        "explore_scientific_database, name2smiles"
     assert "tools" not in (nodes[steps[0]]["attrs"] or {}), "a step that runs none"
 
     # A re-plan of the same steps says nothing new.

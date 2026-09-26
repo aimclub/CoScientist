@@ -79,6 +79,7 @@ const appSettings = {
   taskExecutorAgent: {
     keepScore: 0.3,
     abstainScore: 0.2,
+    fedotFallback: true,               // EXECUTOR__FEDOT_FALLBACK; FedotAgent in the main profile
   },
   coderAgent: {
     sandboxUrl: '',                    // empty: the sandbox button falls back to localhost:8884
