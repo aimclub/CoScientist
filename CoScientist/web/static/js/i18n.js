@@ -1176,6 +1176,10 @@ const i18n = {
     en: 'Type your corrections in the field above first.',
     ru: 'Сначала напишите правки в поле выше.'
   },
+  'hitl.sendUnavailable': {
+    en: 'The decision was not sent: the server connection is unavailable.',
+    ru: 'Решение не отправлено: нет соединения с сервером.'
+  },
   'hitl.btn.accept': { en: 'Accept', ru: 'Принять' },
   'hitl.btn.acceptResult': { en: 'Accept result', ru: 'Принять результат' },
   'hitl.btn.sendRevise': { en: 'Send for revision', ru: 'Отправить на доработку' },

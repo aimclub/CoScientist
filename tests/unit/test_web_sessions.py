@@ -1,12 +1,47 @@
 import asyncio
 import importlib
 import json
+from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
 
 from CoScientist.web.app import APP_NAME, create_app
 
 web_app = importlib.import_module("CoScientist.web.app")
+
+
+def test_request_input_keeps_the_first_hitl_decision():
+    key = ("user_a", "session_a")
+    wait_event = asyncio.Event()
+    recorded = []
+
+    class _Handler:
+        @staticmethod
+        def resolve_request(*_args):
+            return False
+
+    runtime = SimpleNamespace(
+        hitl_handler=_Handler(),
+        pending_hitl={
+            "request-1": {
+                "event": wait_event,
+                "response": None,
+                "session_key": key,
+            }
+        },
+        record_event=lambda session_key, event: recorded.append((session_key, event)),
+    )
+
+    web_app._handle_hitl_response(runtime, key, {
+        "request_id": "request-1", "action": "approve", "approved": True,
+    })
+    web_app._handle_hitl_response(runtime, key, {
+        "request_id": "request-1", "action": "reject", "approved": False,
+    })
+
+    assert runtime.pending_hitl["request-1"]["response"]["approved"] is True
+    assert wait_event.is_set()
+    assert len(recorded) == 1
 
 
 def _create_user(client, nickname):

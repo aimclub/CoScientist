@@ -110,8 +110,10 @@ def test_the_plan_card_survives_a_language_switch():
     # placeHitlCard appends when it finds no card, so a stale planByRequest
     # entry would resurrect one the session has already cleared.
     assert "data-hitl-card" in body
-    # A review already answered must stay answered after the redraw.
-    assert "disableHitlControls" in body
+    # Lifecycle and draft state are restored together after outerHTML replaces
+    # the card; this is what keeps an answered review answered.
+    assert "captureHitlCardState" in body
+    assert "restoreHitlCardState" in body
 
 
 def test_the_front_end_knows_the_experiment_module_agents():

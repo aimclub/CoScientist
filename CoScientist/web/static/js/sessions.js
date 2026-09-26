@@ -472,6 +472,7 @@
       eventCount = 0;
       renderEventCount();
       feed.innerHTML = '';
+      if (window.resetHitlUiState) resetHitlUiState();
 
       // Cost is cumulative per session, so the snapshot carries the current
       // figure directly — clear first, or a session switch would show the
