@@ -32,7 +32,7 @@ const i18n = {
   'agent.PlannerAgent.desc': { en: 'Roadmap Planner', ru: 'Планировщик задач' },
   'agent.TZSpecAgent.desc': { en: 'Technical Spec', ru: 'Техническое задание' },
   'agent.ToolsViewer.desc': { en: 'Tools Viewer', ru: 'Вызовы инструментов' },
-  'agent.KnowledgeGraph.desc': { en: 'Knowledge Graph', ru: 'Граф знаний' },
+  'agent.KnowledgeGraph.desc': { en: 'Research Graph', ru: 'Граф исследований' },
   'agent.SessionTrace.desc': { en: 'Session Trace', ru: 'Трассировка сессии' },
   'agent.MCPBuilder.desc': { en: 'MCP Builder', ru: 'Сборщик MCP' },
   'agent.FedotTrace.desc': { en: 'FEDOT.MAS trace', ru: 'Трассировка FEDOT.MAS' },
@@ -218,8 +218,8 @@ const i18n = {
     ru: 'Не действует: в режиме «Оркестратор планирует сам» отдельного планировщика нет.'
   },
   'settings.inactive.knowledgeGraph': {
-    en: 'Not used: the knowledge graph is off.',
-    ru: 'Не действует: граф знаний выключен.'
+    en: 'Not used: the research graph is off.',
+    ru: 'Не действует: граф исследований выключен.'
   },
   'settings.inactive.autoApproved': {
     en: 'Not used: nobody is asked, so there is nothing to wait for.',
@@ -356,6 +356,18 @@ const i18n = {
   'settings.agents.reasoning': { en: 'Reasoning', ru: 'Ризонинг' },
   'settings.agents.model': { en: 'Model', ru: 'Модель' },
   'settings.agents.modelPlaceholder': { en: 'as in the profile: {model}', ru: 'как в профиле: {model}' },
+  'settings.agents.limit.searches': { en: 'Search limit', ru: 'Лимит поисков' },
+  'settings.agents.limit.searches.hint': {
+    en: 'Search calls allowed in one run of the agent. Empty: the common limit from Tools.',
+    ru: 'Сколько поисковых вызовов разрешено за один запуск агента. Пусто — общий лимит из раздела «Инструменты».',
+  },
+  'settings.agents.limit.perTool': { en: 'Calls per tool', ru: 'Вызовов каждого инструмента' },
+  'settings.agents.limit.perTool.hint': {
+    en: 'How many times the agent may call each of its tools in one task; counted per tool.',
+    ru: 'Сколько раз агент может вызвать каждый свой инструмент за одну задачу; считается отдельно для каждого инструмента.',
+  },
+  'settings.agents.limitPlaceholder': { en: 'as in the profile: {n}', ru: 'как в профиле: {n}' },
+  'settings.agents.limitPlaceholderSetting': { en: 'common limit: {n}', ru: 'общий лимит: {n}' },
   'settings.agents.reset': { en: 'Reset', ru: 'Сбросить' },
   'settings.agents.resetHint': {
     en: 'Back to the values from system.yaml. Saved only after you press Save.',
@@ -620,7 +632,7 @@ const i18n = {
     en: 'The planner looks up suitable MCP tools and names them in tasks. When off, the plan describes only the expected outcome.',
     ru: 'Планировщик ищет подходящие MCP-инструменты и называет их в задачах. Если выключено — план описывает только ожидаемый результат.'
   },
-  'settings.f.plannerGraph.label': { en: 'Planner reads the knowledge graph', ru: 'Планировщик читает граф знаний' },
+  'settings.f.plannerGraph.label': { en: 'Planner reads the research graph', ru: 'Планировщик читает граф исследований' },
   'settings.f.plannerGraph.desc': {
     en: 'The planner takes past runs into account and does not re-plan work that is already done.',
     ru: 'Планировщик учитывает прошлые запуски и не планирует заново уже сделанную работу.'
@@ -781,10 +793,10 @@ const i18n = {
   },
 
   // Fields — Graphs & memory
-  'settings.f.knowledgeGraph.label': { en: 'Knowledge graph', ru: 'Граф знаний' },
+  'settings.f.knowledgeGraph.label': { en: 'Research graph', ru: 'Граф исследований' },
   'settings.f.knowledgeGraph.desc': {
-    en: 'Records how each run went so agents can build on past work, and the Knowledge Graph view shows it. When off, nothing is recorded and agents work without history.',
-    ru: 'Записывает ход каждого запуска: агенты опираются на прошлую работу, а вкладка «Граф знаний» её показывает. Если выключить — ничего не записывается, и агенты работают без истории.'
+    en: 'Records how each run went so agents can build on past work, and the Research Graph view shows it. When off, nothing is recorded and agents work without history.',
+    ru: 'Записывает ход каждого запуска: агенты опираются на прошлую работу, а вкладка «Граф исследований» её показывает. Если выключить — ничего не записывается, и агенты работают без истории.'
   },
   'settings.f.researchGraph.label': { en: 'Research graph', ru: 'Граф исследования' },
   'settings.f.researchGraph.desc': {

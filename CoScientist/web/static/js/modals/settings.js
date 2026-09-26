@@ -47,7 +47,6 @@
               // other agent's. These agents are not listed under Agents.
               { id: 'contextInitReasoning', type: 'agentReasoning', agentsOf: 'general.contextInitEnabled', scope: 'session', parent: 'contextInit' },
               { id: 'maxHypotheses', path: 'hypothesesAgent.maxActiveHypotheses', type: 'number', min: 1, max: 5, scope: 'session', env: 'HYPOTHESES__MAX_ACTIVE' },
-              { id: 'autoNaming', path: 'general.autoNamingEnabled', type: 'toggle', scope: 'instant', env: 'AUTO_NAMING__ENABLED' },
             ],
           },
           {
@@ -228,6 +227,12 @@
               { id: 'researchGraph', path: 'general.researchGraphEnabled', type: 'toggle', scope: 'session', env: 'RESEARCH_GRAPH__ENABLED' },
             ],
           },
+          {
+            heading: 'envOnly',
+            fields: [
+              { id: 'autoClearGraph', path: 'general.autoClearGraphEnabled', type: 'env', env: 'GRAPH__AUTO_CLEAR' },
+            ],
+          },
           { heading: 'danger', fields: [{ id: 'dangerZone', type: 'danger' }] },
         ],
       },
@@ -254,6 +259,7 @@
             fields: [
               { id: 'defaultUsername', path: 'general.coscientistUsername', type: 'text', placeholderKey: 'settings.f.defaultUsername.placeholder', scope: 'reload', env: 'COSCIENTIST_USERNAME', envAliases: ['DEFAULT_USERNAME'] },
               { id: 'opik', path: 'general.opikEnabled', type: 'toggle', scope: 'session', env: 'OPIK__ENABLED' },
+              { id: 'autoNaming', path: 'general.autoNamingEnabled', type: 'toggle', scope: 'instant', env: 'AUTO_NAMING__ENABLED' },
             ],
           },
           {
@@ -264,7 +270,6 @@
             heading: 'envOnly',
             fields: [
               { id: 'useProxy', path: 'general.useProxy', type: 'env', env: 'USE_PROXY' },
-              { id: 'autoClearGraph', path: 'general.autoClearGraphEnabled', type: 'env', env: 'GRAPH__AUTO_CLEAR' },
             ],
           },
         ],
@@ -1000,6 +1005,13 @@
         if (el.dataset.agentEnabled) { setAgentOverride(el.dataset.agentEnabled, 'enabled', el.checked); return; }
         if (el.dataset.agentReasoning) { setAgentOverride(el.dataset.agentReasoning, 'reasoning', el.value); return; }
         if (el.dataset.agentModel) { setAgentOverride(el.dataset.agentModel, 'model', el.value.trim()); return; }
+        if (el.dataset.agentLimit) {
+          const limit = (catalogAgent(el.dataset.agentLimit) || {}).toolLimit;
+          const raw = el.value.trim();
+          const value = raw === '' || !limit ? '' : Math.min(limit.max, Math.max(limit.min, Math.round(Number(raw))));
+          setAgentOverride(el.dataset.agentLimit, 'limit', Number.isFinite(value) ? value : '');
+          return;
+        }
         if (el.hasAttribute('data-agents-internal')) { agentsShowInternal = el.checked; renderAgentsList(); return; }
         if (el.hasAttribute('data-env-import')) { importSettingsEnv(el.files && el.files[0]); el.value = ''; return; }
         const field = SETTINGS_FIELD_BY_ID[el.dataset.field];
@@ -1079,7 +1091,7 @@
       const out = {};
       Object.keys(map).sort().forEach(name => {
         const entry = {};
-        ['enabled', 'reasoning', 'model'].forEach(key => {
+        ['enabled', 'reasoning', 'model', 'limit'].forEach(key => {
           const value = map[name] ? map[name][key] : undefined;
           if (value !== undefined && value !== null && value !== '') entry[key] = value;
         });
@@ -1180,7 +1192,7 @@
         setSettingPath(settingsDraft, field.path, value);
       } else {
         // Equal to the declared value is not an override: drop it.
-        const declared = agent ? agent[key] : undefined;
+        const declared = !agent ? undefined : key === 'limit' ? agentLimitDefault(agent) : agent[key];
         if (value === '' || value == null || value === declared) delete map[name][key];
         else map[name][key] = value;
       }
@@ -1196,6 +1208,15 @@
       if (launched !== undefined) setSettingPath(settingsDraft, field.path, launched);
       updateSettingDraft(SETTINGS_FIELD_BY_ID.agentOverrides, normalizeOverrides(map), false);
       refreshAgentRows();
+    }
+
+    // The budget an agent's limiter has without an override: the profile's,
+    // or the draft value of the setting it follows (the global search cap).
+    function agentLimitDefault(agent) {
+      const limit = agent && agent.toolLimit;
+      if (!limit) return undefined;
+      const fromSetting = limit.setting ? getSettingPath(settingsDraft, limit.setting) : undefined;
+      return typeof fromSetting === 'number' ? fromSetting : limit.default;
     }
 
     function effectiveEnabled(agent) {
@@ -1344,10 +1365,23 @@
 
       const modelValue = override.model || '';
       const resolved = agentsCatalog.models[modelValue || agent.model];
-      // Two columns, label over control: reasoning, then the model with the
-      // litellm string an alias resolves to under it.
-      const modelControls = !agent.hasModel ? '' : `
-        <div class="mt-2.5 pl-[52px] grid grid-cols-1 sm:grid-cols-2 gap-3 ${enabled ? '' : 'opacity-50'}">
+      // The budget of the agent's limiter callback: search calls, or calls of
+      // each tool. Empty = the profile's (or the global search cap).
+      const limit = agent.toolLimit;
+      const limitControl = !limit ? '' : `
+          <label class="flex flex-col gap-1 min-w-0 text-[10px] text-outline-variant" title="${escHtml(t(`settings.agents.limit.${limit.kind}.hint`))}">
+            ${escHtml(t(`settings.agents.limit.${limit.kind}`))}
+            <input type="number" inputmode="numeric" min="${limit.min}" max="${limit.max}" step="1"
+              data-agent-limit="${escHtml(agent.name)}" value="${override.limit ?? ''}"
+              placeholder="${escHtml(tf(limit.setting ? 'settings.agents.limitPlaceholderSetting' : 'settings.agents.limitPlaceholder', { n: agentLimitDefault(agent) }))}"
+              class="w-full bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs rounded-md px-2.5 py-1.5 tabular-nums focus:ring-1 focus:ring-primary/40" />
+          </label>`;
+      // Label over control: reasoning, then the model with the litellm string
+      // an alias resolves to under it, then the tool budget where there is one.
+      const columns = (agent.hasModel ? 2 : 0) + (limit ? 1 : 0);
+      const modelControls = !columns ? '' : `
+        <div class="mt-2.5 pl-[52px] grid grid-cols-1 ${columns === 3 ? 'sm:grid-cols-3' : 'sm:grid-cols-2'} gap-3 ${enabled ? '' : 'opacity-50'}">
+          ${!agent.hasModel ? limitControl : `
           <label class="flex flex-col gap-1 min-w-0 text-[10px] text-outline-variant">
             ${escHtml(t('settings.agents.reasoning'))}
             ${renderReasoningSelect(agent, 'w-full bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs rounded-md pl-2.5 pr-8 py-1.5 focus:ring-1 focus:ring-primary/40', false)}
@@ -1359,6 +1393,7 @@
               class="w-full bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-2.5 py-1.5 focus:ring-1 focus:ring-primary/40" />
             ${resolved ? `<span class="font-mono truncate" title="${escHtml(resolved)}" translate="no">→ ${escHtml(resolved)}</span>` : ''}
           </label>
+          ${limitControl}`}
         </div>`;
 
       return `

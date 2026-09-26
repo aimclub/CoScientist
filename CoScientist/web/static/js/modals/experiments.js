@@ -525,7 +525,16 @@
 
     // Card bodies are rendered only while unfolded, so a run with hundreds of
     // calls still keeps the feed's DOM small.
-    function toggleToolCard(uid) {
+    function toggleToolCard(uid, ev) {
+      // Keyboard activation mirrors a native button (Enter / Space).
+      if (ev && ev.type === 'keydown') {
+        if (ev.key !== 'Enter' && ev.key !== ' ') return;
+        ev.preventDefault();
+      }
+      // Finishing a mouse selection of the tool name must not fold the card.
+      const sel = window.getSelection && window.getSelection();
+      if (ev && ev.type === 'click' && sel && !sel.isCollapsed
+          && ev.currentTarget && ev.currentTarget.contains(sel.anchorNode)) return;
       if (tvOpenCards.has(uid)) tvOpenCards.delete(uid);
       else tvOpenCards.add(uid);
       renderExperimentFeed();
@@ -629,6 +638,19 @@
       } finally {
         ta.remove();
       }
+    }
+
+    async function copyTvToolName(btn) {
+      const rec = toolCallsById.get(btn.dataset.uid);
+      if (!rec) return;
+      const icon = btn.querySelector('.material-symbols-outlined');
+      try {
+        await tvWriteClipboard(rec.name);
+        if (icon) icon.textContent = 'check';
+      } catch {
+        if (icon) icon.textContent = 'error';
+      }
+      setTimeout(() => { if (icon) icon.textContent = 'content_copy'; }, 1200);
     }
 
     async function copyTvBlock(btn) {
@@ -856,17 +878,23 @@
       const meta = safeTimeStr(rec.startedAt);
       return `
         <div class="rounded-md border ${st.border} ${st.bg} overflow-hidden">
-          <button type="button" onclick="toggleToolCard('${rec.uid}')"
-            class="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-surface-variant/20 transition-colors">
+          <div role="button" tabindex="0" aria-expanded="${open}"
+            onclick="toggleToolCard('${rec.uid}', event)" onkeydown="toggleToolCard('${rec.uid}', event)"
+            class="group w-full flex items-center gap-2 px-2.5 py-1.5 text-left cursor-pointer hover:bg-surface-variant/20 transition-colors">
             <span class="material-symbols-outlined text-[14px] text-outline-variant shrink-0">${open ? 'expand_more' : 'chevron_right'}</span>
             <span class="material-symbols-outlined text-[14px] ${st.tone} shrink-0${running ? ' tv-spin' : ''}">${icon}</span>
-            <span class="text-[11px] font-bold font-mono text-on-surface shrink-0">${escHtml(rec.name)}</span>
+            <span class="text-[11px] font-bold font-mono text-on-surface shrink-0 select-text cursor-text">${escHtml(rec.name)}</span>
+            <button type="button" data-uid="${rec.uid}" onclick="event.stopPropagation(); copyTvToolName(this)"
+              onkeydown="event.stopPropagation()" title="${t('common.copy')}"
+              class="shrink-0 -ml-1 flex items-center text-outline-variant opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-primary transition-opacity">
+              <span class="material-symbols-outlined text-[12px]">content_copy</span>
+            </button>
             ${rec.isDelegation ? '<span class="shrink-0 text-[8px] font-bold uppercase tracking-wider text-primary/70">delegates</span>' : ''}
             ${rec.inputs.state_inputs ? `<span class="shrink-0 text-[8px] font-bold uppercase tracking-wider text-tertiary/80" title="${t('experiments.stateBadgeTitle')}">${t('experiments.stateBadge')}</span>` : ''}
             <span class="flex-1 min-w-0 truncate text-[10px] font-mono text-outline-variant/70">${escHtml(summary)}</span>
             <span class="shrink-0 text-[9px] font-mono ${st.tone}">${running ? 'running…' : tvDuration(rec)}</span>
             <span class="shrink-0 text-[9px] font-mono text-outline-variant/70">${meta}</span>
-          </button>
+          </div>
           ${open ? renderToolCardBody(rec) : ''}
         </div>`;
     }
@@ -1003,6 +1031,7 @@
     window.setToolsViewerFormat = setToolsViewerFormat;
     window.toggleTvBlock = toggleTvBlock;
     window.copyTvBlock = copyTvBlock;
+    window.copyTvToolName = copyTvToolName;
     window.addExperimentAgentEvent = addExperimentAgentEvent;
     window.addExperimentToolCall = addExperimentToolCall;
     window.addExperimentToolResponse = addExperimentToolResponse;

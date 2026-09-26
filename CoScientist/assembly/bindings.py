@@ -13,11 +13,13 @@ does not construct MCP sessions or read service settings.
 from __future__ import annotations
 
 from importlib import import_module
+from typing import Optional
 
 from CoScientist.assembly.registry import (
     REGISTRY,
     CallbackEntry,
     ToolDoc,
+    ToolLimit,
     ToolEntry,
 )
 
@@ -1006,8 +1008,8 @@ WORK_ORDER_TOOL_DOCS = (
 
 # ── Callbacks ────────────────────────────────────────────────────────────────
 
-def _cb(key: str, kind: str, func=None, factory=None) -> None:
-    REGISTRY.register_callback(CallbackEntry(key=key, kind=kind, func=func, factory=factory))
+def _cb(key: str, kind: str, func=None, factory=None, limit: Optional[ToolLimit] = None) -> None:
+    REGISTRY.register_callback(CallbackEntry(key=key, kind=kind, func=func, factory=factory, limit=limit))
 
 
 def _save_uploaded_artifacts():
@@ -1149,10 +1151,25 @@ def _inject_research_context(ctx):
     return make_inject_research_context(is_root=is_root)
 
 
-def _web_search_limiter():
-    from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
+def _global_max_searches() -> int:
     from CoScientist.config import get_settings
-    return SearchLimiter(max_searches=get_settings().web.max_searches).limit_searches
+    return get_settings().web.max_searches
+
+
+# The search budget of RESEARCH_AGENT_SEARCHES (Settings → Tools), unless the
+# agent's row in Settings → Agents sets its own.
+SEARCH_LIMIT = ToolLimit(kind="searches", default=_global_max_searches,
+                         setting="researchAgent.maxSearches", minimum=0)
+
+
+def _agent_max_searches(ctx) -> int:
+    from CoScientist.assembly.schema import agent_limit
+    return agent_limit(ctx.config.name, _global_max_searches())
+
+
+def _web_search_limiter(ctx):
+    from CoScientist.agents.callbacks.tool_callbacks import SearchLimiter
+    return SearchLimiter(max_searches=_agent_max_searches(ctx)).limit_searches
 
 
 def _count_research_searches():
@@ -1167,10 +1184,9 @@ def _reset_research_searches():
     return SearchLimiter(max_searches=get_settings().web.max_searches).reset_search_budget
 
 
-def _tavily_search_limiter():
+def _tavily_search_limiter(ctx):
     from CoScientist.agents.callbacks.tool_callbacks import TavilySearchLimiter
-    from CoScientist.config import get_settings
-    return TavilySearchLimiter(max_searches=get_settings().web.max_searches).limit_searches
+    return TavilySearchLimiter(max_searches=_agent_max_searches(ctx)).limit_searches
 
 
 def _paper_search_guard():
@@ -1353,11 +1369,11 @@ _cb(
 )
 _cb("hitl_before_tool", "before_tool", factory=lambda ctx: _hitl_before_tool())
 # Limit web search calls per agent turn.
-_cb("WebSearchLimiter", "before_tool", factory=lambda ctx: _web_search_limiter())
+_cb("WebSearchLimiter", "before_tool", factory=_web_search_limiter, limit=SEARCH_LIMIT)
 _cb("count_research_searches", "after_tool", factory=lambda ctx: _count_research_searches())
 _cb("reset_research_searches", "before_agent", factory=lambda ctx: _reset_research_searches())
 # A separate per-agent quota for EconomicsAgent / ReactorAgent Tavily fallback.
-_cb("TavilySearchLimiter", "before_tool", factory=lambda ctx: _tavily_search_limiter())
+_cb("TavilySearchLimiter", "before_tool", factory=_tavily_search_limiter, limit=SEARCH_LIMIT)
 # Clamp OpenAlex result sets before the request reaches the remote papers MCP.
 _cb("PaperSearchGuard", "before_tool", factory=lambda ctx: _paper_search_guard())
 # Forbid ResearchAgent from calling explore_my_papers (reserved for PaperRetriever).

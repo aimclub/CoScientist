@@ -9,7 +9,7 @@ import lazily so that registering does not open MCP sessions.
 from __future__ import annotations
 
 from CoScientist.assembly.bindings import _cb
-from CoScientist.assembly.registry import REGISTRY, ToolDoc, ToolEntry
+from CoScientist.assembly.registry import REGISTRY, ToolDoc, ToolEntry, ToolLimit
 
 # ── Tools ────────────────────────────────────────────────────────────────────
 
@@ -750,24 +750,36 @@ _cb("publish_literature_summary", "after_agent",
 
 # ── Tool-call budgets ────────────────────────────────────────────────────────
 
-def _per_tool_call_limiter():
+# Calls per tool; Settings → Agents can set another budget for each agent.
+PER_TOOL_CALLS = 2
+EVIDENCE_VERIFIER_CALLS = 10
+
+
+def _per_tool_call_limiter(ctx):
     from CoScientist.agents.callbacks.tool_callbacks import PerToolCallLimiter
+    from CoScientist.assembly.schema import agent_limit
+    max_calls = agent_limit(ctx.config.name, PER_TOOL_CALLS)
     # PaperRetriever's full-text analysis needs a third pass; ResearchAgent is
     # forbidden explore_my_papers, so the override never widens its budget.
     return PerToolCallLimiter(
-        max_calls=2, per_tool={"explore_my_papers": 3}
+        max_calls=max_calls, per_tool={"explore_my_papers": max(3, max_calls)}
     ).limit_tool_calls
 
 
-def _evidence_verifier_tool_limiter():
+def _evidence_verifier_tool_limiter(ctx):
     from CoScientist.agents.callbacks.tool_callbacks import PerToolCallLimiter
-    return PerToolCallLimiter(max_calls=10).limit_tool_calls
+    from CoScientist.assembly.schema import agent_limit
+    return PerToolCallLimiter(
+        max_calls=agent_limit(ctx.config.name, EVIDENCE_VERIFIER_CALLS)
+    ).limit_tool_calls
 
 
 # ResearchAgent budget: two calls per concrete tool (three for explore_my_papers)
 # and per delegated agent branch, so parallel LIT-* tasks never share a counter.
-_cb("PerToolCallLimiter", "before_tool", factory=lambda ctx: _per_tool_call_limiter())
-_cb("EvidenceVerifierToolLimiter", "before_tool", factory=lambda ctx: _evidence_verifier_tool_limiter())
+_cb("PerToolCallLimiter", "before_tool", factory=_per_tool_call_limiter,
+    limit=ToolLimit(kind="perTool", default=lambda: PER_TOOL_CALLS))
+_cb("EvidenceVerifierToolLimiter", "before_tool", factory=_evidence_verifier_tool_limiter,
+    limit=ToolLimit(kind="perTool", default=lambda: EVIDENCE_VERIFIER_CALLS))
 
 
 # ── Agent classes / output schemas ───────────────────────────────────────────

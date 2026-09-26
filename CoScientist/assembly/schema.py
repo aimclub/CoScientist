@@ -165,6 +165,13 @@ def agent_override(name: Optional[str]):
         return None
 
 
+def agent_limit(name: Optional[str], default: int) -> int:
+    """The operator's tool budget for one agent (override ``limit``), else ``default``."""
+    override = agent_override(name)
+    value = getattr(override, "limit", None)
+    return int(value) if isinstance(value, int) and not isinstance(value, bool) else int(default)
+
+
 def default_reasoning_override() -> Optional[Union[bool, str]]:
     """settings.agents.default_reasoning, normalized; None leaves the profile's."""
     try:

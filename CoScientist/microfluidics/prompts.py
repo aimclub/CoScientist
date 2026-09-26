@@ -11,6 +11,7 @@ from CoScientist.agents.prompts.templates import (
     _research,
     _static,
     render_research_protocol,
+    render_task_management,
 )
 from CoScientist.assembly.prompting import PromptContext
 from CoScientist.assembly.registry import render_tool_docs
@@ -116,13 +117,7 @@ Write these section headings in the report language (see LANGUAGE REQUIREMENT):
 
 You may call each individual tool at most 2 times in this task. The limit is independent for every tool; plan tool use carefully.
 
-### TASK_MANAGEMENT
-Context of tasks:
-{active_tasks}
-
-Use `update_task_status` only for an ID explicitly present in the task context above.
-If the context is empty (`[]`), do not call it: this run has no registered task plan.
-Update a registered task to "done" immediately upon completion of its work item.
+<<TASK_MANAGEMENT>>
 
 <<RESEARCH>>
 
@@ -134,6 +129,7 @@ Update a registered task to "done" immediately upon completion of its work item.
         STEPS="\n".join(steps),
         PAPER_SEARCH_SECTION=paper_search_section,
         RESEARCH=render_research_protocol(ctx),
+        TASK_MANAGEMENT=render_task_management(ctx),
         HITL=ctx.render_hitl(),
         LANGUAGE="",  # appended centrally by _render_instruction
     )

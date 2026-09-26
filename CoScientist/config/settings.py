@@ -598,6 +598,9 @@ class AgentOverride(BaseModel):
     reasoning: Optional[str] = None
     # "main" | "coder" | "nir" | a literal litellm model string.
     model: Optional[str] = None
+    # The budget of the agent's limiter callback (registry.ToolLimit): search
+    # calls or calls per tool, whichever that limiter counts.
+    limit: Optional[int] = None
 
 
 class AgentsSettings(BaseModel):

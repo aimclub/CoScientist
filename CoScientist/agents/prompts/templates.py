@@ -166,6 +166,26 @@ _RESEARCH_EXAMPLES = {
 }
 
 
+_TASK_DONE_RULE = 'Update a registered task to "done" immediately upon completion of its work item.'
+
+
+def render_task_management(ctx: PromptContext, done_rule: str = _TASK_DONE_RULE) -> str:
+    """The TASK_MANAGEMENT section — empty unless the task tracker is attached.
+
+    Without it the agent has no ``update_task_status``, and a prompt that still
+    names the tool makes the model call it anyway (a phantom tool call)."""
+    if not ctx.has_tool("task_tracker"):
+        return ""
+    return (
+        "### TASK_MANAGEMENT\n"
+        "Context of tasks:\n"
+        "{active_tasks}\n\n"
+        "Use `update_task_status` only for an ID explicitly present in the task context above.\n"
+        "If the context is empty (`[]`), do not call it: this run has no registered task plan.\n"
+        f"{done_rule}\n"
+    )
+
+
 def render_research_protocol(ctx: PromptContext) -> str:
     """The RESEARCH GRAPH section for a worker agent — empty unless the research
     tools are actually attached (so it vanishes when the feature is off)."""
@@ -537,15 +557,10 @@ consider later" — nothing downstream will pick them up, and in the graph they
 would sit unverified. What you did not commit is not part of the answer.
 
 {links_context?}
-### TASK_MANAGEMENT
-Context of tasks:
-{active_tasks}
-
-Use `update_task_status` only for an ID explicitly present in the task context above.
-If the context is empty (`[]`), do not call it: this run has no registered task plan.
-Update a registered task to "done" immediately upon completion of its work item.
+<<TASK_MANAGEMENT>>
 ''' + research_example, SELECTION=selection, ANSWER_HEAD=answer_head,
         RESEARCH=render_research_protocol(ctx), RIVALRY=rivalry,
+        TASK_MANAGEMENT=render_task_management(ctx),
         SELECT_WORD=select_word, HAND_RULE=hand_rule,
         PROPOSE_RULE=propose_rule,
         HITL=ctx.render_hitl())
@@ -559,6 +574,15 @@ Update a registered task to "done" immediately upon completion of its work item.
 # The workflow adapts to which literature toolsets are actually configured:
 # advertising an absent MCP tool makes the model call it and ADK then
 # hard-errors with "Tool not found", killing the run.
+
+def _tool_limit(ctx: PromptContext, fallback: int) -> int:
+    """The budget the agent's limiter callback enforces, the operator's
+    per-agent value (Settings → Agents) included, so the prompt states it."""
+    from CoScientist.assembly.registry import REGISTRY
+    from CoScientist.assembly.schema import agent_limit
+    limit = REGISTRY.tool_limit(ctx.config.callbacks.before_tool)
+    return agent_limit(ctx.config.name, limit.default() if limit else fallback)
+
 
 def _research(
     ctx: PromptContext,
@@ -737,13 +761,7 @@ Write these section headings in the report language (see LANGUAGE REQUIREMENT):
 <<TOOL_LIMIT_RULE>>
 
 
-### TASK_MANAGEMENT
-Context of tasks:
-{active_tasks}
-
-Use `update_task_status` only for an ID explicitly present in the task context above.
-If the context is empty (`[]`), do not call it: this run has no registered task plan.
-Update a registered task to "done" immediately upon completion of its work item.
+<<TASK_MANAGEMENT>>
 
 <<RESEARCH>>
 
@@ -755,15 +773,16 @@ Update a registered task to "done" immediately upon completion of its work item.
         STEPS="\n".join(steps),
         PAPER_SEARCH_SECTION=paper_search_section,
         TOOL_LIMIT_RULE=(
-            "You may call each individual tool at most 2 times in this task. "
+            f"You may call each individual tool at most {_tool_limit(ctx, 2)} times in this task. "
             "The limit is independent for every tool; plan tool use carefully."
             if cost_constrained else
-            f"You have a STRICT LIMIT of {get_settings().web.max_searches} search calls. "
+            f"You have a STRICT LIMIT of {_tool_limit(ctx, get_settings().web.max_searches)} search calls. "
             "Plan your search carefully."
         ),
         PREFER_LINE=prefer_line,
         FORBIDDEN_PAPERS_RULE=forbidden_papers_rule,
         RESEARCH=render_research_protocol(ctx),
+        TASK_MANAGEMENT=render_task_management(ctx),
         HITL=ctx.render_hitl(),
         LANGUAGE=_LANGUAGE_REQUIREMENT,
     )
@@ -1064,18 +1083,13 @@ current tools' input_schema argument names (empty if none):
    score after generate) — then call fedot_tool once more with upstream inputs.
    Do not escalate to CoderAgent when artifacts already cover the ask.
 
-### TASK_MANAGEMENT
-Context of tasks:
-{active_tasks}
-
-Use `update_task_status` only for an ID explicitly present in the task context above.
-If the context is empty (`[]`), do not call it: this run has no registered task plan.
-Update a registered task to "done" immediately upon completion of its work item.
+<<TASK_MANAGEMENT>>
 
 Do NOT solve the task manually — delegate to FEDOT.MAS.
 
 <<HITL>>
-''', TOOLS=ctx.render_tools(), HITL=ctx.render_hitl(), GEN_CHOICE=_GEN_TOOL_CHOICE)
+''', TOOLS=ctx.render_tools(), HITL=ctx.render_hitl(), GEN_CHOICE=_GEN_TOOL_CHOICE,
+       TASK_MANAGEMENT=render_task_management(ctx))
 
 
 @_register("experiment_react")
@@ -1116,18 +1130,14 @@ still running, do NOT immediately re-check — call sleep_tool(minutes) first
 check again. This costs you nothing while it runs. Never re-check in a tight
 loop without sleeping in between.
 
-### TASK_MANAGEMENT
-Context of tasks:
-{active_tasks}
-
-Use `update_task_status` only for an ID explicitly present in the task context above.
-If the context is empty (`[]`), do not call it: this run has no registered task plan.
-Set a registered task to DONE immediately on completion.
+<<TASK_MANAGEMENT>>
 
 <<RESEARCH>>
 
 <<HITL>>
-''', TOOLS=ctx.render_tools(), RESEARCH=render_research_protocol(ctx), HITL=ctx.render_hitl())
+''', TOOLS=ctx.render_tools(), RESEARCH=render_research_protocol(ctx), HITL=ctx.render_hitl(),
+       TASK_MANAGEMENT=render_task_management(
+           ctx, "Set a registered task to DONE immediately on completion."))
 
 
 # ── TaskExecutorAgent (execution router) ─────────────────────────────────────

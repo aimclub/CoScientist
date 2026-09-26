@@ -137,3 +137,50 @@ def test_a_setting_backed_agent_names_the_field_its_switch_edits():
     assert by_name["FedotAgent"]["enabledSetting"] == "taskExecutorAgent.fedotFallback"
     assert by_name["NirReportAgent"]["enabledSetting"] == "nirReport.enabled"
     assert by_name["ResearchAgent"]["enabledSetting"] is None
+
+
+# ── Tool budgets: a limiter callback's number, per agent ─────────────────────
+
+def _limiter_of(callback, agent_name):
+    """The limiter object a before_tool callback builds for one agent."""
+    from types import SimpleNamespace
+
+    from CoScientist.assembly.registry import REGISTRY
+
+    ctx = SimpleNamespace(config=SimpleNamespace(name=agent_name))
+    return REGISTRY.callback(callback).resolve(ctx).__self__
+
+
+def test_the_catalog_offers_a_budget_for_agents_with_a_limiter():
+    by_name = {a["name"]: a for a in agents_catalog()["agents"]}
+    limit = by_name["ResearchAgent"]["toolLimit"]
+    assert limit["kind"] == "searches"
+    # Without an override the search cap is the common one from Settings → Tools.
+    assert limit["setting"] == "researchAgent.maxSearches"
+    assert limit["default"] == get_settings().web.max_searches
+    assert by_name["OrchestratorAgent"]["toolLimit"] is None
+
+
+def test_a_limit_override_reaches_the_search_limiter_of_that_agent_only():
+    _override("ResearchAgent", limit=7)
+    assert _limiter_of("WebSearchLimiter", "ResearchAgent").max_searches == 7
+    assert _limiter_of("WebSearchLimiter", "OtherAgent").max_searches == get_settings().web.max_searches
+
+
+def test_the_microfluidics_per_tool_budget_follows_the_override():
+    import CoScientist.microfluidics.bindings  # noqa: F401 — registers the limiters
+
+    assert _limiter_of("PerToolCallLimiter", "ResearchAgent").max_calls == 2
+    _override("ResearchAgent", limit=4)
+    limiter = _limiter_of("PerToolCallLimiter", "ResearchAgent")
+    assert limiter.max_calls == 4
+    # PaperRetriever's third explore_my_papers pass is a floor, not a cap.
+    assert limiter.per_tool["explore_my_papers"] == 4
+
+
+def test_apply_clamps_a_limit_and_drops_it_where_there_is_no_limiter():
+    apply_agent_settings({"overrides": {
+        "ResearchAgent": {"limit": 500},
+        "OrchestratorAgent": {"limit": 3},
+    }})
+    assert current_agent_settings()["overrides"] == {"ResearchAgent": {"limit": 50}}

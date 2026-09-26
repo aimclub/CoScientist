@@ -116,6 +116,22 @@ def _lock_reason(cfg: AgentConfig, declared_enabled: bool) -> Optional[str]:
     return None
 
 
+def _tool_limit(cfg: AgentConfig) -> Optional[Dict[str, Any]]:
+    """The budget of the agent's limiter callback, for a number field in its row."""
+    from CoScientist.assembly.registry import REGISTRY
+
+    limit = REGISTRY.tool_limit(cfg.callbacks.before_tool)
+    if limit is None:
+        return None
+    return {
+        "kind": limit.kind,
+        "default": limit.default(),
+        "setting": limit.setting,
+        "min": limit.minimum,
+        "max": limit.maximum,
+    }
+
+
 def agents_catalog() -> Dict[str, Any]:
     """Every agent of the active profile, with its declared values.
 
@@ -158,6 +174,8 @@ def agents_catalog() -> Dict[str, Any]:
             "model": (cfg.model or system.defaults.model) if has_model else None,
             "reasoning": _reasoning_label(cfg.declared_reasoning()) if has_model else None,
             "reasoningRef": str(cfg.reasoning)[2:-1] if _is_setting_ref(cfg.reasoning) else None,
+            # Search calls or calls per tool, when a limiter callback caps them.
+            "toolLimit": _tool_limit(cfg),
         })
     return {
         "agents": agents,
@@ -239,7 +257,29 @@ def apply_agent_settings(section: Dict[str, Any]) -> None:
                 enabled=bool(enabled) if isinstance(enabled, bool) else None,
                 reasoning=reasoning,
                 model=model,
+                limit=_limit_value(name, raw.get("limit"), cfg),
             )
             if override.model_dump(exclude_none=True):
                 overrides[str(name)] = override
         block.overrides = overrides
+
+
+def _limit_value(name: Any, raw: Any, cfg: Optional[AgentConfig]) -> Optional[int]:
+    """A tool budget within its limiter's bounds, or None (dropped with a
+    warning) for a non-number or an agent without a limiter."""
+    if raw in (None, "") or isinstance(raw, bool):
+        return None
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        _log.warning("limit %r for %s is not a number; ignored", raw, name)
+        return None
+    if cfg is None:
+        return value if value >= 0 else None
+    from CoScientist.assembly.registry import REGISTRY
+
+    limit = REGISTRY.tool_limit(cfg.callbacks.before_tool)
+    if limit is None:
+        _log.warning("%s has no tool limiter; limit %r ignored", name, raw)
+        return None
+    return max(limit.minimum, min(limit.maximum, value))

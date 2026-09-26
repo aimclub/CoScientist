@@ -76,7 +76,7 @@
     data: { icon: 'dataset', ru: 'Обрабатываю данные', en: 'Preparing the data' },
     chem: { icon: 'science', ru: 'Считаю свойства молекул', en: 'Computing molecular properties' },
     plot: { icon: 'insert_chart', ru: 'Строю графики', en: 'Building charts' },
-    graph_write: { icon: 'hub', ru: 'Дополняю граф знаний', en: 'Recording findings in the knowledge graph' },
+    graph_write: { icon: 'hub', ru: 'Дополняю граф исследований', en: 'Recording findings in the research graph' },
     graph_read: { icon: 'account_tree', ru: 'Сверяюсь с картой исследования', en: 'Checking the research map' },
     mcp_build: { icon: 'construction', ru: 'Собираю новый инструмент', en: 'Building a new tool' },
     mcp_find: { icon: 'extension', ru: 'Подбираю инструменты для задачи', en: 'Picking tools for the task' },
