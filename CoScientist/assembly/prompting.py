@@ -33,7 +33,7 @@ Two ways to involve them:
 - `request_approval(agent_name, message)` — a yes / no question. The human may
   answer plainly OR reply with free-text ("other") — that free-text is an
   instruction, follow it. Returns {approved, feedback}.
-- `request_selection(agent_name, message, options)` — offer 2–4 concrete options
+- `request_selection(agent_name, message, options, default_option=None)` — offer 2–4 concrete options
   and let the human choose (e.g. among hypotheses, plans, thresholds). The human
   may pick one of the options OR give their own answer in the feedback ("other");
   honor whichever they provide. Returns {selected, approved, feedback}.

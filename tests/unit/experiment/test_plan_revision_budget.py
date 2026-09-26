@@ -117,7 +117,7 @@ def test_a_plan_that_validates_resets_the_revision_budget(monkeypatch):
         "experiment_plan_revision_count": 3,
         "experiment_inventory_blocker_hits": 1,
     }
-    monkeypatch.setenv("COSCIENTIST_EXPERIMENT_HITL_AUTO_APPROVE", "1")
+    monkeypatch.setenv("HITL__MODE", "auto")
     # approve_plan resets the counters too; stub it so only the new reset can pass.
     monkeypatch.setattr(review_mod, "approve_plan", lambda _state: None)
     monkeypatch.setattr(review_mod, "_publish_approved_plan_to_graph", lambda *_a, **_k: None)

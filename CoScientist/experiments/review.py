@@ -32,6 +32,7 @@ from CoScientist.experiments.schemas import ExperimentPlan
 from CoScientist.graph.session_scope import session_key
 from CoScientist.hitl.handler import AbstractHITLHandler, DelegatingHITLHandler
 from CoScientist.hitl.models import HITLAction, HITLRequest, HITLResponse
+from CoScientist.hitl.resolver import resolve_auto, resolve_timeout
 from CoScientist.hitl.session_agent import SessionAgent
 
 logger = logging.getLogger(__name__)
@@ -124,10 +125,7 @@ class FailClosedExperimentHITLHandler(AbstractHITLHandler):
     """Pause review when no interactive reviewer is connected."""
 
     async def handle_request(self, request: HITLRequest) -> HITLResponse:
-        return HITLResponse(
-            action=HITLAction.REJECT, approved=False, timed_out=True,
-            instructions="No interactive reviewer is connected; experiment remains paused.",
-        )
+        return resolve_timeout(reason="no_interactive_reviewer")
 
 
 def fail_closed_handler() -> DelegatingHITLHandler:
@@ -145,34 +143,25 @@ def _headless_auto_approve() -> bool:
 
 
 def _auto_approve(kind: str) -> bool:
-    """Whether this review is approved without asking a human.
-
-    Read at call time, not at startup, so the Approvals tab applies to the
-    next review rather than the next restart. Per kind, because approving a
-    plan sight unseen and accepting whatever came out of it are different
-    risks: the plan costs the run, the result costs the conclusions.
-    """
-    if _headless_auto_approve():
-        return True
+    """Whether the single global HITL mode approves this review."""
     try:
         from CoScientist.hitl.mode import auto_approves
-
-        if auto_approves():
-            return True
+        return auto_approves()
     except Exception:  # noqa: BLE001 — an unreadable mode still asks the human
-        pass
-    cfg = get_settings().experiments
-    return bool(cfg.plan_auto_approve if kind == "plan" else cfg.result_auto_approve)
+        return False
 
 
 def _approval_mode() -> str:
-    """For the audit line: which switch let this review through."""
-    return "headless_auto" if _headless_auto_approve() else "settings_auto"
+    """For the audit line: the global mode made the decision."""
+    return "mode_auto"
 
 
 def _auto_approve_response() -> HITLResponse:
-    # Empty instructions: SessionAgent overwrites output_key when approved+instructions are both set.
-    return HITLResponse(action=HITLAction.APPROVE, approved=True, instructions="")
+    return resolve_auto(HITLRequest(
+        agent_name="ExperimentReview",
+        action_type=HITLAction.APPROVE,
+        message="Automatic experiment review",
+    ))
 
 
 def _context_invariant_errors(plan: ExperimentPlan, context: dict[str, Any]) -> list[dict[str, Any]]:
@@ -598,6 +587,7 @@ _REVIEW_OWNED_STATE_KEYS = (
     "experiment_plan_critique",
     "experiment_plan_validation_errors",
     "experiment_plan_review_paused",
+    "experiment_plan_record_id",
     PAUSE_REASON_STATE_KEY,
     "experiment_plan_revision_count",
     "experiment_inventory_blocker_hits",
@@ -680,25 +670,25 @@ class ExperimentReviewSessionAgent(SessionAgent):
         had turned every timeout off still had the plan review expire at 300 s
         and the run skip execution.
 
-        Now the mode decides and the shorter wait wins: `debug` waits for the
-        human (`None`), `basic` keeps whichever of the two is tighter, and
-        `auto` never gets here because `_auto_approve` answered first.
+        The MODE decides, outright: `debug` waits for the human (`None`),
+        `basic` waits the ten minutes it names, and `auto` never gets here
+        because `_auto_approve` answered first. Taking the tighter of the two
+        was the obvious thing and the wrong one — the default review window is
+        300 s, so the plan card, of all cards, got half the wait the mode
+        advertises, and an operator who set the field to an hour was capped to
+        ten minutes with nothing saying so.
+
+        `configured` is retained in the signature for compatibility only.
         """
         try:
             from CoScientist.hitl.mode import wait_seconds
 
             window = wait_seconds()
-            if window is None:
-                return None
-            if float(window) <= 0:
-                # `auto` never reaches a wait, and a zero window would mean an
-                # instant refusal — keep the review's own bounded one instead.
-                return configured
-        except Exception:  # noqa: BLE001 — an unreadable switch keeps the window
-            return configured
-        # The review's own window is the SHORTER of the two: it fails closed, so
-        # a bounded wait is a safety property of this stage, not a preference.
-        return min(float(configured), float(window))
+        except Exception:  # noqa: BLE001 — fall back to the safe global default
+            from CoScientist.hitl.mode import BASIC_WAIT_S
+
+            return BASIC_WAIT_S
+        return window
 
     def _hitl(
         self, *, message: str, kind: str, plan_id: Any, output: str,
@@ -853,6 +843,7 @@ class ExperimentReviewSessionAgent(SessionAgent):
         view = plan_to_view(plan, critique_json)
         state["experiment_plan_view"] = view
         record_id = record_plan_proposed(ctx, self.name, view)
+        state["experiment_plan_record_id"] = record_id
 
         if _auto_approve("plan"):
             approve_plan(state)

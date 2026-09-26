@@ -7,7 +7,13 @@ import uuid
 from datetime import datetime
 
 from CoScientist.hitl.handler import AbstractHITLHandler
-from CoScientist.hitl.models import HITLAction, HITLRequest, HITLResponse
+from CoScientist.hitl.models import HITLAction, HITLDecisionSource, HITLRequest, HITLResponse
+from CoScientist.hitl.resolver import resolve_auto, resolve_timeout
+
+
+#: Stamped on both transcript events of a decision the MODE took, so a reader —
+#: and the chat card that replays them — can tell it from a human's click.
+AUTO_MARK = "mode=auto"
 
 
 def _auto_approves() -> bool:
@@ -35,6 +41,8 @@ def hitl_response_event(request_id: str, response_data: dict) -> dict:
         "instructions": response_data.get("instructions"),
         "free_input": response_data.get("free_input"),
         "form_values": response_data.get("form_values"),
+        "decision_source": response_data.get("decision_source", "human"),
+        "system_reason": response_data.get("system_reason"),
         "timestamp": datetime.now().isoformat(),
     }
 
@@ -60,8 +68,6 @@ class WebHITLHandler(AbstractHITLHandler):
 
     @property
     def hitl_timeout_seconds(self) -> float:
-        if hasattr(self, "_hitl_timeout_seconds"):
-            return self._hitl_timeout_seconds
         try:
             from CoScientist.hitl.mode import wait_seconds
 
@@ -75,7 +81,9 @@ class WebHITLHandler(AbstractHITLHandler):
 
     @hitl_timeout_seconds.setter
     def hitl_timeout_seconds(self, value: float) -> None:
-        self._hitl_timeout_seconds = float(value)
+        # Compatibility-only: callers may still assign the legacy field, but
+        # the global HITL mode is the sole source of timing behaviour.
+        self._legacy_hitl_timeout_seconds = float(value)
 
     @property
     def HITL_TIMEOUT_SECONDS(self) -> int:
@@ -286,30 +294,46 @@ class WebHITLHandler(AbstractHITLHandler):
         public_context = dict(request.context or {})
         public_context.pop("_session", None)
 
-        # `auto`: nobody is asked, so no card is drawn and nothing waits. The
-        # decision is still written to the transcript — a run that approved
-        # itself must be readable as such afterwards, not indistinguishable
-        # from one a human signed off.
+        # `auto`: nobody is asked, so no card is drawn and nothing waits. Both
+        # events are still written to the transcript — a reload or an export
+        # must show WHAT was asked as well as that the mode answered it, and a
+        # response with no request reads as a gap in the record.
         if _auto_approves():
+            response = resolve_auto(request)
+            asked = {
+                "type": "hitl_request", "request_id": request_id,
+                "agent_name": request.agent_name,
+                "action_type": request.action_type.value,
+                "message": request.message, "options": request.options,
+                "default_option": request.default_option,
+                "context": public_context, "form": request.form,
+                "invoked_via": request.invoked_via, "trigger": request.trigger,
+                "timeout_seconds": 0, "auto": AUTO_MARK,
+                "timestamp": datetime.now().isoformat(),
+            }
+            self._record(session_key, asked)
+            self._event_log.append({**asked, "_session_key": session_key})
             taken = {
                 "type": "hitl_response", "request_id": request_id,
-                "agent_name": request.agent_name, "action": "approve",
-                "approved": True, "instructions": None, "free_input": None,
-                "auto": "mode=auto", "timestamp": datetime.now().isoformat(),
+                "agent_name": request.agent_name,
+                **response.model_dump(mode="json"),
+                "auto": AUTO_MARK, "timestamp": datetime.now().isoformat(),
             }
             self._record(session_key, taken)
-            logger.info("HITL %s approved without asking (HITL__MODE=auto): %s",
-                        request_id[:8], request.agent_name)
-            return HITLResponse(action=HITLAction.APPROVE, approved=True,
-                                instructions="")
+            self._event_log.append({**taken, "_session_key": session_key})
+            logger.info("HITL %s answered by the mode, not a human "
+                        "(HITL__MODE=auto): %s%s", request_id[:8],
+                        request.agent_name,
+                        f" -> {response.selected_option!r}"
+                        if response.selected_option is not None else "")
+            return response
 
-        # A request may bring its own window (a Work Order veto window);
-        # otherwise the operator's global auto-approve timeout applies.
-        timeout_sec = (
-            float(request.timeout_seconds)
-            if request.timeout_seconds is not None
-            else self.hitl_timeout_seconds
-        )
+        # One global mode owns every review window. Per-request and legacy
+        # settings remain serializable for old sessions but no longer override
+        # auto/basic/debug.
+        from CoScientist.hitl.mode import wait_seconds
+
+        timeout_sec = wait_seconds()
         payload = {
             "type": "hitl_request",
             "request_id": request_id,
@@ -317,6 +341,7 @@ class WebHITLHandler(AbstractHITLHandler):
             "action_type": request.action_type.value,
             "message": request.message,
             "options": request.options,
+            "default_option": request.default_option,
             "context": public_context,
             "form": request.form,
             "invoked_via": request.invoked_via,
@@ -347,7 +372,8 @@ class WebHITLHandler(AbstractHITLHandler):
             "session_key": session_key,
             # Auto-approve moment (loop time); None waits for the human. A hold
             # from the browser clears it mid-wait (see hold_request).
-            "deadline": loop.time() + timeout_sec if timeout_sec > 0 else None,
+            "deadline": loop.time() + timeout_sec
+            if timeout_sec is not None and timeout_sec > 0 else None,
         }
         self._pending[request_id] = entry
 
@@ -355,7 +381,7 @@ class WebHITLHandler(AbstractHITLHandler):
         if delivered:
             logger.info("HITL request %s sent to %d tab(s)", request_id[:8], delivered)
         else:
-            if timeout_sec > 0:
+            if timeout_sec is not None and timeout_sec > 0:
                 logger.warning(
                     "HITL request %s has no live tab; waiting %ss for reconnect",
                     request_id[:8],
@@ -370,35 +396,11 @@ class WebHITLHandler(AbstractHITLHandler):
         try:
             response_data = await self._await_response(entry)
         except asyncio.TimeoutError:
-            if self._is_experiment_review(request):
-                # Fail closed. An experiment plan or result is never approved
-                # because nobody was watching; the run stays paused until a
-                # human actually answers.
-                response_data = {
-                    "action": "reject",
-                    "approved": False,
-                    "timed_out": True,
-                    "instructions": (
-                        "Experiment review timed out; execution remains paused."
-                    ),
-                }
-            else:
-                # Silence is a REFUSAL, everywhere. It used to approve for
-                # everything except the two experiment reviews, which is how
-                # thirty-four decisions in the recorded sessions came to be
-                # taken by the clock — and the response carried no `timed_out`,
-                # so nothing downstream could tell them from a human saying yes.
-                # A run that must proceed unattended has a mode of its own now
-                # (`HITL__MODE=auto`), and it is named out loud.
-                response_data = {
-                    "action": "reject",
-                    "approved": False,
-                    "timed_out": True,
-                    "instructions": (
-                        "Nobody answered within the review window; the action "
-                        "was not approved."
-                    ),
-                }
+            response_data = resolve_timeout(
+                reason=("experiment_review_timeout"
+                        if self._is_experiment_review(request)
+                        else "review_window_elapsed")
+            ).model_dump(mode="json")
             timeout_event = {
                 "type": "hitl_timeout",
                 "request_id": request_id,
@@ -439,6 +441,9 @@ class WebHITLHandler(AbstractHITLHandler):
             free_input=response_data.get("free_input"),
             form_values=response_data.get("form_values"),
             timed_out=response_data.get("timed_out", False),
+            decision_source=response_data.get(
+                "decision_source", HITLDecisionSource.HUMAN.value),
+            system_reason=response_data.get("system_reason"),
         )
 
     @staticmethod

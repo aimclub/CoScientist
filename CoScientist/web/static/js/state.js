@@ -50,6 +50,9 @@ const appSettings = {
     startMode: 'planner',   // 'planner' | 'orchestrator' | 'orchestrator_planner'
     maxRetries: 3,
     hitlEnabled: false,
+    // auto | basic | debug — the one knob for every confirmation. See
+    // CoScientist/hitl/mode.py; silence approves in none of the three.
+    hitlMode: 'basic',
     hitlAutoApproveTimeout: -1,        // seconds; -1 = wait for the human
     workOrderEnabled: true,
     workOrderVetoSeconds: -1,          // seconds; -1 = wait for the human

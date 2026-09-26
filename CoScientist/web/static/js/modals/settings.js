@@ -87,10 +87,24 @@
           {
             fields: [
               { id: 'hitl', path: 'general.hitlEnabled', type: 'toggle', scope: 'session', env: 'HITL__ENABLED' },
-              // -1 = no deadline, wait for the human; N > 0 = approved after N seconds.
-              { id: 'hitlTimeout', path: 'general.hitlAutoApproveTimeout', type: 'timeout', fallback: 300, scope: 'instant', parent: 'hitl', env: 'HITL_AUTO_APPROVE_TIMEOUT', envAliases: ['HITL__AUTO_APPROVE_TIMEOUT', 'HITL_TIMEOUT_SECONDS'] },
+              // The one knob that decides whether this run asks a human and for
+              // how long: auto never asks, basic waits ten minutes, debug waits
+              // for you. Silence approves in none of them — a run that must
+              // proceed unattended says `auto` out loud. Deliberately NOT
+              // parented to `hitl`: `auto` is what makes an unattended run
+              // possible, and hiding it behind the switch that turns the asking
+              // off would hide the only honest way to do that.
+              { id: 'hitlMode', path: 'general.hitlMode', type: 'segmented', options: ['auto', 'basic', 'debug'], scope: 'instant', env: 'HITL__MODE',
+                inactive: d => getSettingPath(d, 'general.hitlModePinnedByEnv')
+                  ? { key: 'settings.inactive.envPinned', vars: { name: 'HITL__MODE' } } : null },
+              // Legacy, and superseded by the mode above: it is still read to
+              // DERIVE a mode for a stand configured before the mode existed
+              // (a non-positive value means "wait for me", i.e. debug).
+              { id: 'hitlTimeout', path: 'general.hitlAutoApproveTimeout', type: 'timeout', fallback: 300, scope: 'instant', parent: 'hitl', advanced: true, env: 'HITL_AUTO_APPROVE_TIMEOUT', envAliases: ['HITL__AUTO_APPROVE_TIMEOUT', 'HITL_TIMEOUT_SECONDS'],
+                inactive: () => ({ key: 'settings.inactive.supersededByMode' }) },
               { id: 'workOrder', path: 'general.workOrderEnabled', type: 'toggle', scope: 'session', parent: 'hitl', env: 'WORK_ORDER__ENABLED' },
-              { id: 'workOrderVeto', path: 'general.workOrderVetoSeconds', type: 'timeout', fallback: 60, scope: 'instant', parent: 'workOrder', env: 'WORK_ORDER__VETO_SECONDS' },
+              { id: 'workOrderVeto', path: 'general.workOrderVetoSeconds', type: 'timeout', fallback: 60, scope: 'instant', parent: 'workOrder', env: 'WORK_ORDER__VETO_SECONDS',
+                inactive: () => ({ key: 'settings.inactive.supersededByMode' }) },
             ],
           },
           {
@@ -100,17 +114,15 @@
             // them out with the global switch would hide the only way through.
             heading: 'experimentReview',
             fields: [
-              { id: 'experimentPlanAuto', path: 'experimentModule.planAutoApprove', type: 'toggle', scope: 'instant', env: 'EXPERIMENTS__PLAN_AUTO_APPROVE' },
+              { id: 'experimentPlanAuto', path: 'experimentModule.planAutoApprove', type: 'toggle', scope: 'instant', env: 'EXPERIMENTS__PLAN_AUTO_APPROVE', inactive: () => ({ key: 'settings.inactive.supersededByMode' }) },
               {
                 id: 'experimentPlanTimeout', path: 'experimentModule.planReviewTimeoutS', type: 'number', min: 30, max: 86400, scope: 'instant', env: 'EXPERIMENTS__PLAN_REVIEW_TIMEOUT_S',
-                inactive: d => getSettingPath(d, 'experimentModule.planAutoApprove')
-                  ? { key: 'settings.inactive.autoApproved' } : null,
+                inactive: () => ({ key: 'settings.inactive.supersededByMode' }),
               },
-              { id: 'experimentResultAuto', path: 'experimentModule.resultAutoApprove', type: 'toggle', scope: 'instant', env: 'EXPERIMENTS__RESULT_AUTO_APPROVE' },
+              { id: 'experimentResultAuto', path: 'experimentModule.resultAutoApprove', type: 'toggle', scope: 'instant', env: 'EXPERIMENTS__RESULT_AUTO_APPROVE', inactive: () => ({ key: 'settings.inactive.supersededByMode' }) },
               {
                 id: 'experimentResultTimeout', path: 'experimentModule.resultReviewTimeoutS', type: 'number', min: 30, max: 86400, scope: 'instant', env: 'EXPERIMENTS__RESULT_REVIEW_TIMEOUT_S',
-                inactive: d => getSettingPath(d, 'experimentModule.resultAutoApprove')
-                  ? { key: 'settings.inactive.autoApproved' } : null,
+                inactive: () => ({ key: 'settings.inactive.supersededByMode' }),
               },
             ],
           },

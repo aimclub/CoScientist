@@ -531,8 +531,25 @@ class SessionAgent(LlmAgent):
                 break
 
             if response.approved:
-                if response.instructions and response.action != HITLAction.EDIT:
-                    edited_text = response.instructions
+                # REPLACING the output is what «provide input» means: the
+                # operator edits the text (or the roadmap JSON) and the edited
+                # version becomes the answer. A plain APPROVE that happens to
+                # carry a note must not do that — the note is a remark ABOUT the
+                # output, not the output. It used to be impossible to hit,
+                # because approve-plus-note was rewritten into `edit` in the
+                # browser; the moment a positive answer started meaning approval
+                # it became a live hazard, and a live one: the experiment
+                # planner's `output_key` is `experiment_plan`, so one sentence
+                # of feedback replaced the whole approved plan in session state
+                # while the original plan went on running.
+                if response.action == HITLAction.PROVIDE_INPUT:
+                    edited_text = (
+                        response.instructions
+                        if response.instructions is not None
+                        else response.free_input
+                        if response.free_input is not None
+                        else ""
+                    )
                     if final_event is not None and final_event.content and final_event.content.parts:
                         final_event.content.parts[0].text = edited_text
                     if self.output_key:
@@ -564,7 +581,9 @@ class SessionAgent(LlmAgent):
                     except Exception:
                         pass
 
-                if not response.free_input and response.action != HITLAction.EDIT:
+                if response.action == HITLAction.EDIT:
+                    pass
+                else:
                     # HITL approved — now emit the (possibly updated) final event and exit
                     if final_event is not None:
                         async for event in self._emit_final(ctx, final_event, output_text):

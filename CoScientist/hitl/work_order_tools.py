@@ -342,16 +342,6 @@ class WorkOrderToolset:
                 logger.exception("%s: work order notice failed", self.agent_name)
             return None
 
-        veto = tier in (Tier.READ, Tier.COMPUTE) and not force_blocking
-        # `None` hands the wait to the run's HITL mode, and that is now the
-        # answer for every tier alike. The tiers used to come out inverted:
-        # read/compute passed an explicit -1 and waited for the human forever,
-        # while `side_effect` — the riskiest contract there is — fell through to
-        # the global window and was the only one with a countdown, and that
-        # countdown APPROVED. Only an explicitly configured positive veto window
-        # still overrides the mode. Silence approves in none of them.
-        veto_seconds = get_settings().web.work_order_veto_seconds
-        veto_timeout = float(veto_seconds) if veto_seconds > 0 else None
         request = HITLRequest(
             agent_name=self.agent_name,
             action_type=HITLAction.APPROVE,
@@ -368,18 +358,14 @@ class WorkOrderToolset:
             },
             invoked_via="tool",
             trigger=trigger,
-            timeout_seconds=veto_timeout if veto else None,
+            timeout_seconds=None,
         )
         return await self.handler.handle_request(request)
 
     @staticmethod
     def _review_timeout(tier: Tier) -> Optional[float]:
-        """Veto window for read/compute (-1: wait for the human); None — the
-        global HITL timeout — for side effects."""
-        if tier not in (Tier.READ, Tier.COMPUTE):
-            return None
-        veto_seconds = get_settings().web.work_order_veto_seconds
-        return float(veto_seconds) if veto_seconds > 0 else -1.0
+        """Compatibility shim: the global HITL mode owns every review window."""
+        return None
 
     async def review_step(
         self, order: WorkOrder, step: WorkStep, tool_context: Any
@@ -422,12 +408,6 @@ class WorkOrderToolset:
             return None
         lang = session_report_language(tool_context)
         report = order.report or WorkReport()
-        # Same wait as the declaration, and for the same reason: the run's HITL
-        # mode owns it for every tier, and only an explicitly configured
-        # positive veto window overrides that.
-        veto_seconds = get_settings().web.work_order_veto_seconds
-        veto = order.tier in (Tier.READ, Tier.COMPUTE)
-        veto_timeout = float(veto_seconds) if veto_seconds > 0 else None
         request = HITLRequest(
             agent_name=self.agent_name,
             action_type=HITLAction.APPROVE,
@@ -454,7 +434,7 @@ class WorkOrderToolset:
             },
             invoked_via="tool",
             trigger="work_report",
-            timeout_seconds=veto_timeout if veto else None,
+            timeout_seconds=None,
         )
         return await self.handler.handle_request(request)
 
@@ -612,6 +592,22 @@ class WorkOrderToolset:
                 result["message"] += (" The human REJECTED the listed assumptions: "
                                       "the revised order must not rest on them.")
             return result
+        if response is not None and getattr(response, "timed_out", False):
+            # Nobody answered. The action is NOT approved — silence consents to
+            # nothing — but this is not the human refusing, and it must not be
+            # recorded as one: a persisted `rejected` order makes every later
+            # `declare_work_order` return that rejection without asking, so one
+            # missed card killed the agent for the rest of the run even after
+            # the operator came back. Nothing is saved, so declaring again asks
+            # again.
+            return {
+                "status": "unanswered",
+                "reason": "Nobody answered the work order within the review window.",
+                "message": "Nobody confirmed your work order, so you may not act on "
+                           "it. Do not treat this as a refusal of the plan: declare "
+                           "again if the work is still needed, or finish and report "
+                           "that the contract was never confirmed.",
+            }
         if response is not None and not response.approved:
             order.status = "rejected"
             order.operator_notes = feedback
@@ -734,6 +730,13 @@ class WorkOrderToolset:
                 "feedback": feedback or "No feedback provided.",
                 "message": "The human asked for a different amendment. Adjust it "
                            "and call update_work_order again, or stay within the current order.",
+            }
+        if response is not None and response.timed_out:
+            return {
+                "status": "unanswered",
+                "reason": "Nobody answered the amendment within the review window.",
+                "message": "The current work order remains active and unchanged. "
+                           "Submit the amendment again before using its new tools or steps.",
             }
         if response is not None and not response.approved:
             return {
@@ -864,6 +867,19 @@ class WorkOrderToolset:
                 ),
             }
 
+        if response is not None and response.timed_out:
+            review.status = "pending"
+            review.notes = ""
+            step.status = "in_progress"
+            step.review = review
+            save_order(state, order)
+            return {
+                "status": "unanswered",
+                "step_id": step.id,
+                "reason": "Nobody answered the step review within the review window.",
+                "message": "The step remains in progress and must be submitted for review again.",
+            }
+
         if response is not None and not response.approved:
             review.status = "rejected"
             review.notes = feedback
@@ -983,6 +999,17 @@ class WorkOrderToolset:
                 result["message"] += " The human marked the listed findings as wrong: recheck them."
             return result
 
+        if response is not None and getattr(response, "timed_out", False):
+            # Same distinction as the declaration: an unanswered report is not a
+            # rejected one. Nothing is persisted and the plan step is left where
+            # it is — failing it would close a step nobody judged.
+            return {
+                "status": "unanswered",
+                "reason": "Nobody answered the work report within the review window.",
+                "message": "Nobody checked your result. Do not treat this as a "
+                           "rejection: submit the work report again before moving "
+                           "past this review.",
+            }
         if response is not None and not response.approved:
             report.status = "rejected"
             report.operator_notes = feedback

@@ -75,11 +75,7 @@ def choice_options() -> List[str]:
 
 
 def wants_nir(selected: Optional[str]) -> bool:
-    """True only on an explicit choice of the NIR option.
-
-    A timeout, a dismissal or an unrecognised answer all mean "no". The
-    expensive, outward-facing path is never the default for silence.
-    """
+    """True only when the resolved selection is the full NIR option."""
     return str(selected or "").strip() == OPTION_NIR
 
 

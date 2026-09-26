@@ -21,7 +21,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 from CoScientist.hitl import mode as mode_mod  # noqa: E402
-from CoScientist.hitl.models import HITLAction, HITLRequest, HITLResponse  # noqa: E402
+from CoScientist.hitl.models import (  # noqa: E402
+    HITLAction,
+    HITLDecisionSource,
+    HITLRequest,
+    HITLResponse,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -66,12 +71,28 @@ def test_a_misspelled_mode_falls_back_to_asking(monkeypatch):
 
 # ── совместимость со стендами, настроенными до появления ручки ───────────────
 
-def test_hitl_switched_off_reads_as_auto(monkeypatch):
+def test_the_hitl_switch_is_not_a_mode(monkeypatch):
+    """`HITL__ENABLED=false` must NOT read as `auto`, tempting as it looks. That
+    switch removes the callbacks and the work-order tools, but the two
+    experiment reviews ask even when it is off — deliberately, and the Approvals
+    tab says so: greying them out with the global switch would hide the only way
+    past a paused plan. Deriving `auto` from it silently approved a 7-task,
+    230-minute experiment plan without ever drawing a card."""
     from CoScientist.config import get_settings
 
     monkeypatch.setattr(get_settings().web, "hitl_enabled", False)
     monkeypatch.setattr(get_settings().web, "hitl_mode", "")
-    assert mode_mod.hitl_mode() == mode_mod.AUTO
+    monkeypatch.setattr(get_settings().web, "hitl_auto_approve_timeout", 300)
+    assert mode_mod.hitl_mode() == mode_mod.BASIC
+    assert mode_mod.auto_approves() is False
+
+    from CoScientist.experiments.review import _auto_approve
+
+    monkeypatch.setattr(get_settings().experiments, "plan_auto_approve", False)
+    monkeypatch.setattr(get_settings().experiments, "result_auto_approve", False)
+    monkeypatch.delenv("COSCIENTIST_EXPERIMENT_HITL_AUTO_APPROVE", raising=False)
+    assert _auto_approve("plan") is False
+    assert _auto_approve("result") is False
 
 
 def test_a_non_positive_legacy_timeout_reads_as_debug(monkeypatch):
@@ -91,11 +112,11 @@ def test_a_non_positive_legacy_timeout_reads_as_debug(monkeypatch):
 
 # ── что видит обработчик ─────────────────────────────────────────────────────
 
-def _ask(agent="CoderAgent", **kw):
+def _ask(agent="CoderAgent", action=HITLAction.APPROVE, **kw):
     from CoScientist.web.handler import WebHITLHandler
 
     handler = WebHITLHandler()
-    request = HITLRequest(agent_name=agent, action_type=HITLAction.APPROVE,
+    request = HITLRequest(agent_name=agent, action_type=action,
                           message="Approve", **kw)
     return handler, asyncio.run(handler.handle_request(request))
 
@@ -109,16 +130,144 @@ def test_auto_draws_no_card_and_answers_yes(monkeypatch):
 
 def test_basic_refuses_when_nobody_answers(monkeypatch):
     monkeypatch.setenv("HITL__MODE", "basic")
+    monkeypatch.setattr(mode_mod, "wait_seconds", lambda: 0.001)
     _, answer = _ask(timeout_seconds=0.001)
     assert answer.approved is False
     assert answer.timed_out is True, "и об этом сказано прямо"
 
 
-def test_the_refusal_says_that_nobody_answered(monkeypatch):
-    """`timed_out` без слов ниже по течению читается как решение человека."""
+def test_the_refusal_puts_no_words_in_the_operators_mouth(monkeypatch):
+    """`instructions` must stay EMPTY on a timeout, and that is load-bearing.
+    Every consumer reads those fields as the operator's own words: the ТЗ
+    interview recorded the explanation as the ANSWER to a question and put it
+    into the document, and the sandbox handed it to an agent as "Follow user
+    instructions: …". The fact that nobody answered travels in `timed_out`."""
     monkeypatch.setenv("HITL__MODE", "basic")
+    monkeypatch.setattr(mode_mod, "wait_seconds", lambda: 0.001)
     _, answer = _ask(timeout_seconds=0.001)
-    assert "answer" in (answer.instructions or "").lower()
+    assert answer.timed_out is True
+    assert not (answer.instructions or "")
+    assert not (answer.free_input or "")
+
+
+def test_a_headless_console_refuses_and_says_nobody_decided(monkeypatch):
+    """The console handler is what every non-web run gets. It used to default to
+    APPROVE with no console attached, which meant `debug` — the mode that exists
+    so a run cannot leave without you — approved everything instantly on any box
+    with no terminal. And its refusal must carry `timed_out`, or the experiment
+    plan review records "rejected by the operator" against an operator who was
+    never there."""
+    import sys
+
+    from CoScientist.hitl.handler import ConsoleHITLHandler
+
+    monkeypatch.setenv("HITL__MODE", "debug")
+    monkeypatch.delenv("HITL_HEADLESS_POLICY", raising=False)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: False, raising=False)
+
+    answer = asyncio.run(ConsoleHITLHandler().handle_request(
+        HITLRequest(agent_name="CoderAgent", action_type=HITLAction.APPROVE,
+                    message="Approve")))
+    assert answer.approved is False
+    assert answer.timed_out is True, "nobody decided this"
+    assert not (answer.instructions or "")
+
+    from CoScientist.experiments.review import _is_refusal
+
+    assert _is_refusal(answer) is False, "an absent human is not a rejection"
+
+
+def test_auto_mode_does_not_block_a_console_run(monkeypatch):
+    """The auto short-circuit used to live only in the web handler, so the one
+    mode whose whole point is running unattended blocked on `input()` forever on
+    an interactive CLI run."""
+    import sys
+
+    from CoScientist.hitl.handler import ConsoleHITLHandler
+
+    monkeypatch.setenv("HITL__MODE", "auto")
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True, raising=False)
+
+    answer = asyncio.run(ConsoleHITLHandler().handle_request(
+        HITLRequest(agent_name="CoderAgent", action_type=HITLAction.APPROVE,
+                    message="Approve")))
+    assert answer.approved is True and answer.timed_out is False
+
+
+def test_auto_mode_makes_an_explicit_choice_on_a_select(monkeypatch):
+    """«Approve everything» answered a SELECT with nothing selected, and every
+    reader of one treats "no option" as the negative branch — so the NIR report
+    card was silently DECLINED. The first option is taken: a card lists the
+    cheaper, less outward-facing path first."""
+    monkeypatch.setenv("HITL__MODE", "auto")
+    _, answer = _ask(action=HITLAction.SELECT, options=["short", "full GOST"])
+    assert answer.approved is True
+    assert answer.selected_option == "short"
+
+
+def test_auto_select_prefers_an_explicit_default(monkeypatch):
+    monkeypatch.setenv("HITL__MODE", "auto")
+    _, answer = _ask(
+        action=HITLAction.SELECT,
+        options=["short", "full NIR"],
+        default_option="full NIR",
+    )
+    assert answer.action == HITLAction.SELECT
+    assert answer.selected_option == "full NIR"
+    assert answer.decision_source == HITLDecisionSource.MODE_AUTO
+    assert answer.system_reason == "hitl_mode_auto"
+
+
+def test_auto_completes_forms_with_defaults_and_empty_values(monkeypatch):
+    monkeypatch.setenv("HITL__MODE", "auto")
+    form = {"blocks": [{"title": "Details", "fields": [
+        {"name": "with_value", "value": "kept"},
+        {"name": "with_default", "default": "fallback"},
+        {"name": "required_but_empty", "required": True},
+    ]}]}
+    _, answer = _ask(form=form)
+    assert answer.approved is True
+    assert answer.form_values == {"Details": {
+        "with_value": "kept",
+        "with_default": "fallback",
+        "required_but_empty": "",
+    }}
+
+
+def test_auto_provide_input_continues_with_an_empty_value(monkeypatch):
+    monkeypatch.setenv("HITL__MODE", "auto")
+    _, answer = _ask(action=HITLAction.PROVIDE_INPUT)
+    assert answer.approved is True
+    assert answer.action == HITLAction.PROVIDE_INPUT
+    assert answer.instructions == ""
+    assert answer.free_input == ""
+
+
+def test_timeout_has_its_own_source_and_no_operator_words(monkeypatch):
+    monkeypatch.setenv("HITL__MODE", "basic")
+    monkeypatch.setattr(mode_mod, "wait_seconds", lambda: 0.001)
+    _, answer = _ask(timeout_seconds=999)
+    assert answer.decision_source == HITLDecisionSource.TIMEOUT
+    assert answer.system_reason == "review_window_elapsed"
+    assert not (answer.instructions or answer.free_input)
+
+
+def test_auto_mode_records_both_halves_of_the_decision(monkeypatch):
+    """A response with no request reads as a gap in the record, and a reload or
+    an export rebuilds the chat from exactly these events."""
+    monkeypatch.setenv("HITL__MODE", "auto")
+    from CoScientist.web.handler import AUTO_MARK, WebHITLHandler
+
+    handler = WebHITLHandler()
+    recorded = []
+    handler.set_recorder(lambda key, event: recorded.append(event))
+    asyncio.run(handler.handle_request(HITLRequest(
+        agent_name="CoderAgent", action_type=HITLAction.APPROVE, message="Approve",
+        context={"_session": {"user_id": "u", "session_id": "s"}})))
+
+    assert [e["type"] for e in recorded] == ["hitl_request", "hitl_response"]
+    assert all(e.get("auto") == AUTO_MARK for e in recorded), (
+        "a decision the mode took must be readable as such")
 
 
 def test_the_handlers_window_speaks_the_modes_wait(monkeypatch):
@@ -129,6 +278,21 @@ def test_the_handlers_window_speaks_the_modes_wait(monkeypatch):
     monkeypatch.setenv("HITL__MODE", "debug")
     # Вызывающие читают «<= 0» как «срока нет» — это их словарь.
     assert WebHITLHandler().hitl_timeout_seconds <= 0
+
+
+def test_an_environment_mode_is_reported_as_locked_to_the_ui(monkeypatch):
+    from CoScientist.web.app import _current_settings
+
+    monkeypatch.setenv("HITL__MODE", "auto")
+    assert _current_settings()["general"]["hitlModePinnedByEnv"] is True
+
+    from pathlib import Path
+
+    settings_js = (Path(__file__).resolve().parents[2] / "CoScientist" / "web"
+                   / "static" / "js" / "modals" / "settings.js").read_text(
+                       encoding="utf-8")
+    assert "general.hitlModePinnedByEnv" in settings_js
+    assert "settings.inactive.envPinned" in settings_js
 
 
 # ── отказ от плана эксперимента ──────────────────────────────────────────────
@@ -188,3 +352,41 @@ def test_a_positive_answer_approves_even_with_notes():
     assert "action: 'approve'" in approve and "approved: true" in approve
     # Карточка плана эксперимента зовёт именно её, а не сокращение.
     assert "respondHITLApprove('${escJs(rid)}')" in js
+
+
+def test_approving_with_a_note_does_not_replace_the_thing_approved():
+    """The nastiest consequence of making a positive answer approve. `SessionAgent`
+    treats `instructions` on an approval as the EDITED OUTPUT and writes it into
+    `output_key` — and the experiment planner's output_key is `experiment_plan`.
+    So one sentence of feedback replaced the whole approved plan in session
+    state while the original plan went on running. Replacing the output is what
+    «provide input» means; a plain approve carrying a remark is not that.
+    """
+    import inspect
+
+    from CoScientist.hitl.session_agent import SessionAgent
+
+    body = inspect.getsource(SessionAgent._run_async_impl)
+    assert "response.action == HITLAction.PROVIDE_INPUT" in body, (
+        "only «provide input» may replace the output it was shown")
+    assert "response.action != HITLAction.EDIT" not in body.split(
+        "if response.approved:")[1].split("if not response.free_input")[0], (
+        "an APPROVE must not reach the overwrite")
+
+
+def test_an_unanswered_work_order_is_not_a_rejected_one():
+    """A persisted `rejected` order makes every later `declare_work_order`
+    return that rejection without asking anyone, so one missed card used to kill
+    the agent for the rest of the run — even after the operator came back."""
+    import inspect
+
+    from CoScientist.hitl.work_order_tools import WorkOrderToolset
+
+    for name in ("_settle_declaration", "submit_work_report"):
+        body = inspect.getsource(getattr(WorkOrderToolset, name))
+        assert 'getattr(response, "timed_out", False)' in body, name
+        assert '"status": "unanswered"' in body, name
+        # …and it is asked BEFORE "not approved", or the rejection branch eats it:
+        # a timed-out response is also an unapproved one.
+        assert body.index('getattr(response, "timed_out", False)') < body.index(
+            "not response.approved"), name

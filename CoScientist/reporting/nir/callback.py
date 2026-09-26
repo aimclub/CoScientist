@@ -96,6 +96,7 @@ def make_ask_nir_report_callback(handler: AbstractHITLHandler):
                 action_type=HITLAction.SELECT,
                 message=hitl_form.SELECT_MESSAGE,
                 options=hitl_form.choice_options(),
+                default_option=hitl_form.OPTION_NIR,
                 context=context,
                 invoked_via="callback",
                 trigger="ask_nir_report",

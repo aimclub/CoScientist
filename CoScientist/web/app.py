@@ -500,6 +500,16 @@ def _apply_frontend_settings(frontend: dict) -> None:
         val = bool(general["hitlEnabled"])
         web.hitl_enabled = val
         get_settings().hitl.enabled = val
+    # The one knob that decides whether this run asks a human and for how long.
+    # Read at call time everywhere, so it applies to the next card rather than
+    # the next restart — but HITL__MODE in the environment still wins, and the
+    # tab is told so rather than silently losing the change.
+    if "hitlMode" in general:
+        from CoScientist.hitl.mode import MODES
+
+        chosen = str(general["hitlMode"] or "").strip().lower()
+        if chosen in MODES:
+            web.hitl_mode = chosen
     if "hitlAutoApproveTimeout" in general:
         web.hitl_auto_approve_timeout = int(general["hitlAutoApproveTimeout"])
     if "workOrderEnabled" in general:
@@ -656,6 +666,18 @@ def _settings_payload() -> dict:
     return {**_current_settings(), "defaults": _startup_settings()}
 
 
+def _effective_hitl_mode() -> str:
+    """The mode actually in force, so the tab shows what is happening and not
+    what was last saved. `HITL__MODE` in the environment outranks the setting,
+    and a tab that hid that would report a change it did not make."""
+    try:
+        from CoScientist.hitl.mode import hitl_mode
+
+        return hitl_mode()
+    except Exception:  # noqa: BLE001
+        return "basic"
+
+
 def _current_settings() -> dict:
     """The frontend ``appSettings`` shape, read back off the config singleton."""
     from CoScientist.config import get_settings
@@ -669,6 +691,8 @@ def _current_settings() -> dict:
             "startMode": web.start_mode,
             "maxRetries": web.max_retries,
             "hitlEnabled": web.hitl_enabled,
+            "hitlMode": _effective_hitl_mode(),
+            "hitlModePinnedByEnv": bool(os.getenv("HITL__MODE", "").strip()),
             "hitlAutoApproveTimeout": web.hitl_auto_approve_timeout,
             "workOrderEnabled": web.work_order_enabled,
             "workOrderVetoSeconds": web.work_order_veto_seconds,

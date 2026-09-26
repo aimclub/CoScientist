@@ -79,13 +79,13 @@ def _review_plan(monkeypatch, state=None):
     return response, asked, state
 
 
-def test_the_plan_switch_does_not_accept_the_result_as_well(_clean_env, monkeypatch):
+def test_the_legacy_plan_switch_no_longer_bypasses_the_mode(_clean_env, monkeypatch):
     _clean_env.plan_auto_approve = True
     response, asked, _ = _review_plan(monkeypatch)
 
-    assert response.approved and not asked, "the plan was still put up for review"
-    assert _auto_approve("plan") is True
-    assert _auto_approve("result") is False, "one switch bought both reviews"
+    assert response.approved and asked, "the legacy switch bypassed the review"
+    assert _auto_approve("plan") is False
+    assert _auto_approve("result") is False
 
 
 def test_a_plan_nobody_switched_on_is_still_put_up_for_review(_clean_env, monkeypatch):
@@ -95,28 +95,23 @@ def test_a_plan_nobody_switched_on_is_still_put_up_for_review(_clean_env, monkey
     assert _auto_approve("plan") is False and _auto_approve("result") is False
 
 
-def test_the_environment_switch_still_covers_both(_clean_env, monkeypatch):
-    """`scripts/test_lanes.py` and the headless smokes set one variable and
-    expect both reviews to pass; the tab must not have narrowed that."""
+def test_the_legacy_environment_switch_no_longer_covers_reviews(_clean_env, monkeypatch):
     monkeypatch.setenv("COSCIENTIST_EXPERIMENT_HITL_AUTO_APPROVE", "1")
-    assert _auto_approve("plan") and _auto_approve("result")
-    assert review_mod._approval_mode() == "headless_auto"
+    assert not _auto_approve("plan") and not _auto_approve("result")
 
     monkeypatch.delenv("COSCIENTIST_EXPERIMENT_HITL_AUTO_APPROVE")
     _clean_env.result_auto_approve = True
-    assert review_mod._approval_mode() == "settings_auto"
+    assert not _auto_approve("plan") and not _auto_approve("result")
 
 
-def test_the_tab_reaches_the_reviewer_without_a_restart(_clean_env):
-    """What the browser POSTs has to land on the object the reviewer reads,
-    and come back in the payload so the modal does not show a stale switch."""
+def test_the_tab_keeps_legacy_review_fields_readable_but_inactive(_clean_env):
     from CoScientist.web.app import _apply_frontend_settings, _current_settings
 
     _apply_frontend_settings({"experimentModule": {
         "planAutoApprove": True, "resultAutoApprove": False,
         "planReviewTimeoutS": 1800, "resultReviewTimeoutS": 900,
     }})
-    assert _auto_approve("plan") is True and _auto_approve("result") is False
+    assert _auto_approve("plan") is False and _auto_approve("result") is False
     assert _clean_env.plan_review_timeout_s == 1800
 
     echoed = _current_settings()["experimentModule"]
@@ -275,13 +270,14 @@ def test_the_two_experiment_switches_are_offered_in_the_approvals_tab():
 _ANY = SimpleNamespace(hitl_handler=SimpleNamespace())
 
 
-def test_basic_mode_keeps_the_reviews_own_bounded_window(monkeypatch):
-    """These two windows fail closed, so a bounded wait is a safety property of
-    the stage rather than a preference. In `basic` the tighter of the two wins,
-    and the review's 300 s is tighter than the mode's 600."""
+def test_basic_mode_gives_the_review_the_wait_it_advertises(monkeypatch):
+    """The mode owns the wait outright. Taking the tighter of the two was the
+    obvious thing and the wrong one: the default review window is 300 s, so the
+    plan card — of all cards — got half the wait `basic` names, and an operator
+    who set the field to an hour was capped to ten minutes with nothing saying
+    so."""
     monkeypatch.setenv("HITL__MODE", "basic")
-    assert ExperimentReviewSessionAgent._review_window(_ANY, 300.0) == 300.0
-    # …and where the review asks for longer than the mode allows, the mode wins.
+    assert ExperimentReviewSessionAgent._review_window(_ANY, 300.0) == 600.0
     assert ExperimentReviewSessionAgent._review_window(_ANY, 3600.0) == 600.0
 
 
@@ -299,7 +295,7 @@ def test_auto_mode_never_reaches_a_wait(monkeypatch):
     something that would mean "refuse immediately" if a path ever got here."""
     monkeypatch.setenv("HITL__MODE", "auto")
     assert _auto_approve("plan") is True
-    assert ExperimentReviewSessionAgent._review_window(_ANY, 300.0) == 300.0
+    assert ExperimentReviewSessionAgent._review_window(_ANY, 300.0) == 0.0
 
 
 def test_an_unreadable_mode_keeps_the_bounded_window(monkeypatch):
@@ -311,7 +307,7 @@ def test_an_unreadable_mode_keeps_the_bounded_window(monkeypatch):
         raise RuntimeError("настройки недоступны")
 
     monkeypatch.setattr(mode_mod, "wait_seconds", explode)
-    assert ExperimentReviewSessionAgent._review_window(_ANY, 300.0) == 300.0
+    assert ExperimentReviewSessionAgent._review_window(_ANY, 300.0) == 600.0
 
 
 def test_the_window_reaches_the_request_the_handler_reads():

@@ -158,20 +158,23 @@ def _request(key, timeout_seconds=None):
     )
 
 
-def test_request_timeout_overrides_the_global_wait():
+def test_global_wait_overrides_the_legacy_request_timeout(monkeypatch):
     """A configured veto window is shorter than the run's mode allows: the
     request's own timeout_seconds must win. Running out no longer approves —
     silence is a refusal everywhere, and a run that must proceed unattended
     says so with HITL__MODE=auto instead."""
+    import CoScientist.hitl.mode as mode_mod
+
+    monkeypatch.setattr(mode_mod, "wait_seconds", lambda: 0.05)
+
     async def scenario():
         handler = WebHITLHandler()
-        handler.hitl_timeout_seconds = 300
         key = ("user_a", "session_a")
         socket = _Socket()
         await handler.attach_websocket(socket, key)
 
         response = await asyncio.wait_for(
-            handler.handle_request(_request(key, timeout_seconds=0.05)), timeout=2
+            handler.handle_request(_request(key, timeout_seconds=300)), timeout=2
         )
         assert response.approved is False
         assert response.timed_out is True
@@ -239,10 +242,15 @@ def test_notify_reaches_only_its_session_and_is_logged():
     asyncio.run(scenario())
 
 
-def test_hitl_request_and_its_answer_are_recorded_in_the_session_transcript():
+def test_hitl_request_and_its_answer_are_recorded_in_the_session_transcript(monkeypatch):
     """A reload, export or import rebuilds the chat from the transcript, so an
     answered HITL card and the answer must both be in it — and only in its own
     session's transcript."""
+    import CoScientist.hitl.mode as mode_mod
+
+    window = [5.0]
+    monkeypatch.setattr(mode_mod, "wait_seconds", lambda: window[0])
+
     async def scenario():
         handler = WebHITLHandler()
         recorded = []
@@ -275,6 +283,7 @@ def test_hitl_request_and_its_answer_are_recorded_in_the_session_transcript():
         assert response_event["instructions"] == "go"
         assert response_event["form_values"] == {"rejected_assumption_ids": ["A1"]}
 
+        window[0] = 0.05
         timed_out = await asyncio.wait_for(
             handler.handle_request(_request(key, timeout_seconds=0.05)), timeout=2
         )

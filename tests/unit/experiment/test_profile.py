@@ -347,13 +347,17 @@ def test_research_prompt_requires_both_literature_tools():
     assert "argument `keywords`" in prompt
 
 
-def test_web_hitl_timeout_is_fail_closed_for_every_request():
+def test_web_hitl_timeout_is_fail_closed_for_every_request(monkeypatch):
     """Silence is a refusal now, everywhere — not only on the two experiment
     reviews. It used to approve for everything else, which is how thirty-four
     decisions in the recorded sessions were taken by the clock, and the response
     carried `timed_out=False` so nothing downstream could tell them from a human
     saying yes. A run that must proceed unattended has `HITL__MODE=auto`, and
     that is named out loud rather than inferred from nobody being there."""
+    import CoScientist.hitl.mode as mode_mod
+
+    monkeypatch.setattr(mode_mod, "wait_seconds", lambda: 0.001)
+
     async def scenario():
         handler = WebHITLHandler()
         experiment = await handler.handle_request(
@@ -470,8 +474,11 @@ def test_the_planner_never_hears_of_fedot_while_it_is_off(monkeypatch):
     assert "fedot" not in detached.lower()
 
 
-def test_with_fedot_on_react_tools_stays_the_mcp_route():
+def test_with_fedot_on_react_tools_stays_the_mcp_route(monkeypatch):
     """On, FEDOT.MAS is the narrow exception, not the default it used to be."""
+    from CoScientist.config import get_settings
+
+    monkeypatch.setattr(get_settings().experiments, "route_fedot", True)
     on = _planner_prompt(load_config(resolve_config_path("experiments")))
     assert "route: react_tools|fedot_mas|" in on
     assert '"route":"react_tools"' in on

@@ -87,7 +87,7 @@ def test_read_tier_declaration_still_asks_under_the_veto_window(hitl_on):
     assert handler.notices == []
     request = handler.requests[0]
     assert request.trigger == "work_order"
-    assert request.timeout_seconds == 30
+    assert request.timeout_seconds is None
     assert request.context["tier"] == "read"
     assert request.context["_session"] == {"user_id": "u1", "session_id": "s1"}
 
@@ -113,7 +113,7 @@ def test_compute_tier_gets_the_veto_window(hitl_on):
 
     request = handler.requests[0]
     assert request.trigger == "work_order"
-    assert request.timeout_seconds == 30
+    assert request.timeout_seconds is None
     assert request.context["tier"] == "compute"
     order = request.context["work_order"]
     assert [a["id"] for a in order["assumptions"]] == ["A1", "A2"]

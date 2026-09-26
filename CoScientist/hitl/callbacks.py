@@ -126,7 +126,11 @@ def make_hitl_after_callback(handler: AbstractHITLHandler, action_type: HITLActi
         response = await handler.handle_request(request)
 
         if not response.approved:
-            # Override agent output with rejection feedback
+            if response.timed_out:
+                return genai_types.Content(
+                    role="model",
+                    parts=[genai_types.Part(text="Review timed out; no human decision was made.")],
+                )
             feedback = response.instructions or response.free_input or "No feedback provided"
             return genai_types.Content(
                 role="model",
@@ -135,14 +139,20 @@ def make_hitl_after_callback(handler: AbstractHITLHandler, action_type: HITLActi
                 )],
             )
 
-        '''if response.action == HITLAction.PROVIDE_INPUT and response.free_input:
-            # Override agent output entirely with user's free input
+        if response.action == HITLAction.PROVIDE_INPUT:
+            replacement = (
+                response.instructions
+                if response.instructions is not None
+                else response.free_input
+                if response.free_input is not None
+                else ""
+            )
             return genai_types.Content(
                 role="model",
                 parts=[genai_types.Part(
-                    text=response.free_input
+                    text=replacement
                 )],
-            )'''
+            )
 
         if action_type == HITLAction.SELECT and response.selected_option:
             # Override agent output with human's selection
@@ -208,6 +218,13 @@ def make_hitl_before_callback(handler: AbstractHITLHandler):
         response = await handler.handle_request(request)
 
         if not response.approved:
+            if response.timed_out:
+                return genai_types.Content(
+                    role="model",
+                    parts=[genai_types.Part(
+                        text=f"Execution of agent '{agent_name}' paused because review timed out."
+                    )],
+                )
             # Return a content that "cancels" the agent execution by providing a mock model response
             reason = response.instructions or response.free_input or 'No reason given'
             return genai_types.Content(
@@ -325,6 +342,12 @@ def make_hitl_before_tool_callback(
         response = await handler.handle_request(request)
 
         if not response.approved:
+            if response.timed_out:
+                return {
+                    "status": "unanswered",
+                    "blocked_by": "timeout",
+                    "message": f"Review of tool '{tool_name}' timed out; no human decision was made.",
+                }
             reason = response.instructions or response.free_input or "No reason provided"
             return {
                 "status": "denied",
