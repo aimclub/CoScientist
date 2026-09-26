@@ -1698,6 +1698,7 @@ function planTaskCard(rid, task, index) {
   const open = planOpenTasks.has(rid + ':' + task.id);
   const design = task.design || {};
   const params = Object.entries(task.launch_params || {});
+  const codeAssessment = task.code_assessment || {};
   const body = !open ? '' : `
     <div class="px-3 pb-3">
       ${planField(t('plan.task.question'), planText(design.question))}
@@ -1710,6 +1711,12 @@ function planTaskCard(rid, task, index) {
       ${task.rationale ? planField(t('plan.task.rationale'), planText(task.rationale)) : ''}
       ${planField(t('plan.task.tools'), planTools(task))}
       ${task.repo_url ? planField(t('plan.task.repo'), `<span class="font-mono text-[10px] break-all">${escHtml(task.repo_url)}</span>`) : ''}
+      ${(codeAssessment.requirement && codeAssessment.requirement !== 'unknown') ? planField(
+        t('plan.task.codeAssessment'),
+        `<span class="font-mono text-[10px] text-primary">${escHtml(codeAssessment.requirement)}</span>` +
+        (codeAssessment.evidence ? `<div class="text-[11px] mt-0.5">${mdInline(codeAssessment.evidence)}</div>` : '') +
+        ((codeAssessment.entrypoints || []).length ? `<div class="font-mono text-[10px] text-outline-variant mt-0.5">${escHtml(codeAssessment.entrypoints.join(' · '))}</div>` : '')
+      ) : ''}
       ${params.length ? planField(t('plan.task.params'), planItems(params.map(p => p[0] + '=' + p[1]))) : ''}
       ${planField(t('plan.task.inputs'), planInputs(task))}
       ${planField(t('plan.task.criteria'), planCriteria(task))}

@@ -149,6 +149,14 @@ class ExecutionRoute(str, Enum):
     MEDICAL = "medical"
 
 
+class CodeRequirement(str, Enum):
+    """Whether repository code can be executed as-is or must be changed."""
+
+    REUSE = "reuse"
+    MODIFY = "modify"
+    UNKNOWN = "unknown"
+
+
 class MCPToolRef(StrictModel):
     name: str = Field(min_length=1)
     description: str = Field(min_length=1)
@@ -834,6 +842,20 @@ def _coerce_depends_on(value: Any) -> list[str]:
     return out
 
 
+class CodeAssessment(StrictModel):
+    requirement: CodeRequirement = CodeRequirement.UNKNOWN
+    evidence: str = ""
+    entrypoints: list[str] = Field(default_factory=list)
+
+    @field_validator("entrypoints")
+    @classmethod
+    def validate_entrypoints(cls, values: list[str]) -> list[str]:
+        cleaned = [str(value).strip() for value in values]
+        if any(not value for value in cleaned):
+            raise ValueError("code assessment entrypoints must be non-empty strings")
+        return cleaned
+
+
 class ExperimentTask(StrictModel):
     id: str
     name: str = Field(min_length=1)
@@ -841,6 +863,7 @@ class ExperimentTask(StrictModel):
     rationale: str = Field(min_length=1)
     route: ExecutionRoute
     design: TaskDesign
+    code_assessment: CodeAssessment = Field(default_factory=CodeAssessment)
     mcp_servers: list[MCPServerRef] = Field(default_factory=list)
     repo_url: str | None = None
     post_build_route: Literal["fedot_mas", "react_tools"] | None = None
@@ -875,7 +898,7 @@ class ExperimentTask(StrictModel):
         # Fields planners often nest under design (forbidden there).
         for key in ("est_duration_min", "depends_on", "optional", "success_criteria",
                     "expected_artifacts", "mcp_servers", "input_data", "route",
-                    "description", "rationale", "name"):
+                    "description", "rationale", "name", "code_assessment"):
             if key in design and key not in raw:
                 raw[key] = design.pop(key)
             else:
@@ -1018,8 +1041,35 @@ class ExperimentTask(StrictModel):
                 raise ValueError("route=alembic_build requires repo_url")
             if self.post_build_route is None:
                 raise ValueError("route=alembic_build requires post_build_route")
+            if self.code_assessment.requirement != CodeRequirement.REUSE:
+                raise ValueError(
+                    "route=alembic_build requires code_assessment.requirement=reuse"
+                )
         elif self.post_build_route is not None:
             raise ValueError("post_build_route is only valid with route=alembic_build")
+
+        requirement = self.code_assessment.requirement
+        if requirement == CodeRequirement.MODIFY and self.route != ExecutionRoute.CODER:
+            raise ValueError("code_assessment.requirement=modify requires route=coder")
+        if requirement == CodeRequirement.REUSE:
+            post_build_mcp = (
+                self.route in {ExecutionRoute.REACT_TOOLS, ExecutionRoute.FEDOT_MAS}
+                and any(server.source == "alembic" for server in self.mcp_servers)
+            )
+            if (
+                self.route not in {ExecutionRoute.CODER, ExecutionRoute.ALEMBIC_BUILD}
+                and not post_build_mcp
+            ):
+                raise ValueError(
+                    "code_assessment.requirement=reuse requires route=coder, alembic_build, "
+                    "or an Alembic-produced post-build MCP"
+                )
+            if not self.repo_url:
+                raise ValueError("code_assessment.requirement=reuse requires repo_url")
+            if not self.code_assessment.evidence.strip():
+                raise ValueError("code_assessment.requirement=reuse requires inspection evidence")
+            if not self.code_assessment.entrypoints:
+                raise ValueError("code_assessment.requirement=reuse requires entrypoints")
 
         c_ids = [c.criterion_id for c in self.success_criteria]
         if len(c_ids) != len(set(c_ids)):

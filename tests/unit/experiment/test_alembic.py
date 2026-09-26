@@ -267,6 +267,52 @@ def test_critique_approves_alembic_when_enabled_with_repo_and_post_build():
     assert critique.verdict == "approve"
 
 
+def test_schema_forbids_alembic_when_code_must_change():
+    task = _alembic_task()
+    task["code_assessment"] = {
+        "requirement": "modify",
+        "evidence": "The objective function must be replaced.",
+        "entrypoints": ["synspace_score"],
+    }
+    with pytest.raises(ValidationError, match="requires code_assessment.requirement=reuse"):
+        ExperimentTask.model_validate(task)
+
+
+def test_coder_is_valid_when_repository_code_must_change():
+    task = _task("EXP-1", route="coder")
+    task["code_assessment"] = {
+        "requirement": "modify",
+        "evidence": "The objective function must be replaced.",
+        "entrypoints": ["train.py"],
+    }
+    critique = critique_plan(
+        _plan(task),
+        settings=ExperimentsSettings(route_alembic=True),
+        available_tools=_inventory(),
+        hypothesis_refs=[{"hypothesis_id": "H1", "statement": "Fixture"}],
+    )
+    assert critique.verdict == "approve"
+
+
+def test_alembic_preflight_reports_docker_dns_failure_without_starting_a_job():
+    from CoScientist.tools.alembic_tools import alembic_preflight
+
+    calls = []
+
+    def _runner(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return SimpleNamespace(
+            returncode=1,
+            stdout="",
+            stderr="dial tcp: lookup b.dgx: no such host",
+        )
+
+    result = alembic_preflight(runner=_runner)
+    assert result["available"] is False
+    assert "b.dgx" in result["reason"]
+    assert calls[0][0][:2] == ["docker", "info"]
+
+
 def test_critique_blocks_alembic_repo_not_in_candidates():
     plan = _plan(_alembic_task())
     critique = critique_plan(

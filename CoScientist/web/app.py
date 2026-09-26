@@ -559,6 +559,10 @@ def _apply_frontend_settings(frontend: dict) -> None:
         # a running session - its executor was built without FedotAgent.
         if "routeFedot" in experiment:
             exp.route_fedot = bool(experiment["routeFedot"])
+        # Alembic is already attached inside ExperimentExecutorAgent; this
+        # switch only makes the reviewed reuse→Coder/Alembic choice available.
+        if "routeAlembic" in experiment:
+            exp.route_alembic = bool(experiment["routeAlembic"])
         # Both windows fail closed, so a nonsense value must not become
         # "wait forever" by accident: the model declares gt=0 but a BaseModel
         # does not validate assignment, and handler.py reads <= 0 as no
@@ -719,6 +723,7 @@ def _current_settings() -> dict:
             "planReviewTimeoutS": settings.experiments.plan_review_timeout_s,
             "resultReviewTimeoutS": settings.experiments.result_review_timeout_s,
             "routeFedot": settings.experiments.route_fedot,
+            "routeAlembic": settings.experiments.route_alembic,
         },
         "plannerAgent": {
             "retrievalEnabled": web.planner_retrieval_enabled,

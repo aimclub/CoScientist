@@ -28,7 +28,7 @@ from CoScientist.experiments.runtime.state_machine import (
     medical_route_available,
     session_route_agents,
 )
-from CoScientist.experiments.schemas import ExperimentPlan
+from CoScientist.experiments.schemas import CodeRequirement, ExecutionRoute, ExperimentPlan
 from CoScientist.graph.session_scope import session_key
 from CoScientist.hitl.handler import AbstractHITLHandler, DelegatingHITLHandler
 from CoScientist.hitl.models import HITLAction, HITLRequest, HITLResponse
@@ -250,6 +250,7 @@ _PLAN_WORDS = {
         "col": ("Task", "Hypothesis", "Question", "Dataset", "Baselines", "Metrics",
                 "Tools", "Analysis artifacts", "Route"),
         "route": "Route", "repo": "Repo URL", "post_build": "Post-build route",
+        "code_assessment": "Code assessment", "entrypoints": "entrypoints",
         "hypothesis": "Hypothesis", "question": "Question", "dataset": "Dataset",
         "baselines": "Baselines", "metrics": "Metrics",
         "analysis": "Analysis artifacts", "task": "Task", "rationale": "Rationale",
@@ -267,6 +268,7 @@ _PLAN_WORDS = {
         "col": ("Задача", "Гипотеза", "Вопрос", "Данные", "Базлайны", "Метрики",
                 "Инструменты", "Анализ", "Маршрут"),
         "route": "Маршрут", "repo": "Репозиторий", "post_build": "Маршрут после сборки",
+        "code_assessment": "Оценка кода", "entrypoints": "точки входа",
         "hypothesis": "Гипотеза", "question": "Вопрос", "dataset": "Данные",
         "baselines": "Базлайны", "metrics": "Метрики",
         "analysis": "Артефакты анализа", "task": "Что выполняется", "rationale": "Зачем",
@@ -351,6 +353,15 @@ def render_experiment_plan(plan: ExperimentPlan, lang: str = "en") -> str:
                   if d.operation_ref else "")
         notes = f" — {d.dataset.notes}" if d.dataset.notes else ""
         L += ["", f"## {t.id} · {t.name}", f"{w['route']}: `{t.route.value}`"]
+        if t.code_assessment.requirement != CodeRequirement.UNKNOWN or t.repo_url:
+            assessment = t.code_assessment
+            detail = assessment.evidence or w["unspecified"]
+            entrypoints = ", ".join(f"`{item}`" for item in assessment.entrypoints)
+            if entrypoints:
+                detail += f"; {w['entrypoints']}: {entrypoints}"
+            L.append(
+                f"{w['code_assessment']}: `{assessment.requirement.value}` — {detail}"
+            )
         if t.route.value == "alembic_build":
             L += [f"{w['repo']}: {t.repo_url}", f"{w['post_build']}: `{t.post_build_route}`"]
         L += [
@@ -560,6 +571,22 @@ def _clip(text: Any, limit: int = 400) -> str | None:
 #: "inventory_blocker_repeated". Read by the orchestrator's suppressor to say
 #: so in the final report, and by the planner context builder.
 PAUSE_REASON_STATE_KEY = "experiment_review_pause_reason"
+ROUTE_SELECTIONS_STATE_KEY = "experiment_route_selections"
+_ROUTE_CODER_OPTION = "Coder — execute repository code directly"
+_ROUTE_ALEMBIC_OPTION = "Alembic — wrap the unchanged entrypoint as MCP"
+
+
+def _alembic_preflight() -> dict[str, Any]:
+    """Lazy import keeps normal experiment review independent of Alembic."""
+    try:
+        from CoScientist.tools.alembic_tools import alembic_preflight
+
+        return alembic_preflight()
+    except Exception as exc:  # noqa: BLE001 — an unavailable builder means Coder
+        return {
+            "available": False,
+            "reason": f"Alembic preflight could not run: {type(exc).__name__}: {exc}",
+        }
 
 
 # State this reviewer owns and must hand back to whoever invoked the module.
@@ -588,6 +615,7 @@ _REVIEW_OWNED_STATE_KEYS = (
     "experiment_plan_validation_errors",
     "experiment_plan_review_paused",
     "experiment_plan_record_id",
+    ROUTE_SELECTIONS_STATE_KEY,
     PAUSE_REASON_STATE_KEY,
     "experiment_plan_revision_count",
     "experiment_inventory_blocker_hits",
@@ -710,6 +738,174 @@ class ExperimentReviewSessionAgent(SessionAgent):
             invoked_via="internal_loop", timeout_seconds=timeout_seconds,
         )
 
+    @staticmethod
+    def _route_selection_key(task: Any) -> str:
+        assessment = task.code_assessment
+        return json.dumps(
+            {
+                "task_id": task.id,
+                "operation_ref": task.design.operation_ref,
+                "repo_url": task.repo_url,
+                "requirement": assessment.requirement.value,
+                "entrypoints": assessment.entrypoints,
+                "evidence": assessment.evidence,
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+        )
+
+    @staticmethod
+    def _apply_repository_route(
+        plan: ExperimentPlan,
+        task_id: str,
+        route: str,
+        *,
+        warning: str | None = None,
+    ) -> ExperimentPlan:
+        selected = ExecutionRoute(route)
+        tasks = []
+        for task in plan.tasks:
+            if task.id != task_id:
+                tasks.append(task)
+                continue
+            update: dict[str, Any] = {
+                "route": selected,
+                "mcp_servers": [],
+                "post_build_route": (
+                    ExecutionRoute.REACT_TOOLS.value
+                    if selected == ExecutionRoute.ALEMBIC_BUILD else None
+                ),
+            }
+            if warning:
+                update["warnings"] = [
+                    *task.warnings,
+                    *([] if warning in task.warnings else [warning]),
+                ]
+            tasks.append(task.model_copy(update=update))
+        return plan.model_copy(update={"tasks": tasks})
+
+    async def _select_repository_routes(
+        self,
+        *,
+        ctx: InvocationContext,
+        plan: ExperimentPlan,
+        route_alembic: bool,
+        user_id: str,
+        session_id: str,
+        timeout_seconds: float | None,
+    ) -> tuple[ExperimentPlan, HITLResponse | None]:
+        """Resolve the one intentionally non-automatic Coder/Alembic fork."""
+        if not route_alembic:
+            return plan, None
+
+        state = ctx.session.state
+        raw_cached = state.get(ROUTE_SELECTIONS_STATE_KEY)
+        cached = dict(raw_cached) if isinstance(raw_cached, dict) else {}
+        current = plan
+        preflight: dict[str, Any] | None = None
+
+        for original in plan.tasks:
+            if (
+                original.code_assessment.requirement != CodeRequirement.REUSE
+                or not original.repo_url
+                or original.route not in {ExecutionRoute.CODER, ExecutionRoute.ALEMBIC_BUILD}
+            ):
+                continue
+
+            key = self._route_selection_key(original)
+            prior = cached.get(key)
+            if isinstance(prior, dict) and prior.get("route") in {
+                ExecutionRoute.CODER.value,
+                ExecutionRoute.ALEMBIC_BUILD.value,
+            } and not prior.get("recheck"):
+                route = str(prior["route"])
+                current = self._apply_repository_route(current, original.id, route)
+                _audit(
+                    f"EXPERIMENT_ROUTE_DECISION task={original.id} route={route} "
+                    "source=cached"
+                )
+                continue
+
+            if preflight is None:
+                preflight = _alembic_preflight()
+            if not preflight.get("available"):
+                reason = str(preflight.get("reason") or "Alembic is unavailable")
+                route = ExecutionRoute.CODER.value
+                cached[key] = {
+                    "task_id": original.id,
+                    "route": route,
+                    "source": "system",
+                    "reason": reason,
+                    # Infrastructure can recover without changing the plan;
+                    # probe it again on a later review instead of pinning a
+                    # transient outage as if it were an operator decision.
+                    "recheck": True,
+                }
+                current = self._apply_repository_route(
+                    current,
+                    original.id,
+                    route,
+                    warning=f"Alembic unavailable; using Coder: {reason}",
+                )
+                _audit(
+                    f"EXPERIMENT_ROUTE_DECISION task={original.id} route={route} "
+                    f"source=system reason={_clip(reason)}"
+                )
+                continue
+
+            request = HITLRequest(
+                agent_name=self.name,
+                action_type=HITLAction.SELECT,
+                message=(
+                    f"Task {original.id} can reuse {original.repo_url} unchanged. "
+                    "Choose direct execution or build a reusable MCP tool. "
+                    "Coder is the default because it avoids the container/build step."
+                ),
+                options=[_ROUTE_CODER_OPTION, _ROUTE_ALEMBIC_OPTION],
+                default_option=_ROUTE_CODER_OPTION,
+                context={
+                    "experiment_review_kind": "repository_route",
+                    "experiment_plan_id": plan.plan_id,
+                    "task_id": original.id,
+                    "repo_url": original.repo_url,
+                    "operation_ref": original.design.operation_ref,
+                    "assessment": original.code_assessment.model_dump(mode="json"),
+                    "alembic_preflight": preflight,
+                    "_session": {"user_id": user_id, "session_id": session_id},
+                },
+                invoked_via="internal_loop",
+                timeout_seconds=timeout_seconds,
+            )
+            response = await self.hitl_handler.handle_request(request)
+            selected = response.selected_option
+            if response.approved and selected in {_ROUTE_CODER_OPTION, _ROUTE_ALEMBIC_OPTION}:
+                route = (
+                    ExecutionRoute.ALEMBIC_BUILD.value
+                    if selected == _ROUTE_ALEMBIC_OPTION else ExecutionRoute.CODER.value
+                )
+                source = getattr(response.decision_source, "value", response.decision_source)
+                cached[key] = {
+                    "task_id": original.id,
+                    "route": route,
+                    "source": str(source),
+                }
+                current = self._apply_repository_route(current, original.id, route)
+                _audit(
+                    f"EXPERIMENT_ROUTE_DECISION task={original.id} route={route} "
+                    f"source={source}"
+                )
+                continue
+
+            state["experiment_plan_review_paused"] = True
+            reason = "repository_route_timeout" if response.timed_out else "repository_route_rejected"
+            state[PAUSE_REASON_STATE_KEY] = reason
+            state[ROUTE_SELECTIONS_STATE_KEY] = cached
+            _audit(f"EXPERIMENT_PLAN_REVIEW_PAUSED reason={reason} task={original.id}")
+            return current, response.model_copy(update={"stop_review_loop": True})
+
+        state[ROUTE_SELECTIONS_STATE_KEY] = cached
+        return current, None
+
     def _publish_state(self, ctx: InvocationContext, event: Event) -> None:
         """Copy this reviewer's decisions into ``event``'s state delta.
 
@@ -824,6 +1020,63 @@ class ExperimentReviewSessionAgent(SessionAgent):
                 inventory_blocker=inv,
             )
 
+        # A proven unchanged repository entrypoint is the only ambiguous code
+        # route. Resolve it before runtime initialisation, so Alembic can never
+        # be selected by a planner guess or by a later orchestrator bypass.
+        window = self._review_window(cfg.plan_review_timeout_s)
+        before_route_selection = plan
+        plan, route_response = await self._select_repository_routes(
+            ctx=ctx,
+            plan=plan,
+            route_alembic=bool(cfg.route_alembic),
+            user_id=user_id,
+            session_id=session_id,
+            timeout_seconds=window,
+        )
+        if route_response is not None:
+            return route_response
+        if plan != before_route_selection:
+            try:
+                plan, critique = validate_and_critique_plan(
+                    plan.model_dump(mode="json"), settings=cfg,
+                    available_tools=(
+                        context.get("critique_mcp_capabilities")
+                        or context.get("available_mcp_capabilities") or []
+                    ),
+                    preferred_tools=context.get("preferred_mcp_capabilities"),
+                    previous_plan=previous,
+                    hypothesis_refs=context.get("hypothesis_refs") or [],
+                    repo_candidates=context.get("repo_candidates") or [],
+                    operations=context.get("operations") or [],
+                    pipeline_scope=context.get("pipeline_scope"),
+                    fedot_on=fedot_route_available(cfg, route_agents=route_agents),
+                    medical_on=medical_route_available(route_agents=route_agents),
+                )
+                if errs := _context_invariant_errors(plan, context):
+                    raise PlanValidationError(
+                        "ExperimentPlan context invariants failed", errors=errs
+                    )
+            except (PlanValidationError, ValueError, TypeError) as exc:
+                errors = getattr(exc, "errors", None) or [str(exc)]
+                state["experiment_plan_validation_errors"] = errors
+                return self._revise(
+                    ctx=ctx, detail=errors,
+                    pause_prefix="Selected route failed deterministic validation; experiment remains paused:",
+                    edit_prefix="Return a corrected plan for the selected repository route:",
+                )
+            critique_json = critique.model_dump(mode="json")
+            state["experiment_plan_critique"] = critique_json
+            if critique.verdict != "approve":
+                issue_text = "; ".join(
+                    f"{i.severity}/{i.category}: {i.message} Suggestion: {i.suggestion}"
+                    for i in critique.issues if i.is_blocking
+                )
+                return self._revise(
+                    ctx=ctx, detail=issue_text,
+                    pause_prefix="Selected route failed deterministic critique; experiment remains paused:",
+                    edit_prefix="Return a corrected plan for the selected repository route:",
+                )
+
         state["experiment_plan_review_paused"] = False
         state[PAUSE_REASON_STATE_KEY] = None
         state["experiment_plan_validation_errors"] = None
@@ -834,7 +1087,23 @@ class ExperimentReviewSessionAgent(SessionAgent):
         # the first stumble.
         state["experiment_plan_revision_count"] = 0
         state["experiment_inventory_blocker_hits"] = 0
-        initialize_runtime(state, plan, critique=critique_json)
+        runtime = initialize_runtime(state, plan, critique=critique_json)
+        route_selections = state.get(ROUTE_SELECTIONS_STATE_KEY)
+        if isinstance(route_selections, dict):
+            for decision in route_selections.values():
+                if not isinstance(decision, dict):
+                    continue
+                task_runtime = (runtime.get("tasks") or {}).get(decision.get("task_id"))
+                if not isinstance(task_runtime, dict):
+                    continue
+                if decision.get("route") != task_runtime.get("planned_route"):
+                    continue
+                task_runtime["route_history"] = [{
+                    "route": task_runtime["planned_route"],
+                    "reason": "repository_route_selected",
+                    "decision_source": decision.get("source"),
+                    **({"detail": decision["reason"]} if decision.get("reason") else {}),
+                }]
 
         # One structured plan, three readers: the web review card, the call
         # graph's record of this round, and anything later that wants the plan
@@ -853,7 +1122,6 @@ class ExperimentReviewSessionAgent(SessionAgent):
             _audit("EXPERIMENT_DESIGN_MATRIX\n" + render_experiment_plan(plan, "en"))
             return _auto_approve_response()
 
-        window = self._review_window(cfg.plan_review_timeout_s)
         response = await self.hitl_handler.handle_request(self._hitl(
             message="Review and explicitly approve the experiment plan.", kind="plan",
             plan_id=plan.plan_id, output=render_experiment_plan(plan, lang),

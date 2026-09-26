@@ -769,6 +769,14 @@ const i18n = {
     en: 'Turning it on applies to sessions that first run after saving; turning it off also stops FEDOT.MAS in sessions already running.',
     ru: 'Включение действует для сессий, впервые запущенных после сохранения; выключение останавливает FEDOT.MAS и в уже запущенных сессиях.'
   },
+  'settings.f.experimentRouteAlembic.label': {
+    en: 'Offer Alembic for repository reuse',
+    ru: 'Предлагать Alembic для переиспользования репозитория'
+  },
+  'settings.f.experimentRouteAlembic.desc': {
+    en: 'When inspected repository code already fits unchanged, ask whether to run it directly with Coder (default) or wrap it as an MCP tool. Code changes always stay on Coder.',
+    ru: 'Если проверенный код репозитория подходит без изменений, спросить: запустить напрямую через Coder (по умолчанию) или обернуть в MCP-инструмент. Любые изменения кода всегда идут в Coder.'
+  },
 
   // Fields — Models
   'settings.f.providerSort.label': { en: 'Provider priority', ru: 'Приоритет при выборе провайдера' },
@@ -900,6 +908,7 @@ const i18n = {
   'plan.task.rationale': { en: 'Why', ru: 'Зачем' },
   'plan.task.tools': { en: 'MCP / tools', ru: 'MCP / инструменты' },
   'plan.task.repo': { en: 'Repository', ru: 'Репозиторий' },
+  'plan.task.codeAssessment': { en: 'Code assessment', ru: 'Оценка кода' },
   'plan.task.params': { en: 'Launch params', ru: 'Параметры запуска' },
   'plan.task.inputs': { en: 'Inputs', ru: 'Входные данные' },
   'plan.task.criteria': { en: 'Success criteria', ru: 'Критерии успеха' },

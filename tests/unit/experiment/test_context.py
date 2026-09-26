@@ -179,6 +179,16 @@ def test_extract_repo_candidates_from_ask():
     assert refs[0]["repo_name"] == "synspace"
 
 
+def test_explicit_repo_url_survives_when_alembic_discovery_is_off():
+    from CoScientist.experiments.context import resolve_repo_candidates
+
+    out = resolve_repo_candidates(
+        "Run https://github.com/whitead/synspace directly with Coder.",
+        route_alembic=False,
+    )
+    assert [row["url"] for row in out] == ["https://github.com/whitead/synspace"]
+
+
 def test_resolve_repo_candidates_skips_search_when_inventory_covers(monkeypatch):
     from CoScientist.experiments.context import resolve_repo_candidates
 

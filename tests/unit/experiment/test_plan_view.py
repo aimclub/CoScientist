@@ -187,6 +187,11 @@ def test_an_alembic_build_task_keeps_the_repo_it_will_build():
     raw = _task("EXP-1", route="alembic_build")
     raw["repo_url"] = "https://github.com/example/tool"
     raw["post_build_route"] = "react_tools"
+    raw["code_assessment"] = {
+        "requirement": "reuse",
+        "evidence": "Existing tool entrypoint covers the operation unchanged.",
+        "entrypoints": ["tool.run"],
+    }
     plan = ExperimentPlan.model_validate(_plan(raw).model_dump(mode="json"))
 
     task = plan_to_view(plan)["tasks"][0]

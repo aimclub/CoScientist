@@ -57,7 +57,6 @@ def test_the_module_replaces_mains_execution_lane():
         "ResearchAgent",
         "ExperimentModuleAgent",
         "MedicalAgent",
-        "McpBuilderAgent",
     ]
     # Three agents stand down, each for a structural reason: ADK allows an agent
     # exactly one `children` parent, and ToolPreparerAgent belongs to the module.
@@ -306,13 +305,14 @@ def test_planner_and_coder_prompts_cover_multi_h_and_anti_fabrication():
     assert "design.operation_ref" in planner
     assert "Do NOT invent extra hypotheses" in planner
     assert "HypothesesAgent" in planner
-    assert "PREFERRED over coder when a repo fits" in planner
+    assert "deterministic review asks the operator" in planner
+    assert "modify|unknown → route=coder" in planner
     assert "Bind exact inventory server_id+tool" in planner
     assert "risks/assumptions only at plan root" in planner
     assert "Mandatory markdown/HTML reports are forbidden" in planner
     assert "NEVER add a narrative task" in planner
     assert "Leftover MCP for a different operation is not coverage" in planner
-    assert "required route=coder" in planner
+    assert "Otherwise use route=coder" in planner
     assert "role=data" in planner
     assert "different-family" in planner
     assert "Cover every distinct operation" in retriever

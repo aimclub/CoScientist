@@ -9,6 +9,8 @@ from CoScientist.experiments.reporting.models import (
 )
 from .models import (
     BLOCKING_SEVERITIES,
+    CodeAssessment,
+    CodeRequirement,
     CritiqueIssue,
     DataRef,
     DesignAnalysisArtifact,
@@ -32,6 +34,8 @@ from .models import (
 
 __all__ = [
     "BLOCKING_SEVERITIES",
+    "CodeAssessment",
+    "CodeRequirement",
     "ArtifactRef",
     "CriterionCheck",
     "CritiqueIssue",

@@ -267,6 +267,11 @@ def _alembic_task(task_id: str = "EXP-1", *, hypothesis_ref: str = "H1") -> dict
             "repo_url": "https://github.com/whitead/synspace",
             "post_build_route": "react_tools",
             "mcp_servers": [],
+            "code_assessment": {
+                "requirement": "reuse",
+                "evidence": "The repository exposes the required operation unchanged.",
+                "entrypoints": ["synspace_score"],
+            },
             "expected_artifacts": [
                 {
                     "name": "mcp_endpoint",

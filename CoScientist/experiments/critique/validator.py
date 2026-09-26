@@ -14,13 +14,13 @@ from CoScientist.experiments.capabilities.inventory import (
     FAMILY_RESEARCH,
     declared_family_capabilities,
     index_inventory_tools,
-    inventory_nonempty,
     inventory_pairs,
     match_named_family_capability,
     match_named_inventory_tool,
 )
 from CoScientist.experiments.critique.coverage import task_coverage_blob as _task_coverage_blob
 from CoScientist.experiments.schemas import (
+    CodeRequirement,
     CritiqueIssue,
     ExecutionRoute,
     ExperimentPlan,
@@ -414,6 +414,7 @@ def critique_plan(
 
     for task in plan.tasks:
         tid = task.id
+        code_requirement = task.code_assessment.requirement
         if _is_narrative_report_task(task):
             fe(
                 tid, "major",
@@ -464,6 +465,45 @@ def critique_plan(
         elif task.route not in enabled:
             fe(tid, "blocker", f"Route {task.route.value!r} is disabled by profile settings.",
                "Choose an enabled route.")
+
+        if code_requirement == CodeRequirement.MODIFY and task.route != ExecutionRoute.CODER:
+            fe(
+                tid, "blocker",
+                f"{tid} requires repository/code modification but uses {task.route.value}.",
+                "Use route=coder. Alembic only wraps an existing entrypoint unchanged.",
+            )
+        if task.route == ExecutionRoute.ALEMBIC_BUILD and code_requirement != CodeRequirement.REUSE:
+            fe(
+                tid, "blocker",
+                f"{tid} uses alembic_build without a proven code_assessment.requirement=reuse.",
+                "Inspect the repository and record reuse evidence+entrypoints, or use route=coder.",
+            )
+        if code_requirement == CodeRequirement.REUSE:
+            if task.route not in {ExecutionRoute.CODER, ExecutionRoute.ALEMBIC_BUILD}:
+                fe(
+                    tid, "blocker",
+                    f"{tid} declares repository reuse but uses {task.route.value}.",
+                    "Use route=coder initially; deterministic review can offer Alembic.",
+                )
+            if not task.repo_url:
+                fe(tid, "blocker", f"{tid} declares repository reuse but repo_url is missing.",
+                   "Copy the exact URL from experiment_context.repo_candidates.")
+            elif not cand or _norm_repo_url(task.repo_url) not in cand:
+                fe(
+                    tid, "blocker",
+                    f"{tid} reuse repo_url {task.repo_url!r} is not an exact repo candidate.",
+                    "Use an exact URL from experiment_context.repo_candidates; do not reconstruct it.",
+                )
+            if not task.code_assessment.evidence.strip():
+                fe(
+                    tid, "major", f"{tid} repository reuse has no inspection evidence.",
+                    "State why the existing code covers the operation without modification.",
+                )
+            if not task.code_assessment.entrypoints:
+                fe(
+                    tid, "major", f"{tid} repository reuse has no concrete entrypoint.",
+                    "List the existing CLI/function/script that will be executed or wrapped.",
+                )
 
         if research_forbidden and task.route == ExecutionRoute.RESEARCH:
             fe(
@@ -522,7 +562,11 @@ def critique_plan(
             fe(tid, "major", "Direct MCP-to-Coder mode is disabled.",
                "Remove MCP refs from the coder task or enable EXPERIMENTS__ROUTE_CODER_MCP.")
 
-        if task.route == ExecutionRoute.CODER and not task.optional:
+        if (
+            task.route == ExecutionRoute.CODER
+            and code_requirement != CodeRequirement.MODIFY
+            and not task.optional
+        ):
             blob = _task_coverage_blob(task, ops_index)
             if match_named_family_capability(blob, families=families) and not research_forbidden:
                 fe(
@@ -540,16 +584,6 @@ def critique_plan(
                     "tool — Coder must not reimplement a ready MCP.",
                     "Bind that exact inventory tool on react_tools.",
                 )
-
-        if task.route == ExecutionRoute.CODER and settings.route_alembic and cand_list and not inventory_nonempty(by_tool_caps):
-            top = cand_list[0].get("url")
-            co("minor",
-               f"{tid} uses route=coder, but experiment_context.repo_candidates has a "
-               f"fitting repository ({top}) and route_alembic is enabled — route=alembic_build "
-               "may be a better fit than reimplementing via coder.",
-               f"Consider route=alembic_build with repo_url={top!r} and "
-               "post_build_route=react_tools instead of reimplementing via coder.",
-               tid)
 
         for server in task.mcp_servers:
             if server.source == "registry":

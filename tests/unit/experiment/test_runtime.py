@@ -27,6 +27,7 @@ from .helpers import (
     NOW,
     _approved_state,
     _design,
+    _inventory,
     _plan,
     _route_return,
     _success_result,
@@ -556,10 +557,10 @@ def test_control_tool_downgrades_incomplete_success_to_terminal_failure():
     assert stored["status"] == "success"
     assert stored["downgraded_from"] == "partial"
     assert stored["task_result"]["status"] == "failure"
-    assert stored["task_result"]["error_code"] == "result_incomplete"
-    assert stored["task_result"]["retryable"] is True
+    assert stored["task_result"]["error_code"] == "partial_missing_core_evidence"
+    assert stored["task_result"]["retryable"] is False
     assert state["experiment_runtime"]["active_attempt_id"] is None
-    assert state["experiment_runtime"]["tasks"]["EXP-1"]["status"] == "retry_pending"
+    assert state["experiment_runtime"]["tasks"]["EXP-1"]["status"] == "fallback_pending"
 
 
 def test_record_result_downgrades_fabricated_success_to_partial():
@@ -1035,6 +1036,23 @@ def test_start_task_ignores_stuffed_tool_name_when_operation_unnamed():
     out = start_task(state, "EXP-1")
     assert out["status"] == "success"
     assert out["route"] == "coder"
+
+
+def test_code_modification_is_never_rewritten_to_a_ready_mcp():
+    from CoScientist.experiments.context.builder import RETRIEVED_CAPABILITIES_KEY
+
+    task = _task("EXP-1", route="coder")
+    task["code_assessment"] = {
+        "requirement": "modify",
+        "evidence": "The model objective and training loop must be changed.",
+        "entrypoints": ["train.py"],
+    }
+    state = _approved_state(_plan(task))
+    state[RETRIEVED_CAPABILITIES_KEY] = _inventory()
+
+    started = start_task(state, "EXP-1")
+    assert started["route"] == "coder"
+    assert started["route_agent"] == "CoderAgent"
 
 
 def test_result_tasks_ok_ignores_unused_research_failure():

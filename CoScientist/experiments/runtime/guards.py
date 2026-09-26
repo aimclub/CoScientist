@@ -752,47 +752,30 @@ def rewrite_mismatched_control_action(
 
 
 def assess_experiment_inventory_feasibility(callback_context: Any) -> None:
-    """after_agent(ToolPreparer): set/clear an early NO_MATCHING_TOOL verdict."""
+    """Record inventory coverage without blocking the always-available Coder lane."""
     from CoScientist.experiments.capabilities.inventory import (
         index_inventory_tools,
         inventory_covers_capabilities,
     )
-    from CoScientist.config import get_settings
-
     state = callback_context.state
     gate_routed = bool(state.get(GATE_ROUTED_STATE_KEY))
     state[GATE_ROUTED_STATE_KEY] = None
 
     by_tool = index_inventory_tools(session_inventory_rows(state))
     covered = inventory_covers_capabilities(by_tool)
-    try:
-        alembic_on = bool(get_settings().experiments.route_alembic)
-    except Exception:
-        alembic_on = False
-
-    inventory_ok = covered
-    if (not gate_routed) or inventory_ok or alembic_on:
-        state[NO_MATCHING_TOOL_STATE_KEY] = None
-        audit(
-            logger,
-            f"EXPERIMENT_FEASIBILITY_OK gate_routed={gate_routed} "
-            f"inventory={len(by_tool)} covered={covered}",
-            stdout=(
-                f"EXPERIMENT_FEASIBILITY_OK gate_routed={gate_routed} "
-                f"inventory={len(by_tool)} covered={covered}"
-            ),
-        )
-        return
-
-    message = (
-        f"{_NO_MATCHING_TOOL_TOKEN}: inventory has no tool relevant to this request "
-        f"(retrieved={len(by_tool)} tool(s)). Recommend ResearchAgent with the original ask."
-    )
-    state[NO_MATCHING_TOOL_STATE_KEY] = message
+    # An empty/mismatched MCP inventory is not proof that the experiment is
+    # infeasible: ExperimentModuleAgent owns CoderAgent and can implement or
+    # run repository code directly.  Keep the observation for diagnostics, but
+    # never short-circuit the planner/executor here.
+    state[NO_MATCHING_TOOL_STATE_KEY] = None
     audit(
         logger,
-        f"EXPERIMENT_NO_MATCHING_TOOL early inventory={len(by_tool)}",
-        stdout=f"EXPERIMENT_NO_MATCHING_TOOL early inventory={len(by_tool)}",
+        f"EXPERIMENT_FEASIBILITY_OK gate_routed={gate_routed} "
+        f"inventory={len(by_tool)} covered={covered} coder_fallback=true",
+        stdout=(
+            f"EXPERIMENT_FEASIBILITY_OK gate_routed={gate_routed} "
+            f"inventory={len(by_tool)} covered={covered} coder_fallback=true"
+        ),
     )
 
 

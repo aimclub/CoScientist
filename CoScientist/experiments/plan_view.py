@@ -166,6 +166,11 @@ def task_to_view(task: ExperimentTask) -> dict[str, Any]:
         ),
         "repo_url": task.repo_url,
         "post_build_route": task.post_build_route,
+        "code_assessment": {
+            "requirement": task.code_assessment.requirement.value,
+            "evidence": _text(task.code_assessment.evidence),
+            "entrypoints": _lines(task.code_assessment.entrypoints, 240),
+        },
         "design": _design(task),
         "mcp_servers": _servers(task),
         "input_data": _inputs(task),

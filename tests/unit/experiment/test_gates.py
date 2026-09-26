@@ -181,10 +181,12 @@ def test_orchestrator_subordinates_clean_lanes():
     assert "ResearchAgent" in subordinates
     assert "ExperimentModuleAgent" in subordinates
     assert "PlannerAgent" in subordinates
-    assert "McpBuilderAgent" in subordinates
+    # Alembic is an internal execution route.  The orchestrator must not bypass
+    # ExperimentModule review, URL pinning, or the Coder fallback policy.
+    assert "McpBuilderAgent" not in subordinates
 
-    # The one lane rule the module does own: no orchestrator→Coder shadow
-    # science. Coding is reached through the module, as a route of its executor.
+    # Code and tool-building are both reached through the module as reviewed
+    # routes of its executor.
     assert "CoderAgent" not in subordinates
     assert "TaskExecutorAgent" not in subordinates
 
@@ -209,6 +211,20 @@ def test_early_feasibility_skips_check_for_explicit_module_call():
             },
         ],
     }
+    assess_experiment_inventory_feasibility(
+        SimpleNamespace(state=state, agent_name="ToolPreparerAgent")
+    )
+    assert state.get(NO_MATCHING_TOOL_STATE_KEY) in (None, "")
+
+
+def test_empty_inventory_does_not_block_the_coder_lane():
+    from CoScientist.experiments.runtime.guards import (
+        NO_MATCHING_TOOL_STATE_KEY,
+        assess_experiment_inventory_feasibility,
+    )
+    from CoScientist.experiments.runtime.shared import GATE_ROUTED_STATE_KEY
+
+    state = {GATE_ROUTED_STATE_KEY: True, "experiment_retrieved_capabilities": []}
     assess_experiment_inventory_feasibility(
         SimpleNamespace(state=state, agent_name="ToolPreparerAgent")
     )

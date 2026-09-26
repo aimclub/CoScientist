@@ -431,9 +431,12 @@ def resolve_repo_candidates(
     there are no frame operations and the ask does not name an inventory tool.
     Pass ``search=False`` in unit tests to skip the network.
     """
-    if not route_alembic:
-        return []
     from_ask = extract_repo_candidates(source_request)
+    # Explicit URLs are useful to Coder as well.  The feature switch controls
+    # discovery/building, not whether a URL supplied by the operator survives
+    # into the experiment context.
+    if not route_alembic:
+        return from_ask[:_MAX_REPO_CANDIDATES]
     caps = list(planner_caps or [])
     do_search = (
         (not _inventory_covers_ask(caps, source_request, operations))

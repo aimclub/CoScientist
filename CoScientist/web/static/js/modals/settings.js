@@ -122,6 +122,7 @@
                 id: 'experimentResultTimeout', path: 'experimentModule.resultReviewTimeoutS', type: 'number', min: 30, max: 86400, scope: 'instant', env: 'EXPERIMENTS__RESULT_REVIEW_TIMEOUT_S',
                 inactive: () => ({ key: 'settings.inactive.supersededByMode' }),
               },
+              { id: 'experimentRouteAlembic', path: 'experimentModule.routeAlembic', type: 'toggle', scope: 'instant', env: 'EXPERIMENTS__ROUTE_ALEMBIC' },
             ],
           },
         ],

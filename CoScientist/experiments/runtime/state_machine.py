@@ -12,6 +12,7 @@ from uuid import uuid4
 from CoScientist.config import get_settings
 from CoScientist.config.settings import ExperimentsSettings
 from CoScientist.experiments.schemas import (
+    CodeRequirement,
     CriterionCheck,
     ExecutionRoute,
     ExperimentPlan,
@@ -71,6 +72,21 @@ _RESULT_STATUS_ALIASES = {
     "ok": "success",
     "succeeded": "success",
 }
+
+
+def _is_core_execution_failure(result: Mapping[str, Any]) -> bool:
+    """True when a partial label would hide absence of the primary operation."""
+    code = str(result.get("error_code") or "").strip().upper()
+    text = " ".join(
+        str(result.get(key) or "") for key in ("error_code", "error_message", "summary")
+    ).upper()
+    return (
+        "NO_MATCHING_TOOL" in text
+        or code.startswith("MISSING_")
+        or code.startswith("REQUIRED_INPUT_")
+        or code.startswith("PRIMARY_OPERATION_")
+        or code in {"TOOL_UNAVAILABLE", "CAPABILITY_UNAVAILABLE", "CAPABILITY_MISSING"}
+    )
 
 
 def _result_text_blob(result: dict[str, Any]) -> str:
@@ -804,7 +820,12 @@ def start_task(
             "Task references hypotheses that are not eligible in this experiment turn: "
             + ", ".join(blocked_hypotheses),
         )
-    if route == ExecutionRoute.CODER.value and not mcp_routes_tried(task_runtime):
+    if (
+        route == ExecutionRoute.CODER.value
+        and task_model.code_assessment.requirement == CodeRequirement.UNKNOWN
+        and not task_model.repo_url
+        and not mcp_routes_tried(task_runtime)
+    ):
         from CoScientist.experiments.capabilities.inventory import (
             FAMILY_MEDICAL,
             FAMILY_RESEARCH,
@@ -1131,6 +1152,28 @@ def record_result(
                                                         attempt=attempt, state=state)
     artifacts_ok, missing_artifacts = required_artifacts_present(task, artifacts, route=attempt_route)
     criteria_ok, failed_criteria = criteria_valid(task, checks, route=attempt_route)
+    core_failure = _is_core_execution_failure(result)
+    material_partial = status == "partial" and (
+        core_failure or not artifacts_ok or not criteria_ok
+    )
+    if material_partial:
+        # Partial means the primary operation completed and only non-core gaps
+        # remain.  If required evidence is absent, keep the evidence we did get
+        # but drive the normal retry/fallback chain instead of closing green.
+        status = "failure"
+        result = {
+            **result,
+            "status": "failure",
+            "error_code": result.get("error_code") or "partial_missing_core_evidence",
+            "error_message": result.get("error_message") or (
+                "partial result lacks required primary-operation evidence"
+            ),
+            "retryable": bool(result.get("retryable", False)),
+            "warnings": [
+                *(result.get("warnings") or []),
+                "partial_promoted_to_failure: retry/fallback required for missing core output",
+            ],
+        }
     durable_ok = has_durable_family_evidence(
         task, artifacts, route=attempt_route,
         outputs=outputs if isinstance(outputs, dict) else {},
@@ -1145,7 +1188,7 @@ def record_result(
                 "planner artifact names are not required."
             )
         criteria_ok, failed_criteria = criteria_valid(task, checks, route=attempt_route)
-        if status == "failure" and criteria_ok and artifacts_ok:
+        if status == "failure" and not core_failure and not material_partial and criteria_ok and artifacts_ok:
             # Ярлык оправдан: доказательство действительно есть, и называть это
             # полным провалом неверно. Но retryable=False здесь был отдельной,
             # незаметной потерей: провал получал право не повторяться.
@@ -1274,6 +1317,11 @@ def record_result(
         + (f" post_build_route={post_build.get('post_build_route')}" if post_build else "")
     )
     response = {"status": "success", "task_result": result_json, "phase": runtime["phase"]}
+    if material_partial:
+        response.update({
+            "downgraded_from": "partial",
+            "downgrade_reason": "partial_missing_core_evidence",
+        })
     if post_build:
         response["post_build"] = post_build
     return response

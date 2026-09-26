@@ -47,7 +47,6 @@ agents:
       - ResearchAgent
       - ExperimentModuleAgent
       - MedicalAgent
-      - McpBuilderAgent
     callbacks:
       # main's chain plus the module's: pipeline-scope HITL, and the structural
       # fan-out merge that keeps one ask from becoming several module calls.

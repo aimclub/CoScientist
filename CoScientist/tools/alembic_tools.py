@@ -418,6 +418,43 @@ def _start_chain_cmd(repo_url: str) -> list[str]:
     return cmd
 
 
+def alembic_preflight(
+    *, timeout_s: float = 5.0, runner=subprocess.run,
+) -> Dict[str, Any]:
+    """Check the Docker daemon Alembic would use before offering a build.
+
+    The probe inherits the same environment as ``start_chain.py`` (including
+    ``DOCKER_HOST``).  It is deliberately read-only and bounded: a broken
+    remote DNS/daemon must be discovered before a long-lived build job is
+    created, not several minutes into that job.
+    """
+    try:
+        result = runner(
+            ["docker", "info", "--format", "{{.ServerVersion}}"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_s,
+            env=_start_chain_env(),
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return {
+            "available": False,
+            "reason": f"Docker preflight failed: {type(exc).__name__}: {exc}",
+        }
+    if result.returncode == 0:
+        return {
+            "available": True,
+            "reason": "Docker daemon is reachable",
+            "server_version": (result.stdout or "").strip() or None,
+        }
+    detail = (result.stderr or result.stdout or "docker info failed").strip()
+    return {
+        "available": False,
+        "reason": f"Docker preflight failed: {detail[:500]}",
+    }
+
+
 def _runner(rec: Dict[str, Any]) -> None:
     log_path = Path(rec["log_file"])
     log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1590,7 +1627,7 @@ def import_jobs_snapshot(jobs: list) -> None:
             _JOBS[jid] = entry
 
 
-__all__ = ["ALEMBIC_TOOLS", "build_mcp_server", "check_mcp_build", "list_mcp_builds",
+__all__ = ["ALEMBIC_TOOLS", "alembic_preflight", "build_mcp_server", "check_mcp_build", "list_mcp_builds",
            "peek_mcp_build", "wait_mcp_build", "list_served_mcp_tools",
            "enrich_snapshot_with_tools",
            "web_build_log_file", "web_build_snapshot", "web_build_workdir",

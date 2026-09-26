@@ -442,6 +442,11 @@ def test_a_build_task_records_the_repo_as_a_tool_being_created(tmp_path):
     raw = _task("EXP-1", route="alembic_build", hypothesis_ref="H1")
     raw["repo_url"] = "https://github.com/example/solver"
     raw["post_build_route"] = "react_tools"
+    raw["code_assessment"] = {
+        "requirement": "reuse",
+        "evidence": "Existing solver entrypoint covers the operation unchanged.",
+        "entrypoints": ["solver.run"],
+    }
     # Built by hand: the deterministic critic refuses alembic_build under the
     # default profile, and the route it refuses is the one under test here.
     state: dict = {}

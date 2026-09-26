@@ -119,6 +119,7 @@ def test_the_tab_keeps_legacy_review_fields_readable_but_inactive(_clean_env):
         "planAutoApprove": True, "resultAutoApprove": False,
         "planReviewTimeoutS": 1800, "resultReviewTimeoutS": 900,
         "routeFedot": get_settings().experiments.route_fedot,
+        "routeAlembic": get_settings().experiments.route_alembic,
     }, echoed
 
 
@@ -138,6 +139,16 @@ def test_the_agents_tab_switches_fedot_for_the_next_session(monkeypatch):
     _apply_frontend_settings({"experimentModule": {"routeFedot": True}})
     assert exp.route_fedot is True
     assert _current_settings()["experimentModule"]["routeFedot"] is True
+
+
+def test_settings_switch_alembic_route_without_rebuilding_the_agent_tree(monkeypatch):
+    from CoScientist.web.app import _apply_frontend_settings, _current_settings
+
+    exp = get_settings().experiments
+    monkeypatch.setattr(exp, "route_alembic", False)
+    _apply_frontend_settings({"experimentModule": {"routeAlembic": True}})
+    assert exp.route_alembic is True
+    assert _current_settings()["experimentModule"]["routeAlembic"] is True
 
 
 def test_the_agents_tab_switches_the_medical_agent(monkeypatch):

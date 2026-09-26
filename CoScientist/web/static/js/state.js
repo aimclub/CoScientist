@@ -105,6 +105,7 @@ const appSettings = {
     planReviewTimeoutS: 300,           // seconds; runs out => paused, not approved
     resultReviewTimeoutS: 300,
     routeFedot: false,                 // FEDOT.MAS route; applies to the next session
+    routeAlembic: false,               // offer reviewed reuse→MCP wrapping
   },
   // Settings → Agents: the operator's changes over system.yaml, applied when
   // the next session's agent tree is built. Only what differs is stored.

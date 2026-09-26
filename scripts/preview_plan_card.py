@@ -193,6 +193,11 @@ def _sample_plan() -> dict:
     build = task("EXP-2", "Build an MCP server from the docking repo", "alembic_build", "H2",
                  repo_url="https://github.com/ccsb-scripps/AutoDock-Vina",
                  post_build_route="react_tools", mcp_servers=[], est_duration_min=45,
+                 code_assessment={
+                     "requirement": "reuse",
+                     "evidence": "The existing vina CLI covers docking unchanged.",
+                     "entrypoints": ["vina --config <config>"],
+                 },
                  description="Turn the docking repository into a served MCP tool the next task calls.",
                  warnings=["a full build takes tens of minutes and may fail on system libraries"])
     build["design"] = dict(build["design"],

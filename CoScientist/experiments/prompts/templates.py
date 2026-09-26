@@ -147,9 +147,17 @@ RULES:
    2) SAME-operation literature/web AND source_request asks → research, mcp_servers=[].
       Bind family tool on analysis_artifacts.path_or_tool (prepare_via=research; role=report|data).
    3) <<CLINICAL_RULE>>
-   4) route_alembic=true AND a repo_candidates[].url fits → alembic_build, repo_url=<exact
-      url>, post_build_route=react_tools, mcp_servers=[]. PREFERRED over coder when a repo fits.
-   5) else required route=coder (for multi-target scripting, comparative data tables, plots, or uncovered operations).
+   4) For every task that may use repository code, set code_assessment:
+      requirement=reuse ONLY when an inspected, exact repo_candidates[].url already exposes
+      the required operation unchanged; include concrete evidence and entrypoints.
+      requirement=modify when any algorithm, model, objective/fitness, input contract,
+      training path, or source code must change. Use unknown when this has not been proved.
+      modify|unknown → route=coder. Never send them to alembic_build.
+      reuse → initially route=coder with repo_url=<exact candidate URL>. When
+      route_alembic=true, deterministic review asks the operator to choose direct Coder
+      execution (default) or wrapping that unchanged entrypoint with Alembic.
+   5) Otherwise use route=coder (multi-target scripting, comparative data tables, plots,
+      new implementations, or uncovered operations). code_assessment defaults to unknown.
    Mixed ask = one plan: <<EVIDENCE_ROUTES>> evidence, react_tools compute, coder uncovered/comparative.
 6. Copy experiment_run_id + source_request verbatim. plan_id: one stable
    non-empty id, e.g. PLAN-<uuid>; revision: integer >= 1. On a REVISION round
@@ -158,7 +166,8 @@ RULES:
    success_criteria = execution verification, not claim status.
    expected_artifacts: bound MCP → what that tool produces (role=data). Mandatory markdown/HTML reports are forbidden
    for data/generator tools (required=false only).
-   coder → concrete filenames; alembic_build → mcp_server/report.
+   coder → concrete scientific filenames. Alembic is only an intermediate wrapper;
+   it must not replace the task's final scientific artifacts with mcp_server/report.
 
 Minimal react_tools (copy server_id, name, url from available_mcp_servers):
 {"id":"EXP-1","name":"…","description":"…","rationale":"…","route":"react_tools",
@@ -167,6 +176,7 @@ Minimal react_tools (copy server_id, name, url from available_mcp_servers):
   "baselines":[{"name":"…","kind":"method","ref":null}],
   "metrics":[{"name":"…","direction":"maximize","threshold":0.8,"test":null}],
   "analysis_artifacts":[{"name":"out.json","role":"data","prepare_via":"mcp","path_or_tool":"generate_mols"}]},
+ "code_assessment":{"requirement":"unknown","evidence":"","entrypoints":[]},
  "mcp_servers":[{"name":"srv-chem","server_id":"srv-chem","url":"http://127.0.0.1:8000/mcp","tools":["generate_mols"],"source":"registry","health":"unknown"}],
  "repo_url":null,"post_build_route":null,"input_data":[],
  "launch_params":"{\"case\":\"target\",\"num\":10,\"upload_results_to_s3\":true}",
@@ -175,10 +185,13 @@ Minimal react_tools (copy server_id, name, url from available_mcp_servers):
  "est_duration_min":30,"warnings":[],"depends_on":[],"optional":false}
 
 Deltas vs that skeleton (same design/criteria/artifact shape):
-- coder: route=coder, mcp_servers=[], launch_params="{}", prepare_via=coder, path_or_tool=filename
+- coder: route=coder, mcp_servers=[], launch_params="{}", prepare_via=coder, path_or_tool=filename.
+  If reusing a repo unchanged, copy its exact repo_url and set code_assessment=reuse with
+  inspection evidence+entrypoints. For any change set code_assessment=modify.
 - research: route=research, mcp_servers=[], prepare_via=research, path_or_tool=family tool, artifact role=report
-- alembic_build: route=alembic_build, mcp_servers=[], repo_url from repo_candidates, post_build_route=react_tools,
-  expected_artifacts role=mcp_server. Runtime injects the built server — never invent tools.<<FEDOT_DELTA>>
+- alembic_build is selected by deterministic review only for code_assessment=reuse;
+  mcp_servers=[], exact repo_url, post_build_route=react_tools. Runtime injects the
+  built server — never invent tools.<<FEDOT_DELTA>>
 
 Top-level: schema_version, plan_id, experiment_run_id, revision, source_request,
 goal, hypothesis, hypotheses, methods, context_digest, context_refs, tasks,
@@ -230,14 +243,17 @@ Routes: <<AGENTS>>
    passed,observed,evidence_artifact_ids,details}],error_code,error_message,
    retryable,warnings.
    Real outputs/artifacts/download URLs or literature notes → status=success or
-   partial (gaps in warnings). Do NOT record failure for materialization warnings
-   or "insufficient literature". Simulated/hardcoded outputs are forbidden.
+   partial (non-core gaps in warnings). A missing primary operation, missing required
+   scientific artifact/input, or NO_MATCHING_TOOL is failure, never partial.
+   Do NOT record failure for materialization warnings or "insufficient literature".
+   Simulated/hardcoded outputs are forbidden.
    record_result status=error → fix payload and resubmit same attempt.
 5) retry_pending→retry_task+start_task; fallback_pending→fallback_task then
    start_task SAME task_id. Never switch route mid-attempt.
 6) Alembic (McpBuilderAgent): success ONLY with outputs.mcp_url. Builder still
-   running → do not record failure and do not fallback to coder. After alembic
-   success: start_task again on post_build_route. Do not fallback to CoderAgent.
+   running → do not record failure. After success: start_task again on
+   post_build_route. On a terminal build/infrastructure failure, record it honestly;
+   the state machine may fall back to CoderAgent for the same exact repo and task.
 7) skip_task=optional only; amend_task=unstarted only.
 8) After EVERY record_result: if phase is still execution → get_experiment_plan
    and start_task the next ready task. Only when phase is reporting: short
