@@ -1,0 +1,56 @@
+version: 1
+
+# Presentation metadata only. Connections, credentials and tool schemas remain
+# in the MCP registry and application settings. Keys are stable registry IDs.
+servers:
+  d6dac6fb09066080:
+    priority: 0
+    featured: true
+    category: automl
+    role: scientific
+    display_name:
+      ru: "Инструменты автоматического машинного обучения для научных задач — FEDOT"
+      en: "Automated machine learning tools for scientific tasks — FEDOT"
+    description:
+      ru: "Обучение моделей на подготовленных данных о молекулах и предсказание свойств новых молекул по их структуре. Сервис запускает обучение, позволяет отслеживать его состояние и применять ранее обученные модели."
+      en: "Train models on prepared molecular data and predict properties of new molecules from their structures. The service starts training, tracks its state and applies previously trained models."
+
+tools:
+  "d6dac6fb09066080:train_ml":
+    priority: 0
+    category: automl
+    role: scientific
+    display_name:
+      ru: "Обучить модель для предсказания свойств молекул"
+      en: "Train a molecular property prediction model"
+    description:
+      ru: "По таблице молекул и измеренных свойств запускает автоматический подбор и обучение модели FEDOT. Возвращает идентификатор задачи для отслеживания хода обучения."
+      en: "Starts FEDOT model selection and training from a table of molecules and measured properties. Returns a job identifier for tracking progress."
+  "d6dac6fb09066080:predict_ml":
+    priority: 1
+    category: automl
+    role: scientific
+    display_name:
+      ru: "Предсказать свойства молекул"
+      en: "Predict molecular properties"
+    description:
+      ru: "Применяет ранее обученную модель к списку молекул или файлу с их структурами и возвращает прогнозы выбранных свойств."
+      en: "Applies a previously trained model to a list or file of molecular structures and returns predictions for the selected properties."
+  "d6dac6fb09066080:train_ml_job_status":
+    category: automl
+    role: supporting
+    display_name:
+      ru: "Проверить ход обучения"
+      en: "Check training progress"
+    description:
+      ru: "Показывает состояние фоновой задачи обучения по её идентификатору."
+      en: "Shows the state of a background training job by its identifier."
+  "d6dac6fb09066080:check_state":
+    category: automl
+    role: supporting
+    display_name:
+      ru: "Проверить состояние модели"
+      en: "Check model state"
+    description:
+      ru: "Возвращает состояние зарегистрированных моделей и сведения об ошибках обучения."
+      en: "Returns registered model state and information about training errors."

@@ -1443,6 +1443,9 @@ async def lifespan(app: FastAPI):
         )
     yield
     print("[CoScientist Web] Shutting down …")
+    from CoScientist.tools.mcp_catalog import close_catalog
+
+    await close_catalog()
     await app.state.runtime.close()
 
 
@@ -2542,6 +2545,41 @@ def create_app() -> FastAPI:
         """The paper database statistics, as the paper-analysis server reports them."""
         return HTMLResponse(
             (WEB_DIR / "templates" / "stats.html").read_text(encoding="utf-8"),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/tools", response_class=HTMLResponse)
+    async def tools_catalog_page():
+        """Deployment-wide catalogue of configured MCP tools."""
+        return HTMLResponse(
+            _versioned_static_refs(
+                (WEB_DIR / "templates" / "tools.html").read_text(encoding="utf-8"),
+                _static_dir,
+            ),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.get("/api/mcp-tools")
+    async def mcp_tools_catalog_api():
+        """Return the saved catalogue immediately and refresh it when stale."""
+        from CoScientist.tools.mcp_catalog import get_catalog
+
+        return JSONResponse(
+            await get_catalog(refresh_if_stale=True),
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.post("/api/mcp-tools/refresh", status_code=202)
+    async def refresh_mcp_tools_catalog_api():
+        """Start one bounded MCP discovery pass (or join the current one)."""
+        from CoScientist.tools.mcp_catalog import get_catalog, request_refresh
+
+        started = await request_refresh(force=True)
+        payload = await get_catalog(refresh_if_stale=False)
+        payload["refresh_started"] = started
+        return JSONResponse(
+            payload,
+            status_code=202,
             headers={"Cache-Control": "no-store"},
         )
 

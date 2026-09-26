@@ -32,6 +32,7 @@ const i18n = {
   'agent.PlannerAgent.desc': { en: 'Roadmap Planner', ru: 'Планировщик задач' },
   'agent.TZSpecAgent.desc': { en: 'Technical Spec', ru: 'Техническое задание' },
   'agent.ToolsViewer.desc': { en: 'Tools Viewer', ru: 'Вызовы инструментов' },
+  'agent.ToolCatalogue.desc': { en: 'MCP Tool Catalogue', ru: 'Каталог MCP-инструментов' },
   'agent.KnowledgeGraph.desc': { en: 'Research Graph', ru: 'Граф исследований' },
   'agent.SessionTrace.desc': { en: 'Session Trace', ru: 'Трассировка сессии' },
   'agent.MCPBuilder.desc': { en: 'MCP Builder', ru: 'Сборщик MCP' },

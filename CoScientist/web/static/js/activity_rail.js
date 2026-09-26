@@ -6,7 +6,7 @@
     // among these, so it lives on the gear in the footer.
     const NAV_GROUPS = [
       { key: 'nav.group.work', items: ['OrchestratorAgent', 'PlannerAgent', 'KnowledgeGraph'] },
-      { key: 'nav.group.observe', items: ['ToolsViewer', 'SessionTrace', 'PaperStatistics', 'FedotTrace', 'FedotDemo'] },
+      { key: 'nav.group.observe', items: ['ToolsViewer', 'ToolCatalogue', 'SessionTrace', 'PaperStatistics', 'FedotTrace', 'FedotDemo'] },
       { key: 'nav.group.tools', items: ['MCPBuilder', 'CoderSandbox'] },
     ];
 
@@ -16,6 +16,7 @@
       // The microfluidics pipeline plans through a ТЗ rather than a roadmap.
       { name: "TZSpecAgent", icon: "assignment", desc: "Technical Spec" },
       { name: "ToolsViewer", icon: "handyman", desc: "Tools Viewer" },
+      { name: "ToolCatalogue", icon: "inventory", desc: "Tool Catalogue", href: "/tools" },
       // The knowledge memory is gone; this graph is the research record.
       { name: "KnowledgeGraph", icon: "bubble_chart", desc: "Research Graph", id: "graph-link", href: "/graph" },
       { name: "SessionTrace", icon: "timeline", desc: "Session Trace", id: "trace-link", href: "/trace" },
@@ -95,6 +96,8 @@
         openTzPanel();
       } else if (name === "ToolsViewer") {
         openToolsViewer();
+      } else if (name === "ToolCatalogue") {
+        window.open('/tools', '_blank');
       } else if (name === "KnowledgeGraph" || name === "SessionTrace") {
         // Scope to the open session FIRST. The rail's own href carries no
         // session, so preferring it opened whichever session the page happened
