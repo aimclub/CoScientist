@@ -262,68 +262,76 @@ def hypotheses(ctx: PromptContext) -> str:
     # hold more than one — at a ceiling of one there is nothing to distinguish,
     # and the rule would read as an invitation.
     rivalry = '' if single else f'''
-### WHAT MAKES HYPOTHESIS #2 AN ALTERNATIVE (and not the next step)
+### THE HYPOTHESES FORM A CHAIN, NOT A LIST
 
-{"Hypothesis #2 is a RIVAL EXPLANATION" if max_active == 2 else
- f"Hypotheses #2..#{max_active} are RIVAL EXPLANATIONS"} of the SAME outcome, not
-a later stage of one pipeline. A second hypothesis is admissible only if all
-three hold:
+{"H1 and H2 are" if max_active == 2 else f"H1..H{max_active} are"} ONE line of
+enquiry at successive depths, not independent ideas and not stages of a
+pipeline. H1 is what you expect to hold — the claim that, if it holds, already
+settles the task. **Every later hypothesis is written for the world in which the
+previous one was REFUTED**, and its job is to SALVAGE that run rather than start
+another: whatever the previous method measured successfully is its input, given,
+not to be re-derived.
 
-1. SAME OUTCOME, SAME MEASUREMENT. H1 and H2 predict DIFFERENT VALUES of the
-   SAME measurement on the SAME data. Sharing the procedure is what makes them
-   rivals — it is not a reason to merge them. They are one hypothesis phrased
-   twice only when they predict the SAME result.
-2. ONE RUN DECIDES BOTH. Name the single VerificationMethod that separates them
-   and the value that makes one true and the other false ("median LD50 gap ≥ 10×
-   → H1; < 2× → H2"). If no single result can support one and undermine the
-   other, they are not alternatives, and a second independent claim is not
-   allowed here.
-3. THEY CANNOT BOTH BE TRUE. State the incompatibility in the rationale: "H2
-   rivals H1: H1 attributes the effect to X, H2 to Y; the same run settles both."
+A later hypothesis is admissible only if all three hold:
 
-Admissible shapes for #2: a DIFFERENT CAUSE of the same effect ("the ranking is
-driven by lipophilicity, not by the scaffold"); the NULL ("the clusters do not
-separate at all: every median within 2×"); a DIFFERENT WINNER ("the most toxic
-cluster is not the furanocoumarins").
+1. WRITTEN AGAINST THE REFUTATION. Say in its rationale what the previous claim
+   failing would mean, and why this one is then the live explanation: "if the
+   clusters do not separate by LD50, the signal is not structural — H2 says it
+   tracks lipophilicity instead."
+2. IT REUSES THE RUN. Name which outputs of the earlier method it takes as
+   given. Its VerificationMethod is the earlier one PLUS A DELTA — an extra
+   endpoint, another grouping of the same table, one more tool over the same
+   compounds. Link it to the SAME VerificationMethod when the delta is only a
+   different reading of the same results. If settling it means running the whole
+   pipeline again from the start, it is not a continuation but a second study:
+   do not commit it.
+3. STILL A CLAIM, NOT A STEP. It must pass the threshold test on its own — a
+   number and a unit, or a named check with a pass condition.
+
+Admissible shapes for a later hypothesis: a DIFFERENT CAUSE of the same effect
+("the ranking is driven by lipophilicity, not by the scaffold"); the NULL ("the
+clusters do not separate at all: every median within 2×"); a DIFFERENT WINNER
+("the most toxic cluster is not the furanocoumarins"); a WEAKER FORM the same
+data still settles ("the separation holds for one endpoint but not across all
+four").
 
 NOT hypotheses — these are steps of H1's VerificationMethod, never commit them:
 "the dataset will hold ≥ 25 compounds with valid SMILES"; "clustering will yield
 ≥ 3 clusters with silhouette ≥ 0.3"; "the synthesis cost of the leaders will be
 under $5000". If your #2 begins with the next operation of the user's pipeline,
 delete it and fold it into H1's method.
+
+Because the chain shares one run, order it so that the EARLIER claims are the
+ones whose measurements the later ones need. A chain written in that order
+leaves the run with every artefact it produced still usable when H1 falls.
 '''
 
-    # The rule that replaces the old backlog scaffolding. `postponed` is a dead
-    # end in the schema — there is no transition out of it except back to
-    # `formulated` — so a hypothesis filed there is never verified and the study
-    # cannot close while it sits. Hence: commit only what will be tested.
+    # Only conditional successors are deliberately postponed; the graph
+    # maintainer activates the next link after a refuted verdict.
     has_graph = ctx.has_tool("research_graph")
     no_backlog = '''
-### EVERYTHING YOU HAND OVER WILL BE VERIFIED
-There is no backlog here and nothing is parked for later. Hand over only what
-you would spend a verification branch on; an idea you are not ready to test
-belongs in your answer as a remark, not in the list of hypotheses.''' + ('''
-
-A hypothesis recorded as `postponed` has no route to a verdict at all — the
-graph offers it no path except back to `formulated` — so it stays in the
-research unverified, holds the study open, and the operator sees a hypothesis
-nothing is testing. The single exception is a claim that can only be settled in
-a physical laboratory: record that one `postponed` with the reason, because this
-system cannot run it at all (see below).''' if has_graph else '')
+### NO UNCONDITIONAL BACKLOG
+Hand over only one refutation chain you would actually verify. H1 is active;
+later links are deliberately dormant and become active only after the previous
+link is refuted. Ideas outside that chain belong in your reasoning, not in the
+committed list.'''
 
     if has_graph:
         example_nodes = [
-            '        {"type": "Hypothesis", "ref": "h_new", "attrs": {"formulation": "...", '
+            '        {"type": "Hypothesis", "ref": "h_new", "status": "formulated", "attrs": {"formulation": "...", '
             '"priority": "high", "selected": "true"}},'
         ]
         example_edges = ['        {"type": "motivates", "from": "Q1", "to": "#h_new"},']
         if not single:
             example_nodes.append(
-                '        {"type": "Hypothesis", "ref": "h_rival", "attrs": {"formulation": '
-                '"...", "priority": "high", "rationale": "rivals h_new: same measurement, '
-                'opposite value"}},')
+                '        {"type": "Hypothesis", "ref": "h_rival", "status": "postponed", "attrs": {"formulation": '
+                '"...", "priority": "high", "rationale": "next in the chain: holds if '
+                'h_new is refuted; reuses its clustering and LD50 table"}},')
             example_edges.append(
                 '        {"type": "motivates", "from": "Q1", "to": "#h_rival"},')
+            example_edges.append(
+                '        {"type": "conditional_successor", "from": "#h_new", '
+                '"to": "#h_rival", "attrs": {"required_status": "refuted"}},')
         example_nodes += [
             '        {"type": "VerificationMethod", "ref": "vm_new", "attrs": '
             '{"method_type": "computational", "description": "...", '
@@ -333,11 +341,11 @@ system cannot run it at all (see below).''' if has_graph else '')
         ]
         example_edges.append('        {"type": "tested_by", "from": "#h_new", "to": "#vm_new"},')
         if not single:
-            # One method decides both — that is what makes them rivals.
+            # The successor reuses this method's outputs after H1 is refuted.
             example_edges.append(
                 '        {"type": "tested_by", "from": "#h_rival", "to": "#vm_new"},')
         example_edges.append(
-            '        {"type": "evaluated_by", "from": "#vm_new", "to": "#cc_new"}')
+            '        {"type": "formulated_for", "from": "#cc_new", "to": "#h_new"}')
         research_example = ('\n\nExample research_commit call:\nresearch_commit(\n'
                             '    nodes=[\n' + "\n".join(example_nodes) + '\n    ],\n'
                             '    edges=[\n' + "\n".join(example_edges) + '\n    ]\n)\n'
@@ -352,17 +360,17 @@ The research verifies {how_many} — one branch costs a plan, a run and a verdic
 and a study that branches five ways finishes none of them. In your single
 `research_commit`:
 
-- each hypothesis is created with the default status (`formulated`) plus a
-  `"priority"`, and your first pick carries `"selected": "true"`;
+- H1 is created as `formulated`; every later link is `postponed`, joined by
+  `conditional_successor` with `required_status="refuted"`; H1 carries
+  `"selected": "true"`;
 - build the full verification frame — VerificationMethod + ConfirmationCriteria,
   plus any Tool it truly needs — for EVERY hypothesis you commit. If you are not
   willing to equip it, you are not willing to test it, so do not commit it;
-- commit them in ONE call. Several calls do not raise the ceiling; the surplus
-  is filed as `postponed`, and postponed means never verified.
+- commit the whole chain in ONE call. Do not activate H2 yourself: the graph
+  does that only after a real `refuted` verdict on H1.
 
-If you commit more than the run can hold, the graph keeps the highest-priority
-ones active and postpones the rest, and says so in the commit warnings — but
-that is a stranded hypothesis, not a queue. Make the choice yourself.
+Only H1 occupies a verification slot. H2/H3 are not parallel work and must not
+appear in an experiment plan until their predecessor has been refuted.
 {no_backlog}'''
         answer_head = (
             "Start with exactly this line (real ids from your commit, "
@@ -400,21 +408,36 @@ validated for a given task — and to hand the orchestrator exactly <<SELECT_WOR
 1. Understand the task and its constraints.
 2. Propose <<PROPOSE_RULE>>
    Whatever the count, the FIRST one must be the hypothesis that, if it holds,
-   ALREADY SETTLES the task — carrying the logic of the whole pipeline, not one
-   step of it. How many you write is decided by the task in front of you, not by
+   ALREADY SETTLES the research question — addressing the material, system,
+   mechanism or effect being studied, not one operation in its verification.
+   How many you write is decided by the task in front of you, not by
    the ceiling: the ceiling is what you may not exceed, and one well-aimed claim
    is a better answer than two.
-   Stay inside the operations the user actually asked for: a hypothesis may span
-   several of them, but do not invent endpoints beyond them. One claim covering
-   five operations is the goal; five claims covering one each is not, and the
-   plan links each of its tasks to the operation it serves anyway.
+   Treat the available operations as means of observation, analysis and
+   verification. Do not turn them into the subject of the claim, and do not
+   invent endpoints beyond what they can measure. One scientific claim may need
+   several operations to test; five claims each restating one operation are not
+   five hypotheses.
 3. Keep them concise and actionable.
 4. Prefer testable and experimentally verifiable ideas.
 5. If relevant, briefly note assumptions or required conditions.
 6. SELECT what you commit — <<SELECT_WORD>>, the most relevant to verify — and
    say why. Judge relevance by: how directly it answers the user's actual question,
-   how testable it is with the tools/resources at hand, and how much the outcome
-   would change what we do next. What you do not select, you do not commit.
+   how testable it is with the tools/resources at hand, how much the outcome
+   would change what we do next, and — between claims that score alike on those —
+   HOW MUCH THE RUN LEAVES BEHIND: the claim whose verification exercises more of
+   the inventory yields more figures, tables and files, and those are the report.
+   What you do not select, you do not commit.
+7. IF THE INVENTORY BELOW LISTS TOOLS, equip each claim from that inventory:
+   name in its VerificationMethod the actual tools that will settle it, and
+   write its ConfirmationCriteria against a value one of them RETURNS. If the
+   inventory is empty, name the needed measurement without inventing a tool.
+   Check the tool's
+   signature before you promise a comparison: a tool that takes no arguments
+   cannot be pointed at a subgroup, so a claim contrasting subgroups it does not
+   split by cannot be verified here however reasonable it sounds. A claim nothing
+   in the inventory can measure is not sharper than one it can — it is a claim
+   this run will quietly re-interpret instead of testing.
 
 {hypothesis_brief?}
 
@@ -433,14 +456,17 @@ about. Two rules decide it:
   you have restated it. Ask instead: what does the request QUIETLY ASSUME that
   could be false? That assumption is the hypothesis.
 
-**A known route still needs one.** Most requests here are procedural — build the
-pipeline, rank the compounds, assemble the review — and the method is obvious
-from the start. That does not exempt the study: the pipeline can run to
-completion and return nothing usable, or rank on a signal that turns out not to
-carry. So for a procedural task, state the EXPECTED OUTCOME of the pipeline as
-the hypothesis ("the toxicity ranking will separate the clusters by more than
-one order of magnitude in predicted LD50"), never the list of steps. The steps
-are the VerificationMethod.
+**Available methods do not define the hypothesis.** A request may already name
+tools, analyses or a sequence of operations. Treat the study as beginning from
+its scientific question: formulate a falsifiable claim about the investigated
+material, system, mechanism or effect, then select the available methods that
+can test it. Do not phrase the claim as a prediction about the procedure
+itself. For example,
+write "furanocoumarin-rich metabolites of *Heracleum sosnowskyi* have lower
+predicted LD50 and higher predicted hepatotoxicity than the remaining
+metabolites"; clustering and toxicity prediction are its VerificationMethod.
+The method can yield an inconclusive result, but it is never the object of the
+hypothesis.
 
 **If the human already stated one, use theirs.** When the request contains a
 claim about an outcome — including one written out as a hypothesis — adopt it as

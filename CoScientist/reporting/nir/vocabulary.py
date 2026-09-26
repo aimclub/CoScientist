@@ -137,6 +137,7 @@ EDGE_WORDS: Dict[str, str] = {
     "refutes": "опровержение",
     "refines": "уточнение",
     "supersedes": "замещение",
+    "conditional_successor": "условный переход после опровержения",
     "based_on": "основание вывода",
     "determines_sufficiency": "достаточность данных",
     "formulated_for": "условие подтверждения",

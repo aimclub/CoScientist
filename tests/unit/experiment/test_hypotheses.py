@@ -795,7 +795,10 @@ def test_an_overrun_is_still_cut_down_and_keeps_the_ranking():
     })
     assert len(args["nodes"]) == 3
     assert args["status_updates"] == [{"id": "H1", "status": "postponed"}]
-    assert len(args["edges"]) == 3
+    assert len(args["edges"]) == 5
+    assert [edge["type"] for edge in args["edges"]].count(
+        "conditional_successor"
+    ) == 2
 
 
 def test_the_cut_falls_on_the_new_hypotheses_not_on_the_updates():

@@ -612,6 +612,108 @@ def test_the_backlog_is_offered_only_when_a_slot_is_free(store, monkeypatch):
     assert "BACKLOG" in queries.postponed_hypotheses(store)["rendered"]
 
 
+def _conditional_pair(store):
+    _init(store)
+    result = store.commit(
+        source="HypothesesAgent",
+        nodes=[
+            {"type": "Hypothesis", "ref": "h1", "status": "formulated",
+             "attrs": {"formulation": "primary claim"}},
+            {"type": "Hypothesis", "ref": "h2", "status": "postponed",
+             "attrs": {"formulation": "fallback claim"}},
+        ],
+        edges=[
+            {"type": "conditional_successor", "from": "#h1", "to": "#h2",
+             "attrs": {"required_status": "refuted"}},
+        ],
+    )
+    assert result.ok, result.errors
+
+
+def test_a_conditional_successor_cannot_start_before_refutation(store, monkeypatch):
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 2)
+    _conditional_pair(store)
+
+    assert [row["hypothesis"] for row in queries.ready_hypotheses(store)["items"]] == ["H1"]
+    early = store.commit(
+        source="OrchestratorAgent",
+        status_updates=[{"id": "H2", "status": "formulated"}],
+    )
+    assert not early.ok
+    assert any("conditional successor" in error for error in early.errors)
+    assert store.hypothesis_eligible("H2") is False
+
+
+def test_refuting_the_predecessor_activates_the_next_link(store, monkeypatch):
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 1)
+    _conditional_pair(store)
+    assert store.commit(
+        source="OrchestratorAgent",
+        status_updates=[{"id": "H1", "status": "under_verification"}],
+    ).ok
+    verdict = store.commit(
+        source="ValidatorAgent",
+        status_updates=[{"id": "H1", "status": "refuted", "reason": "measured miss"}],
+    )
+    assert verdict.ok, verdict.errors
+
+    hypotheses = {row["id"]: row for row in store.full()["nodes"]
+                  if row["type"] == "Hypothesis"}
+    assert hypotheses["H1"]["status"] == "refuted"
+    assert hypotheses["H2"]["status"] == "formulated"
+    assert store.hypothesis_eligible("H2") is True
+    assert [row["hypothesis"] for row in queries.ready_hypotheses(store)["items"]] == ["H2"]
+    edges = store.full()["edges"]
+    supersedes = next(edge for edge in edges if edge["type"] == "supersedes")
+    assert supersedes["from"] == "H1" and supersedes["to"] == "H2"
+    assert supersedes["attrs"]["verdict"] == "refuted"
+
+
+@pytest.mark.parametrize("verdict", ["confirmed", "inconclusive"])
+def test_a_non_refuting_verdict_keeps_the_successor_dormant(
+    store, monkeypatch, verdict,
+):
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 2)
+    _conditional_pair(store)
+    assert store.commit(
+        source="OrchestratorAgent",
+        status_updates=[{"id": "H1", "status": "under_verification"}],
+    ).ok
+    if verdict == "confirmed":
+        evidence = store.commit(
+            source="ValidatorAgent", enforce_permissions=False,
+            nodes=[{"type": "Evidence", "ref": "support",
+                    "attrs": {"subtype": "literature", "content": "measured support"}}],
+            edges=[{"type": "supports", "from": "#support", "to": "H1"}],
+        )
+        assert evidence.ok, evidence.errors
+    result = store.commit(
+        source="ValidatorAgent", enforce_permissions=False,
+        status_updates=[{"id": "H1", "status": verdict, "reason": "measured"}],
+    )
+    assert result.ok, result.errors
+    h2 = next(row for row in store.full()["nodes"] if row["id"] == "H2")
+    assert h2["status"] == "postponed"
+    assert not store.hypothesis_eligible("H2")
+
+
+def test_conditional_successors_reject_self_links_and_cycles(store, monkeypatch):
+    monkeypatch.setattr(get_settings().web, "max_active_hypotheses", 2)
+    _conditional_pair(store)
+    self_link = store.commit(
+        source="HypothesesAgent",
+        edges=[{"type": "conditional_successor", "from": "H1", "to": "H1"}],
+    )
+    assert not self_link.ok
+    assert any("itself" in error for error in self_link.errors)
+    cycle = store.commit(
+        source="HypothesesAgent",
+        edges=[{"type": "conditional_successor", "from": "H2", "to": "H1"}],
+    )
+    assert not cycle.ok
+    assert any("acyclic" in error for error in cycle.errors)
+
+
 def test_commit_keeps_one_hypothesis_active_and_postpones_the_rest(store, monkeypatch):
     """A batch of hypotheses proposed in one commit: the selected one stays
     `formulated`, the alternatives are stored as `postponed` backlog."""
@@ -2554,22 +2656,26 @@ def test_the_generator_is_asked_for_exactly_as_many_hypotheses_as_the_run_can_ve
         "at a ceiling of one there is no second hypothesis to invite")
     for limit in (2, 5):
         assert f"UP TO {limit} hypotheses" in rendered[limit]
-        # and the only thing a second one may be
-        assert "RIVAL EXPLANATION" in rendered[limit], limit
-        assert "ONE RUN DECIDES BOTH" in rendered[limit], limit
-    assert "RIVAL EXPLANATION" not in rendered[1]
+        # and the only thing a second one may be: the next link of one chain,
+        # written for the world where the previous claim was refuted and taking
+        # that run's measurements as its input rather than repeating them.
+        assert "CHAIN, NOT A LIST" in rendered[limit], limit
+        assert "WRITTEN AGAINST THE REFUTATION" in rendered[limit], limit
+        assert "IT REUSES THE RUN" in rendered[limit], limit
+    assert "CHAIN, NOT A LIST" not in rendered[1]
 
     for limit, prompt in rendered.items():
         assert "(2–5)" not in prompt, limit
-        # Nothing is parked: what is committed is what gets verified.
-        assert "EVERYTHING YOU HAND OVER WILL BE VERIFIED" in prompt, limit
+        assert "NO UNCONDITIONAL BACKLOG" in prompt, limit
+        if limit > 1:
+            assert "every later link is `postponed`" in prompt, limit
         assert "ranked backlog" not in prompt, limit
 
     prompt = rendered[2]                      # the configured default
     assert "threshold test" in prompt and "restatement test" in prompt
-    # A known route still needs a claim about its outcome — this is the whole
-    # reason the generator was never reached on a procedural task.
-    assert "A known route still needs one" in prompt
+    # Available operations are a means of verification; the claim is about the
+    # scientific question, not a prediction of what the procedure will return.
+    assert "Available methods do not define the hypothesis" in prompt
     # And the human's own hypothesis is used rather than competed with.
     assert "If the human already stated one, use theirs" in prompt
     # The paragraph telling it to propose a VerificationMethod plus criteria was

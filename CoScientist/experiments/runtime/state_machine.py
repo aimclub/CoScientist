@@ -788,6 +788,22 @@ def start_task(
         raise ExperimentRuntimeError("route_disabled", f"Route {route!r} is disabled for Experiment Module v0.")
 
     task_model = ExperimentTask.model_validate(task_runtime["task"])
+    allowed_hypotheses = {
+        str(row.get("hypothesis_id") or "").strip().upper()
+        for row in ((state.get("experiment_context") or {}).get("hypothesis_refs") or [])
+        if isinstance(row, dict) and row.get("hypothesis_id")
+    }
+    task_hypotheses = {
+        task_model.design.hypothesis_ref.strip().upper(),
+        *(str(item).strip().upper() for item in task_model.design.also_tests),
+    }
+    blocked_hypotheses = sorted(task_hypotheses - allowed_hypotheses) if allowed_hypotheses else []
+    if blocked_hypotheses:
+        raise ExperimentRuntimeError(
+            "hypothesis_not_eligible",
+            "Task references hypotheses that are not eligible in this experiment turn: "
+            + ", ".join(blocked_hypotheses),
+        )
     if route == ExecutionRoute.CODER.value and not mcp_routes_tried(task_runtime):
         from CoScientist.experiments.capabilities.inventory import (
             FAMILY_MEDICAL,

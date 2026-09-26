@@ -2546,11 +2546,40 @@ class ResearchGraphStore:
             ttype = creates[refs[dst[1]]]["type"] if dst[0] == "ref" else self._g.nodes[dst[1]]["type"]
             edge_errs += [f"edges[{j}]: {e}" for e in schema.validate_edge(
                 source, etype, ftype, ttype, enforce_permissions=enforce_permissions)]
+            attrs = d.get("attrs") or {}
+            if etype == "conditional_successor":
+                required = schema.normalize_token(str(attrs.get("required_status") or "refuted"))
+                if required != "refuted":
+                    edge_errs.append(
+                        f"edges[{j}]: conditional_successor supports only "
+                        "attrs.required_status='refuted'.")
+                attrs = {**attrs, "required_status": required}
             # In partial mode a rejected LINK costs the link, not the commit.
             (warnings if partial_edges else errors).extend(edge_errs)
             if not edge_errs:
                 staged_edges.append({"type": etype, "from": src, "to": dst,
-                                     "attrs": d.get("attrs") or {}})
+                                     "attrs": attrs})
+
+        def _edge_node(endpoint: Tuple[str, str]) -> str:
+            if endpoint[0] == "id":
+                return endpoint[1]
+            created = creates[refs[endpoint[1]]]
+            return str(created.get("twin") or f"@{endpoint[1].lower()}")
+
+        conditional = nx.DiGraph()
+        conditional.add_edges_from(
+            (u, v) for u, v, key in self._g.edges(keys=True)
+            if key == "conditional_successor"
+        )
+        for e in staged_edges:
+            if e["type"] != "conditional_successor":
+                continue
+            u, v = _edge_node(e["from"]), _edge_node(e["to"])
+            if u == v:
+                errors.append("conditional_successor cannot link a hypothesis to itself.")
+            conditional.add_edge(u, v)
+        if conditional.number_of_edges() and not nx.is_directed_acyclic_graph(conditional):
+            errors.append("conditional_successor edges must form an acyclic chain.")
 
         # -- status updates: existing nodes only ------------------------------
         # Criteria this commit marks met, whatever order they arrive in. The
@@ -2671,6 +2700,23 @@ class ResearchGraphStore:
                                       "to": new, "reason": d.get("reason"),
                                       "index": k})
 
+        final_status = {s["id"]: s["to"] for s in staged_status}
+        for s in staged_status:
+            if s["type"] != "Hypothesis" or s["to"] not in self._BUSY:
+                continue
+            unmet = []
+            for pred, _, key, data in self._g.in_edges(s["id"], keys=True, data=True):
+                if key != "conditional_successor":
+                    continue
+                required = str((data.get("attrs") or {}).get("required_status") or "refuted")
+                actual = final_status.get(pred, self._g.nodes[pred].get("status"))
+                if actual != required:
+                    unmet.append(f"{pred}={actual} (needs {required})")
+            if unmet:
+                errors.append(
+                    f"status_updates[{s['index']}]: {s['id']} is a conditional successor "
+                    f"and cannot become active until {', '.join(unmet)}.")
+
         # -- verification slots: the whole commit at once ---------------------
         # After the loop, not inside it. Inside, each update could only see the
         # ones staged BEFORE it, so the same swap — close one branch, open
@@ -2768,6 +2814,7 @@ class ResearchGraphStore:
             node["status_history"] = history
             committed["status_updates"].append({"id": s["id"], "from": s["from"],
                                                 "to": s["to"]})
+        self._activate_conditional_successors(committed, now)
         # Focus auto-link (Option A): Evidence created here that isn't linked to
         # any hypothesis gets a `relates_to` edge to the focused hypothesis, so a
         # worker's finding is never orphaned. The background validator then decides
@@ -2956,6 +3003,75 @@ class ResearchGraphStore:
                 committed["status_updates"].append(
                     {"id": hid, "from": "formulated", "to": "under_verification",
                      "auto": True})
+
+    def hypothesis_eligible(self, hypothesis_id: str) -> bool:
+        """Whether every conditional predecessor has reached its required verdict."""
+        hid = self._canon_node(hypothesis_id)
+        if hid is None or self._g.nodes[hid].get("type") != "Hypothesis":
+            return False
+        for pred, _, key, data in self._g.in_edges(hid, keys=True, data=True):
+            if key != "conditional_successor":
+                continue
+            required = str((data.get("attrs") or {}).get("required_status") or "refuted")
+            if self._g.nodes[pred].get("status") != required:
+                return False
+        return True
+
+    def _activate_conditional_successors(
+        self, committed: Dict[str, List[Dict[str, Any]]], now: float,
+    ) -> None:
+        """Open the next chain link after a real refuted verdict, slot permitting."""
+        refuted = [
+            row["id"] for row in committed.get("status_updates", [])
+            if row.get("to") == "refuted"
+        ]
+        if not refuted:
+            return
+        active = len(self._active_hypotheses())
+        limit = self.max_active_hypotheses()
+        for pred in sorted(refuted):
+            successors = sorted(
+                (v for _, v, key in self._g.out_edges(pred, keys=True)
+                 if key == "conditional_successor"),
+                key=str,
+            )
+            for hid in successors:
+                if active >= limit:
+                    return
+                node = self._g.nodes[hid]
+                if node.get("type") != "Hypothesis" or node.get("status") != "postponed":
+                    continue
+                if not self.hypothesis_eligible(hid):
+                    continue
+                node["status"] = "formulated"
+                node["updated_at"] = now
+                history = list(node.get("status_history") or [])
+                history.append({
+                    "from": "postponed", "to": "formulated",
+                    "source": "graph-maintainer", "at": now,
+                    "reason": f"conditional predecessor {pred} was refuted",
+                })
+                node["status_history"] = history
+                committed["status_updates"].append({
+                    "id": hid, "from": "postponed", "to": "formulated", "auto": True,
+                })
+                if not self._g.has_edge(pred, hid, key="supersedes"):
+                    edge = ResearchEdge(
+                        id=f"supersedes:{pred}->{hid}", type="supersedes",
+                        **{"from": pred, "to": hid},
+                        attrs={
+                            "verdict": "refuted",
+                            "reason": "conditional successor activated",
+                        },
+                        source="graph-maintainer", created_at=now,
+                    )
+                    data = edge.model_dump(by_alias=True)
+                    data.pop("from"), data.pop("to")
+                    self._g.add_edge(pred, hid, key="supersedes", **data)
+                    committed["edges"].append({
+                        "type": "supersedes", "from": pred, "to": hid, "auto": True,
+                    })
+                active += 1
 
 
     def _unmet_criteria(self, hypothesis_id: str) -> List[str]:

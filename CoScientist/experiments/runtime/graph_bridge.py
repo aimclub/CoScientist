@@ -113,6 +113,21 @@ def _covered_hypothesis_ids(tasks: list[dict[str, Any]]) -> set[str]:
     return covered
 
 
+def _task_hypotheses_eligible(
+    store: Any, graph_nodes: dict[str, dict[str, Any]], task: dict[str, Any],
+) -> bool:
+    """Reject a task that names a known, still-locked chain successor."""
+    for hid in _task_hypothesis_ids(task.get("design") or {}):
+        if graph_nodes.get(hid, {}).get("type") != "Hypothesis":
+            continue
+        try:
+            if not store.hypothesis_eligible(hid):
+                return False
+        except AttributeError:
+            continue
+    return True
+
+
 def _sync_uncovered_hypotheses(
     store: Any, graph_nodes: dict[str, dict[str, Any]], covered: set[str],
 ) -> tuple[int, int]:
@@ -127,7 +142,7 @@ def _sync_uncovered_hypotheses(
             continue
         status = str(meta.get("status") or "")
         if nid in covered:
-            if status == "postponed":
+            if status == "postponed" and store.hypothesis_eligible(nid):
                 updates.append({
                     "id": nid,
                     "status": "formulated",
@@ -563,6 +578,12 @@ def publish_plan_detail_to_graph(store: Any,
         step_texts = _plan_step_texts(state)
         known = _xt_ids(state)
         graph_nodes = _graph_nodes(store)
+        tasks = [
+            task for task in tasks
+            if _task_hypotheses_eligible(store, graph_nodes, task)
+        ]
+        if not tasks:
+            return
         matched: list[str] = []
 
         nodes: list[dict[str, Any]] = []
@@ -716,6 +737,12 @@ def publish_plan_to_graph(store: Any, state: MutableMapping[str, Any]) -> None:
         vm_ids = _vm_ids(state)
         tool_ids = _tool_ids(state)
         graph_nodes = _graph_nodes(store)
+        tasks = [
+            task for task in tasks
+            if _task_hypotheses_eligible(store, graph_nodes, task)
+        ]
+        if not tasks:
+            return
 
         nodes: list[dict[str, Any]] = []
         edges: list[dict[str, Any]] = []
@@ -1086,7 +1113,8 @@ def publish_result_to_graph(
             })
             edges.append({"type": "produces", "from": vm_id, "to": "#e_0"})
             for hid in _task_hypothesis_ids((task or {}).get("design") or {}):
-                if graph_nodes.get(hid, {}).get("type") == "Hypothesis":
+                if (graph_nodes.get(hid, {}).get("type") == "Hypothesis"
+                        and store.hypothesis_eligible(hid)):
                     edges.append({"type": "relates_to", "from": "#e_0", "to": hid})
             for i, artifact in enumerate(artifacts[:_MAX_GENERATED_DATA]):
                 location = _artifact_location(artifact)

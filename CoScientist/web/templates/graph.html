@@ -390,7 +390,7 @@
       report:5, publication:5, spec:5, efficiencyjustification:5, costmodel:5, efficiencymetric:5,
       framing:0, outcome:5 };
     const R_EDGE = { supports:GOOD, refutes:CRIT, refines:WARN,
-      supersedes:SLATE, frames:SLATE, concludes:INFO };
+      supersedes:SLATE, conditional_successor:WARN, frames:SLATE, concludes:INFO };
     // An untyped link — motivates, tested_by, produces, uses — used to be
     // drawn in #4a5160 on a #14161a canvas, and its label in #aeb6c2 at 12px.
     // Three stops off the background is invisible past a dozen cards, and on
@@ -424,7 +424,8 @@
       refines:"refines", based_on:"based on", determines_sufficiency:"sufficiency for",
       formulated_for:"criterion for", regulates:"regulates", constrains:"constrains",
       derived_from:"derived from", contextualizes:"frames", defines_scope:"scope of",
-      relates_to:"relates to", applies_to:"applies to", via:"via" };
+      relates_to:"relates to", applies_to:"applies to",
+      conditional_successor:"if refuted, continue with", via:"via" };
     // The server now names the type and the status in the words a scientist
     // uses; the client keeps its own table only as a fallback for older data.
     const rTypeName = n => {

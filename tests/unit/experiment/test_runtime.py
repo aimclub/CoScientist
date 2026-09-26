@@ -71,6 +71,19 @@ def test_scenario_a_ready_chemistry_mcp_defaults_to_one_fedot_attempt_and_artifa
     assert state["experiment_runtime"]["phase"] == "reporting"
 
 
+def test_start_task_rejects_a_hypothesis_outside_the_eligible_context():
+    state = _approved_state(_plan(_task("EXP-1", hypothesis_ref="H2")))
+    state["experiment_context"] = {
+        "hypothesis_refs": [{"hypothesis_id": "H1", "statement": "active"}],
+    }
+
+    with pytest.raises(ExperimentRuntimeError) as raised:
+        start_task(state, "EXP-1")
+
+    assert raised.value.code == "hypothesis_not_eligible"
+    assert "H2" in str(raised.value)
+
+
 def test_scenario_b_two_sequential_fedot_tasks_and_duplicate_route_refused():
     """§11.6 B: no session hard-stop; second call in one attempt is refused."""
     plan = _plan(

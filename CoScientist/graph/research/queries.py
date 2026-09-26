@@ -62,6 +62,16 @@ def _hypothesis_tools(g, hyp_id: str) -> List[str]:
     return sorted(tools)
 
 
+def _conditional_eligible(g, hyp_id: str) -> bool:
+    for predecessor, _, key, data in g.in_edges(hyp_id, keys=True, data=True):
+        if key != "conditional_successor":
+            continue
+        required = str((data.get("attrs") or {}).get("required_status") or "refuted")
+        if _status(g, predecessor) != required:
+            return False
+    return True
+
+
 # ── individual triggers ──────────────────────────────────────────────────────
 
 def _id_order(node_id: str) -> tuple:
@@ -89,6 +99,8 @@ def ready_hypotheses(store: Optional[ResearchGraphStore] = None) -> Dict[str, An
     candidates = []
     for h in _nodes_of(g, "Hypothesis"):
         if _status(g, h) != "formulated":
+            continue
+        if not _conditional_eligible(g, h):
             continue
         tools = _hypothesis_tools(g, h)
         if all(_status(g, t) == "available" for t in tools):
@@ -136,7 +148,7 @@ def postponed_hypotheses(store: Optional[ResearchGraphStore] = None) -> Dict[str
     g = graph_store.full_graph()
     items = [{"hypothesis": h, "label": _label(g, h)}
              for h in sorted(_nodes_of(g, "Hypothesis"), key=_id_order)
-             if _status(g, h) == "postponed"]
+             if _status(g, h) == "postponed" and _conditional_eligible(g, h)]
     try:
         max_active = graph_store.max_active_hypotheses()
     except AttributeError:      # a bare graph passed in place of a store

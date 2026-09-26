@@ -417,6 +417,10 @@ EDGE_TYPES: Dict[str, Tuple[Tuple[str, str], ...]] = {
     # replaced it — the arrow points the way the research went. attrs carry
     # {"verdict": confirmed|refuted|inconclusive, "reason": what changed}.
     "supersedes": (("Hypothesis", "Hypothesis"),),
+    # Execution dependency, deliberately separate from provenance-oriented
+    # supersedes.  The successor stays dormant until the predecessor reaches
+    # attrs.required_status (v1 supports only refuted).
+    "conditional_successor": (("Hypothesis", "Hypothesis"),),
     "based_on": (("Conclusion", "Evidence"),),
     "determines_sufficiency": (("ConfirmationCriteria", "Conclusion"),),
     # Not in the spec's edge table, but the docx says criteria are "formulated
@@ -496,6 +500,7 @@ RU_ALIASES: Dict[str, str] = {
     "поддерживает": "supports",
     "опровергает": "refutes",
     "уточняет": "refines",
+    "условный_преемник": "conditional_successor",
     "основано_на": "based_on",
     "определяет_достаточность": "determines_sufficiency",
     "сформулировано_для": "formulated_for", "формулируется_для": "formulated_for",
@@ -715,7 +720,7 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         # It writes the modified hypothesis, so it is the one that can say which
         # hypothesis that modification replaces.
         edges=_edges("motivates", "tested_by", "requires", "formulated_for",
-                     "uses", "consumes", "supersedes"),
+                     "uses", "consumes", "supersedes", "conditional_successor"),
     ),
     "ResearchAgent": AgentPerm(
         # The same hole the coder and the experimenter had, on the literature

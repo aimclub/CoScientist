@@ -364,9 +364,12 @@ agents:
       that is not meant to be started.
     planning: |-
       Use this FIRST on any study that has no hypothesis yet, procedural tasks included:
-      one hypothesis stating what the planned pipeline will show is what makes the result
-      judgeable instead of merely delivered. It returns only what is to be verified now
-      — usually one hypothesis — so plan a verification branch for each one it returns.
+      formulate one hypothesis about the study object, mechanism, effect, or relationship
+      that the research must test. Treat the available pipeline as a means of measurement,
+      not as the subject of the claim and not as a source of an assumed outcome. State the
+      method of verification and numerical acceptance criteria only when those methods can
+      measure them. It returns only what is to be verified now — usually one hypothesis —
+      so plan a verification branch for each one it returns.
       Decision-making and compatibility assessment based on gathered facts.
     # Ideation plus choosing what to test first: the most reasoning-bound job
     # in the system — so `high`, unless a run turns it down with

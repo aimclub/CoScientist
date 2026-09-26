@@ -57,6 +57,20 @@ def _nodes_by_type(store: ResearchGraphStore) -> dict[str, list[str]]:
     return out
 
 
+def _conditional_store(tmp_path) -> ResearchGraphStore:
+    store = _seeded_store(
+        tmp_path,
+        extra=[{"formulation": "Fallback after H1 is refuted.", "status": "postponed"}],
+    )
+    linked = store.commit(
+        source="HypothesesAgent", enforce_permissions=False,
+        edges=[{"type": "conditional_successor", "from": "H1", "to": "H2",
+                "attrs": {"required_status": "refuted"}}],
+    )
+    assert linked.ok, linked.errors
+    return store
+
+
 def test_publish_plan_creates_vm_and_tested_by(tmp_path):
     from CoScientist.experiments.runtime.graph_bridge import publish_plan_to_graph
 
@@ -79,6 +93,49 @@ def test_publish_plan_creates_vm_and_tested_by(tmp_path):
     assert len(mcp_servers) >= 1
     assert mcp_servers[0]["url"] == "http://127.0.0.1:8000/mcp"
     assert "estimate_property" in mcp_servers[0]["tools"]
+
+
+def test_plan_publication_cannot_publish_a_locked_successor(tmp_path):
+    from CoScientist.experiments.runtime.graph_bridge import (
+        publish_plan_detail_to_graph,
+        publish_plan_to_graph,
+    )
+
+    store = _conditional_store(tmp_path)
+    state = _approved_state(_plan(_task("EXP-1", hypothesis_ref="H2")))
+
+    publish_plan_to_graph(store, state)
+    publish_plan_detail_to_graph(store, state)
+
+    by_type = _nodes_by_type(store)
+    assert by_type.get("VerificationMethod") is None
+    assert by_type.get("ExperimentTask") is None
+    assert state.get("experiment_graph_vm_ids") is None
+    assert state.get(_XT_KEY) is None
+
+
+def test_automatic_evidence_is_not_attached_to_a_locked_successor(tmp_path):
+    from CoScientist.experiments.runtime.graph_bridge import (
+        publish_plan_to_graph,
+        publish_result_to_graph,
+    )
+
+    store = _conditional_store(tmp_path)
+    state = _approved_state(_plan(_task("EXP-1", hypothesis_ref="H1")))
+    publish_plan_to_graph(store, state)
+    state["experiment_runtime"]["plan"]["tasks"][0]["design"]["also_tests"] = ["H2"]
+    publish_result_to_graph(store, state, "EXP-1", {
+        "result_id": "RES-chain",
+        "status": "success",
+        "summary": "Evidence for the active hypothesis only.",
+        "artifacts": [],
+    })
+
+    evidence_id = _nodes_by_type(store)["Evidence"][0]
+    linked = {edge["to"] for edge in store.full()["edges"]
+              if edge["type"] == "relates_to" and edge["from"] == evidence_id}
+    assert linked == {"H1"}
+    assert _node_status(store)["H2"] == "postponed"
 
 
 def test_publish_plan_is_idempotent(tmp_path):

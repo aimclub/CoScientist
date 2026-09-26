@@ -777,6 +777,53 @@ def _coerce_commit_arg_lists(args: dict[str, Any]) -> tuple[dict[str, Any], bool
     return out, changed
 
 
+def _enforce_conditional_chain(args: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """Make generated hypotheses a deterministic refutation-gated chain."""
+    nodes = args.get("nodes")
+    if not isinstance(nodes, list):
+        return args, False
+    out = dict(args)
+    out_nodes = [dict(node) if isinstance(node, dict) else node for node in nodes]
+    created = [
+        node for node in out_nodes
+        if isinstance(node, dict)
+        and str(node.get("type") or node.get("node_type") or "") == "Hypothesis"
+        and node.get("ref")
+    ]
+    if not created:
+        return args, False
+    changed = False
+    for index, node in enumerate(created):
+        expected = "formulated" if index == 0 else "postponed"
+        if node.get("status") != expected:
+            node["status"] = expected
+            changed = True
+
+    edges = [dict(edge) if isinstance(edge, dict) else edge
+             for edge in (args.get("edges") or [])]
+    existing = {
+        (str(edge.get("from")), str(edge.get("to")))
+        for edge in edges if isinstance(edge, dict)
+        and edge.get("type") == "conditional_successor"
+    }
+    for predecessor, successor in zip(created, created[1:]):
+        pair = (f"#{predecessor['ref']}", f"#{successor['ref']}")
+        if pair in existing:
+            continue
+        edges.append({
+            "type": "conditional_successor",
+            "from": pair[0],
+            "to": pair[1],
+            "attrs": {"required_status": "refuted"},
+        })
+        changed = True
+    if changed:
+        out["nodes"] = out_nodes
+        out["edges"] = edges
+        return out, True
+    return args, False
+
+
 def _extract_args_from_call_syntax(call_str: str) -> dict[str, Any]:
     """Parse python-syntax tool calls like research_commit(nodes=[...], edges=[...])."""
     try:
@@ -833,6 +880,8 @@ def normalize_em_hypothesis_commit(
             mutated = True
         args, coerced = _coerce_commit_arg_lists(args)
         shrunk, refs, changed = _shrink_commit_args(args)
+        shrunk, chained = _enforce_conditional_chain(shrunk)
+        changed = changed or chained
         if refs:
             state[_PENDING_FC_KEY] = _merge_refs(state.get(_PENDING_FC_KEY), refs)
             ids = [r["hypothesis_id"] for r in state[_PENDING_FC_KEY]]
