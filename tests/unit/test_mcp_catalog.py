@@ -197,6 +197,12 @@ def test_page_assets_and_navigation_are_wired():
     assert "badge(tool.status" not in script
     assert "featured-status" not in script
     assert "lang === 'en' && tool.original_description" in script
+    assert 'id="availability-filter"' in page
+    assert 'id="status-filter"' not in page
+    assert "Сохранённое описание" not in page
+    assert "Проверено сейчас" not in page
+    assert "function needsAttention(tool)" in script
+    assert "server.discrepancy?.has_difference" in script
 
 
 def test_refresh_remains_available_in_memory_when_snapshot_disk_is_read_only(tmp_path, monkeypatch):

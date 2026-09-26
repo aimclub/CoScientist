@@ -12,8 +12,8 @@
       refresh: 'Обновить сейчас', app: 'К приложению', checked: 'Последняя проверка: {time}', never: 'Проверка ещё не завершалась',
       tools: 'актуальных инструментов', servers: 'серверов отвечают', categories: 'предметных категорий', attention: 'требуют внимания',
       allConnections: 'Все подключения', instruments: 'Инструменты', search: 'Поиск', searchPlaceholder: 'Название, задача или сервер',
-      category: 'Категория', serverLabel: 'Сервер', status: 'Состояние', role: 'Назначение', allCategories: 'Все категории', allServers: 'Все серверы', allStatuses: 'Все состояния', allRoles: 'Все назначения',
-      live: 'Проверено сейчас', saved: 'Сохранённое описание', scientific: 'Научные', supporting: 'Служебные',
+      category: 'Категория', serverLabel: 'Сервер', availability: 'Доступность', role: 'Назначение', allCategories: 'Все категории', allServers: 'Все серверы', allAvailability: 'Все инструменты', allRoles: 'Все назначения',
+      available: 'Доступные', needsAttention: 'Требуют внимания', scientific: 'Научные', supporting: 'Служебные',
       shown: 'Показано {shown} из {total}', empty: 'По заданным фильтрам инструменты не найдены.', details: 'Технические сведения',
       machineName: 'Машинное имя', server: 'Сервер', source: 'Источник описания', parameters: 'Параметры', unknownSchema: 'Параметры не описаны',
       original: 'Исходное описание', agentLimited: 'Ограниченный доступ', fedot: 'FEDOT', more: 'Ещё операции ({count})',
@@ -31,8 +31,8 @@
       refresh: 'Refresh now', app: 'Back to app', checked: 'Last checked: {time}', never: 'The first check has not finished yet',
       tools: 'current tools', servers: 'servers responding', categories: 'subject categories', attention: 'need attention',
       allConnections: 'All connections', instruments: 'Tools', search: 'Search', searchPlaceholder: 'Name, task or server',
-      category: 'Category', serverLabel: 'Server', status: 'Status', role: 'Purpose', allCategories: 'All categories', allServers: 'All servers', allStatuses: 'All statuses', allRoles: 'All purposes',
-      live: 'Checked now', saved: 'Saved description', scientific: 'Scientific', supporting: 'Supporting',
+      category: 'Category', serverLabel: 'Server', availability: 'Availability', role: 'Purpose', allCategories: 'All categories', allServers: 'All servers', allAvailability: 'All tools', allRoles: 'All purposes',
+      available: 'Available', needsAttention: 'Needs attention', scientific: 'Scientific', supporting: 'Supporting',
       shown: 'Showing {shown} of {total}', empty: 'No tools match the selected filters.', details: 'Technical details',
       machineName: 'Machine name', server: 'Server', source: 'Metadata source', parameters: 'Parameters', unknownSchema: 'Parameters are not described',
       original: 'Original description', agentLimited: 'Restricted access', fedot: 'FEDOT', more: 'More operations ({count})',
@@ -107,11 +107,11 @@
     $('search-input').placeholder = text('searchPlaceholder');
     $('category-label').textContent = text('category');
     $('server-label').textContent = text('serverLabel');
-    $('status-label').textContent = text('status');
+    $('availability-label').textContent = text('availability');
     $('role-label').textContent = text('role');
-    $('status-filter').options[0].text = text('allStatuses');
-    $('status-filter').options[1].text = text('live');
-    $('status-filter').options[2].text = text('saved');
+    $('availability-filter').options[0].text = text('allAvailability');
+    $('availability-filter').options[1].text = text('available');
+    $('availability-filter').options[2].text = text('needsAttention');
     $('role-filter').options[0].text = text('allRoles');
     $('role-filter').options[1].text = text('scientific');
     $('role-filter').options[2].text = text('supporting');
@@ -209,18 +209,29 @@
     return card;
   }
 
+  function needsAttention(tool) {
+    const server = serverFor(tool);
+    return tool.status !== 'available'
+      || server.discovery_status !== 'reachable'
+      || Boolean(server.discrepancy?.has_difference);
+  }
+
   function matches(tool) {
     const query = $('search-input').value.trim().toLocaleLowerCase(lang === 'ru' ? 'ru' : 'en');
     const category = $('category-filter').value;
     const serverId = $('server-filter').value;
-    const status = $('status-filter').value;
+    const availability = $('availability-filter').value;
     const role = $('role-filter').value;
     const server = serverFor(tool);
     const haystack = [tool.name, localized(tool.display_name), localized(tool.summary), tool.original_description,
       server.name, localized(server.display_name)].join(' ').toLocaleLowerCase(lang === 'ru' ? 'ru' : 'en');
+    const attention = needsAttention(tool);
+    const matchesAvailability = !availability
+      || (availability === 'available' && !attention)
+      || (availability === 'attention' && attention);
     return (!query || haystack.includes(query)) && (!category || tool.category === category)
       && (!serverId || tool.server_id === serverId)
-      && (!status || tool.status === status) && (!role || tool.role === role);
+      && matchesAvailability && (!role || tool.role === role);
   }
 
   function openDetails() {
@@ -366,7 +377,7 @@
     localStorage.setItem(LANG_KEY, lang);
     render();
   });
-  ['search-input', 'category-filter', 'server-filter', 'status-filter', 'role-filter'].forEach(id => {
+  ['search-input', 'category-filter', 'server-filter', 'availability-filter', 'role-filter'].forEach(id => {
     $(id).addEventListener(id === 'search-input' ? 'input' : 'change', renderTools);
   });
   document.addEventListener('visibilitychange', () => {
