@@ -12,6 +12,7 @@ from CoScientist.context_init.agent import (
     FRAME_STATE_KEY,
     ContextInitSessionAgent,
     apply_form_values,
+    apply_review_response,
     coerce_frame,
     frame_is_initialized,
     frame_to_form,
@@ -20,6 +21,11 @@ from CoScientist.context_init.commit import frame_to_init_kwargs, seed_frame
 from CoScientist.context_init.models import CANONICAL_FRAME_BLOCKS, ResearchFrame
 from CoScientist.graph.research import schema
 from CoScientist.graph.research.store import ResearchGraphStore
+from CoScientist.hitl.models import (
+    HITLAction,
+    HITLDecisionSource,
+    HITLResponse,
+)
 
 
 def _filled_frame() -> ResearchFrame:
@@ -93,6 +99,30 @@ def test_apply_form_values_sets_operator_status_and_is_soft():
 def test_apply_form_values_none_is_noop():
     f = _filled_frame()
     assert apply_form_values(f, None).model_dump() == f.normalized().model_dump()
+
+
+def test_auto_review_does_not_forge_operator_provenance():
+    frame = ResearchFrame.blank("q")
+    domain = next(
+        field for field in frame.block("Вопрос исследования").fields
+        if field.name == "domain"
+    )
+    domain.value = "physics"
+    domain.status = "предложено агентом"
+    response = HITLResponse(
+        action=HITLAction.APPROVE,
+        approved=True,
+        form_values={"Вопрос исследования": {
+            "domain": "physics",
+            "trl": "Не задано",
+        }},
+        decision_source=HITLDecisionSource.MODE_AUTO,
+    )
+
+    reviewed = apply_review_response(frame, response)
+    fields = {field.name: field for field in reviewed.block("Вопрос исследования").fields}
+    assert fields["domain"].status == "предложено агентом"
+    assert fields["trl"].status == "не задано"
 
 
 def test_coerce_frame_accepts_dict_and_json():

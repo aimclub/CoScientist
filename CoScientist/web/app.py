@@ -2666,6 +2666,30 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse(payload)
 
+    @app.get("/api/users/{user_id}/sessions/{session_id}/graph/framing")
+    async def api_research_framing(
+        user_id: str,
+        session_id: str,
+        study_id: str = "active",
+    ):
+        """Structured technical specification for the selected research.
+
+        The graph itself remains a compact polling payload.  The full field
+        descriptions and long values are fetched only when the reader opens the
+        Technical specification card.
+        """
+        try:
+            runtime.registry.require_session(user_id, session_id)
+            from CoScientist.graph.research.store import get_research_graph
+
+            payload = get_research_graph(
+                user_id=user_id,
+                session_id=session_id,
+            ).framing_view_of(study_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse(payload, headers={"Cache-Control": "no-store"})
+
     @app.post("/api/users/{user_id}/sessions/{session_id}/graph/agent_summary")
     async def api_agent_summary(user_id: str, session_id: str, request: Request):
         """A few lines from a small model on what one agent did in one request.

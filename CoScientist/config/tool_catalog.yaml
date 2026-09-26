@@ -14,10 +14,58 @@ servers:
     description:
       ru: "Обучение моделей на подготовленных данных о молекулах и предсказание свойств новых молекул по их структуре. Сервис запускает обучение, позволяет отслеживать его состояние и применять ранее обученные модели."
       en: "Train models on prepared molecular data and predict properties of new molecules from their structures. The service starts training, tracks its state and applies previously trained models."
+  6d7e3471063c3f95:
+    category: epidemiology
+    role: scientific
+    display_name:
+      ru: "Гибридное и суррогатное моделирование эпидемий"
+      en: "Hybrid and surrogate epidemic modelling"
+    description:
+      ru: "Моделирование распространения эпидемий на сетях, калибровка параметров, краткосрочное прогнозирование заболеваемости и анализ эпидемических пиков."
+      en: "Network, hybrid and surrogate epidemic modelling, parameter calibration, short-term incidence forecasting and epidemic peak analysis."
 
 # Shared Russian presentation for tools whose machine names may appear on more
 # than one MCP server. Exact server-specific entries below take precedence.
 tool_defaults:
+  run_hybrid_model:
+    display_name: {ru: "Запустить гибридную эпидемиологическую модель"}
+    description: {ru: "Моделирует SEIR-динамику на сети и переключается на гибридную модель с выбранным методом прогноза скорости передачи инфекции."}
+  hybrid_heatmap_r2:
+    display_name: {ru: "Построить карты качества гибридной модели"}
+    description: {ru: "Строит тепловые карты коэффициента детерминации R² гибридной модели для разных сочетаний параметров α и β."}
+  run_surrogate_point:
+    display_name: {ru: "Запустить суррогатную модель с точечной оценкой"}
+    description: {ru: "Рассчитывает точечный прогноз заболеваемости суррогатной моделью для заданных параметров α и β."}
+  run_surrogate_interval:
+    display_name: {ru: "Запустить суррогатную модель с интервальной оценкой"}
+    description: {ru: "Рассчитывает среднюю, нижнюю и верхнюю оценки заболеваемости суррогатной моделью для заданных параметров α и β."}
+  surrogate_heatmap_r2:
+    display_name: {ru: "Построить карты качества суррогатной модели"}
+    description: {ru: "Строит тепловые карты R² для точечных и интервальных прогнозов суррогатной модели."}
+  calibrate_model_complete_data:
+    display_name: {ru: "Откалибровать модель по полной кривой заболеваемости"}
+    description: {ru: "Подбирает параметры выбранной модели по полной целевой кривой методом последовательного Монте-Карло с приближёнными байесовскими вычислениями."}
+  calibrate_model_complete_data_3in1:
+    display_name: {ru: "Откалибровать три модели по полной кривой"}
+    description: {ru: "Одновременно калибрует сетевую, гибридную и суррогатную модели по полной кривой заболеваемости методом ABC-SMC."}
+  calibrate_model_forecast:
+    display_name: {ru: "Откалибровать модель для краткосрочного прогноза"}
+    description: {ru: "Калибрует выбранную модель по неполной кривой заболеваемости и строит краткосрочный прогноз методом ABC-SMC."}
+  calibrate_model_forecast_3in1:
+    display_name: {ru: "Сравнить три модели в краткосрочном прогнозе"}
+    description: {ru: "Калибрует сетевую, гибридную и суррогатную модели по неполным данным и сравнивает их краткосрочные прогнозы."}
+  plot_synth_peaks:
+    display_name: {ru: "Визуализировать пики синтетических эпидемий"}
+    description: {ru: "Строит карты времени и высоты эпидемических пиков для сетей Барабаши — Альберт и малого мира."}
+  plot_synth_inc_beta:
+    display_name: {ru: "Визуализировать заболеваемость и параметр β"}
+    description: {ru: "Строит траектории заболеваемости и скорости передачи инфекции β для разных сетевых топологий."}
+  plot_forecast_peak_errors:
+    display_name: {ru: "Показать ошибки прогноза эпидемического пика"}
+    description: {ru: "Сравнивает ошибки гибридного и суррогатного прогнозов до и после эпидемического пика."}
+  plot_heatmap_switch:
+    display_name: {ru: "Показать моменты переключения гибридной модели"}
+    description: {ru: "Строит тепловые карты дней переключения и их смещения относительно эпидемического пика."}
   get_mcp_logs:
     display_name: {ru: "Получить журналы MCP-сервера"}
     description: {ru: "Показывает диагностические журналы MCP-сервера для поиска причин ошибок при выполнении задач."}

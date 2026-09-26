@@ -191,43 +191,43 @@ BLOCK_I18N: Dict[str, Dict[str, Dict[str, str]]] = {
 
 FIELD_I18N: Dict[str, Dict[str, Dict[str, str]]] = {
     "formulation": {
-        "label": {"en": "Formulation", "ru": "Формулировка"},
+        "label": {"en": "Research question", "ru": "Исследовательский вопрос"},
         "placeholder": {
             "en": "Enter the full text of the research question, or leave it empty so the agent fills in a working value.",
             "ru": "Введите полный текст исследовательского вопроса или оставьте поле пустым — агент заполнит рабочее значение."},
     },
     "domain": {
-        "label": {"en": "Domain", "ru": "Домен"},
+        "label": {"en": "Subject area", "ru": "Предметная область"},
         "placeholder": {
             "en": "Enter the subject area of the research, or leave it empty so the agent fills in a working value.",
             "ru": "Введите предметную область исследования или оставьте поле пустым — агент заполнит рабочее значение."},
     },
     "specificity": {
-        "label": {"en": "Specificity", "ru": "Специфичность"},
+        "label": {"en": "Research boundaries", "ru": "Границы исследования"},
         "placeholder": {
             "en": "Enter how narrow the question is, or leave it empty so the agent fills in a working value.",
             "ru": "Укажите, насколько узок вопрос, или оставьте поле пустым — агент заполнит рабочее значение."},
     },
     "gap": {
-        "label": {"en": "Knowledge gap", "ru": "Пробел в знаниях"},
+        "label": {"en": "Problem being addressed", "ru": "Проблема, которую решаем"},
         "placeholder": {
             "en": "Enter the knowledge gap that the research addresses, or leave it empty so the agent fills in a working value.",
             "ru": "Укажите пробел в знаниях, который закрывает исследование, или оставьте поле пустым — агент заполнит рабочее значение."},
     },
     "decomposition": {
-        "label": {"en": "Decomposition", "ru": "Декомпозиция"},
+        "label": {"en": "Research subtasks", "ru": "Подзадачи исследования"},
         "placeholder": {
             "en": "Enter the split of the question into sub-questions, or leave it empty so the agent fills in a working value.",
             "ru": "Укажите разбиение вопроса на подвопросы или оставьте поле пустым — агент заполнит рабочее значение."},
     },
     "target_setting": {
-        "label": {"en": "Target setting", "ru": "Целевая установка"},
+        "label": {"en": "Expected result", "ru": "Ожидаемый результат"},
         "placeholder": {
             "en": "Enter the result that the research must produce, or leave it empty so the agent fills in a working value.",
             "ru": "Укажите результат, который должно дать исследование, или оставьте поле пустым — агент заполнит рабочее значение."},
     },
     "research_form": {
-        "label": {"en": "Research form", "ru": "Форма исследования"},
+        "label": {"en": "Research format", "ru": "Формат исследования"},
         "placeholder": {
             "en": "Enter the study type, such as review or experiment, or leave it empty so the agent fills in a working value.",
             "ru": "Укажите форму исследования (обзор, эксперимент, моделирование) или оставьте поле пустым — агент заполнит рабочее значение."},
@@ -240,37 +240,37 @@ FIELD_I18N: Dict[str, Dict[str, Dict[str, str]]] = {
             "ru": "Укажите уровень технологической готовности от 1 до 9 или оставьте поле пустым — агент заполнит рабочее значение."},
     },
     "ai_application_model": {
-        "label": {"en": "AI application model", "ru": "Модель применения ИИ"},
+        "label": {"en": "Role of AI", "ru": "Роль ИИ в работе"},
         "placeholder": {
             "en": "Enter how the AI takes part, for example assistant or autonomous agent, or leave it empty so the agent fills in a working value.",
             "ru": "Укажите, как участвует ИИ (ассистент, соавтор, автономный агент), или оставьте поле пустым — агент заполнит рабочее значение."},
     },
     "completion_criteria": {
-        "label": {"en": "Completion criteria", "ru": "Критерии завершения"},
+        "label": {"en": "Research completion conditions", "ru": "Условия завершения исследования"},
         "placeholder": {
             "en": "Enter the conditions that stop the research, or leave it empty so the agent fills in a working value.",
             "ru": "Укажите условия остановки исследования или оставьте поле пустым — агент заполнит рабочее значение."},
     },
     "modality": {
-        "label": {"en": "Modality", "ru": "Модальность"},
+        "label": {"en": "Research approach", "ru": "Подход к исследованию"},
         "placeholder": {
             "en": "Enter the modality (theoretical, experimental, computational), or leave it empty so the agent fills in a working value.",
             "ru": "Укажите модальность (теоретическая, экспериментальная, вычислительная) или оставьте поле пустым — агент заполнит рабочее значение."},
     },
     "form_trl": {
-        "label": {"en": "Form and TRL", "ru": "Форма и TRL"},
+        "label": {"en": "Research form and readiness", "ru": "Форма исследования и готовность"},
         "placeholder": {
             "en": "Enter the study form and readiness level, or leave it empty so the agent fills in a working value.",
             "ru": "Укажите форму исследования и уровень готовности или оставьте поле пустым — агент заполнит рабочее значение."},
     },
     "norms": {
-        "label": {"en": "Norms", "ru": "Нормы"},
+        "label": {"en": "Research conduct rules", "ru": "Правила проведения исследования"},
         "placeholder": {
             "en": "Enter the accepted methods for this type of research, or leave it empty so the agent fills in a working value.",
             "ru": "Укажите принятые методы для этого типа исследований или оставьте поле пустым — агент заполнит рабочее значение."},
     },
     "frameworks": {
-        "label": {"en": "Models and theories", "ru": "Модели и теории"},
+        "label": {"en": "Theoretical models and approaches", "ru": "Теоретические модели и подходы"},
         "placeholder": {
             "en": "Enter the formal models and theories of the domain, or leave it empty so the agent fills in a working value.",
             "ru": "Укажите формальные модели и теории домена или оставьте поле пустым — агент заполнит рабочее значение."},

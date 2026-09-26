@@ -404,13 +404,13 @@
         formValues[section][field] = String(draft[section][field] || '').trim();
       });
     });
-    sendHitlResponse({
+    if (!sendHitlResponse({
       type: 'hitl_response',
       request_id: requestId,
       action: 'approve',
       approved: true,
       form_values: formValues,
-    });
+    })) return;
     const panel = document.getElementById('hitl-panel');
     if (panel) panel.classList.add('hidden');
     markCard(requestId, empty

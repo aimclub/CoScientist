@@ -21,6 +21,74 @@ const TRIGGER_KEYS = {
 };
 const hitlCards = new Map();  // request_id -> payload, re-rendered on language switch
 const workOrderStripState = new Map(); // request_id -> manually chosen open state
+// Lifecycle and operator input must outlive the DOM node. Localisation redraws
+// the structured cards with outerHTML, so DOM-only `data-answered` state would
+// make an already answered card actionable again.
+const hitlCardState = new Map(); // request_id -> { closed, history, feedback, assumptions, findings }
+
+function hitlState(requestId) {
+  const rid = String(requestId || '');
+  let state = hitlCardState.get(rid);
+  if (!state) {
+    state = { closed: false, history: false };
+    hitlCardState.set(rid, state);
+  }
+  return state;
+}
+
+function captureHitlCardState(requestId) {
+  const rid = String(requestId || '');
+  const state = hitlState(rid);
+  const card = document.querySelector(`[data-hitl-card="${CSS.escape(rid)}"]`);
+  const feedback = document.getElementById('hitl-feedback-' + rid);
+  if (feedback) state.feedback = feedback.value;
+  if (!card) return state;
+
+  state.assumptions = Object.fromEntries(
+    [...card.querySelectorAll('input[data-wo-assumption]')]
+      .map(el => [el.dataset.woAssumption, el.checked])
+  );
+  state.findings = Object.fromEntries(
+    [...card.querySelectorAll('input[data-wr-finding]')]
+      .map(el => [el.dataset.wrFinding, el.checked])
+  );
+  return state;
+}
+
+function restoreHitlCardState(requestId) {
+  const rid = String(requestId || '');
+  const state = hitlState(rid);
+  const card = document.querySelector(`[data-hitl-card="${CSS.escape(rid)}"]`);
+  const feedback = document.getElementById('hitl-feedback-' + rid);
+  if (feedback && Object.prototype.hasOwnProperty.call(state, 'feedback')) {
+    feedback.value = state.feedback;
+  }
+  if (card) {
+    card.querySelectorAll('input[data-wo-assumption]').forEach(el => {
+      if (Object.prototype.hasOwnProperty.call(state.assumptions || {}, el.dataset.woAssumption)) {
+        el.checked = state.assumptions[el.dataset.woAssumption];
+      }
+    });
+    card.querySelectorAll('input[data-wr-finding]').forEach(el => {
+      if (Object.prototype.hasOwnProperty.call(state.findings || {}, el.dataset.wrFinding)) {
+        el.checked = state.findings[el.dataset.wrFinding];
+      }
+    });
+    woRecount(card);
+  }
+  if (state.closed || state.history) {
+    disableHitlControls(rid, { remember: false });
+  }
+}
+
+function resetHitlUiState() {
+  hitlCards.clear();
+  hitlCardState.clear();
+  workOrderStripState.clear();
+  if (typeof planByRequest !== 'undefined') planByRequest.clear();
+  if (typeof planOpenTasks !== 'undefined') planOpenTasks.clear();
+}
+window.resetHitlUiState = resetHitlUiState;
 
 function fillHitl(key, params) {
   return t(key).replace(/\{(\w+)\}/g, (m, k) => (params[k] != null ? params[k] : m));
@@ -127,11 +195,12 @@ function redrawWorkOrderCards() {
         && trigger !== 'work_step' && trigger !== 'work_report') return;
     const card = document.querySelector(`[data-hitl-card="${CSS.escape(rid)}"]`);
     if (!card) return;
-    const box = document.getElementById('hitl-controls-' + rid);
-    const live = !(box && box.dataset.answered === '1');
+    const state = captureHitlCardState(rid);
+    const live = !state.closed && !state.history;
     if (trigger === 'work_report') renderWorkReportCard(live, data);
     else if (trigger === 'work_step') renderWorkStepCard(live, data);
     else renderWorkOrderCard(live, data);
+    restoreHitlCardState(rid);
     const remembered = workOrderStripState.get(rid);
     if (remembered == null) return;
     const fresh = document.querySelector(`[data-hitl-card="${CSS.escape(rid)}"] details[data-wo-strip]`);
@@ -154,10 +223,9 @@ function redrawPlanCards() {
     // Only cards actually on screen: placeHitlCard appends when it finds none,
     // so a stale entry would resurrect a card the session has already cleared.
     if (!data || !document.querySelector(`[data-hitl-card="${CSS.escape(rid)}"]`)) return;
-    const box = document.getElementById('hitl-controls-' + rid);
-    const answered = !!(box && box.dataset.answered === '1');
-    renderExperimentPlanReview(!answered, data);
-    if (answered) disableHitlControls(rid);
+    const state = captureHitlCardState(rid);
+    renderExperimentPlanReview(!state.closed && !state.history, data);
+    restoreHitlCardState(rid);
   });
 }
 window.relocalizeHitlCards = relocalizeHitlCards;
@@ -185,7 +253,12 @@ function placeHitlCard(rid, html) {
 // is what they are given now.
 function showHITL(data, { history = false } = {}) {
   const live = !history;
-  hitlCards.set(data.request_id || '', data);
+  const rid = data.request_id || '';
+  hitlCards.set(rid, data);
+  // A live redelivery is authoritative: the server only redelivers requests
+  // that are still pending. A transcript copy stays locked until either its
+  // recorded outcome is replayed or that live redelivery arrives.
+  Object.assign(hitlState(rid), { closed: false, history });
 
   // The microfluidics ТЗ has its own panel, which owns both the form and the
   // running document; hand the request over and let it draw the card.
@@ -221,7 +294,7 @@ function showHITL(data, { history = false } = {}) {
   } else {
     renderHitlCard(live, data);
   }
-  if (history) disableHitlControls(data.request_id);
+  restoreHitlCardState(rid);
   scrollChat();
 }
 
@@ -400,14 +473,19 @@ function renderHitlCard(live, data) {
     </section>`);
 }
 
-function disableHitlControls(requestId) {
+function disableHitlControls(requestId, { remember = true } = {}) {
+  const state = captureHitlCardState(requestId);
+  if (remember) {
+    state.closed = true;
+    state.history = false;
+  }
   stopWorkOrderCountdown(requestId);
   // Answered, timed out or cancelled: the question is closed, so the panel it
   // opened closes with it. One the reader opened by hand stays.
-  if (window.closeDocumentForRequest) closeDocumentForRequest(requestId);
+  if (remember && window.closeDocumentForRequest) closeDocumentForRequest(requestId);
   // Nothing left to act on: fold whatever this card was showing open.
   const card = document.querySelector(`[data-hitl-card="${CSS.escape(String(requestId || ''))}"]`);
-  if (card) card.querySelectorAll('.fold-open').forEach(collapseFold);
+  if (remember && card) card.querySelectorAll('.fold-open').forEach(collapseFold);
   // And close the strip we opened because an answer was needed. Only that one:
   // a strip the reader opened by hand is being read, and a timeout firing under
   // it is no reason to snap it shut.
@@ -416,10 +494,12 @@ function disableHitlControls(requestId) {
   // never went through respondWorkOrder, so its assumption and finding boxes
   // stayed clickable on a question nobody is asking any more.
   if (card) {
-    card.querySelectorAll('details[data-wo-strip][data-auto-open]').forEach(el => {
-      el.open = false;
-      el.removeAttribute('data-auto-open');
-    });
+    if (remember) {
+      card.querySelectorAll('details[data-wo-strip][data-auto-open]').forEach(el => {
+        el.open = false;
+        el.removeAttribute('data-auto-open');
+      });
+    }
     card.querySelectorAll('input[data-wo-assumption], input[data-wr-finding]')
       .forEach(el => { el.disabled = true; });
   }
@@ -527,10 +607,26 @@ function applyHitlOutcome(event) {
 window.applyHitlOutcome = applyHitlOutcome;
 
 function sendHitlResponse(payload) {
-  if (ws && ws.readyState === 1) {
-    ws.send(JSON.stringify(payload));
+  const rid = String(payload.request_id || '');
+  const state = hitlState(rid);
+  const controls = document.getElementById('hitl-controls-' + rid);
+  if (state.closed || state.history || (controls && controls.dataset.answered === '1')) {
+    return false;
   }
-  const request = hitlCards.get(payload.request_id || '');
+  if (!ws || ws.readyState !== 1) {
+    addSystemMsg(t('hitl.sendUnavailable'));
+    return false;
+  }
+  try {
+    ws.send(JSON.stringify(payload));
+  } catch (_) {
+    addSystemMsg(t('hitl.sendUnavailable'));
+    return false;
+  }
+  // Close centrally and synchronously. Every HITL surface, including the TZ
+  // panel, now gets the same duplicate-click protection.
+  disableHitlControls(rid);
+  const request = hitlCards.get(rid);
   if (payload.action === 'approve' && request && request.agent_name === 'PlannerAgent') {
     releasePlanGate();
   }
@@ -538,20 +634,20 @@ function sendHitlResponse(payload) {
     StatusIndicator.feed({ type: 'hitl_response', request_id: payload.request_id });
   }
   addSystemMsg(hitlResponseSummary(payload));
+  return true;
 }
 
 function respondHITLInput(requestId) {
   const feedbackEl = document.getElementById('hitl-feedback-' + requestId);
   const feedback = feedbackEl ? feedbackEl.value.trim() : '';
-  sendHitlResponse({
+  if (!sendHitlResponse({
     type: 'hitl_response',
     request_id: requestId,
     action: 'provide_input',
     approved: true,
     instructions: feedback,
     free_input: feedback,
-  });
-  disableHitlControls(requestId);
+  })) return;
 
   if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
     currentPlannerHitlRequest = null;
@@ -567,15 +663,14 @@ function respondHITLInput(requestId) {
 function respondHITLApprove(requestId) {
   const feedbackEl = document.getElementById('hitl-feedback-' + requestId);
   const feedback = feedbackEl ? feedbackEl.value.trim() : '';
-  sendHitlResponse({
+  if (!sendHitlResponse({
     type: 'hitl_response',
     request_id: requestId,
     action: 'approve',
     approved: true,
     instructions: feedback || null,
     free_input: null,
-  });
-  disableHitlControls(requestId);
+  })) return;
 
   if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
     currentPlannerHitlRequest = null;
@@ -589,15 +684,14 @@ function respondHITL(requestId, approved) {
   const feedback = feedbackEl ? feedbackEl.value.trim() : '';
   // Approving with feedback means the operator wants the output revised.
   const action = approved && feedback ? 'edit' : (approved ? 'approve' : 'reject');
-  sendHitlResponse({
+  if (!sendHitlResponse({
     type: 'hitl_response',
     request_id: requestId,
     action,
     approved: action === 'approve',
     instructions: feedback || null,
     free_input: feedback || null,
-  });
-  disableHitlControls(requestId);
+  })) return;
 
   if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
     currentPlannerHitlRequest = null;
@@ -607,7 +701,7 @@ function respondHITL(requestId, approved) {
 
 function respondHITLOption(requestId, option) {
   // A question-window option button: a complete answer by itself.
-  sendHitlResponse({
+  if (!sendHitlResponse({
     type: 'hitl_response',
     request_id: requestId,
     action: 'select',
@@ -615,8 +709,7 @@ function respondHITLOption(requestId, option) {
     selected_option: option,
     instructions: option,
     free_input: option,
-  });
-  disableHitlControls(requestId);
+  })) return;
 }
 
 function respondHITLEdit(requestId) {
@@ -628,15 +721,14 @@ function respondHITLEdit(requestId) {
     if (feedbackEl) feedbackEl.focus();
     return;
   }
-  sendHitlResponse({
+  if (!sendHitlResponse({
     type: 'hitl_response',
     request_id: requestId,
     action: 'edit',
     approved: false,
     instructions: feedback,
     free_input: feedback,
-  });
-  disableHitlControls(requestId);
+  })) return;
 
   if (currentPlannerHitlRequest && currentPlannerHitlRequest.request_id === requestId) {
     currentPlannerHitlRequest = null;
@@ -730,14 +822,13 @@ function respondHITLForm(requestId, collect) {
       (formValues[block] = formValues[block] || {})[field] = v;
     });
   }
-  sendHitlResponse({
+  if (!sendHitlResponse({
     type: 'hitl_response',
     request_id: requestId,
     action: 'approve',
     approved: true,
     form_values: formValues,
-  });
-  disableHitlControls(requestId);
+  })) return;
 }
 
 // ── Work Order cards ─────────────────────────────────────────────────────
@@ -1172,7 +1263,6 @@ function respondWorkOrder(rid, action) {
   const disputedIds = card
     ? [...card.querySelectorAll('input[data-wr-finding]')].filter(el => el.checked).map(el => el.dataset.wrFinding)
     : [];
-  if (card) card.querySelectorAll('input[data-wo-assumption], input[data-wr-finding]').forEach(el => { el.disabled = true; });
   // The strip is about to fold; its line has to say what was just decided.
   woRecount(card);
   // What the operator marked travels with EVERY action, not with one of them.
@@ -1187,7 +1277,7 @@ function respondWorkOrder(rid, action) {
   const formValues = {};
   if (rejectedIds.length) formValues.rejected_assumption_ids = rejectedIds;
   if (disputedIds.length) formValues.disputed_finding_ids = disputedIds;
-  sendHitlResponse({
+  if (!sendHitlResponse({
     type: 'hitl_response',
     request_id: rid,
     action: action,
@@ -1195,8 +1285,7 @@ function respondWorkOrder(rid, action) {
     instructions: feedback || null,
     free_input: feedback || null,
     form_values: Object.keys(formValues).length ? formValues : null,
-  });
-  disableHitlControls(rid);
+  })) return;
   const box = document.getElementById('wo-countdown-' + rid);
   if (box) box.remove();
 }

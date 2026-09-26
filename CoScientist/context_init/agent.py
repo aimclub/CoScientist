@@ -38,7 +38,12 @@ from CoScientist.context_init.operations import (
 from CoScientist.graph.research.store import get_research_graph
 from CoScientist.graph.session_scope import session_key
 from CoScientist.hitl.field_status import OPERATOR_STATUS, is_open
-from CoScientist.hitl.models import HITLAction, HITLRequest, HITLResponse
+from CoScientist.hitl.models import (
+    HITLAction,
+    HITLDecisionSource,
+    HITLRequest,
+    HITLResponse,
+)
 from CoScientist.hitl.session_agent import SessionAgent
 
 logger = logging.getLogger(__name__)
@@ -181,6 +186,20 @@ def apply_form_values(frame: ResearchFrame,
     return frame
 
 
+def apply_review_response(frame: ResearchFrame,
+                          response: HITLResponse) -> ResearchFrame:
+    """Apply form values only when a person actually reviewed the frame.
+
+    Auto mode materialises a form-shaped response from the proposed defaults so
+    downstream consumers can proceed deterministically.  Those values were not
+    entered or confirmed by an operator and therefore must keep their original
+    provenance statuses.
+    """
+    if response.decision_source != HITLDecisionSource.HUMAN:
+        return frame.normalized()
+    return apply_form_values(frame, response.form_values)
+
+
 def render_frame_summary(frame: ResearchFrame) -> str:
     """Compact readable summary (console review / chat publication)."""
     lines: List[str] = ["## Рамка исследования", ""]
@@ -259,7 +278,7 @@ class ContextInitSessionAgent(SessionAgent):
 
         # Fold the operator's answers in and store the merged frame back, so the
         # base loop finishes (approved, no instructions) with the updated frame.
-        merged = apply_form_values(frame, response.form_values)
+        merged = apply_review_response(frame, response)
         if self.output_key:
             ctx.session.state[self.output_key] = merged.model_dump()
         return HITLResponse(action=HITLAction.APPROVE, approved=True)
@@ -309,6 +328,7 @@ __all__ = [
     "FRAME_COMPLETED_STATE_KEY",
     "FRAME_STATE_KEY",
     "apply_form_values",
+    "apply_review_response",
     "coerce_frame",
     "frame_is_initialized",
     "frame_to_form",
