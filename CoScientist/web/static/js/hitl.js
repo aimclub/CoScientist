@@ -32,10 +32,17 @@ function hitlTrigger(data) {
   return m && m[1] === 'CALLBACK' ? m[2].toLowerCase() : null;
 }
 
+// The agent's display name (e.g. «Анализ литературы»), not its class name.
+function hitlAgentName(name) {
+  if (!name) return '';
+  return (window.StatusIndicator && StatusIndicator.agentName)
+    ? (StatusIndicator.agentName(name) || name) : name;
+}
+
 function hitlParams(data) {
   const ctx = data.context || {};
   return {
-    agent: data.agent_name || '?',
+    agent: hitlAgentName(data.agent_name) || '?',
     tool: ctx.tool || data.trigger || '?',
     rule: ctx.matched_rule || '?',
   };
@@ -50,7 +57,7 @@ function localizeHitlMessage(data) {
   }
   const message = data.message || '';
   const m = INTERNAL_LOOP_RE.exec(message);
-  if (m) return t('hitl.internalLoop').replace('{agent}', m[1]);
+  if (m) return t('hitl.internalLoop').replace('{agent}', hitlAgentName(m[1]));
   return message.replace(LEGACY_PREFIX_RE, '');
 }
 
@@ -474,7 +481,7 @@ function hitlResponseSummary(response) {
 }
 
 function hitlTimeoutSummary(data) {
-  return t('hitl.timeoutMsg', { seconds: (data.timeout_seconds || 300), agent: (data.agent_name || '') });
+  return t('hitl.timeoutMsg', { seconds: (data.timeout_seconds || 300), agent: hitlAgentName(data.agent_name) });
 }
 window.hitlTimeoutSummary = hitlTimeoutSummary;
 

@@ -39,7 +39,7 @@
     ContextInitAgent: 'assignment',
     HypothesesAgent: 'lightbulb',
     ResearchAgent: 'travel_explore',
-    PaperRetriever: 'menu_book',
+    PaperRetriever: 'travel_explore',
     TaskExecutorAgent: 'alt_route',
     CoderAgent: 'terminal',
     DatasetCollectorAgent: 'dataset',

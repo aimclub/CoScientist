@@ -49,7 +49,9 @@ class Channel:
 
     ``client`` and ``publish`` are looked up at call time, so tests can patch
     the module-level ``_client``. ``publish`` writes the channel's view of the
-    service result next to the task record.
+    service result next to the task record. With ``require_human`` a plan is
+    approved only through the web interface card (hitl/human_gate.py); with no
+    one to ask, the approval is refused instead of sent unreviewed.
     """
     agent_name: str
     active_key: str
@@ -57,6 +59,7 @@ class Channel:
     invalid_key: str
     client: Callable[[], A2AClient]
     publish: Callable[[ToolContext, dict], None]
+    require_human: bool = False
 
 
 OPTIMIZATION = Channel(
@@ -351,13 +354,14 @@ async def approve_task_plan(
             f"The external system asks for approval again with {steps} steps executed: it is "
             "re-planning instead of running the approved plan. Do not confirm again; stop and "
             "report this to the operator.")}
-    if _operator_reachable(tool_context):
+    if channel.require_human or _operator_reachable(tool_context):
         from CoScientist.agents.common import hitl_handler
         from CoScientist.graph.session_scope import session_key
+        from CoScientist.hitl.human_gate import unavailable_reason
         from CoScientist.hitl.models import HITLAction, HITLRequest
 
         user_id, session_id = session_key(tool_context)
-        decision = await hitl_handler.handle_request(HITLRequest(
+        request = HITLRequest(
             agent_name=channel.agent_name,
             action_type=HITLAction.APPROVE,
             message=operator_message,
@@ -371,7 +375,15 @@ async def approve_task_plan(
             },
             invoked_via="tool",
             trigger=trigger,
-        ))
+        )
+        if channel.require_human:
+            unavailable = unavailable_reason(hitl_handler)
+            if unavailable is not None:
+                # Nobody can be asked: the plan stays waiting, nothing is sent.
+                return {"state": "error", "error": (
+                    f"The plan needs approval in the web interface, but {unavailable}; "
+                    "nothing was sent to the external system.")}
+        decision = await hitl_handler.handle_request(request)
         if not decision.approved:
             return _save(tool_context, {
                 **record,

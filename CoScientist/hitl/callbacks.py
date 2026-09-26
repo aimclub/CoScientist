@@ -242,6 +242,7 @@ def make_hitl_before_callback(handler: AbstractHITLHandler):
 def make_hitl_before_tool_callback(
     handler: AbstractHITLHandler,
     target_tools: Optional[Iterable[str]] = ("sandbox",),
+    require_hitl: bool = False,
 ):
     """Factory for before_tool_callback that intercepts tool calls and requests HITL approval.
 
@@ -259,6 +260,9 @@ def make_hitl_before_tool_callback(
             substring in lower-case tool name, e.g. "run_sandbox_task") will trigger
             HITL approval. When None, all tool calls (except excluded HITL tools)
             require approval.
+        require_hitl: Fail closed: a targeted call runs only after it is
+            approved in the web interface. HITL switched off or no web
+            interface attached leaves it blocked instead of running unreviewed.
 
     Returns:
         An async callback function compatible with ADK's before_tool_callback.
@@ -278,9 +282,6 @@ def make_hitl_before_tool_callback(
         tool_args=None,
         **kwargs,
     ) -> Optional[Dict[str, Any]]:
-        if not get_settings().web.hitl_enabled:
-            return None
-
         # Support both positional (tool, args, tool_context) and keyword calls from ADK
         actual_tool = tool if tool is not None else kwargs.get("tool")
         actual_args = (
@@ -303,6 +304,22 @@ def make_hitl_before_tool_callback(
             tool_lower = tool_name.lower()
             if not any(t == tool_name or t.lower() in tool_lower for t in targets):
                 return None
+
+        if require_hitl:
+            from CoScientist.hitl.human_gate import unavailable_reason
+
+            unavailable = unavailable_reason(handler)
+            if unavailable is not None:
+                return {
+                    "status": "denied",
+                    "blocked_by": "hitl_unavailable",
+                    "message": (
+                        f"Tool '{tool_name}' needs approval in the web interface, but "
+                        f"{unavailable}; the call was not executed."
+                    ),
+                }
+        elif not get_settings().web.hitl_enabled:
+            return None
 
         inv_ctx = getattr(actual_context, "_invocation_context", None) or getattr(actual_context, "invocation_context", None)
         inv_agent = getattr(inv_ctx, "agent", None) if inv_ctx is not None else None

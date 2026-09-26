@@ -141,6 +141,8 @@ CAMPAIGN = Channel(
     agent_name="OptimizationAgent", active_key=ACTIVE_KEY, history_key=HISTORY_KEY,
     invalid_key=INPUT_ERROR_KEY, client=lambda: _client(),
     publish=lambda context, record: _publish(context, record),
+    # campaign_approve may start the physical rig: only the web card approves it.
+    require_human=True,
 )
 
 INSTRUCTION = (

@@ -165,7 +165,7 @@
       TZSpecAgent: 'assignment',
       HypothesesAgent: 'lightbulb',
       ResearchAgent: 'travel_explore',
-      PaperRetriever: 'menu_book',
+      PaperRetriever: 'travel_explore',
       TaskExecutorAgent: 'alt_route',
       ToolPipelineAgent: 'checklist',
       ToolPreparerAgent: 'precision_manufacturing',
@@ -514,11 +514,20 @@
     }
 
 
+    // A dropped MCP session is a transport hiccup the client reconnects from,
+    // not a failure of the tool, so it stays out of the error counters.
+    const MCP_CONNECTION_LOST_RE = /MCP session connection lost/i;
+
     function activityResponseFailed(response) {
       if (!response) return false;
-      if (typeof response === 'string') return /^\s*(error|traceback)/i.test(response);
+      if (typeof response === 'string') {
+        return /^\s*(error|traceback)/i.test(response) && !MCP_CONNECTION_LOST_RE.test(response);
+      }
       if (typeof response !== 'object') return false;
-      if (response.error) return true;
+      if (response.error) {
+        const text = typeof response.error === 'string' ? response.error : JSON.stringify(response.error);
+        return !MCP_CONNECTION_LOST_RE.test(text);
+      }
       const status = String(response.status || response.result_status || '').toLowerCase();
       return status === 'error' || status === 'failed';
     }

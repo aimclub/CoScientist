@@ -513,6 +513,14 @@ def _campaign_a2a():
     return [campaign_start, campaign_get_status, campaign_provide_input, campaign_approve]
 
 
+def _hitl_before_campaign_start():
+    from CoScientist.agents.common import hitl_handler
+    from CoScientist.hitl.callbacks import make_hitl_before_tool_callback
+    return make_hitl_before_tool_callback(
+        hitl_handler, target_tools=("campaign_start",), require_hitl=True,
+    )
+
+
 def _operator_screening_override():
     from CoScientist.microfluidics.operator_override import operator_authorize_screening_override
     return [operator_authorize_screening_override]
@@ -719,6 +727,10 @@ _cb("review_preliminary_economics", "before_agent",
     factory=lambda ctx: _microfluidics_route_compliance("review_preliminary_economics"))
 _cb("guard_economics_routes", "before_tool",
     factory=lambda ctx: _microfluidics_route_compliance("guard_economics_routes"))
+# The rig campaign is sent only after the operator approves it in the web
+# interface; with HITL switched off the call is blocked, not run unreviewed.
+_cb("hitl_before_campaign_start", "before_tool",
+    factory=lambda ctx: _hitl_before_campaign_start())
 # Microfluidics module B: keep the economics server's costing answers as given.
 _cb("collect_economics_result", "after_tool", factory=lambda ctx: _collect_economics_result())
 # Stage 3: a molecule fixed in the ТЗ is handed on as the only candidate — no design.

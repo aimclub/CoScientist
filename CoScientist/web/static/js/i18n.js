@@ -952,11 +952,11 @@ const i18n = {
   // ── Work Order cards (hitl.js) ──
   'hitl.msg.workOrder': {
     en: "Agent {agent} declares its work order. Review the plan and the assumptions.",
-    ru: "Агент {agent} представил план работы. Проверьте план, условия и ограничения."
+    ru: "Агент «{agent}» представил план работы. Проверьте план, условия и ограничения."
   },
   'hitl.msg.workOrderAmendment': {
     en: "Agent {agent} wants to amend its work order.",
-    ru: "Агент {agent} хочет изменить свой план работы."
+    ru: "Агент «{agent}» хочет изменить свой план работы."
   },
   'hitl.via.workOrder': { en: 'work order (plan before acting)', ru: 'план работы агента (план до действий)' },
   'hitl.via.workOrderAmendment': { en: 'work order amendment', ru: 'поправка к плану работы' },
@@ -1035,7 +1035,7 @@ const i18n = {
   // ── Work Report cards (hitl.js) ──
   'hitl.msg.workReport': {
     en: 'Agent {agent} reports what it did. Check the findings against its work order.',
-    ru: 'Агент {agent} отчитался о работе. Сверьте находки с планом работы.'
+    ru: 'Агент «{agent}» отчитался о работе. Сверьте находки с планом работы.'
   },
   'hitl.via.workReport': { en: 'work report (result after acting)', ru: 'отчёт агента (результат после работы)' },
   'workReport.title': { en: 'Work Report', ru: 'Отчёт агента' },
@@ -1123,7 +1123,7 @@ const i18n = {
   // Internal-loop review request (agent name replaces {agent}).
   'hitl.internalLoop': {
     en: "Agent {agent} proposes its result. Please review.",
-    ru: "Агент {agent} предлагает свой результат. Проверьте его."
+    ru: "Агент «{agent}» предлагает свой результат. Проверьте его."
   },
 
   // ── HITL request card (built at render time from agent_name / invoked_via / trigger) ──
@@ -1132,19 +1132,19 @@ const i18n = {
   'hitl.viaLabel': { en: 'Invoked via', ru: 'Причина вызова' },
   'hitl.msg.beforeTool': {
     en: "Agent {agent} is about to execute tool {tool}. Approve execution?",
-    ru: "Агент {agent} собирается выполнить инструмент {tool}. Разрешить выполнение?"
+    ru: "Агент «{agent}» собирается выполнить инструмент {tool}. Разрешить выполнение?"
   },
   'hitl.msg.afterAgent': {
     en: "Agent {agent} proposes the following output. Please review.",
-    ru: "Агент {agent} предлагает следующий результат. Проверьте его."
+    ru: "Агент «{agent}» предлагает следующий результат. Проверьте его."
   },
   'hitl.msg.beforeAgent': {
     en: "Agent {agent} is about to start. Approve?",
-    ru: "Агент {agent} собирается начать работу. Разрешить?"
+    ru: "Агент «{agent}» собирается начать работу. Разрешить?"
   },
   'hitl.msg.bashCommand': {
     en: "Agent {agent} wants to run a command that is outward-facing or hard to reverse. Approve execution?",
-    ru: "Агент {agent} хочет выполнить команду с внешними или необратимыми последствиями. Разрешить выполнение?"
+    ru: "Агент «{agent}» хочет выполнить команду с внешними или необратимыми последствиями. Разрешить выполнение?"
   },
   'hitl.via.beforeTool': {
     en: 'confirmation before running tool «{tool}»',
@@ -1281,7 +1281,7 @@ const i18n = {
   'hitl.revisionRequested': { en: '✎ HITL Revision requested: {feedback}', ru: '✎ HITL: запрошена доработка: {feedback}' },
   'hitl.timeoutMsg': {
     en: '⏱ HITL: no answer for {seconds} s — the proposal of agent {agent} was auto-approved, the pipeline continues.',
-    ru: '⏱ HITL: нет ответа {seconds} с — предложение агента {agent} автоподтверждено, пайплайн продолжен.'
+    ru: '⏱ HITL: нет ответа {seconds} с — предложение агента «{agent}» автоподтверждено, пайплайн продолжен.'
   },
   'hitl.source.mode_auto': { en: 'decided by auto mode', ru: 'решено режимом auto' },
   'hitl.source.timeout': { en: 'review timed out', ru: 'время ожидания истекло' },

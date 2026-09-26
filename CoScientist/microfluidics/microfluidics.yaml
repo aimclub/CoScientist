@@ -473,6 +473,9 @@ agents:
     prompt: microfluidics_campaign
     tools: [campaign_a2a, sleep]
     hitl: true
+    callbacks:
+      # campaign_start waits for approval in the web interface; blocked when HITL is off.
+      before_tool: [hitl_before_campaign_start]
     # Narrative is separate from the normalized result the tools write to
     # state["optimization"] (and the raw task to campaign_a2a_task).
     output_key: campaign_summary
