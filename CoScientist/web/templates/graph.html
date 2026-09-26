@@ -3,6 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <link rel="stylesheet" href="/static/css/fonts.css" />
+  <link rel="stylesheet" href="/static/css/framing_panel.css" />
   <title data-i18n="graph.title">CoScientist — Research Graph</title>
   <script src="/static/vis-network.min.js"></script>
   <!-- Placement only: ELK computes coordinates, vis-network draws. -->
@@ -2021,6 +2022,7 @@
     function showDetail(n){
       if (!n) return;
       if (!isResearch() && !RESEARCH_KINDS.has(n.kind)) return showDetailClassic(n);
+      if (n.kind === "framing") return showFramingDetail(n);
       const st = rStatus(n.status);
       let body = "";
       // A write-up card carries the whole document, not a line about itself, so
@@ -2360,6 +2362,7 @@
     function paint(n, html){
       const box = document.getElementById("detail");
       const top = paintedId === n.id ? box.scrollTop : 0;
+      box.classList.toggle("framing-detail", n.kind === "framing");
       box.innerHTML = html; box.style.display = "block"; box.scrollTop = top;
       document.getElementById("dgrip").style.display = "block";
       paintedId = n.id;
@@ -2895,5 +2898,6 @@
       poll(); loop();
     })();
   </script>
+  <script src="/static/js/framing_panel.js"></script>
 </body>
 </html>

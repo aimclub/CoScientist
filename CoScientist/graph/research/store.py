@@ -14,6 +14,7 @@ and either applied atomically or rejected with instructive per-item errors.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -1542,6 +1543,10 @@ class ResearchGraphStore:
         self._research_id = "research"
         self._created_at: float = time.time()
         self._root_id: Optional[str] = None
+        # The confirmed, per-field research frame that produced this graph.
+        # Stored with the graph (and therefore with its archive), so opening an
+        # older study cannot accidentally show the active study's specification.
+        self._framing_snapshot: Optional[Dict[str, Any]] = None
         #: Commits refused since the last successful one. Deliberately NOT
         #: persisted: it describes what is happening to this run, not what the
         #: study is, and a restart should not accuse the graph of old failures.
@@ -1675,7 +1680,10 @@ class ResearchGraphStore:
                 edges.append({"type": "applies_to", "from": f"#{ref}", "to": "#q"})
 
         with self._lock:
-            old_graph, old_meta = self._g, (self._research_id, self._created_at, self._root_id)
+            old_graph, old_meta = self._g, (
+                self._research_id, self._created_at, self._root_id,
+                self._framing_snapshot,
+            )
             old_data = self._serialize() if old_graph.number_of_nodes() else None
             self._g = nx.MultiDiGraph()
             self._research_id = (
@@ -1686,6 +1694,7 @@ class ResearchGraphStore:
             )
             self._created_at = time.time()
             self._root_id = None
+            self._framing_snapshot = None
             # Privileged seeding: the context star (Question/Tool/Resource/
             # EmpiricalBase/Constraint) is created here regardless of the caller's
             # general create-set (schema.INIT_SEED_TYPES) — structural validation
@@ -1695,7 +1704,8 @@ class ResearchGraphStore:
             if not result.ok:
                 # restore the previous research untouched
                 self._g = old_graph
-                self._research_id, self._created_at, self._root_id = old_meta
+                (self._research_id, self._created_at, self._root_id,
+                 self._framing_snapshot) = old_meta
                 return result.model_dump()
             self._root_id = next(n["id"] for n in result.committed["nodes"] if n.get("ref") == "q")
             archived = self._archive_data(old_data) if old_data else None
@@ -1986,6 +1996,133 @@ class ResearchGraphStore:
         with self._lock:
             return self._serialize()
 
+    def set_framing_snapshot(self, frame: Dict[str, Any]) -> None:
+        """Attach the confirmed research frame to the active study.
+
+        This is presentation metadata, not a scientific graph node.  Keeping it
+        in the graph snapshot gives every archived study its own per-field
+        values and provenance while leaving agent context and graph semantics
+        unchanged.
+        """
+        canonical = json.dumps(frame, ensure_ascii=False, sort_keys=True, default=str)
+        with self._lock:
+            self._framing_snapshot = {
+                "schema_version": 1,
+                "research_id": self._research_id,
+                "root_id": self.root_id(),
+                "saved_at": time.time(),
+                "revision": hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16],
+                "frame": frame,
+            }
+            self._save()
+
+    def _study_data(self, study_id: Optional[str]) -> Dict[str, Any]:
+        chosen = study_id or "active"
+        if chosen == "active":
+            with self._lock:
+                return self._serialize()
+        path = self._dir / chosen
+        if path.name != chosen or not path.is_file():
+            raise KeyError(f"no archived study '{chosen}' in this session")
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise KeyError(f"archived study '{chosen}' is unreadable") from exc
+        if not isinstance(data, dict) or not isinstance(data.get("nodes"), list):
+            raise KeyError(f"archived study '{chosen}' is unreadable")
+        return data
+
+    def framing_view_of(self, study_id: Optional[str] = None) -> Dict[str, Any]:
+        """The structured technical specification for one selected study."""
+        chosen = study_id or "active"
+        data = self._study_data(chosen)
+        snapshot = data.get("framing_snapshot")
+
+        # Compatibility for active studies created before the frame became part
+        # of the graph snapshot.  The sidecar has a root id; use it only when it
+        # demonstrably belongs to the graph currently being read.  An archived
+        # study must never borrow the active study's sidecar.
+        if snapshot is None and chosen == "active":
+            sidecar = self._dir / "research_frame.json"
+            try:
+                candidate = json.loads(sidecar.read_text(encoding="utf-8"))
+                if not isinstance(candidate, dict):
+                    candidate = {}
+                candidate_frame = candidate.get("frame") or {}
+                if not isinstance(candidate_frame, dict):
+                    candidate_frame = {}
+                candidate_question = ""
+                for block in candidate_frame.get("blocks") or []:
+                    if block.get("title") != "Вопрос исследования":
+                        continue
+                    for field in block.get("fields") or []:
+                        if field.get("name") == "formulation":
+                            candidate_question = str(field.get("value") or "").strip()
+                            break
+                graph_question = self._study_label(data).strip()
+                has_archives = any(
+                    path.name not in {self._path.name, "research_frame.json"}
+                    for path in self._dir.glob("research_*.json")
+                )
+                exact_identity = (
+                    candidate.get("research_id")
+                    and candidate.get("research_id") == data.get("research_id")
+                )
+                safe_legacy_identity = (
+                    not candidate.get("research_id")
+                    and not has_archives
+                    and candidate.get("root_id") == data.get("root_id")
+                    and candidate_question == graph_question
+                )
+                if isinstance(candidate, dict) and (exact_identity or safe_legacy_identity):
+                    snapshot = candidate
+            except (OSError, ValueError):
+                pass
+
+        raw_nodes = {
+            str(node.get("id")): node for node in (data.get("nodes") or [])
+            if isinstance(node, dict) and node.get("id")
+        }
+        raw_edges = [{
+            "src": edge.get("from"), "dst": edge.get("to"),
+            "type": edge.get("type"), "attrs": dict(edge.get("attrs") or {}),
+        } for edge in (data.get("edges") or []) if isinstance(edge, dict)]
+        _host, carried, _hosts_of = _fold_plan(raw_nodes, raw_edges)
+        frame_documents = {
+            nid for role, nid in carried.get(FRAME_ID, [])
+            if role == "attachment" and raw_nodes.get(nid, {}).get("type") == "Spec"
+        }
+
+        documents: List[Dict[str, Any]] = []
+        for node in data.get("nodes") or []:
+            if (not isinstance(node, dict) or node.get("type") != "Spec"
+                    or str(node.get("id") or "") not in frame_documents):
+                continue
+            attrs = dict(node.get("attrs") or {})
+            nid = str(node.get("id") or "")
+            view = _folded_view(nid, node, self._scope)
+            name = str(attrs.get("name") or "").strip()
+            suffix = Path(name).suffix.lstrip(".").upper() if name else ""
+            documents.append({
+                "id": nid,
+                "title": {"ru": "Предварительный текст ТЗ",
+                          "en": "Preliminary specification"},
+                "href": str(view.get("href") or ""),
+                "format": suffix,
+                # A legacy Spec can contain text but no downloadable file.
+                "content": str(attrs.get("content") or "") if not view.get("href") else "",
+                "source": str(node.get("source") or ""),
+            })
+
+        from CoScientist.graph.research.framing_view import build_framing_details
+
+        return build_framing_details(
+            data,
+            snapshot=snapshot,
+            documents=documents,
+            study_id=chosen,
+        )
+
     def restore(self, data: Dict[str, Any], archive: bool = True) -> Optional[str]:
         """Replace the active blackboard with a checkpointed snapshot.
 
@@ -2019,6 +2156,8 @@ class ResearchGraphStore:
             self._research_id = data.get("research_id", "research")
             self._created_at = data.get("created_at", time.time())
             self._root_id = data.get("root_id")
+            snapshot = data.get("framing_snapshot")
+            self._framing_snapshot = snapshot if isinstance(snapshot, dict) else None
             self._save()
         return archived
 
@@ -2049,6 +2188,7 @@ class ResearchGraphStore:
             root = self.root_id()
             research_id = self._research_id
             rejected = self._rejected_commits
+            framing_revision = str((self._framing_snapshot or {}).get("revision") or "legacy")
 
         host, carried, hosts_of = _fold_plan(raw_nodes, raw_edges)
         nodes = self._project_nodes(raw_nodes, raw_edges, carried, research_id)
@@ -2064,6 +2204,14 @@ class ResearchGraphStore:
         stamps = [d.get("updated_at") or d.get("created_at")
                   for d in raw_nodes.values()]
         stamps = [t for t in stamps if isinstance(t, (int, float))]
+        latest_stamp = max(stamps) if stamps else None
+        for node in nodes:
+            if node.get("id") == FRAME_ID:
+                # The browser uses this to cache the large, separately fetched
+                # specification.  A new document or graph update invalidates it.
+                node["framing_revision"] = (
+                    f"{framing_revision}:{latest_stamp or 0}:{len(raw_nodes)}"
+                )
         view = {
             "run_id": research_id,
             "nodes": nodes,
@@ -2072,7 +2220,7 @@ class ResearchGraphStore:
             # single prompt, so a session can show one that has not moved for a
             # day — which reads as "the new run produced nothing" only if the
             # reader can see the date.
-            "updated_at": max(stamps) if stamps else None,
+            "updated_at": latest_stamp,
             "node_count": len(raw_nodes),
             "counters": _counters(raw_nodes),
             "headline": _headline_meta(raw_nodes, raw_edges, root),
@@ -2345,11 +2493,13 @@ class ResearchGraphStore:
                 "updated_at": self._latest_stamp(), "live": True,
                 "node_count": self._g.number_of_nodes()}]
         for path in sorted(self._dir.glob("research_*.json"), reverse=True):
-            if path.name == self._path.name:
+            if path.name in {self._path.name, "research_frame.json"}:
                 continue
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
+                continue
+            if not isinstance(data, dict) or not isinstance(data.get("nodes"), list):
                 continue
             nodes = data.get("nodes") or []
             stamps = [n.get("updated_at") or n.get("created_at") for n in nodes]
@@ -2394,6 +2544,7 @@ class ResearchGraphStore:
             self._research_id = "research"
             self._created_at = time.time()
             self._root_id = None
+            self._framing_snapshot = None
             self._save()
             return archived
 
@@ -3548,6 +3699,7 @@ class ResearchGraphStore:
             "research_id": self._research_id,
             "created_at": self._created_at,
             "root_id": self._root_id,
+            "framing_snapshot": self._framing_snapshot,
             "nodes": [dict(self._g.nodes[n]) for n in self._g.nodes],
             "edges": [{"type": k, "from": u, "to": v, **d}
                       for u, v, k, d in self._g.edges(keys=True, data=True)],
@@ -3595,6 +3747,8 @@ class ResearchGraphStore:
             self._research_id = data.get("research_id", "research")
             self._created_at = data.get("created_at", time.time())
             self._root_id = data.get("root_id")
+            snapshot = data.get("framing_snapshot")
+            self._framing_snapshot = snapshot if isinstance(snapshot, dict) else None
         except Exception as exc:  # noqa: BLE001 — a corrupt file must not kill startup
             logger.warning("Research graph load failed (%s); starting empty. "
                            "Keeping the file untouched at %s", exc, self._path)

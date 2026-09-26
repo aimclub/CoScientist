@@ -159,7 +159,9 @@ def _dump_frame(store, frame: ResearchFrame, result: Dict[str, Any]) -> None:
         from pathlib import Path
 
         Path(directory).mkdir(parents=True, exist_ok=True)
+        full = store.full() if callable(getattr(store, "full", None)) else {}
         payload = {"root_id": result.get("root_id"),
+                   "research_id": full.get("research_id"),
                    "frame": frame.normalized().model_dump()}
         (Path(directory) / "research_frame.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -169,9 +171,14 @@ def _dump_frame(store, frame: ResearchFrame, result: Dict[str, Any]) -> None:
 
 def seed_frame(store, frame: ResearchFrame) -> Dict[str, Any]:
     """Seed the confirmed frame into ``store`` (a ResearchGraphStore)."""
+    frame = frame.normalized()
     kwargs = frame_to_init_kwargs(frame)
     result = store.init_research(source=AGENT_SOURCE, **kwargs)
     if result.get("ok"):
+        # Keep the per-field values and statuses with this exact research
+        # snapshot.  A session can contain several archived studies; a single
+        # mutable sidecar cannot tell their technical specifications apart.
+        store.set_framing_snapshot(frame.model_dump())
         _dump_frame(store, frame, result)
     return result
 
