@@ -13,6 +13,9 @@ Usage (from the repo root):
 
 Environment overrides:
     COSCIENTIST_WEB_PORT — port for this instance (default 8010)
+    COSCIENTIST_WEB_HOST — bind address (default 127.0.0.1). A deploy host sets
+                           this to serve the instance to the team, because no
+                           reverse proxy is in front of it.
     HITL__ENABLED        — same switch as --no-hitl (false disables all HITL)
 """
 import os
@@ -35,4 +38,10 @@ from CoScientist.cli import run_web  # noqa: E402
 
 
 if __name__ == "__main__":
-    run_web(host="127.0.0.1", port=int(os.environ["COSCIENTIST_WEB_PORT"]))
+    # The default keeps a local run on the loopback address. Only a deploy host
+    # sets COSCIENTIST_WEB_HOST, so this change does not move a developer run
+    # onto the network.
+    run_web(
+        host=os.environ.get("COSCIENTIST_WEB_HOST", "127.0.0.1"),
+        port=int(os.environ["COSCIENTIST_WEB_PORT"]),
+    )
