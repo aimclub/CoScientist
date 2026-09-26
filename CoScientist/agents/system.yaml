@@ -165,7 +165,10 @@ agents:
   PlannerAgent:
     class: custom:session
     root: false
-    enabled: false #${orchestrator.use_planner}
+    # Available both as the first stage of `planner` mode and as an on-demand
+    # subordinate in `orchestrator` mode. `build_for_mode()` disables it only
+    # for `orchestrator_planner`, where the orchestrator owns create_plan_tool.
+    enabled: true
     description: >-
       produces a step-by-step roadmap for a complex, multi-step task;
       call it first, then execute the roadmap by delegating each step.

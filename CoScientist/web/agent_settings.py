@@ -4,9 +4,9 @@ operator changed about it.
 system.yaml stays the declaration; ``settings.agents`` holds the operator's
 overrides (on/off, reasoning, model) and the assembler reads them when a
 session's agent tree is built. This module is the web side of that: the
-catalog the settings modal lists (read off a fresh load of the profile, so it
-shows the declared values, not the overridden ones), and the read/write of the
-overrides in the ``appSettings`` shape.
+catalog the settings modal lists (read off a fresh load of the profile, with
+start-mode agents adjusted to the effective runtime state), and the read/write
+of the overrides in the ``appSettings`` shape.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from CoScientist.assembly.schema import (
+    MODE_CONTROLLED_AGENTS,
     REASONING_EFFORTS,
     AgentConfig,
     SystemConfig,
@@ -103,6 +104,11 @@ def _enabled_ref(cfg: AgentConfig) -> Optional[str]:
 def _lock_reason(cfg: AgentConfig, declared_enabled: bool) -> Optional[str]:
     if cfg.root:
         return "root"
+    # A mode-controlled composite may also be marked internal.  The mode is
+    # nevertheless the reason its switch is read-only, and lets the browser
+    # update its indicator immediately when the start mode changes.
+    if cfg.name in MODE_CONTROLLED_AGENTS:
+        return "startMode"
     if cfg.internal:
         return "internal"
     ref = _enabled_ref(cfg)
@@ -115,6 +121,30 @@ def _lock_reason(cfg: AgentConfig, declared_enabled: bool) -> Optional[str]:
     if not cfg.enabled_overridable():
         return "startMode"
     return None
+
+
+def _mode_controlled_enabled(
+    cfg: AgentConfig, system: SystemConfig, declared_enabled: bool,
+) -> bool:
+    """Display the state produced by ``build_for_mode`` for locked agents.
+
+    Their YAML value is the baseline, while the selected start mode patches
+    the live tree.  Showing only the baseline made PlannerAgent look disabled
+    in ``planner`` mode even though it was the first stage being executed.
+    """
+    if cfg.name not in MODE_CONTROLLED_AGENTS:
+        return declared_enabled
+    mode = get_settings().web.start_mode
+    if cfg.name == "PlannerAgent":
+        return mode not in ("orchestrator_planner", "orchestrator_plan")
+    if cfg.name in ("PlanningPipelineAgent", "InitAgent"):
+        selected = (
+            "PlanningPipelineAgent"
+            if "PlanningPipelineAgent" in system.agents
+            else "InitAgent"
+        )
+        return cfg.name == selected and mode in ("init", "planner")
+    return declared_enabled
 
 
 def _tool_limit(cfg: AgentConfig) -> Optional[Dict[str, Any]]:
@@ -165,7 +195,7 @@ def agents_catalog() -> Dict[str, Any]:
             "stage": stage,
             "parents": parents.get(name, []),
             "subordinates": list(cfg.subordinates) + list(cfg.children),
-            "enabled": declared_enabled,
+            "enabled": _mode_controlled_enabled(cfg, system, declared_enabled),
             # The setting that decides `enabled` in the YAML, if any, and the
             # appSettings field the switch then edits instead of an override.
             "enabledRef": _enabled_ref(cfg),

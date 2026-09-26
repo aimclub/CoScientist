@@ -485,6 +485,9 @@ def test_build_for_mode_orchestrator(monkeypatch):
     system = build_for_mode()
     assert system is not None
     assert system.root.name == "OrchestratorAgent"
+    assert "PlannerAgent" in [
+        agent.name for agent in system.config.enabled_subordinates("OrchestratorAgent")
+    ]
 
 
 def test_build_for_mode_orchestrator_planner(monkeypatch):

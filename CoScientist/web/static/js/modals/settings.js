@@ -1237,6 +1237,15 @@
     }
 
     function effectiveEnabled(agent) {
+      if (agent.lock === 'startMode') {
+        const mode = getSettingPath(settingsDraft, 'general.startMode');
+        if (agent.name === 'PlannerAgent') {
+          return mode !== 'orchestrator_planner' && mode !== 'orchestrator_plan';
+        }
+        if (agent.name === 'PlanningPipelineAgent' || agent.name === 'InitAgent') {
+          return mode === 'planner' || mode === 'init';
+        }
+      }
       if (agent.lock) return agent.enabled;
       const field = agentSettingField(agent);
       if (field) return !!getSettingPath(settingsDraft, field.path);

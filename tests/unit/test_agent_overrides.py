@@ -127,6 +127,28 @@ def test_the_catalog_shows_declared_values_not_overridden_ones():
     assert root["lock"] == "root"
 
 
+@pytest.mark.parametrize(
+    ("mode", "planner_enabled", "pipeline_enabled"),
+    [
+        ("planner", True, True),
+        ("orchestrator", True, False),
+        ("orchestrator_planner", False, False),
+    ],
+)
+def test_catalog_shows_start_mode_effective_planner_state(
+    monkeypatch, mode, planner_enabled, pipeline_enabled,
+):
+    monkeypatch.setenv("COSCIENTIST_CONFIG", "experiments")
+    monkeypatch.setattr(get_settings().web, "start_mode", mode)
+
+    by_name = {a["name"]: a for a in agents_catalog()["agents"]}
+
+    assert by_name["PlannerAgent"]["enabled"] is planner_enabled
+    assert by_name["PlannerAgent"]["lock"] == "startMode"
+    assert by_name["PlanningPipelineAgent"]["enabled"] is pipeline_enabled
+    assert by_name["PlanningPipelineAgent"]["lock"] == "startMode"
+
+
 def test_a_setting_backed_agent_names_the_field_its_switch_edits():
     """Settings → Agents is the one place agents are switched: for an agent
     whose `enabled` is a setting, the row edits that setting, not an override."""
