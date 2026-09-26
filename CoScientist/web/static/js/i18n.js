@@ -196,10 +196,10 @@ const i18n = {
     en: 'Takes effect right after saving, including sessions that are already running.',
     ru: 'Действует сразу после сохранения, в том числе в уже запущенных сессиях.'
   },
-  'settings.scope.session': { en: 'New sessions', ru: 'Новые сессии' },
+  'settings.scope.session': { en: 'Next request', ru: 'Следующий запрос' },
   'settings.scope.session.hint': {
-    en: 'Agents are built when a session first runs — sessions that already ran keep the previous value.',
-    ru: 'Агенты собираются при первом запуске сессии — уже запускавшиеся сессии сохранят прежнее значение.'
+    en: 'The current run finishes on its existing agent tree; the next request rebuilds it without losing session history.',
+    ru: 'Текущий запуск завершится на прежнем дереве агентов; перед следующим запросом оно пересоберётся без потери истории сессии.'
   },
   'settings.scope.browser': { en: 'This browser', ru: 'Этот браузер' },
   'settings.scope.browser.hint': {
@@ -268,8 +268,8 @@ const i18n = {
   'settings.status.saving': { en: 'Saving…', ru: 'Сохранение…' },
   'settings.status.saved': { en: 'Saved.', ru: 'Сохранено.' },
   'settings.status.savedSession': {
-    en: 'Saved. Some changes take effect in new sessions.',
-    ru: 'Сохранено. Часть изменений вступит в силу в новых сессиях.'
+    en: 'Saved. Tree-level changes take effect on the next request.',
+    ru: 'Сохранено. Изменения дерева агентов вступят в силу со следующего запроса.'
   },
   'settings.status.savedReload': {
     en: 'Saved. The change takes effect after a page reload.',
@@ -280,8 +280,8 @@ const i18n = {
   // Settings → Agents
   'settings.section.agents': { en: 'Agents', ru: 'Агенты' },
   'settings.section.agents.desc': {
-    en: 'Which agents take part, how deeply each one reasons and on which model. Changes apply to new sessions.',
-    ru: 'Какие агенты участвуют в работе, насколько глубоко каждый рассуждает и на какой модели. Изменения применяются к новым сессиям.'
+    en: 'Which agents take part, how deeply each one reasons and on which model. Changes apply on the next request.',
+    ru: 'Какие агенты участвуют в работе, насколько глубоко каждый рассуждает и на какой модели. Изменения применяются со следующего запроса.'
   },
   'settings.f.defaultReasoning.label': { en: 'Default reasoning', ru: 'Ризонинг по умолчанию' },
   'settings.f.defaultReasoning.desc': {
@@ -355,6 +355,11 @@ const i18n = {
   },
   'settings.agents.reasoning': { en: 'Reasoning', ru: 'Ризонинг' },
   'settings.agents.model': { en: 'Model', ru: 'Модель' },
+  'settings.agents.modelCustom': { en: 'Custom model ID…', ru: 'Свой ID модели…' },
+  'settings.agents.modelScope': {
+    en: 'Changes only the LLM; the agent keeps its own prompt, tools and role.',
+    ru: 'Меняется только LLM; промпт, инструменты и роль агента сохраняются.',
+  },
   'settings.agents.modelPlaceholder': { en: 'as in the profile: {model}', ru: 'как в профиле: {model}' },
   'settings.agents.limit.searches': { en: 'Search limit', ru: 'Лимит поисков' },
   'settings.agents.limit.searches.hint': {
@@ -762,12 +767,12 @@ const i18n = {
     ru: 'Если ни один ранжировщик не нашёл подходящего MCP-инструмента, задача уходит FedotAgent, а не CoderAgent.'
   },
   'settings.f.fedotFallback.scopeHint': {
-    en: 'The agent is added for sessions that first run after saving; turning it off also stops the fallback in sessions already running.',
-    ru: 'Агент добавляется для сессий, впервые запущенных после сохранения; выключение останавливает резервный маршрут и в уже запущенных сессиях.'
+    en: 'The tree is rebuilt before the next request. Disabling it blocks new FEDOT.MAS calls but does not cancel one already running.',
+    ru: 'Дерево пересоберётся перед следующим запросом. Выключение блокирует новые вызовы FEDOT.MAS, но не отменяет уже выполняющийся.'
   },
   'settings.f.experimentRouteFedot.scopeHint': {
-    en: 'Turning it on applies to sessions that first run after saving; turning it off also stops FEDOT.MAS in sessions already running.',
-    ru: 'Включение действует для сессий, впервые запущенных после сохранения; выключение останавливает FEDOT.MAS и в уже запущенных сессиях.'
+    en: 'The tree is rebuilt before the next request. Disabling it blocks new experiment FEDOT.MAS calls but does not cancel one already running.',
+    ru: 'Дерево пересоберётся перед следующим запросом. Выключение блокирует новые вызовы FEDOT.MAS в экспериментах, но не отменяет уже выполняющийся.'
   },
   'settings.f.experimentRouteAlembic.label': {
     en: 'Offer Alembic for repository reuse',

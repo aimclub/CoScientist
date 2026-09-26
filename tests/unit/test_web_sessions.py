@@ -117,6 +117,28 @@ def test_finished_run_cannot_discard_a_new_owner():
     asyncio.run(scenario())
 
 
+def test_settings_invalidation_rebuilds_the_cached_tree_without_replacing_manager():
+    async def scenario():
+        runtime = web_app.WebRuntime()
+        key = ("user_a", "session_a")
+        rebuilt = []
+
+        class StubManager:
+            async def rebuild_agent_tree(self):
+                rebuilt.append(True)
+
+        manager = StubManager()
+        runtime.registry.require_session = lambda *_: None
+        runtime.managers[key] = manager
+
+        assert runtime.invalidate_agent_trees() == 1
+        assert await runtime.get_manager(*key) is manager
+        assert rebuilt == [True]
+        assert key not in runtime.stale_manager_trees
+
+    asyncio.run(scenario())
+
+
 def test_chat_controls_follow_server_status_broadcasts():
     chat_js = (web_app.WEB_DIR / "static" / "js" / "chat.js").read_text(encoding="utf-8")
     ws_js = (web_app.WEB_DIR / "static" / "js" / "ws.js").read_text(encoding="utf-8")

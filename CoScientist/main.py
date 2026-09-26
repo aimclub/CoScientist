@@ -281,6 +281,23 @@ class CoScientistManager:
 
             self._initialized = True
 
+    async def rebuild_agent_tree(self) -> None:
+        """Rebuild agents from current settings while preserving session data.
+
+        This deliberately does not call :meth:`close`: closing a manager also
+        removes uploaded-paper resources and usage state, which is appropriate
+        when a session ends but not when the operator changes a model or
+        capability between two requests in the same session.
+        """
+        async with self._initialize_lock:
+            if self.runner is not None:
+                try:
+                    await self.runner.close()
+                finally:
+                    self.runner = None
+                    self._initialized = False
+        await self.initialize()
+
     async def _set_state(self, key: str, value) -> None:
         """Best-effort write into the live session state (in-memory)."""
         try:

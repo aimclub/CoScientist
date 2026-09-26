@@ -663,6 +663,11 @@ class WebRuntime:
         self.session_service = _web_session_service()
         self.registry = LocalSessionRegistry()
         self.managers: dict[SessionKey, CoScientistManager] = {}
+        # Settings are process-wide, while each manager owns an immutable ADK
+        # agent tree.  A save marks cached trees stale; get_manager rebuilds a
+        # stale tree immediately before the next invocation, preserving the
+        # underlying durable ADK session and research artifacts.
+        self.stale_manager_trees: set[SessionKey] = set()
         self.manager_lock = asyncio.Lock()
         self.control_locks: dict[SessionKey, asyncio.Lock] = {}
         self.execution_locks: dict[SessionKey, asyncio.Lock] = {}
@@ -853,11 +858,14 @@ class WebRuntime:
         self.registry.require_session(user_id, session_id)
         key = (user_id, session_id)
         manager = self.managers.get(key)
-        if manager is not None:
+        if manager is not None and key not in self.stale_manager_trees:
             return manager
         async with self.manager_lock:
             manager = self.managers.get(key)
-            if manager is None:
+            if manager is not None and key in self.stale_manager_trees:
+                await manager.rebuild_agent_tree()
+                self.stale_manager_trees.discard(key)
+            elif manager is None:
                 # NOT the place to wipe the session's graphs. A missing manager
                 # means "no manager since this process started", which is a very
                 # different thing from "a new session": continuing yesterday's
@@ -877,6 +885,12 @@ class WebRuntime:
                 self.managers[key] = manager
                 self.execution_locks[key] = asyncio.Lock()
         return manager
+
+    def invalidate_agent_trees(self) -> int:
+        """Apply tree-level settings on each session's next request."""
+        keys = set(self.managers)
+        self.stale_manager_trees.update(keys)
+        return len(keys)
 
     def attach_socket(self, key: SessionKey, ws: WebSocket) -> None:
         if ws not in self.sockets[key]:
@@ -2970,8 +2984,15 @@ def create_app() -> FastAPI:
     @app.post("/api/settings")
     async def save_settings_api(data: dict):
         """Update WebSettings from the frontend."""
+        before = _current_settings()
         _apply_frontend_settings(data)
-        return JSONResponse({"status": "success", **_settings_payload()})
+        changed = before != _current_settings()
+        queued = runtime.invalidate_agent_trees() if changed else 0
+        return JSONResponse({
+            "status": "success",
+            "agentTreesQueued": queued,
+            **_settings_payload(),
+        })
 
     # --- Agent info ---
     @app.get("/api/agents/catalog")
@@ -3012,6 +3033,14 @@ def create_app() -> FastAPI:
 
     @app.post("/api/fedot-debug-run")
     async def fedot_debug_run(data: dict):
+        from CoScientist.capabilities import fedot_mas_enabled
+
+        if not fedot_mas_enabled():
+            raise HTTPException(
+                status_code=409,
+                detail=("FEDOT.MAS is disabled. Enable the experiment route or "
+                        "executor fallback before starting a debug run."),
+            )
         task_description = data.get(
             "task_description",
             "Ping test: say hello, do nothing else.",
