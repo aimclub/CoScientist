@@ -9,6 +9,8 @@ running system reads to decide which sandbox to continue in.
 """
 import pytest
 
+from CoScientist.config import get_settings
+
 
 @pytest.fixture(autouse=True)
 def _isolated_web_state(tmp_path, monkeypatch):
@@ -37,3 +39,19 @@ def _let_caplog_see_our_logs():
         yield
     finally:
         app_logger.propagate = previous
+
+
+@pytest.fixture(autouse=True)
+def _auth_disabled_by_default(monkeypatch):
+    """Let every other test go on testing what it was written to test.
+
+    ``create_app`` now installs a deny-by-default gate, so a TestClient without
+    a session gets 401 on every route. Tests about graph scoping or report
+    links have nothing to say about authentication, and threading a cookie
+    through each of them would only obscure what they assert.
+
+    The gate itself is covered by tests/unit/test_web_auth.py, whose own
+    autouse fixture turns it back on — a module fixture runs after this one, so
+    it wins.
+    """
+    monkeypatch.setattr(get_settings().auth, "enabled", False)

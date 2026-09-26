@@ -221,3 +221,7 @@ benchmarks/alembic/pre_comparison
 # Exported run folders and stray configs — session data, never source
 *_cossession/
 CoScientist/some.yaml
+
+# Working notes, handoff files and draft PR text. These are session scratch,
+# not source. Nine of them reached main once already.
+scratchpad/
