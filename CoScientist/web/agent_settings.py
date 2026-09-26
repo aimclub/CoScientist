@@ -91,6 +91,7 @@ ENABLED_SETTING_FIELDS: Dict[str, str] = {
     "web.medical_agent_enabled": "medicalAgent.enabled",
     "web.fedot_fallback_enabled": "taskExecutorAgent.fedotFallback",
     "experiments.route_fedot": "experimentModule.routeFedot",
+    "experiments.route_alembic": "experimentModule.routeAlembic",
     "nir_buildable": "nirReport.enabled",
 }
 

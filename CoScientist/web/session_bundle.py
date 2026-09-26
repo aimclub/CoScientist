@@ -350,6 +350,10 @@ async def export_session(
     # --- Pack ZIP ---
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        from CoScientist.tools.fedot_runs import snapshot as fedot_snapshot
+        # Optional v1 member: old bundles remain importable. Graph configs,
+        # inputs, outputs and tool traces are carried with every session run.
+        zf.writestr("fedot/runs.json", _json_bytes(fedot_snapshot(key)))
         zf.writestr(_MANIFEST, _json_bytes(manifest))
         if adk_session_data is not None:
             zf.writestr(_ADK_SESSION, _json_bytes(adk_session_data))
@@ -472,12 +476,20 @@ async def import_session(
     execution_graph_data = _read_json(_GRAPH_EXECUTION)
     # Absent from a bundle written before this existed; reads back as {}.
     agent_summaries_data = _read_json(_GRAPH_SUMMARIES)
+    fedot_data = _read_json("fedot/runs.json")
+    if "fedot/runs.json" in zf.namelist() and fedot_data is None:
+        raise ValueError("Invalid fedot/runs.json in session bundle")
+    if fedot_data is not None:
+        from CoScientist.tools.fedot_runs import validate_snapshot
+        validate_snapshot(fedot_data)
 
     title = manifest.get("title", "Imported session")
     session_id = f"session_{uuid4().hex}"
 
     # --- Ensure user exists in registry ---
-    user = runtime.registry.ensure_user(target_user_id)
+    # ensure_user accepts a nickname, not an ID. Prefer the chosen owner;
+    # otherwise import silently creates a different user with the ID as name.
+    user = runtime.registry.get_user(target_user_id) or runtime.registry.ensure_user(target_user_id)
     user_id = user["id"]
 
     # --- Create ADK session ---
@@ -522,6 +534,10 @@ async def import_session(
     )
 
     key = (user_id, session_id)
+
+    if fedot_data is not None:
+        from CoScientist.tools.fedot_runs import restore as restore_fedot
+        restore_fedot(key, fedot_data)
 
     # --- Restore agent events ---
     if isinstance(agent_events, list) and agent_events:

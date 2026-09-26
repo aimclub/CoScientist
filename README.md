@@ -239,51 +239,37 @@ uv run python -m CoScientist.main
 
 ### FEDOT.MAS graph and traces
 
-Two rows in the web UI's activity rail open FEDOT.MAS views. Both are optional,
-and each needs something set up before it has anything to show:
+Open the FEDOT graph or trace from the current session's activity rail. Both
+views list **all FEDOT calls in that session**, including failed/timed-out or
+cancelled attempts, and select a concrete `run_id`. Switching between graph and
+trace keeps that run. Manual selection disables automatic following of new runs.
+Opening a page without a session never falls back to another session's run.
 
-| Rail row | Page | Needs |
-|---|---|---|
-| FEDOT.MAS trace | `/fedot-trace` | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` in `.env` |
-| FEDOT.MAS agent graph | `/fedot-demo/` | the `infrastructure/fedot-mas-gui` submodule, running as its own process |
+The graph renderer is bundled with CoScientist; no GUI stand, submodule checkout,
+port 4173 or `FEDOT_GUI_URL` is needed. This is an observation-only viewer; start
+computations from the CoScientist chat.
 
-**Traces.** `/fedot-trace` reads the latest `coscientist:fedot` trace from
-Langfuse and draws it as a span tree. The secret key stays on the server; only
-the (already truncated) trace content reaches the browser. Without the keys the
-page renders an empty state that says so.
+Every new run saves its configuration (MAS/MAW graph), ADK agent/model/tool
+events, inputs, outputs and outcome under `WEB_STATE_DIR/fedot_runs` (default:
+`graph_runs/web_state/fedot_runs`). There is no automatic five-run history cap.
+These journals contain research data: protect/back up this directory and session
+exports accordingly. Remote artifacts referenced by tools retain their existing
+artifact lifecycle; the trace archive does not download arbitrary external URLs.
 
-```env
-LANGFUSE_PUBLIC_KEY=pk-...
-LANGFUSE_SECRET_KEY=sk-...
-LANGFUSE_BASE_URL=https://cloud.langfuse.com   # or your self-hosted instance
-```
+Session export includes `fedot/runs.json`. Import restores graphs and traces
+locally under the new session, preserves original provenance, and does not resume
+an in-flight snapshot. Old archives without this section still import normally.
+Previously unsaved/global Langfuse runs cannot reliably be assigned to a session
+retroactively, so they are not guessed into its history.
 
-**Agent graph.** `/fedot-demo/` reverse-proxies the FEDOT.MAS GUI stand, which
-lives in its own process and its own environment:
+Langfuse is optional: local traces work without its keys or service. When the
+plugin is available it receives the session and FEDOT run IDs; its exact trace
+and root-observation IDs are retained in the local journal for correlation.
+The trace tab no longer asks Langfuse for a global latest trace.
 
-```bash
-git submodule update --init infrastructure/fedot-mas-gui
-cd infrastructure/fedot-mas-gui
-uv sync && uv pip install -r gui/requirements.txt
-GUI_PORT=4173 ./.venv/bin/python gui/run.py        # Windows: .venv\Scripts\python.exe
-```
-
-Its own environment is not optional. FEDOT.MAS discovers local MCP servers by
-walking up from its installed location to a `pyproject.toml` carrying
-`[tool.uv.workspace]`; installed into CoScientist's venv there is no such root,
-so the stand starts but answers 500 on `/api/status` and comes up with no
-tools. Point `FEDOT_GUI_URL` elsewhere if the stand runs on another host or
-port.
-
-The stand reads `OPENAI_API_KEY` and `OPENAI_BASE_URL` for its own "run"
-button. CoScientist's `.env` names the same key `LLM__OPENAI_API_KEY`, so
-either add the alias or pass it on the command line.
-
-CoScientist splices a small bridge into the stand's `app.js` while proxying it,
-so a real `fedot_tool` run **inside CoScientist** draws on that page as it
-happens (through `/api/fedot-live-stream`) — nothing has to be started in the
-stand itself. Until the stand is up, `/fedot-demo/` answers a page naming the
-commands above.
+Web and same-host A2A workers must use the **same persistent `WEB_STATE_DIR`**.
+For workers in separate containers/hosts, mount shared storage at that directory;
+an in-memory broadcaster alone does not transfer their history to the web server.
 
 ### Chemical Computing Examples
 

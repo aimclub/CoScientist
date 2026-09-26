@@ -24,6 +24,11 @@ def main(argv=None) -> None:
     from CoScientist.assembly.schema import get_config
 
     agent_cfg = get_config().a2a_agent_by_key(args.key)
+    if not agent_cfg.is_enabled():
+        raise SystemExit(
+            f"A2A agent {args.key!r} is disabled by configuration. "
+            "Enable its capability switch before serving it."
+        )
     for name, value in agent_cfg.a2a.env.items():
         os.environ.setdefault(name, value)
 

@@ -199,8 +199,9 @@ still emits one — it would overwrite the executor's answer.
 the Experiment Module's optional `fedot_mas` route, `FedotAgent` an AgentTool of
 `ExperimentExecutorAgent`, with a single switch of its own,
 `EXPERIMENTS__ROUTE_FEDOT` (off by default; also in the web settings, where
-turning it on applies to sessions started afterwards and turning it off also
-stops a running one). `experiments.yaml` attaches `FedotAgent` on it, and every
+turning it on rebuilds cached web agent trees before their next request and
+turning it off blocks new calls without cancelling one already in flight).
+`experiments.yaml` attaches `FedotAgent` on it, and every
 route decision — the planner prompt and context, the plan critique,
 `start_task`, the fallback chains and the Alembic post-build route — asks
 `state_machine.fedot_route_available`, which also requires `FedotAgent` in
@@ -210,6 +211,12 @@ route off as well; deleting only the `FedotAgent:` block does not, because
 names it to the planner, and MCP work goes to `react_tools` (ExperimentAgent).
 On, `fedot_mas` is still only the exception for one task chaining several tools
 in a search loop.
+
+The Alembic builder uses the same policy boundary. `EXPERIMENTS__ROUTE_ALEMBIC`
+is off by default; it controls whether `McpBuilderAgent` is assembled, whether
+an Alembic route may start, whether the direct build tool accepts a call, and
+whether the standalone A2A service is started. Existing build records remain
+readable while the capability is off.
 
 The `medical` route follows `MedicalAgent` the same way, through
 `state_machine.medical_route_available`: its switch is `MEDICAL__ENABLED` (also

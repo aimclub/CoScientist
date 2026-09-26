@@ -15,6 +15,8 @@ from .state_machine import (
     ROUTE_AGENT_BY_ROUTE,
     ExperimentRuntimeError,
     active_attempt,
+    alembic_route_available,
+    fedot_route_available,
     mark_route_returned,
 )
 from .shared import GATE_ROUTED_STATE_KEY, audit, schema_offers_s3_upload, session_inventory_rows
@@ -325,6 +327,16 @@ def guard_route_agent_tool(
     state = tool_context.state
     pending = _pending_record_attempt(state)
     if tool_name in ROUTE_AGENT_NAMES:
+        if tool_name == "FedotAgent" and not fedot_route_available():
+            return {
+                "status": "refused", "error_code": "route_disabled",
+                "message": "FEDOT.MAS route is disabled by current settings.",
+            }
+        if tool_name == "McpBuilderAgent" and not alembic_route_available():
+            return {
+                "status": "refused", "error_code": "route_disabled",
+                "message": "Alembic route is disabled by current settings.",
+            }
         try:
             _, task_runtime, attempt = active_attempt(state)
         except ExperimentRuntimeError as exc:

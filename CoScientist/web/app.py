@@ -117,118 +117,6 @@ WEB_DIR = Path(__file__).parent
 TEMPLATE_PATH = WEB_DIR / "templates" / "index.html"
 APP_NAME = "coscientist_app"
 
-# Spliced into infrastructure/fedot-mas-gui's static/app.js by the /fedot-demo
-# reverse proxy (see fedot_demo_proxy below) — NOT a fork of that file. Runs
-# inside its own IIFE closure (spliced before the closing `})();`), so it can
-# call straight into its already-loaded loadPreset/liveActivate/liveMessage/
-# presetFromConfig instead of re-implementing the graph renderer a second
-# time. Feeds REAL fedot_tool runs (CoScientist/tools/fedot_live.py) into
-# this exact page, instead of the stand's own /api/run flow.
-_FEDOT_DEMO_LIVE_BRIDGE = r"""
-/* ───────── CoScientist live bridge (injected by the reverse proxy) ───────── */
-function _coscientistLiveConnect() {
-  const es = new EventSource("/api/fedot-live-stream");
-  es.onmessage = (e) => {
-    let ev;
-    try { ev = JSON.parse(e.data); } catch { return; }
-
-    if (ev.type === "config") {
-      const preset = presetFromConfig(ev.config, "CoScientist — живой запуск");
-      preset.id = "__live__";
-      loadPreset(preset);
-      showTab("feed");
-      return;
-    }
-    if (ev.type === "run_start") { resetRun(); return; }
-    if (ev.type === "agent_start") {
-      liveActivate(ev.agent);
-      liveMessage("старт", ev.agent, (ev.instruction || "").slice(0, 200));
-      return;
-    }
-    if (ev.type === "agent_done") {
-      liveFinish(ev.agent);
-      liveMessage("результат", ev.agent, (ev.output || "(готово)").slice(0, 200));
-      return;
-    }
-    if (ev.type === "tool") {
-      const routing = ev.tool === "transfer_to_agent";
-      const text = routing ? `Передаёт задачу агенту ${ev.target || "…"}`
-                           : (ev.args ? `${ev.tool}(${ev.args})` : `Вызов инструмента ${ev.tool}`);
-      liveMessage(routing ? "маршрутизация" : "инструмент", ev.agent, text, routing ? null : ev.tool);
-      return;
-    }
-    if (ev.type === "tool_result") {
-      if (ev.error) liveMessage("ошибка инструмента", ev.agent, ev.text, ev.tool);
-      return;
-    }
-    if (ev.type === "text") {
-      S.tokens += ev.tokens || 0;
-      $("m-tokens").textContent = nfmt(S.tokens);
-      liveMessage("шаг агента", ev.agent, ev.text);
-      return;
-    }
-    if (ev.type === "tokens") {
-      S.tokens += ev.tokens || 0;
-      $("m-tokens").textContent = nfmt(S.tokens);
-      return;
-    }
-    if (ev.type === "run_end") {
-      liveMessage(ev.status === "success" ? "готово" : "ошибка", "система",
-                  ev.status === "success" ? "Прогон завершён." : (ev.error || "Прогон завершился с ошибкой."));
-      $("p-fill").style.width = "100%";
-      return;
-    }
-  };
-}
-document.addEventListener("DOMContentLoaded", _coscientistLiveConnect);
-"""
-# Shown in place of the gui-demo when its own process is not up. Deliberately
-# self-contained (no /static, no i18n.js): it has to render even when the only
-# thing this route can reach is this string.
-_FEDOT_DEMO_OFFLINE_PAGE = """<!DOCTYPE html>
-<html lang="ru"><head><meta charset="utf-8">
-<link rel="stylesheet" href="/static/css/fonts.css" />
-<title>FEDOT.MAS Demo — не запущен</title>
-<style>
-  body {{ margin: 0; min-height: 100vh; display: grid; place-items: center;
-    background: #0f1115; color: #e6e6e6;
-    font: 15px/1.6 "Source Sans 3", -apple-system, "Segoe UI", Roboto, sans-serif; }}
-  main {{ max-width: 620px; padding: 32px; }}
-  h1 {{ font-size: 19px; margin: 0 0 10px; }}
-  p {{ color: #9aa0b0; margin: 10px 0; }}
-  code {{ font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13px;
-    background: #1b1f27; border: 1px solid #262a33; border-radius: 5px; padding: 1px 5px; }}
-  ol {{ color: #9aa0b0; padding-left: 20px; }} li {{ margin: 6px 0; }}
-  a {{ color: #6ea8fe; }}
-</style></head><body><main>
-  <h1>Граф агентов FEDOT.MAS не отвечает</h1>
-  <p>Это окно — обратный прокси к отдельному приложению
-  (<code>infrastructure/fedot-mas-gui</code>), которое живёт в своём процессе и
-  своём окружении: оно закрепляет более новый <code>fedotmas</code>, чем ядро,
-  поэтому в CoScientist не импортируется. Сейчас по адресу
-  <code>{upstream}</code> никто не слушает.</p>
-  <ol>
-    <li><code>git submodule update --init infrastructure/fedot-mas-gui</code></li>
-    <li><code>cd infrastructure/fedot-mas-gui &amp;&amp; uv sync &amp;&amp;
-        uv pip install -r gui/requirements.txt</code> — своё окружение
-        обязательно: fedotmas ищет локальные MCP-серверы, поднимаясь от места
-        своей установки до <code>pyproject.toml</code> с
-        <code>[tool.uv.workspace]</code>, и в ядровом venv такого корня нет —
-        стенд тогда стартует, но отвечает 500 на <code>/api/status</code></li>
-    <li><code>GUI_PORT=4173 ./.venv/Scripts/python.exe gui/run.py</code> —
-        ключ провайдера стенд читает из <code>.env</code> как
-        <code>OPENAI_API_KEY</code> и <code>OPENAI_BASE_URL</code></li>
-    <li>другой адрес задаётся переменной <code>FEDOT_GUI_URL</code></li>
-  </ol>
-  <p>Живой прогон <code>fedot_tool</code> рисуется на этой же странице через
-  <code>/api/fedot-live-stream</code> — поток работает и без демо, но рисовать
-  его пока нечему. Трассировка прогонов доступна отдельно:
-  <a href="/fedot-trace">/fedot-trace</a>.</p>
-  <p style="font-size:13px">FEDOT.MAS agent graph is a separate app served by
-  its own process; start it as above or point <code>FEDOT_GUI_URL</code>
-  elsewhere.</p>
-</main></body></html>
-"""
 
 SessionKey = tuple[str, str]
 SOCKET_SEND_TIMEOUT_SECONDS = 5.0
@@ -775,6 +663,11 @@ class WebRuntime:
         self.session_service = _web_session_service()
         self.registry = LocalSessionRegistry()
         self.managers: dict[SessionKey, CoScientistManager] = {}
+        # Settings are process-wide, while each manager owns an immutable ADK
+        # agent tree.  A save marks cached trees stale; get_manager rebuilds a
+        # stale tree immediately before the next invocation, preserving the
+        # underlying durable ADK session and research artifacts.
+        self.stale_manager_trees: set[SessionKey] = set()
         self.manager_lock = asyncio.Lock()
         self.control_locks: dict[SessionKey, asyncio.Lock] = {}
         self.execution_locks: dict[SessionKey, asyncio.Lock] = {}
@@ -965,11 +858,14 @@ class WebRuntime:
         self.registry.require_session(user_id, session_id)
         key = (user_id, session_id)
         manager = self.managers.get(key)
-        if manager is not None:
+        if manager is not None and key not in self.stale_manager_trees:
             return manager
         async with self.manager_lock:
             manager = self.managers.get(key)
-            if manager is None:
+            if manager is not None and key in self.stale_manager_trees:
+                await manager.rebuild_agent_tree()
+                self.stale_manager_trees.discard(key)
+            elif manager is None:
                 # NOT the place to wipe the session's graphs. A missing manager
                 # means "no manager since this process started", which is a very
                 # different thing from "a new session": continuing yesterday's
@@ -989,6 +885,12 @@ class WebRuntime:
                 self.managers[key] = manager
                 self.execution_locks[key] = asyncio.Lock()
         return manager
+
+    def invalidate_agent_trees(self) -> int:
+        """Apply tree-level settings on each session's next request."""
+        keys = set(self.managers)
+        self.stale_manager_trees.update(keys)
+        return len(keys)
 
     def attach_socket(self, key: SessionKey, ws: WebSocket) -> None:
         if ws not in self.sockets[key]:
@@ -2945,184 +2847,8 @@ def create_app() -> FastAPI:
             headers={"Cache-Control": "no-store"},
         )
 
-    @app.get("/api/fedot-langfuse-trace")
-    async def fedot_langfuse_trace():
-        """Latest 'coscientist:fedot' trace from Langfuse, as a span tree.
-
-        A thin read-only proxy: LANGFUSE_SECRET_KEY never reaches the browser,
-        only the (already truncated) trace content does. Any failure — missing
-        keys, no trace yet, Langfuse unreachable — comes back as a normal JSON
-        body with status != "ok" rather than an HTTP error, so the page can
-        just render an empty state.
-        """
-        public_key = os.getenv("LANGFUSE_PUBLIC_KEY")
-        secret_key = os.getenv("LANGFUSE_SECRET_KEY")
-        base_url = os.getenv("LANGFUSE_BASE_URL") or os.getenv("LANGFUSE_HOST") or "https://cloud.langfuse.com"
-        if not public_key or not secret_key:
-            return JSONResponse({
-                "status": "unconfigured",
-                "detail": "LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are not set",
-            })
-
-        def _truncate(value, limit: int = 800):
-            if value is None:
-                return None
-            text = value if isinstance(value, str) else json.dumps(value, default=str, ensure_ascii=False)
-            return text if len(text) <= limit else text[:limit] + f"… ({len(text)} chars total)"
-
-        def _fetch():
-            from langfuse.api.client import LangfuseAPI
-
-            client = LangfuseAPI(base_url=base_url, username=public_key, password=secret_key)
-            traces = client.trace.list(name="coscientist:fedot", limit=1, order_by="timestamp.desc")
-            if not traces.data:
-                return {"status": "empty"}
-            full = client.trace.get(traces.data[0].id)
-            observations = sorted(
-                (
-                    {
-                        "id": o.id,
-                        "parent_id": o.parent_observation_id,
-                        "type": o.type,
-                        "name": o.name,
-                        "start_time": o.start_time.isoformat() if o.start_time else None,
-                        "end_time": o.end_time.isoformat() if o.end_time else None,
-                        "level": o.level,
-                        "status_message": o.status_message,
-                        "input": _truncate(o.input),
-                        "output": _truncate(o.output),
-                        "usage": o.usage.dict() if o.usage else None,
-                    }
-                    for o in (full.observations or [])
-                ),
-                key=lambda o: o["start_time"] or "",
-            )
-            return {
-                "status": "ok",
-                "trace_id": full.id,
-                "name": full.name,
-                "timestamp": full.timestamp.isoformat() if full.timestamp else None,
-                "latency": full.latency,
-                "total_cost": full.total_cost,
-                "langfuse_url": f"{base_url}{full.html_path}" if full.html_path else None,
-                "observations": observations,
-            }
-
-        try:
-            result = await asyncio.to_thread(_fetch)
-        except Exception as exc:  # noqa: BLE001 — surface as JSON, never crash the server
-            result = {"status": "error", "detail": str(exc)}
-        return JSONResponse(result)
-
-    # --- FEDOT.MAS gui-demo (infrastructure/fedot-mas-gui, an unmerged upstream
-    # PR — see .gitmodules) — reverse-proxied rather than imported in-process:
-    # that fork pins a newer fedotmas (ships UnknownToolRecoveryPlugin, which our
-    # pinned fedotmas doesn't have yet), so importing its server module here would
-    # force a core dependency bump for the whole app. It stays its own process on
-    # its own venv/port; this just makes it render under CoScientist's own origin
-    # instead of a separate tab, using CoScientist's own OpenRouter key (see
-    # infrastructure/fedot-mas-gui/.env).
-    FEDOT_GUI_UPSTREAM = os.getenv("FEDOT_GUI_URL", "http://127.0.0.1:4173")
-
-    @app.get("/fedot-demo")
-    async def fedot_demo_root():
-        return RedirectResponse(url="/fedot-demo/")
-
-    @app.api_route("/fedot-demo/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "HEAD"])
-    async def fedot_demo_proxy(path: str, request: Request):
-        upstream_url = f"{FEDOT_GUI_UPSTREAM}/{path}"
-        body = await request.body()
-        forward_headers = {
-            k: v for k, v in request.headers.items()
-            if k.lower() not in ("host", "content-length")
-        }
-        client = httpx.AsyncClient(timeout=None)
-        try:
-            upstream_req = client.build_request(
-                request.method, upstream_url,
-                params=request.query_params, content=body, headers=forward_headers,
-            )
-            upstream_resp = await client.send(upstream_req, stream=True)
-        except httpx.ConnectError:
-            await client.aclose()
-            # This is a row in the activity rail, so the failure opens in a
-            # browser tab: a JSON body would read as a broken page. Anything
-            # that is not a navigation (the page's own fetches) still gets
-            # JSON, and both keep the 502 — nothing here is a working demo.
-            detail = (
-                f"FEDOT.MAS gui-demo is not answering at {FEDOT_GUI_UPSTREAM}"
-            )
-            if "text/html" in request.headers.get("accept", ""):
-                return HTMLResponse(
-                    _FEDOT_DEMO_OFFLINE_PAGE.format(upstream=FEDOT_GUI_UPSTREAM),
-                    status_code=502, headers={"Cache-Control": "no-store"},
-                )
-            return JSONResponse({"detail": detail}, status_code=502)
-
-        resp_headers = {
-            k: v for k, v in upstream_resp.headers.items()
-            if k.lower() not in ("content-length", "content-encoding", "transfer-encoding", "connection")
-        }
-
-        # app.js only: splice a small bridge script in just before its closing
-        # `})();`, wiring THEIR own loadPreset/liveActivate/liveMessage (this
-        # exact file, untouched above the splice point) to REAL fedot_tool
-        # runs via /api/fedot-live-stream, instead of this stand's own
-        # /api/run. Buffered (not streamed) because the splice needs the
-        # whole body — app.js is ~90KB, that's fine.
-        if path == "app.js" and upstream_resp.status_code == 200:
-            raw = await upstream_resp.aread()
-            await upstream_resp.aclose()
-            await client.aclose()
-            text = raw.decode("utf-8", errors="replace")
-            stripped = text.rstrip()
-            if stripped.endswith("})();"):
-                splice_at = len(stripped) - len("})();")
-                text = stripped[:splice_at] + _FEDOT_DEMO_LIVE_BRIDGE + "\n})();\n"
-            patched = text.encode("utf-8")
-            resp_headers.pop("content-length", None)
-            return Response(patched, status_code=200, media_type="text/javascript", headers=resp_headers)
-
-        async def _stream():
-            try:
-                async for chunk in upstream_resp.aiter_raw():
-                    yield chunk
-            finally:
-                await upstream_resp.aclose()
-                await client.aclose()
-
-        return StreamingResponse(
-            _stream(),
-            status_code=upstream_resp.status_code,
-            media_type=upstream_resp.headers.get("content-type"),
-            headers=resp_headers,
-        )
-
-    # --- FEDOT.MAS live agent graph — real fedot_tool runs, fed into the
-    # gui-demo page above via _FEDOT_DEMO_LIVE_BRIDGE. See
-    # CoScientist/tools/fedot_live.py. No standalone page of its own. ---
-    @app.get("/api/fedot-live-stream")
-    async def fedot_live_stream():
-        from CoScientist.tools.fedot_live import fedot_live
-
-        queue = fedot_live.subscribe()
-
-        async def events():
-            try:
-                while True:
-                    try:
-                        item = await asyncio.wait_for(queue.get(), timeout=15)
-                    except asyncio.TimeoutError:
-                        yield ": ping\n\n"
-                        continue
-                    yield f"data: {json.dumps(item, ensure_ascii=False, default=str)}\n\n"
-            finally:
-                fedot_live.unsubscribe(queue)
-
-        return StreamingResponse(
-            events(), media_type="text/event-stream",
-            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
-        )
+    from CoScientist.web.fedot_routes import register_fedot_routes
+    register_fedot_routes(app, runtime, WEB_DIR, _RevalidatingStatic)
 
     # --- Roadmap endpoints ---
     @app.get("/api/users/{user_id}/sessions/{session_id}/roadmap")
@@ -3258,8 +2984,15 @@ def create_app() -> FastAPI:
     @app.post("/api/settings")
     async def save_settings_api(data: dict):
         """Update WebSettings from the frontend."""
+        before = _current_settings()
         _apply_frontend_settings(data)
-        return JSONResponse({"status": "success", **_settings_payload()})
+        changed = before != _current_settings()
+        queued = runtime.invalidate_agent_trees() if changed else 0
+        return JSONResponse({
+            "status": "success",
+            "agentTreesQueued": queued,
+            **_settings_payload(),
+        })
 
     # --- Agent info ---
     @app.get("/api/agents/catalog")
@@ -3300,6 +3033,14 @@ def create_app() -> FastAPI:
 
     @app.post("/api/fedot-debug-run")
     async def fedot_debug_run(data: dict):
+        from CoScientist.capabilities import fedot_mas_enabled
+
+        if not fedot_mas_enabled():
+            raise HTTPException(
+                status_code=409,
+                detail=("FEDOT.MAS is disabled. Enable the experiment route or "
+                        "executor fallback before starting a debug run."),
+            )
         task_description = data.get(
             "task_description",
             "Ping test: say hello, do nothing else.",

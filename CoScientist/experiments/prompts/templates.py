@@ -325,7 +325,11 @@ lifecycle.
 def experiment_result_summary(ctx: PromptContext) -> str:
     return render_template(
         """Concise factual ExperimentSummary for HITL result review from TaskResults
-only — no invented verdict; surface failures/partials/warnings.
+only. Analyse whether each recorded criterion is actually supported, call out
+contradictions between tasks, missing evidence, suspiciously weak artifacts,
+and limitations that can change the scientific interpretation. Preserve every
+typed TaskResult status and evidence reference verbatim: this review explains
+the record but never upgrades/downgrades statuses or invents a verdict.
 {experiment_task_results?}
 Canonical artifact locations (paste verbatim; never invent S3://artifacts or
 example.com links): {experiment_artifacts_manifest?}

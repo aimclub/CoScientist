@@ -399,6 +399,7 @@
 
     // ── server sync ─────────────────────────────────────────────────────────
     function mergeServerSettings(data) {
+      agentsWithCustomModel.clear();
       Object.keys(appSettings).forEach(group => {
         if (!data[group] || typeof data[group] !== 'object') return;
         Object.keys(appSettings[group]).forEach(key => {
@@ -456,6 +457,7 @@
 
     function discardSettingsChanges() {
       if (!settingsSaved) return;
+      agentsWithCustomModel.clear();
       settingsDraft = cloneSettings(settingsSaved);
       settingsStatus = null;
       renderSettings();
@@ -465,6 +467,7 @@
       // The appearance lives in this browser, not in the server defaults.
       if (sectionId === 'interface') { resetAppearance(); renderSettings(); return; }
       if (!settingsDefaults || !settingsDraft) return;
+      if (sectionId === 'agents') agentsWithCustomModel.clear();
       EDITABLE_FIELDS.filter(f => f.section === sectionId).forEach(f => {
         const value = getSettingPath(settingsDefaults, f.path);
         if (value !== undefined) setSettingPath(settingsDraft, f.path, cloneSettings(value));
@@ -1005,6 +1008,17 @@
         const el = e.target;
         if (el.dataset.agentEnabled) { setAgentOverride(el.dataset.agentEnabled, 'enabled', el.checked); return; }
         if (el.dataset.agentReasoning) { setAgentOverride(el.dataset.agentReasoning, 'reasoning', el.value); return; }
+        if (el.dataset.agentModelChoice) {
+          const name = el.dataset.agentModelChoice;
+          if (el.value === '__custom__') {
+            agentsWithCustomModel.add(name);
+            refreshAgentRows();
+          } else {
+            agentsWithCustomModel.delete(name);
+            setAgentOverride(name, 'model', el.value);
+          }
+          return;
+        }
         if (el.dataset.agentModel) { setAgentOverride(el.dataset.agentModel, 'model', el.value.trim()); return; }
         if (el.dataset.agentLimit) {
           const limit = (catalogAgent(el.dataset.agentLimit) || {}).toolLimit;
@@ -1066,6 +1080,7 @@
     let agentsCatalogError = '';
     let agentsFilter = '';
     let agentsShowInternal = false;
+    const agentsWithCustomModel = new Set();
 
     async function loadAgentsCatalog() {
       try {
@@ -1202,6 +1217,7 @@
     }
 
     function resetAgentOverride(name) {
+      agentsWithCustomModel.delete(name);
       const map = cloneSettings(agentOverrides());
       delete map[name];
       const field = agentSettingField(catalogAgent(name));
@@ -1289,9 +1305,6 @@
             <span class="flex-1"></span>
             <span data-agents-changed class="text-[11px] text-outline-variant tabular-nums">${escHtml(agentsChangedText())}</span>
           </div>
-          <datalist id="settings-agent-models">
-            ${Object.entries(agentsCatalog.models).map(([alias, model]) => `<option value="${escHtml(alias)}">${escHtml(model || '')}</option>`).join('')}
-          </datalist>
           <div id="settings-agents-list" class="rounded-lg border border-outline-variant/15 divide-y divide-outline-variant/10">${renderAgentRows()}</div>
         </div>`;
     }
@@ -1365,7 +1378,27 @@
       }
 
       const modelValue = override.model || '';
-      const resolved = agentsCatalog.models[modelValue || agent.model];
+      const aliasSelected = Object.prototype.hasOwnProperty.call(agentsCatalog.models, modelValue);
+      const customModel = (!!modelValue && !aliasSelected) || agentsWithCustomModel.has(agent.name);
+      const modelChoice = customModel ? '__custom__' : modelValue;
+      const inheritedModel = agentsCatalog.models[agent.model] || agent.model;
+      const resolved = modelValue
+        ? (agentsCatalog.models[modelValue] || modelValue)
+        : inheritedModel;
+      const modelSelect = `
+        <select data-agent-model-choice="${escHtml(agent.name)}"
+          aria-label="${escHtml(`${t('settings.agents.model')}: ${agentTitle(agent.name)}`)}"
+          class="w-full bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs rounded-md pl-2.5 pr-8 py-1.5 focus:ring-1 focus:ring-primary/40">
+          <option value="" ${modelChoice === '' ? 'selected' : ''}>${escHtml(tf('settings.agents.inheritWith', { value: `${agent.model} — ${inheritedModel}` }))}</option>
+          ${Object.entries(agentsCatalog.models).map(([alias, model]) =>
+            `<option value="${escHtml(alias)}" ${modelChoice === alias ? 'selected' : ''}>${escHtml(`${alias} — ${model || ''}`)}</option>`).join('')}
+          <option value="__custom__" ${customModel ? 'selected' : ''}>${escHtml(t('settings.agents.modelCustom'))}</option>
+        </select>`;
+      const customModelInput = !customModel ? '' : `
+        <input type="text" data-agent-model="${escHtml(agent.name)}" value="${escHtml(modelValue)}"
+          autocomplete="off" spellcheck="false" placeholder="provider/model"
+          aria-label="${escHtml(t('settings.agents.modelCustom'))}"
+          class="w-full bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-2.5 py-1.5 focus:ring-1 focus:ring-primary/40" />`;
       // The budget of the agent's limiter callback: search calls, or calls of
       // each tool. Empty = the profile's (or the global search cap).
       const limit = agent.toolLimit;
@@ -1389,10 +1422,10 @@
           </label>
           <label class="flex flex-col gap-1 min-w-0 text-[10px] text-outline-variant">
             ${escHtml(t('settings.agents.model'))}
-            <input type="text" list="settings-agent-models" data-agent-model="${escHtml(agent.name)}" value="${escHtml(modelValue)}"
-              autocomplete="off" spellcheck="false" placeholder="${escHtml(tf('settings.agents.modelPlaceholder', { model: agent.model }))}"
-              class="w-full bg-surface-container-high border border-outline-variant/20 text-on-surface text-xs font-mono rounded-md px-2.5 py-1.5 focus:ring-1 focus:ring-primary/40" />
+            ${modelSelect}
+            ${customModelInput}
             ${resolved ? `<span class="font-mono truncate" title="${escHtml(resolved)}" translate="no">→ ${escHtml(resolved)}</span>` : ''}
+            <span>${escHtml(t('settings.agents.modelScope'))}</span>
           </label>
           ${limitControl}`}
         </div>`;

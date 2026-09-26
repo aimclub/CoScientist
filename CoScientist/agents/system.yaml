@@ -107,7 +107,7 @@ agents:
     description: Main CoScientist Orchestrator — coordinates specialized agents to solve scientific tasks.
     # Picks who works next out of the whole roster and reads back what they
     # returned; a wrong delegation costs an entire sub-agent run.
-    #reasoning: low
+    reasoning: low
     prompt: orchestrator
     tools: [retrieval, graph, research_graph_orchestrator]
     subordinates:
@@ -651,6 +651,7 @@ agents:
         tags: [medical, pubmed, dicom, clinical]
 
   McpBuilderAgent:
+    enabled: "${experiments.route_alembic}"
     # Asks before acting on a decision; inert until HITL__ENABLED.
     hitl: true
     class: llm
