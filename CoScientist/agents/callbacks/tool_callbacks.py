@@ -1683,8 +1683,13 @@ def sync_plan_to_research_graph(tasks: Iterable[Dict[str, Any]], graph: Any,
                 retitles.append({"id": step, "attrs": _card_attrs(task)})
             tracked = _step_status(task)
             want = tracked
+            derived = from_tasks.get(step)
             if tracked != "blocked":
-                want = _furthest(tracked, from_tasks.get(step)) or tracked
+                # A failed child is a terminal outcome, not work that is still
+                # running.  `blocked` is deliberately outside `_furthest`, so
+                # handle that verdict before comparing ordinary progress.
+                want = ("blocked" if derived == "blocked"
+                        else _furthest(tracked, derived) or tracked)
             if live.get(step) not in (None, want) and _may_move(live.get(step), want):
                 reason = ("план перевёл шаг в состояние «" + _RU_STEP.get(want, want) + "»"
                           if want == tracked else
@@ -1771,10 +1776,11 @@ def _furthest(*statuses: Optional[str]) -> Optional[str]:
 def _status_from_tasks(graph: Any) -> Dict[str, str]:
     """PlanStep id -> what the experiment tasks under it say, if anything.
 
-    A task the plan marked optional and the runtime skipped says nothing about
-    the step; a task that only exists as a plan (`planned`) has not started it
-    either. Everything else has: the step is at least under way, and when all
-    of its tasks are done, so is it.
+    A skipped optional task does not hold back siblings that completed; when
+    every child was skipped, however, the step ended without a result and must
+    not keep pulsing. A task that only exists as a plan (`planned`) has not
+    started it either. Everything else has: the step is at least under way,
+    and when all of its tasks are done, so is it.
     """
     try:
         full = graph.full() or {}
@@ -1796,10 +1802,20 @@ def _status_from_tasks(graph: Any) -> Dict[str, str]:
     for step, statuses in children.items():
         counted = [s for s in statuses if s != "skipped"]
         if not counted:
+            if statuses and all(s == "skipped" for s in statuses):
+                out[step] = "blocked"
             continue
         if all(s == "done" for s in counted):
             out[step] = "done"
-        elif any(s in {"done", "running", "failed"} for s in counted):
+        elif any(s == "running" for s in counted):
+            out[step] = "in_progress"
+        elif any(s == "failed" for s in counted):
+            # No task is executing and at least one finished with an error.
+            # Calling that state `in_progress` kept the parent card pulsing for
+            # the rest of the session and concealed the failure itself.
+            out[step] = "blocked"
+        elif any(s == "done" for s in counted):
+            # Some work is complete and another task is still merely planned.
             out[step] = "in_progress"
     return out
 
@@ -1813,7 +1829,8 @@ def _mark_step(state: Any, task: Dict[str, Any], status: str) -> None:
     task_id = str(task.get("id") or "").strip()
     if not task_id:
         return
-    tracker = {"in_progress": "IN_PROGRESS", "done": "DONE"}.get(status)
+    tracker = {"in_progress": "IN_PROGRESS", "done": "DONE",
+               "blocked": "FAILED"}.get(status)
     if not tracker:
         return
     try:

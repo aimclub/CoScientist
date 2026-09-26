@@ -917,7 +917,7 @@ def _measured_on(
 
 def _advance_task_card(store: Any, state: MutableMapping[str, Any],
                        task_id: str, final: str, status: str,
-                       task_result: dict[str, Any]) -> None:
+                       task_result: dict[str, Any]) -> bool:
     """Move the ExperimentTask card to done/failed, with the reason on failure.
 
     Separate from the method's own transition: a method is the means and may be
@@ -928,30 +928,78 @@ def _advance_task_card(store: Any, state: MutableMapping[str, Any],
     try:
         xt_id = _xt_ids(state).get(str(task_id))
         if not xt_id:
-            return
+            return False
         nodes = _graph_nodes(store)
         current = nodes.get(xt_id, {})
         if current.get("type") != "ExperimentTask":
-            return
+            return False
         if current.get("status") == final:
-            return
+            return True
         update: dict[str, Any] = {"id": xt_id, "status": final,
                                   "reason": f"задача {task_id}: {_ru_status(status)}"}
         # A card that says a thing failed and not why is the gap the graph
         # reports as `unreasoned_failures`, so the failure carries its message.
         attrs = None
         if final == "failed":
-            why = _clean(task_result.get("error")
+            why = _clean(task_result.get("error_message")
+                         or task_result.get("error")
                          or task_result.get("message")
                          or task_result.get("summary"), 600)
             if why:
                 attrs = {"failure_reason": why}
         # planned → done is legal for this type, so no intermediate hop.
-        store.commit(source=_PLAN_SOURCE,
-                     nodes=[{"id": xt_id, "attrs": attrs}] if attrs else None,
-                     status_updates=[update])
+        for attempt in range(2):
+            result = store.commit(
+                source=_PLAN_SOURCE,
+                nodes=[{"id": xt_id, "attrs": attrs}] if attrs else None,
+                status_updates=[update],
+            )
+            ok = bool(getattr(result, "ok", None) if not isinstance(result, dict)
+                      else result.get("ok"))
+            if ok:
+                return True
+            errors = (result.get("errors") if isinstance(result, dict)
+                      else getattr(result, "errors", None))
+            logger.warning(
+                "advancing experiment task %s failed (attempt %s/2): %s",
+                task_id, attempt + 1, errors,
+            )
+        return False
     except Exception as exc:  # noqa: BLE001 — never break result recording
         logger.warning("advancing the experiment task card failed: %s", exc)
+        return False
+
+
+def _settle_outer_plan(store: Any, state: MutableMapping[str, Any]) -> None:
+    """Recompute the outer step as soon as a detailed task finishes.
+
+    Waiting for the orchestrator's next tool callback was not sufficient: that
+    callback caches only the outer plan fingerprint, which does not change when
+    an experiment task moves from running to done/failed.  The parent could
+    therefore pulse forever even though every child was terminal.
+    """
+    try:
+        from CoScientist.agents.callbacks.tool_callbacks import (
+            sync_plan_to_research_graph,
+        )
+
+        result = sync_plan_to_research_graph(
+            state.get("_master_active_tasks") or [], store, state,
+            str(state.get("user_query") or ""),
+        )
+        if isinstance(result, dict):
+            ok = result.get("ok")
+        elif result is None:
+            ok = True
+        else:
+            ok = getattr(result, "ok", None)
+        if ok is False:
+            sync_plan_to_research_graph(
+                state.get("_master_active_tasks") or [], store, state,
+                str(state.get("user_query") or ""),
+            )
+    except Exception as exc:  # noqa: BLE001 — result recording still wins
+        logger.warning("settling the outer experiment step failed: %s", exc)
 
 
 def _may_move(node_type: str, current: Any, want: str) -> bool:
@@ -971,7 +1019,8 @@ def _may_move(node_type: str, current: Any, want: str) -> bool:
     return (cur, want) in {tuple(pair) for pair in allowed}
 
 
-def _begin_plan_step(store: Any, xt_id: str, task_id: str) -> None:
+def _begin_plan_step(store: Any, state: MutableMapping[str, Any],
+                     xt_id: str, task_id: str) -> None:
     """Say that the outer plan step holding this task is under way.
 
     Its own commit, under its own source: the step belongs to the outer plan,
@@ -982,23 +1031,53 @@ def _begin_plan_step(store: Any, xt_id: str, task_id: str) -> None:
              and e.get("from") == xt_id]
     if not steps:
         return
-    nodes = _graph_nodes(store)
-    # ONLY from a step nobody has started. Three moves this deliberately does
-    # not make: `done → in_progress`, because a finished step is the outer
-    # plan's own record and re-opening it because one late task started would
-    # have the module overwrite a verdict it does not own; `blocked →
-    # in_progress`, because a step is blocked by something that knows why — a
-    # replan retired it, or a work report was rejected — and quietly releasing
-    # it here left it in_progress permanently, since the retirement sweep only
-    # ever looks at steps that are still `todo`; and any move at all on a step
-    # already in_progress, which would be pure history churn.
+    full_nodes = {n.get("id"): n for n in (_graph_full(store).get("nodes") or [])
+                  if isinstance(n, dict) and n.get("id")}
+
+    def resumable(data: dict[str, Any]) -> bool:
+        if data.get("status") == "todo":
+            return True
+        if data.get("status") != "blocked":
+            return False
+        history = data.get("status_history") or []
+        last = history[-1] if history and isinstance(history[-1], dict) else {}
+        # Only undo the block derived from these experiment tasks. A replan,
+        # rejected work report or operator decision owns its block and this
+        # module must not talk over it.
+        return (last.get("source") == "plan-mirror"
+                and str(last.get("reason") or "").startswith(
+                    "задачи эксперимента под этим шагом"))
+
+    # Never reopen a completed step, and avoid history churn for one already
+    # in progress. A retry may resume the specific block its failed predecessor
+    # created; all other blocked states remain protected.
     updates = [{"id": sid, "status": "in_progress",
                 "reason": f"задача {task_id} выполняется"}
                for sid in steps
-               if (nodes.get(sid) or {}).get("type") == "PlanStep"
-               and (nodes.get(sid) or {}).get("status") == "todo"]
+               if (full_nodes.get(sid) or {}).get("type") == "PlanStep"
+               and resumable(full_nodes.get(sid) or {})]
     if updates:
-        store.commit(source=_PLAN_SOURCE, status_updates=updates)
+        result = store.commit(source=_PLAN_SOURCE, status_updates=updates)
+        ok = bool(getattr(result, "ok", None) if not isinstance(result, dict)
+                  else result.get("ok"))
+        if not ok:
+            return
+        try:
+            from CoScientist.tools.task_tracker import set_task_status
+
+            for update in updates:
+                previous = full_nodes.get(update["id"]) or {}
+                attrs = previous.get("attrs") or {}
+                outer_id = str(attrs.get("plan_task_id") or "").strip()
+                if outer_id:
+                    set_task_status(
+                        state, outer_id, "IN_PROGRESS",
+                        notes=(f"задача эксперимента {task_id} запущена повторно"
+                               if previous.get("status") == "blocked" else
+                               f"задача эксперимента {task_id} запущена"),
+                    )
+        except Exception as exc:  # noqa: BLE001 — graph state already moved
+            logger.warning("resuming outer task tracker state failed: %s", exc)
 
 
 def publish_task_state_to_graph(store: Any, state: MutableMapping[str, Any],
@@ -1043,7 +1122,7 @@ def publish_task_state_to_graph(store: Any, state: MutableMapping[str, Any],
                           f"status={want} errors={errors}", level=logging.WARNING)
             return
         if want == "running":
-            _begin_plan_step(store, xt_id, task_id)
+            _begin_plan_step(store, state, xt_id, task_id)
         audit(logger, f"EXPERIMENT_GRAPH_TASK_STATE task_id={task_id} "
                       f"node={xt_id} status={want}")
     except Exception as exc:  # noqa: BLE001 — never break the run
@@ -1061,7 +1140,9 @@ def publish_result_to_graph(
     success/partial → ``Evidence`` (subtype=computational) + ``VM —produces→ E``
     and ``Evidence —relates_to→`` every hypothesis the task covers (so the
     store moves those Hs to ``under_verification`` and the background
-    validator can judge). File artifacts → ``GeneratedData —derived_from→ E``;
+    validator can judge). A failed attempt becomes meta-evidence about the
+    execution and is deliberately not related to a hypothesis. File artifacts
+    → ``GeneratedData —derived_from→ E``;
     the task's method is marked ``used`` — or ``not_used``, when the run
     settled nothing. The task's own card is advanced either way, even when no
     method was published for it.
@@ -1076,7 +1157,11 @@ def publish_result_to_graph(
         # finished — and since `start_task` began drawing the card as running,
         # a task left un-advanced is no longer merely out of date: it is a card
         # pulsing «выполняется» on a canvas for the rest of the session.
-        _advance_task_card(store, state, task_id, task_final, status, task_result)
+        task_advanced = _advance_task_card(
+            store, state, task_id, task_final, status, task_result,
+        )
+        if task_advanced:
+            _settle_outer_plan(store, state)
         vm_id = _vm_ids(state).get(str(task_id))
         if not vm_id:
             return
@@ -1095,43 +1180,70 @@ def publish_result_to_graph(
         edges: list[dict[str, Any]] = []
         artifacts = [a for a in (task_result.get("artifacts") or []) if isinstance(a, dict)]
         task = _task_by_id(state, task_id)
+        source_ref = next(
+            (loc for a in artifacts if (loc := _artifact_location(a))), "",
+        )
         if status in ("success", "partial"):
-            source_ref = next(
-                (loc for a in artifacts if (loc := _artifact_location(a))), "",
-            )
-            nodes.append({
-                "type": "Evidence",
-                "ref": "e_0",
-                "attrs": {
-                    "subtype": "computational",
-                    "content": _clean(task_result.get("summary")) or f"Task {task_id}: {status}",
-                    "measured_on": _measured_on(task_id, task, task_result, source_ref),
-                    "source_ref": source_ref,
-                    "task_id": str(task_id),
-                    "result_id": str(task_result.get("result_id") or ""),
-                },
-            })
-            edges.append({"type": "produces", "from": vm_id, "to": "#e_0"})
+            evidence_attrs = {
+                "subtype": "computational",
+                "content": _clean(task_result.get("summary")) or f"Task {task_id}: {status}",
+                "measured_on": _measured_on(task_id, task, task_result, source_ref),
+                "source_ref": source_ref,
+                "task_id": str(task_id),
+                "result_id": str(task_result.get("result_id") or ""),
+            }
+            if status == "partial":
+                evidence_attrs["result_kind"] = "частичный результат"
+        else:
+            # A failed execution is still an observed result of an attempt.  It
+            # belongs in the record, but as meta-evidence about execution: no
+            # relates_to/supports/refutes edge is written, so an infrastructure
+            # error cannot settle a scientific hypothesis.
+            failure = _clean(
+                task_result.get("error_message")
+                or task_result.get("error")
+                or task_result.get("message")
+                or task_result.get("summary"),
+                600,
+            ) or "причина не записана"
+            evidence_attrs = {
+                "subtype": "meta",
+                "content": f"Задача {task_id} завершилась с ошибкой: {failure}",
+                "result_kind": "ошибка выполнения",
+                "failure_reason": failure,
+                "source_ref": source_ref,
+                "task_id": str(task_id),
+                "result_id": str(task_result.get("result_id") or ""),
+            }
+        nodes.append({
+            "type": "Evidence",
+            "ref": "e_0",
+            "attrs": evidence_attrs,
+        })
+        edges.append({"type": "produces", "from": vm_id, "to": "#e_0"})
+
+        if status in ("success", "partial"):
             for hid in _task_hypothesis_ids((task or {}).get("design") or {}):
                 if (graph_nodes.get(hid, {}).get("type") == "Hypothesis"
                         and store.hypothesis_eligible(hid)):
                     edges.append({"type": "relates_to", "from": "#e_0", "to": hid})
-            for i, artifact in enumerate(artifacts[:_MAX_GENERATED_DATA]):
-                location = _artifact_location(artifact)
-                if not location:
-                    continue
-                ref = f"gd_{i}"
-                attrs = {
-                    "description": _clean(artifact.get("name") or artifact.get("description"), 200),
-                    "path": location,
-                }
-                # Kept beside `path` rather than inside it: the panel resolves
-                # this into a link, and `path` stays readable as the place the
-                # file sat on the machine that made it.
-                if aid := str(artifact.get("session_artifact_id") or "").strip():
-                    attrs["session_artifact_id"] = aid
-                nodes.append({"type": "GeneratedData", "ref": ref, "attrs": attrs})
-                edges.append({"type": "derived_from", "from": f"#{ref}", "to": "#e_0"})
+        # Logs and diagnostics from a failed attempt are useful attachments too.
+        for i, artifact in enumerate(artifacts[:_MAX_GENERATED_DATA]):
+            location = _artifact_location(artifact)
+            if not location:
+                continue
+            ref = f"gd_{i}"
+            attrs = {
+                "description": _clean(artifact.get("name") or artifact.get("description"), 200),
+                "path": location,
+            }
+            # Kept beside `path` rather than inside it: the panel resolves
+            # this into a link, and `path` stays readable as the place the
+            # file sat on the machine that made it.
+            if aid := str(artifact.get("session_artifact_id") or "").strip():
+                attrs["session_artifact_id"] = aid
+            nodes.append({"type": "GeneratedData", "ref": ref, "attrs": attrs})
+            edges.append({"type": "derived_from", "from": f"#{ref}", "to": "#e_0"})
         status_updates = []
         current_vm_status = _graph_nodes(store).get(vm_id, {}).get("status")
         # `not_used → used` is the one move back: a method the study had given

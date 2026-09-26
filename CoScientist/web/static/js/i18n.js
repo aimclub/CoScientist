@@ -1508,7 +1508,7 @@ const i18n = {
   'graph.type.efficiencyjustification': { en: 'Efficiency', ru: 'Эффективность' },
   'graph.type.costmodel': { en: 'Cost model', ru: 'Модель стоимости' },
   'graph.type.efficiencymetric': { en: 'Metric', ru: 'Метрика' },
-  'graph.type.framing': { en: 'Framing', ru: 'Постановка' },
+  'graph.type.framing': { en: 'Technical specification', ru: 'Техническое задание' },
   'graph.type.outcome': { en: 'Outcome', ru: 'Итог' },
   'graph.type.planstep': { en: 'Plan step', ru: 'Шаг плана' },
   'graph.plan.title': { en: 'Research plan', ru: 'План исследования' },
@@ -1748,6 +1748,8 @@ const i18n = {
   'graph.field.method': { en: 'Method', ru: 'Метод' },
   'graph.field.not_tested_reason': { en: 'Why untested', ru: 'Почему не проверялась' },
   'graph.field.failure_reason': { en: 'Why it failed', ru: 'Почему не удалось' },
+  'graph.field.result_kind': { en: 'Result type', ru: 'Характер результата' },
+  'graph.field.evidence_assessment': { en: 'Reliability assessment', ru: 'Оценка достоверности' },
   'graph.field.postponed_reason': { en: 'Why postponed', ru: 'Почему отложена' },
   'graph.field.inconclusive_reason': { en: 'What stayed unsettled', ru: 'Что осталось неясным' },
   // The plan's own record, on a method and on an experiment task. Left

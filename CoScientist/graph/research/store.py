@@ -137,7 +137,7 @@ _KIND_WORDS = {
     # The plan track, beside the record rather than part of it.
     "PlanStep": "Шаг плана", "ExperimentTask": "Задача эксперимента",
     # Derived cards, projected rather than written.
-    "Framing": "Постановка", "Outcome": "Итог",
+    "Framing": "Техническое задание", "Outcome": "Итог",
 }
 
 _STATUS_WORDS = {
@@ -146,11 +146,12 @@ _STATUS_WORDS = {
     "formulated": "предложена", "under_verification": "проверяется",
     "confirmed": "подтверждена", "refuted": "опровергнута",
     "inconclusive": "проверена — без ответа", "postponed": "отложена",
-    # An observation nobody has weighed yet is not a finished thing: it is
-    # waiting to be judged, and the card says so rather than announcing a
-    # result. Its verdicts keep their own words below.
-    "obtained": "проверяется", "validated": "проверено", "rejected": "отклонено",
-    "planned": "запланирован", "running": "выполняется", "done": "выполнен",
+    # Evidence exists only after something has been observed or recorded. Its
+    # scientific assessment is a separate concern: the viewer always says the
+    # evidence was received, while validated/rejected remain in history and in
+    # the assessment field of the detail panel.
+    "obtained": "получено", "validated": "проверено", "rejected": "отклонено",
+    "planned": "запланирован", "running": "выполняется", "done": "выполнено",
     "failed": "не удался", "not_met": "ещё не выполнен", "met": "выполнен",
     # A method's own words — see NODE_TYPES["VerificationMethod"] for why it
     # has a vocabulary of its own rather than a task's.
@@ -809,6 +810,33 @@ def _adjacency(raw_edges: List[Dict[str, Any]]):
     return out, inc
 
 
+def _plan_step_view_status(nid: str, status: str,
+                           raw_nodes: Dict[str, Dict[str, Any]],
+                           raw_edges: List[Dict[str, Any]]) -> str:
+    """Repair a stale running step from the terminal tasks underneath it.
+
+    Result mirroring now settles the stored parent immediately, but snapshots
+    written before that fix can still be opened.  Projection is the compatibility
+    boundary: old sessions stop pulsing without rewriting their research record.
+    """
+    if status != "in_progress":
+        return status
+    children = [raw_nodes.get(e.get("src"), {}) for e in raw_edges
+                if e.get("type") == "elaborates" and e.get("dst") == nid]
+    child_states = [str(child.get("status") or "") for child in children
+                    if child.get("type") == "ExperimentTask"]
+    states = [state for state in child_states if state != "skipped"]
+    if child_states and not states and all(
+            state == "skipped" for state in child_states):
+        return "blocked"
+    if states and all(state == "done" for state in states):
+        return "done"
+    if states and not any(state == "running" for state in states) \
+            and any(state == "failed" for state in states):
+        return "blocked"
+    return status
+
+
 def _is_reading(value: Any) -> bool:
     """Whether a declared subtype / method_type names reading rather than running."""
     return str(value or "").strip().lower().replace(" ", "_") in {
@@ -1044,7 +1072,13 @@ def _folded_view(nid: str, data: Dict[str, Any],
     # description stays visible as a field, so nothing is hidden, but the name
     # next to a link is now the name of the file behind it.
     stored_name = _stored_name(kind, attrs, scope)
-    label = stored_name or headline
+    # A preliminary specification used to inherit its whole markdown body as
+    # the attachment label.  The result was a paragraph-long hyperlink beside
+    # the framing card.  This display rule also fixes already stored studies:
+    # no snapshot migration is required.
+    label = ("Предварительный текст ТЗ" if kind == "Spec"
+             else stored_name or headline)
+    view_status = "obtained" if kind == "Evidence" else status
     return {
         "id": nid,
         "kind": kind.lower(),
@@ -1055,8 +1089,8 @@ def _folded_view(nid: str, data: Dict[str, Any],
         # visible somewhere, so a description the plan wrote and the file did
         # not match reappears as a field instead of vanishing.
         "fields": _fields(attrs, label, kind),
-        "status": status,
-        "status_word": _STATUS_WORDS.get(status, status),
+        "status": view_status,
+        "status_word": _STATUS_WORDS.get(view_status, view_status),
         "source": data.get("source", ""),
     }
 
@@ -1317,8 +1351,8 @@ def _virtual_nodes(raw_nodes: Dict[str, Dict[str, Any]],
     if members or fields:
         out.append({
             "id": FRAME_ID, "run_id": research_id, "kind": "framing", "virtual": True,
-            "label": _KIND_WORDS.get("Framing", "Постановка"),
-            "type_word": _KIND_WORDS.get("Framing", "Постановка"),
+            "label": _KIND_WORDS.get("Framing", "Техническое задание"),
+            "type_word": _KIND_WORDS.get("Framing", "Техническое задание"),
             "index": None, "status": "derived",
             "status_word": _STATUS_WORDS.get("derived", ""),
             "executor_agent": "", "input": fields, "output": "",
@@ -2163,6 +2197,25 @@ class ResearchGraphStore:
             if own:
                 # First: it is this card's own file, not something it carries.
                 attachments.insert(0, own)
+            # Whether an Evidence record has been accepted or rejected is an
+            # assessment of its reliability, not whether the observation was
+            # obtained.  Keep the internal lifecycle untouched, but expose the
+            # one user-facing state the card can actually have.
+            if kind == "Evidence":
+                view_status = "obtained"
+            elif kind == "PlanStep":
+                view_status = _plan_step_view_status(
+                    nid, status, raw_nodes, raw_edges,
+                )
+                if view_status != status and not why:
+                    why = ("все задачи эксперимента завершены"
+                           if view_status == "done"
+                           else "задачи эксперимента завершены без результата")
+            else:
+                view_status = status
+            input_fields = _fields(attrs, headline, kind)
+            if kind == "Evidence" and status in {"validated", "rejected"}:
+                input_fields["evidence_assessment"] = _STATUS_WORDS[status]
             node = {
                 "id": nid,
                 "run_id": research_id,
@@ -2173,10 +2226,10 @@ class ResearchGraphStore:
                 "label": headline,
                 "type_word": _KIND_WORDS.get(kind, kind),
                 "index": ordinal.get(nid),
-                "status": status,
-                "status_word": _STATUS_WORDS.get(status, status),
+                "status": view_status,
+                "status_word": _STATUS_WORDS.get(view_status, view_status),
                 "executor_agent": d.get("source", ""),
-                "input": _fields(attrs, headline, kind),
+                "input": input_fields,
                 # For a write-up the card is the title and the panel is the
                 # document; `reportBlock` renders this as markdown. Stored
                 # references become URLs here rather than when the node was

@@ -87,6 +87,10 @@ NODE_TYPES: Dict[str, NodeTypeSpec] = {s.name: s for s in [
                            "here if it is a stand-in for what the hypothesis names "
                            "(e.g. 'local reimplementation; upstream repo 404')",
             "reliability": "weight / reliability estimate",
+            "result_kind": "reader-facing classification such as a partial "
+                           "result or execution error; not a hypothesis verdict",
+            "failure_reason": "why an attempted execution failed; execution "
+                              "errors must not be linked as scientific support/refutation",
             "source_ref": "paper DOI, PMC id, dataset, run id, … — one per "
                           "source, separated by ';' when there are several",
             "doi": "set by the graph when a cited paper is matched to a stored file",
@@ -802,16 +806,18 @@ AGENT_PERMISSIONS: Dict[str, AgentPerm] = {
         create=frozenset({"ExperimentTask"}),
         update_attrs=frozenset({"ExperimentTask"}),
         # …and the one thing it may say about the step ABOVE its tasks: that
-        # work on it has begun, and only about a step nobody has started. The
+        # work on it has begun. Usually that is a step nobody has started. A
+        # retry may also resume a block that these same experiment tasks caused;
+        # graph_bridge checks the block's source and reason before asking for
+        # that move, so operator/replan/report blocks remain protected. The
         # outer plan's own mirror only runs on an orchestrator tick, and by then
         # the tracker has usually moved the step from «не начат» straight to
         # «выполнен» — so a step that was being worked on for minutes was never
         # once drawn as being worked on. The module knows the moment a task
-        # starts; this lets it say so, and nothing else about the step. `blocked`
-        # is deliberately not here: a blocked step was blocked by something that
-        # knows why, and the module is not it.
+        # starts; this lets it say so, and nothing else about the step.
         transitions=_transitions("ExperimentTask",
-                                 ("PlanStep", "todo", "in_progress")),
+                                 ("PlanStep", "todo", "in_progress"),
+                                 ("PlanStep", "blocked", "in_progress")),
         edges=_edges("elaborates",
                      ("realises", "VerificationMethod", "ExperimentTask"),
                      ("realises", "Evidence", "ExperimentTask")),

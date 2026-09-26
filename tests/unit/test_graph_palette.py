@@ -95,6 +95,7 @@ def test_a_settled_claim_is_green_a_rejected_one_red_and_the_rest_neutral(page):
     assert live, "the page must say which statuses are work in flight"
     working = set(re.findall(r'"(\w+)"', live.group(1)))
     assert {"in_progress", "running", "under_verification"} <= working
+    assert "obtained" not in working, "received evidence is not work in flight"
     assert not working & positive and not working & negative, (
         "work in flight is not a verdict either way")
     assert re.search(r"statusInk = st => STATUS_GOOD\.has\(st\) \? GOOD\s*"
@@ -195,6 +196,15 @@ def test_the_pulse_is_painted_not_written_into_the_cards(page):
     # second for as long as the tab stayed open.
     assert "pulseRunning = false" in body
     assert "!pulsing.size" in body and "checked" in body
+
+
+def test_a_failed_poll_stops_stale_activity_and_late_views_are_ignored(page):
+    """A dead feed cannot honestly keep saying that yesterday's task runs."""
+    assert "if (pollGeneration !== studyGen) return" in page
+    assert "if (pollInFlightFor === pollGeneration) return" in page
+    failed = re.search(r"catch \(err\) \{(.*?)\n      \} finally", page, re.S)
+    assert failed, "poll failures need their own reconciliation path"
+    assert "setPulsing(new Set())" in failed.group(1)
 
 
 def test_no_pictograms_on_a_card(page):

@@ -101,8 +101,9 @@ def test_the_words_the_reader_sees(store):
     assert _STATUS_WORDS["used"] == "использован"
     assert _STATUS_WORDS["not_used"] == "не использован"
     assert _STATUS_WORDS["in_progress"] == _STATUS_WORDS["running"] == "выполняется"
-    # Наблюдение, которое ещё никто не взвесил, не объявляет результат.
-    assert _STATUS_WORDS["obtained"] == "проверяется"
+    # Свидетельство появляется только после получения результата. Его
+    # достоверность оценивается отдельно и не меняет этот факт.
+    assert _STATUS_WORDS["obtained"] == "получено"
     assert _STATUS_WORDS["under_verification"] == "проверяется"
 
 

@@ -284,7 +284,7 @@
       refuted:{c:CRIT,g:'✗'}, rejected:{c:CRIT,g:'✗'}, failed:{c:CRIT,g:'✗'}, creation_failed:{c:CRIT,g:'✗'},
       // Tested and not settled: neither a verdict nor an untouched branch.
       inconclusive:{c:ORANGE,g:'≈'},
-      under_verification:{c:WARN,g:'⧗'}, running:{c:WARN,g:'⧗'}, obtained:{c:WARN,g:'●'}, draft:{c:WARN,g:'✎'},
+      under_verification:{c:WARN,g:'⧗'}, running:{c:WARN,g:'⧗'}, obtained:{c:INFO,g:'●'}, draft:{c:WARN,g:'✎'},
       formulated:{c:INFO,g:'○'}, open:{c:INFO,g:'○'}, planned:{c:INFO,g:'○'}, not_met:{c:INFO,g:'○'},
       // The plan track's own vocabulary, which this table simply did not know:
       // a step in progress and a step nobody had started both fell through to
@@ -369,8 +369,7 @@
     // in neutral ink it read exactly like a card nobody had touched, which is
     // the complaint this whole table exists to answer — the study says which
     // stage is going, and the reader could not see it.
-    const STATUS_LIVE = new Set(["in_progress", "running", "under_verification",
-                                 "obtained"]);
+    const STATUS_LIVE = new Set(["in_progress", "running", "under_verification"]);
     const statusInk = st => STATUS_GOOD.has(st) ? GOOD
                           : STATUS_BAD.has(st) ? CRIT
                           : STATUS_LIVE.has(st) ? WARN : INK2;
@@ -419,7 +418,7 @@
       tool:"Tool", resource:"Resource", empiricalbase:"Data source", constraint:"Constraint",
       codeartifact:"Code", generateddata:"Dataset", report:"Report", publication:"Publication",
       spec:"Spec", efficiencyjustification:"Efficiency", costmodel:"Cost model",
-      efficiencymetric:"Metric", framing:"Framing", outcome:"Outcome" };
+      efficiencymetric:"Metric", framing:"Technical specification", outcome:"Outcome" };
     const R_EDGE_NAME = { motivates:"motivates", tested_by:"tested by", requires:"requires",
       uses:"uses", consumes:"consumes", produces:"produces", supports:"supports", refutes:"refutes",
       refines:"refines", based_on:"based on", determines_sufficiency:"sufficiency for",
@@ -1516,7 +1515,14 @@
     const nodeData = {};
     let lastGraph = { nodes: [], edges: [] };
     let fitted = false;
+    // At most one request per selected study/view. A reset increments
+    // `studyGen`, allowing the new selection to load immediately while the old
+    // request drains; its late answer is ignored below.
+    let pollInFlightFor = null;
     async function poll(){
+      const pollGeneration = studyGen;
+      if (pollInFlightFor === pollGeneration) return;
+      pollInFlightFor = pollGeneration;
       try {
         const params = new URLSearchParams(location.search);
         const userId = params.get("user_id") || "";
@@ -1533,7 +1539,9 @@
           + (chosenTurn ? `&turn=${encodeURIComponent(chosenTurn)}` : "");
         const r = await fetch(url, { cache: "no-store" });
         if (!r.ok) throw new Error(t('graph.error.http', { status: r.status }));
-        const g = await r.json(); lastGraph = g;
+        const g = await r.json();
+        if (pollGeneration !== studyGen) return;
+        lastGraph = g;
         // The API answers ANY failure with HTTP 200 and {"nodes": [], "edges":
         // [], "error": "..."} so it never breaks the page. Unread, that is
         // indistinguishable from a study nobody has written to yet.
@@ -1822,7 +1830,16 @@
         document.getElementById("status").textContent = t('graph.status', {
           nodes: (g.nodes||[]).length, edges: (g.edges||[]).length
         }) + age;
-      } catch (err) { document.getElementById("status").textContent = t('graph.error', { error: err }); }
+      } catch (err) {
+        if (pollGeneration !== studyGen) return;
+        // Stale activity must not keep animating when the feed that could end
+        // it is unavailable. Keep the cards for inspection, but stop claiming
+        // that work is currently running.
+        setPulsing(new Set());
+        document.getElementById("status").textContent = t('graph.error', { error: err });
+      } finally {
+        if (pollInFlightFor === pollGeneration) pollInFlightFor = null;
+      }
     }
 
     // ── framing the study ─────────────────────────────────────────────────────

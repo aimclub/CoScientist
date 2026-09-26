@@ -2021,6 +2021,77 @@ def test_the_frame_is_one_card_beside_the_question(store):
         (e["src"], e["dst"], e["type"]) for e in view["edges"]}
 
 
+def test_the_frame_and_its_preliminary_spec_have_short_reader_facing_names(store):
+    """The full specification belongs in the document, not in its hyperlink."""
+    _init(store)
+    result = store.commit(
+        source="ContextInitAgent",
+        nodes=[{"type": "Spec", "ref": "tz", "attrs": {
+            "content": "# Техническое задание\n\n" + "Очень длинный текст. " * 80,
+            "name": "TZ_20260926.docx",
+            "path": "https://example.test/TZ_20260926.docx",
+        }}],
+        edges=[{"type": "derived_from", "from": "#tz", "to": "Q1"}],
+        partial_edges=True,
+    )
+    assert result.ok, result.errors
+
+    frame = {n["id"]: n for n in store.to_view()["nodes"]}["FRAME"]
+    assert frame["label"] == frame["type_word"] == "Техническое задание"
+    spec = next(a for a in frame["attachments"] if a["kind"] == "spec")
+    assert spec["label"] == "Предварительный текст ТЗ"
+    assert spec["href"] == "https://example.test/TZ_20260926.docx"
+
+
+def test_evidence_is_shown_as_received_while_assessment_stays_in_details(store):
+    _init(store)
+    created = store.commit(
+        source="ResearchAgent",
+        nodes=[{"type": "Evidence", "attrs": {
+            "subtype": "literature", "content": "The paper reports no effect.",
+        }}],
+    )
+    assert created.ok, created.errors
+    assert store.commit(
+        source="ResearchAgent",
+        status_updates=[{"id": "E1", "status": "rejected",
+                         "reason": "методика не воспроизводится"}],
+    ).ok
+
+    card = {n["id"]: n for n in store.to_view()["nodes"]}["E1"]
+    assert card["status"] == "obtained"
+    assert card["status_word"] == "получено"
+    assert card["input"]["evidence_assessment"] == "отклонено"
+
+
+@pytest.mark.parametrize(("task_status", "shown"), [
+    ("done", "done"),
+    ("failed", "blocked"),
+])
+def test_an_old_running_step_is_projected_from_its_terminal_task(
+        store, task_status, shown):
+    """Existing snapshots are repaired on read, without a data migration."""
+    _init(store)
+    step = store.commit(
+        source="plan-mirror",
+        nodes=[{"type": "PlanStep", "status": "in_progress", "attrs": {
+            "title": "Run the experiment", "plan_task_id": "TASK-1",
+        }}],
+    )
+    assert step.ok, step.errors
+    task = store.commit(
+        source="experiment-plan-mirror",
+        nodes=[{"type": "ExperimentTask", "ref": "task", "status": task_status,
+                "attrs": {"title": "Attempt", "experiment_task_id": "EXP-1"}}],
+        edges=[{"type": "elaborates", "from": "#task", "to": "PS1"}],
+    )
+    assert task.ok, task.errors
+
+    card = {n["id"]: n for n in store.to_view()["nodes"]}["PS1"]
+    assert card["status"] == shown
+    assert card["status_word"] == ("выполнено" if shown == "done" else "заблокирован")
+
+
 def test_an_unseeded_frame_is_a_gap_and_not_an_empty_box(store):
     """With the pre-stage off nothing seeds the framing. Say so, don't draw it."""
     store.ensure_root("Does compound X inhibit target Y?")

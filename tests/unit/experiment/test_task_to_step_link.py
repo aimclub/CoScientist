@@ -269,8 +269,14 @@ def test_a_plan_that_has_only_been_written_starts_nothing():
                                         ("XT4", "planned", "PS4"))) == {}
 
 
-def test_a_failed_task_still_means_the_step_was_started():
+def test_a_failed_task_stops_the_step_instead_of_leaving_it_running():
     derived = _status_from_tasks(_graph_of(("XT3", "failed", "PS4")))
+    assert derived == {"PS4": "blocked"}
+
+
+def test_a_failed_task_does_not_stop_a_sibling_that_is_still_running():
+    derived = _status_from_tasks(_graph_of(("XT3", "failed", "PS4"),
+                                           ("XT4", "running", "PS4")))
     assert derived == {"PS4": "in_progress"}
 
 
@@ -278,6 +284,12 @@ def test_a_skipped_optional_task_does_not_hold_its_step_back():
     derived = _status_from_tasks(_graph_of(("XT3", "done", "PS4"),
                                            ("XT4", "skipped", "PS4")))
     assert derived == {"PS4": "done"}
+
+
+def test_a_step_with_only_skipped_tasks_is_not_left_running():
+    derived = _status_from_tasks(_graph_of(("XT3", "skipped", "PS4"),
+                                           ("XT4", "skipped", "PS4")))
+    assert derived == {"PS4": "blocked"}
 
 
 def test_the_step_of_a_finished_task_stops_saying_not_started(monkeypatch):

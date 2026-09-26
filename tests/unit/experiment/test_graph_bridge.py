@@ -188,7 +188,7 @@ def test_publish_result_writes_evidence_and_vm_status(tmp_path):
     assert statuses["H1"] == "under_verification"
 
 
-def test_publish_result_failure_leaves_the_method_unused(tmp_path):
+def test_publish_result_failure_is_received_but_cannot_judge_a_hypothesis(tmp_path):
     from CoScientist.experiments.runtime.graph_bridge import (
         publish_plan_to_graph,
         publish_result_to_graph,
@@ -199,13 +199,49 @@ def test_publish_result_failure_leaves_the_method_unused(tmp_path):
     publish_plan_to_graph(store, state)
     vm_id = state["experiment_graph_vm_ids"]["EXP-1"]
 
-    publish_result_to_graph(store, state, "EXP-1",
-                            {"result_id": "RES-2", "status": "failure", "summary": "boom"})
+    publish_result_to_graph(store, state, "EXP-1", {
+        "result_id": "RES-2", "status": "failure", "summary": "route failed",
+        "error_message": "Docker host did not resolve",
+    })
 
     by_type = _nodes_by_type(store)
-    assert by_type.get("Evidence") is None
+    evidence_id = by_type["Evidence"][0]
+    evidence = next(n for n in store.full()["nodes"] if n["id"] == evidence_id)
+    assert evidence["status"] == "obtained"
+    assert evidence["attrs"]["subtype"] == "meta"
+    assert evidence["attrs"]["result_kind"] == "ошибка выполнения"
+    assert "Docker host" in evidence["attrs"]["failure_reason"]
+    edges = store.full()["edges"]
+    assert any(e["type"] == "produces" and e["to"] == evidence_id for e in edges)
+    assert not any(e["from"] == evidence_id and e["type"] in {
+        "relates_to", "supports", "refutes", "refines",
+    } for e in edges)
     vm_status = {n["id"]: n["status"] for n in store.full()["nodes"]}[vm_id]
     assert vm_status == "not_used"
+
+
+def test_a_terminal_task_status_retries_one_refused_graph_write():
+    from CoScientist.experiments.runtime.graph_bridge import _advance_task_card
+
+    class _FlakyStore:
+        def __init__(self):
+            self.calls = 0
+
+        def overview(self):
+            return {"nodes": [{"id": "XT1", "type": "ExperimentTask",
+                               "status": "running"}]}
+
+        def commit(self, **_kwargs):
+            self.calls += 1
+            return SimpleNamespace(ok=self.calls == 2, errors=["temporary refusal"])
+
+    graph = _FlakyStore()
+    advanced = _advance_task_card(
+        graph, {_XT_KEY: {"EXP-1": "XT1"}}, "EXP-1", "done", "success", {},
+    )
+
+    assert advanced is True
+    assert graph.calls == 2
 
 
 def test_publish_result_skips_when_no_vm(tmp_path):
@@ -651,6 +687,7 @@ def test_a_finished_task_says_so_on_its_own_card(tmp_path):
         publish_plan_detail_to_graph,
         publish_plan_to_graph,
         publish_result_to_graph,
+        publish_task_state_to_graph,
     )
 
     store = _seeded_store(tmp_path)
@@ -672,6 +709,21 @@ def test_a_finished_task_says_so_on_its_own_card(tmp_path):
     assert by_task["EXP-1"]["status"] == "done"
     assert by_task["EXP-2"]["status"] == "failed"
     assert "refused the call" in by_task["EXP-2"]["attrs"]["failure_reason"]
+    step_id = _nodes_by_type(store)["PlanStep"][0]
+    assert _node_status(store)[step_id] == "blocked"
+    assert state["_master_active_tasks"][0]["status"] == "FAILED"
+
+    # A retry may reopen only the block the failed experiment created. The
+    # parent returns to live while the task runs and settles when it succeeds.
+    publish_task_state_to_graph(store, _started(state, "EXP-2", "ready"), "EXP-2")
+    publish_task_state_to_graph(store, _started(state, "EXP-2", "running"), "EXP-2")
+    assert _node_status(store)[step_id] == "in_progress"
+    assert state["_master_active_tasks"][0]["status"] == "IN_PROGRESS"
+    publish_result_to_graph(store, state, "EXP-2", {
+        "status": "success", "summary": "retry produced a real result",
+    })
+    assert _node_status(store)[step_id] == "done"
+    assert state["_master_active_tasks"][0]["status"] == "DONE"
 
 
 # ── what the graph is told while a task is actually running ───────────────────
@@ -839,3 +891,6 @@ def test_a_finished_task_stops_being_drawn_as_running_even_with_no_method(tmp_pa
                             {"result_id": "RES-9", "status": "success",
                              "summary": "done without a method node"})
     assert _node_status(store)[xt_id] == "done"
+    step_id = _nodes_by_type(store)["PlanStep"][0]
+    assert _node_status(store)[step_id] == "done"
+    assert state["_master_active_tasks"][0]["status"] == "DONE"
