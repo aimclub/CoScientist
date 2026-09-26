@@ -267,15 +267,16 @@ def test_planner_context_reads_numbered_frame_operations():
 class _FakeSnapshotGraph:
     """Minimal research store stand-in exposing full()/overview()/is_empty()."""
 
-    def __init__(self, nodes, *, rendered="rendered overview"):
+    def __init__(self, nodes, *, edges=None, rendered="rendered overview"):
         self._nodes = nodes
+        self._edges = edges or []
         self._rendered = rendered
 
     def is_empty(self):
         return not self._nodes
 
     def full(self):
-        return {"nodes": self._nodes}
+        return {"nodes": self._nodes, "edges": self._edges}
 
     def overview(self):
         return {"rendered": self._rendered, "nodes": self._nodes}
@@ -321,6 +322,37 @@ def test_research_graph_snapshot_reads_typed_nodes(monkeypatch):
     assert snap["data_refs"][0]["source_ref"] == "s3://bucket/data.csv"
     assert snap["prior_evidence"][0]["node_id"] == "E1"
     assert snap["rendered"] == "rendered overview"
+
+
+def test_successor_context_reuses_predecessor_evidence_with_provenance(monkeypatch):
+    from CoScientist.experiments.context.builder import research_graph_snapshot
+
+    nodes = [
+        {"id": "H1", "type": "Hypothesis", "status": "refuted",
+         "attrs": {"formulation": "Primary claim."}, "source": "HypothesesAgent"},
+        {"id": "H2", "type": "Hypothesis", "status": "formulated",
+         "attrs": {"formulation": "Fallback claim."}, "source": "HypothesesAgent"},
+        {"id": "E1", "type": "Evidence", "status": "validated",
+         "attrs": {"subtype": "computational", "content": "Measured miss."},
+         "source": "ExperimentModule"},
+        {"id": "GD1", "type": "GeneratedData", "status": "available",
+         "attrs": {"path": "s3://bucket/prior.csv"}, "source": "ExperimentModule"},
+    ]
+    edges = [
+        {"type": "conditional_successor", "from": "H1", "to": "H2"},
+        {"type": "refutes", "from": "E1", "to": "H1"},
+        {"type": "derived_from", "from": "GD1", "to": "E1"},
+    ]
+    ctx = _snapshot_ctx(monkeypatch, _FakeSnapshotGraph(nodes, edges=edges))
+
+    chain = research_graph_snapshot(ctx)["hypothesis_chain_context"][0]
+
+    assert chain["successor_id"] == "H2"
+    assert chain["predecessor_status"] == "refuted"
+    assert chain["predecessor_evidence"][0]["id"] == "E1"
+    assert chain["predecessor_evidence"][0]["source"] == "ExperimentModule"
+    assert chain["predecessor_artifacts"][0]["id"] == "GD1"
+    assert chain["predecessor_artifacts"][0]["attrs"]["path"] == "s3://bucket/prior.csv"
 
 
 def test_research_graph_snapshot_empty_when_disabled(monkeypatch):

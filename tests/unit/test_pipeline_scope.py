@@ -301,10 +301,10 @@ def test_planner_context_copies_hitl_pipeline_scope():
     assert '"research":false' in ctx.state["experiment_planner_context"]
 
 
-def test_experiments_yaml_asks_scope_first():
+def test_experiments_yaml_prepares_the_turn_before_asking_scope():
     config = load_config(resolve_config_path("experiments"))
     before = config.agent("OrchestratorAgent").callbacks.before_agent
-    assert before[0] == "ask_pipeline_scope"
+    assert before[:2] == ["prepare_experiment_user_turn", "ask_pipeline_scope"]
     orch = config.agent("OrchestratorAgent").callbacks
     assert "inject_pipeline_scope_directive" not in orch.before_model
     # expand_link_refs owns the first slot — it is the egress point for the

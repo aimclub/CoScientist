@@ -25,6 +25,7 @@ _CLEAR_ON_NEW_RUN = (
     "experiment_artifacts_manifest",
     "experiment_last_route_response", "experiment_active_envelope",
     "experiment_plan_validation_errors", "experiment_plan_review_paused",
+    "experiment_review_pause_reason", "experiment_module_runs", "experiment_module_dispatched",
     "experiment_plan_revision_count", "experiment_inventory_blocker_hits",
     "experiment_no_matching_tool", "experiment_execution_summary",
     "experiment_repo_candidates",
@@ -61,7 +62,7 @@ _REPO_URL_RE = re.compile(
 )
 _PROMPT_OPTIONAL_KEYS = (
     "research_focus_id", "research_context", "hypotheses", "hypothesis_refs", "prior_results",
-    "prior_evidence", "confirmation_criteria",
+    "prior_evidence", "hypothesis_chain_context", "confirmation_criteria",
     "data_refs", "constraints", "operations", "explicit_mcp_servers", "repo_candidates",
     "revision_feedback", "unresolved_gaps", "pipeline_scope",
 )
@@ -161,7 +162,9 @@ def research_graph_snapshot(callback_context: CallbackContext) -> dict[str, Any]
         store = get_research_graph(callback_context)
         if store.is_empty():
             return {}
-        nodes = store.full().get("nodes", []) or []
+        full = store.full()
+        nodes = full.get("nodes", []) or []
+        edges = full.get("edges", []) or []
         rendered = str(store.overview().get("rendered") or "")
     except Exception:  # noqa: BLE001
         return {}
@@ -171,6 +174,10 @@ def research_graph_snapshot(callback_context: CallbackContext) -> dict[str, Any]
     criteria: list[dict[str, Any]] = []
     data_refs: list[dict[str, Any]] = []
     evidence: list[dict[str, Any]] = []
+    node_by_id = {
+        str(node.get("id")): node for node in nodes
+        if isinstance(node, dict) and node.get("id")
+    }
     for node in nodes:
         if not isinstance(node, dict):
             continue
@@ -179,6 +186,9 @@ def research_graph_snapshot(callback_context: CallbackContext) -> dict[str, Any]
         status = str(node.get("status") or "")
         if ntype == "Hypothesis":
             if status not in _SNAPSHOT_ACTIVE_H_STATUSES:
+                continue
+            eligible = getattr(store, "hypothesis_eligible", None)
+            if callable(eligible) and not eligible(str(node.get("id") or "")):
                 continue
             statement = str(attrs.get("formulation") or attrs.get("label") or "").strip()
             if not statement or len(hypothesis_refs) >= _MAX_HYPOTHESIS_REFS:
@@ -221,12 +231,48 @@ def research_graph_snapshot(callback_context: CallbackContext) -> dict[str, Any]
                 "source_ref": ref,
                 "status": status,
             })
+    chain_context: list[dict[str, Any]] = []
+    active_ids = {row["hypothesis_id"] for row in hypothesis_refs}
+    for edge in edges:
+        if not isinstance(edge, dict) or edge.get("type") != "conditional_successor":
+            continue
+        predecessor = str(edge.get("from") or "")
+        successor = str(edge.get("to") or "")
+        if successor not in active_ids:
+            continue
+        pred_node = node_by_id.get(predecessor) or {}
+        pred_evidence_ids = {
+            str(item.get("from") or "") for item in edges
+            if isinstance(item, dict)
+            and item.get("to") == predecessor
+            and item.get("type") in {"supports", "refutes", "refines", "relates_to"}
+        }
+        pred_artifact_ids = {
+            str(item.get("from") or "") for item in edges
+            if isinstance(item, dict)
+            and item.get("to") in pred_evidence_ids
+            and item.get("type") == "derived_from"
+        }
+        chain_context.append({
+            "successor_id": successor,
+            "predecessor_id": predecessor,
+            "predecessor_status": pred_node.get("status"),
+            "predecessor_evidence": [
+                node_by_id[node_id] for node_id in sorted(pred_evidence_ids)
+                if node_id in node_by_id
+            ][:8],
+            "predecessor_artifacts": [
+                node_by_id[node_id] for node_id in sorted(pred_artifact_ids)
+                if node_id in node_by_id
+            ][:8],
+        })
     snapshot = {
         "hypothesis_refs": hypothesis_refs[:_MAX_HYPOTHESIS_REFS],
         "constraints": constraints[:20],
         "confirmation_criteria": criteria[:8],
         "data_refs": data_refs[:20],
         "prior_evidence": evidence[:8],
+        "hypothesis_chain_context": chain_context[:4],
         "rendered": rendered[:4000],
     }
     return {key: value for key, value in snapshot.items() if value}
@@ -698,6 +744,7 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
     user_text = _user_text(callback_context)
     previous_context = state.get("experiment_context") or {}
     previous_runtime = state.get("experiment_runtime") or {}
+    force_new_run = bool(state.get("experiment_force_new_run"))
     if not isinstance(previous_context, dict):
         previous_context = {}
     if not isinstance(previous_runtime, dict):
@@ -705,7 +752,7 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
     # One accepted experiment per session until HITL asks for replan.
     # A second EM hop after phase=completed must not wipe the runtime
     # (that is what started a fresh plan and the start_task loop).
-    if previous_runtime.get("phase") == "completed":
+    if previous_runtime.get("phase") == "completed" and not force_new_run:
         return
     persisted = str(state.get("experiment_source_request") or "").strip()
     prev_request = str(
@@ -715,7 +762,7 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
     if not isinstance(critique, dict):
         critique = {}
     # Critique/schema revise + HITL edits keep same run_id + inventory.
-    planning_revision = bool(
+    planning_revision = not force_new_run and bool(
         state.get("experiment_plan_validation_errors")
         or critique.get("verdict") == "revise"
         or previous_runtime.get("phase") == "awaiting_review"
@@ -747,6 +794,8 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
             # it there would zero the counter on the very hop it must survive.
             from CoScientist.experiments.runtime.state_machine import REPLAN_ROUNDS_KEY
             state[REPLAN_ROUNDS_KEY] = 0
+    if force_new_run:
+        state["experiment_force_new_run"] = False
     # Mid-attempt filtered_tools is task-scoped; do not overwrite discovery.
     mid_attempt = bool(state.get("experiment_active_envelope"))
     live_discovery = _normalize_capabilities(state.get("filtered_tools")) if not mid_attempt else []
@@ -860,6 +909,8 @@ def build_experiment_context(callback_context: CallbackContext) -> None:
         "operations": _bounded(operations, 20),
         "prior_results": _bounded(state.get("experiment_task_results") or [], 20),
         "prior_evidence": _bounded(snapshot.get("prior_evidence") or [], 20),
+        "hypothesis_chain_context": _bounded(
+            snapshot.get("hypothesis_chain_context") or [], 8),
         "confirmation_criteria": _bounded(snapshot.get("confirmation_criteria") or [], 20),
         "data_refs": _bounded(data_refs, 20),
         "constraints": _bounded(constraints, 20),

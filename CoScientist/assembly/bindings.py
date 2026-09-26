@@ -949,10 +949,11 @@ HITL_TOOL_DOCS = (
     ),
     ToolDoc(
         name="request_selection",
-        signature="request_selection(agent_name, message, options)",
+        signature="request_selection(agent_name, message, options, default_option=None)",
         purpose=(
             "(HITL) Ask the human to choose one of several options you generated "
-            "(e.g. hypotheses or plans). Returns 'selected' and 'approved'."
+            "(e.g. hypotheses or plans). An optional default_option controls auto mode; "
+            "otherwise auto selects the first option. Returns 'selected' and 'approved'."
         ),
     ),
 )
@@ -1415,6 +1416,7 @@ _cb("guard_report_without_execution", "before_agent",
 # import per resolve. Keys and hooks must stay in sync with experiments.yaml.
 _EM = "CoScientist.experiments"
 _EM_CALLBACKS: tuple[tuple[str, str, str], ...] = (
+    ("prepare_experiment_user_turn", "before_agent", f"{_EM}.runtime:prepare_experiment_user_turn"),
     # Bounded planner context plus hard AgentTool route guard.
     ("build_experiment_context", "before_agent", f"{_EM}.context:build_experiment_context"),
     ("commit_experiment_hypotheses", "after_agent", f"{_EM}.hypotheses:commit_experiment_hypotheses"),

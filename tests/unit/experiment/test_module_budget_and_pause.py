@@ -29,6 +29,7 @@ from CoScientist.experiments.review import PAUSE_REASON_STATE_KEY
 from CoScientist.experiments.runtime import coalesce as coalesce_mod
 from CoScientist.experiments.runtime.coalesce import (
     coalesce_experiment_module_calls,
+    prepare_experiment_user_turn,
     suppress_experiment_module_after_completed,
 )
 
@@ -59,6 +60,74 @@ def _turn(state: dict, response=None):
         "text": " ".join(p.text for p in response.content.parts
                          if getattr(p, "text", None)),
     }
+
+
+def _user_turn(state: dict, invocation_id: str, text: str = "same request"):
+    ctx = SimpleNamespace(
+        state=state,
+        invocation_id=invocation_id,
+        user_content=SimpleNamespace(parts=[SimpleNamespace(text=text)]),
+    )
+    prepare_experiment_user_turn(ctx)
+
+
+def test_a_new_invocation_resets_only_the_previous_execution():
+    state = {
+        "experiment_user_turn_id": "inv-1",
+        "experiment_source_request": "old request",
+        "experiment_context": {"experiment_run_id": "EXRUN-old"},
+        "experiment_plan": {"plan_id": "PLAN-old"},
+        "experiment_plan_record_id": "PR1",
+        "experiment_runtime": {"phase": "awaiting_review"},
+        "experiment_task_results": [{"task_id": "EXP-1"}],
+        "experiment_artifacts_manifest": [{"artifact_id": "A1"}],
+        "experiment_review_pause_reason": "plan_review_timeout",
+        "experiment_module_runs": 2,
+        "research_frame": {"original_request": "preserved"},
+        "documents": [{"id": "doc:1"}],
+        "capability_inventory": [{"name": "ready"}],
+    }
+
+    _user_turn(state, "inv-2", "same request")
+
+    assert state["experiment_user_turn_id"] == "inv-2"
+    assert state["experiment_source_request"] == "same request"
+    assert state["experiment_force_new_run"] is True
+    assert state["experiment_context"] is None
+    assert state["experiment_runtime"] is None
+    assert state["experiment_review_pause_reason"] is None
+    assert state["experiment_module_runs"] is None
+    assert state["research_frame"] == {"original_request": "preserved"}
+    assert state["documents"] == [{"id": "doc:1"}]
+    assert state["capability_inventory"] == [{"name": "ready"}]
+    archived = state["experiment_run_history"][-1]
+    assert archived["context"]["experiment_run_id"] == "EXRUN-old"
+    assert archived["plan_record_id"] == "PR1"
+    assert archived["task_results"] == [{"task_id": "EXP-1"}]
+
+
+def test_the_same_invocation_does_not_start_a_second_run():
+    state = {"experiment_user_turn_id": "inv-1", "experiment_module_runs": 1}
+    _user_turn(state, "inv-1")
+    assert state["experiment_module_runs"] == 1
+    assert "experiment_force_new_run" not in state
+
+
+def test_identical_text_in_a_new_invocation_is_a_new_turn():
+    state = {"experiment_user_turn_id": "inv-1", "experiment_module_runs": 1}
+    _user_turn(state, "inv-2", "identical")
+    assert state["experiment_user_turn_id"] == "inv-2"
+    assert state["experiment_module_runs"] is None
+
+
+def test_legacy_entrypoints_fall_back_to_request_text():
+    state = {}
+    _user_turn(state, "", "legacy request")
+    first = state["experiment_user_turn_id"]
+    state["experiment_module_runs"] = 1
+    _user_turn(state, "", "legacy request")
+    assert state["experiment_user_turn_id"] == first
+    assert state["experiment_module_runs"] == 1
 
 
 @pytest.fixture()
@@ -185,7 +254,7 @@ def test_a_timed_out_plan_review_records_why(monkeypatch):
 
     # And the next plan round starts from a clean slate.
     state["experiment_plan_revision_count"] = 0
-    monkeypatch.setattr(get_settings().experiments, "plan_auto_approve", True)
+    monkeypatch.setenv("HITL__MODE", "auto")
     monkeypatch.setattr(review_mod, "approve_plan", lambda _s: None)
     monkeypatch.setattr(review_mod, "_publish_approved_plan_to_graph", lambda *_a, **_k: None)
     asyncio.run(agent._review_plan(ctx, plan.model_dump_json()))
@@ -217,4 +286,3 @@ def test_the_coalescer_is_never_registered_without_the_suppressor():
         text = yaml_file.read_text(encoding="utf-8")
         if "coalesce_experiment_module_calls" in text:
             assert "suppress_experiment_module_after_completed" in text, yaml_file.name
-

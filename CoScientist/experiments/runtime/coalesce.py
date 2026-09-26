@@ -13,6 +13,7 @@ Two structural (never keyword-based) safety nets live here:
 from __future__ import annotations
 
 import logging
+from hashlib import sha256
 from typing import Optional
 
 from google.adk.agents.callback_context import CallbackContext
@@ -31,6 +32,73 @@ _TIMED_OUT_REASONS = {"plan_review_timeout", "result_review_timeout"}
 # Set by research_init, or by ContextInit from the user's original_request.
 _ROOT_GOAL_STATE_KEY = "orchestrator_root_goal"
 _FRAME_STATE_KEY = "research_frame"
+
+_TURN_CLEAR_KEYS = (
+    "experiment_context", "experiment_plan", "experiment_plan_view", "experiment_plan_critique",
+    "experiment_plan_record_id",
+    "experiment_runtime", "experiment_task_results", "experiment_summary",
+    "experiment_artifacts_manifest", "experiment_last_route_response",
+    "experiment_active_envelope", "experiment_plan_validation_errors",
+    "experiment_plan_review_paused", _PAUSE_REASON_STATE_KEY,
+    "experiment_plan_revision_count", "experiment_inventory_blocker_hits",
+    "experiment_no_matching_tool", "experiment_execution_summary",
+    "experiment_repo_candidates", "experiment_module_runs",
+    "experiment_module_dispatched",
+)
+
+
+def _invocation_id(callback_context: CallbackContext) -> str:
+    inv = getattr(callback_context, "_invocation_context", None) or getattr(
+        callback_context, "invocation_context", None
+    )
+    return str(
+        getattr(inv, "invocation_id", None)
+        or getattr(callback_context, "invocation_id", None)
+        or ""
+    ).strip()
+
+
+def prepare_experiment_user_turn(callback_context: CallbackContext) -> None:
+    """Reset stale execution state once, before orchestrator suppression guards."""
+    state = getattr(callback_context, "state", None)
+    if state is None or not hasattr(state, "get") or not hasattr(state, "__setitem__"):
+        return None
+    user_text = _text_parts(getattr(callback_context, "user_content", None))
+    if not user_text:
+        return None
+    invocation_id = _invocation_id(callback_context)
+    turn_id = invocation_id or (
+        "legacy:" + sha256(user_text.encode("utf-8")).hexdigest()
+    )
+    if str(state.get("experiment_user_turn_id") or "") == turn_id:
+        return None
+
+    previous = {
+        "user_turn_id": state.get("experiment_user_turn_id"),
+        "source_request": state.get("experiment_source_request"),
+        "context": state.get("experiment_context"),
+        "plan": state.get("experiment_plan"),
+        "plan_record_id": state.get("experiment_plan_record_id"),
+        "runtime": state.get("experiment_runtime"),
+        "task_results": state.get("experiment_task_results"),
+        "artifacts_manifest": state.get("experiment_artifacts_manifest"),
+        "summary": state.get("experiment_summary"),
+    }
+    if any(previous.get(key) for key in (
+        "source_request", "plan", "runtime", "task_results", "artifacts_manifest", "summary"
+    )):
+        history = list(state.get("experiment_run_history") or [])
+        history.append(previous)
+        state["experiment_run_history"] = history[-20:]
+
+    for key in _TURN_CLEAR_KEYS:
+        if key in state:
+            state[key] = None
+    state["experiment_user_turn_id"] = turn_id
+    state["experiment_source_request"] = user_text
+    state["experiment_force_new_run"] = True
+    logger.info("EXPERIMENT_USER_TURN_PREPARED turn_id=%s", turn_id)
+    return None
 
 
 def _spend(state: object, current_runs: int) -> None:
@@ -187,9 +255,13 @@ def suppress_experiment_module_after_completed(
         summary = getter("experiment_summary") if callable(getter) else None
         if not isinstance(summary, str) or not summary.strip():
             if plan_paused:
+                why = str(getter(_PAUSE_REASON_STATE_KEY) or "")
                 summary = (
-                    "Experiment plan review is paused for this session; "
-                    "not starting a second plan."
+                    "Experiment plan review is paused"
+                    + (f" ({why})" if why else "")
+                    + ": not starting a second plan for this request. Say so in "
+                      "the answer, and do not describe experiment results — "
+                      "there are none."
                 )
             elif budget_exhausted:
                 # A budget spent because nobody answered the review is not a
@@ -229,6 +301,7 @@ def suppress_experiment_module_after_completed(
 
 
 __all__ = [
+    "prepare_experiment_user_turn",
     "coalesce_experiment_module_calls",
     "suppress_experiment_module_after_completed",
 ]

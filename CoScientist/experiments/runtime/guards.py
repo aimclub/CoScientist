@@ -855,8 +855,18 @@ def skip_when_experiment_stage_complete(callback_context: Any) -> Optional[types
         return types.Content(role="model", parts=[types.Part(text=summary)])
 
     if state.get("experiment_plan_review_paused"):
-        message = "Experiment plan review is paused for this session; not starting another plan."
-        audit(logger, "EXPERIMENT_SKIP_PLAN_PAUSED")
+        # Say WHICH pause and how wide it is. A rejected plan stops the module
+        # for THIS ask — a new, different request clears the flag on its first
+        # turn — and an operator told only "paused for this session" reasonably
+        # concludes the session is dead and starts over from nothing.
+        why = str(state.get("experiment_review_pause_reason") or "")
+        message = (
+            "Experiment plan review is paused"
+            + (f" ({why})" if why else "")
+            + ": not starting another plan for this request. Send a new request "
+              "to plan the experiment again."
+        )
+        audit(logger, f"EXPERIMENT_SKIP_PLAN_PAUSED reason={why or 'unrecorded'}")
         return types.Content(role="model", parts=[types.Part(text=message)])
 
     if agent == "ToolPreparerAgent":

@@ -66,10 +66,13 @@ def test_no_report_is_written_over_a_plan_that_never_ran():
     text, _ = _run(_skipped())
     assert text is not None, "агрегатор должен быть замкнут"
     assert "не выполнялся" in text
-    assert "plan_review_timeout" in text, "причина берётся из состояния, не выдумывается"
+    assert "обзор плана не подтверждён" in text, (
+        "причина берётся из состояния, не выдумывается — и словами, а не ключом")
+    assert "plan_review_timeout" not in text, "ключ состояния читателю ничего не говорит"
     assert "**Задач в плане:** 3" in text
     # И сказано, что делать дальше: справка без выхода — это тупик.
-    assert "подтвердите план" in text.lower()
+    assert "новый запрос" in text.lower(), (
+        "«подтвердите план на карточке» было невыполнимо: карточка уже закрыта")
 
 
 def test_the_refusal_says_plainly_that_nothing_was_measured():
@@ -114,7 +117,7 @@ def test_a_partial_run_that_did_stop_says_why():
         "experiment_review_pause_reason": "plan_review_timeout",
         "experiment_task_results": [{"status": "partial"}],
     })
-    assert "Причина остановки: plan_review_timeout" in note
+    assert "Причина остановки: обзор плана не подтверждён" in note
 
 
 def test_a_failed_task_is_not_carried_out_work(tmp_path, monkeypatch):

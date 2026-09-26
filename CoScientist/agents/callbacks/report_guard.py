@@ -106,24 +106,85 @@ def _evidence_in_graph(callback_context: Any) -> int:
         return 0
 
 
-def _why(state: Any) -> str:
+def _why(state: Any, lang: str) -> str:
     """Почему исполнение не состоялось, словами самой системы.
 
     Пустая строка, когда причины нет: фаза «execution» ничего не останавливала,
     и называть её причиной остановки значило бы придумать событие. Прогон, где
     часть задач просто не дошла очередь, — это не прогон, который встал.
     """
-    said = str(state.get("experiment_execution_summary") or "").strip()
-    if said:
-        return said
     pause = str(state.get("experiment_review_pause_reason") or "").strip()
     runtime = state.get("experiment_runtime")
     phase = str(runtime.get("phase") or "") if isinstance(runtime, dict) else ""
-    if pause and phase:
-        return f"{pause} (phase={phase})"
+    # The pause reason FIRST, and translated. `experiment_execution_summary` is
+    # `skip_executor_without_runtime`'s own English line — "Experiment execution
+    # skipped: no approved experiment runtime is active (plan_review_timeout
+    # (phase=awaiting_review))." — written for a log, and preferring it put that
+    # sentence, state keys and all, in the middle of a Russian note to the
+    # operator. It stays as the fallback for the cases the table has no word for.
     if pause:
-        return pause
+        said = _PAUSE_WORDS[lang].get(pause, pause)
+        return f"{said} (phase={phase})" if phase else said
+    said = str(state.get("experiment_execution_summary") or "").strip()
+    if said:
+        return said
     return f"phase={phase}" if phase and phase != "execution" else ""
+
+
+#: Причины паузы словами, а не ключами состояния: читатель справки — оператор,
+#: и `plan_rejected_by_operator` посреди русского абзаца ему ничего не говорит.
+_PAUSE_WORDS = {
+    "ru": {
+        "plan_rejected_by_operator": "план эксперимента отклонён оператором",
+        "plan_review_timeout": "обзор плана не подтверждён в отведённое время",
+        "result_review_timeout": "результат не подтверждён в отведённое время",
+        "max_plan_revisions": "исчерпан лимит переработок плана",
+        "inventory_blocker_repeated": "план дважды упёрся в отсутствующий инструмент",
+    },
+    "en": {
+        "plan_rejected_by_operator": "the experiment plan was rejected by the operator",
+        "plan_review_timeout": "the plan review was not confirmed in time",
+        "result_review_timeout": "the result review was not confirmed in time",
+        "max_plan_revisions": "the plan revision budget was exhausted",
+        "inventory_blocker_repeated": "the plan twice required an unavailable tool",
+    },
+}
+
+#: Что делать дальше. «Подтвердите план на карточке обзора и запустите прогон
+#: заново» было невыполнимо с двух сторон: карточка к этому моменту закрыта
+#: (`disableHitlControls` срабатывает и на тайм-ауте), а повторный прогон того
+#: же запроса отклоняет привратник модуля. Работает только новый запрос.
+_WHAT_NEXT = {
+    "ru": {
+        "plan_rejected_by_operator":
+            "Вы отклонили план. Чтобы спланировать эксперимент заново, "
+            "отправьте новый запрос — с тем, что в отклонённом плане было не так.",
+        None:
+            "Чтобы продолжить, отправьте новый запрос: этот план подтвердить "
+            "уже нельзя, его карточка обзора закрыта.",
+    },
+    "en": {
+        "plan_rejected_by_operator":
+            "You rejected the plan. To plan the experiment again, send a new "
+            "request saying what was wrong with the rejected one.",
+        None:
+            "To continue, send a new request: this plan can no longer be "
+            "approved, its review card is closed.",
+    },
+}
+
+
+def _what_next(lang: str, state: Any) -> str:
+    pause = str(state.get("experiment_review_pause_reason") or "").strip()
+    table = _WHAT_NEXT[lang]
+    text = table.get(pause) or table[None]
+    if state.get("experiment_plan_record_id"):
+        text += (
+            " Сам план сохранён в графе выполнения."
+            if lang == "ru"
+            else " The plan itself is retained in the execution graph."
+        )
+    return text
 
 
 _INSTEAD_OF_A_REPORT = {
@@ -136,8 +197,7 @@ _INSTEAD_OF_A_REPORT = {
         "- **Выполнено:** 0\n"
         "- **Свидетельств в графе:** 0\n"
         "- **Причина остановки:** {why}\n\n"
-        "Чтобы продолжить: подтвердите план эксперимента на карточке обзора и "
-        "запустите прогон заново. Сам план сохранён в графе исследования."
+        "{next}"
     ),
     "en": (
         "## No report: the experiment was never executed\n\n"
@@ -148,8 +208,7 @@ _INSTEAD_OF_A_REPORT = {
         "- **Carried out:** 0\n"
         "- **Evidence in the graph:** 0\n"
         "- **Why it stopped:** {why}\n\n"
-        "To continue: approve the experiment plan on its review card and start "
-        "the run again. The plan itself is kept in the research graph."
+        "{next}"
     ),
 }
 
@@ -199,7 +258,8 @@ def guard_report_without_execution(callback_context: Any) -> types.Content | Non
 
         done, planned = _carried_out(state), _planned(state)
         evidence = _evidence_in_graph(callback_context)
-        lang, why = _language(state), _why(state)
+        lang = _language(state)
+        why = _why(state, lang)
 
         if done or evidence:
             # Что-то сделано. Отчёт законен, но обязан сказать, чего в нём нет.
@@ -220,7 +280,8 @@ def guard_report_without_execution(callback_context: Any) -> types.Content | Non
         return types.Content(
             role="model",
             parts=[types.Part(text=_INSTEAD_OF_A_REPORT[lang].format(
-                planned=planned or unknown, why=why or unknown))],
+                planned=planned or unknown, why=why or unknown,
+                next=_what_next(lang, state)))],
         )
     except Exception as exc:  # noqa: BLE001 — привратник не ломает прогон
         logger.warning("проверка отчёта на пустое исполнение не выполнена: %s", exc)
