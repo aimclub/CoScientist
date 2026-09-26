@@ -413,6 +413,13 @@
       color: rgb(var(--c-outline-variant));
     }
 
+    /* The one-line strip a Work Order / Report folds into (hitl.js woStrip).
+       `list-none` hides the disclosure triangle everywhere but WebKit, which
+       draws its own; the strip has its chevron already. */
+    details[data-wo-strip]>summary::-webkit-details-marker {
+      display: none;
+    }
+
     .topology-grid {
       background-image: radial-gradient(rgb(var(--c-primary) / 0.05) 1px, transparent 1px);
       background-size: 24px 24px;

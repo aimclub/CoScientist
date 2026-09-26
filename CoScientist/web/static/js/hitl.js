@@ -20,6 +20,7 @@ const TRIGGER_KEYS = {
   work_report: 'workReport',
 };
 const hitlCards = new Map();  // request_id -> payload, re-rendered on language switch
+const workOrderStripState = new Map(); // request_id -> manually chosen open state
 
 function fillHitl(key, params) {
   return t(key).replace(/\{(\w+)\}/g, (m, k) => (params[k] != null ? params[k] : m));
@@ -109,6 +110,29 @@ function relocalizeHitlCards() {
     el.innerHTML = hitlDynamicHtml(part, part === 'via' ? describeHitlVia(data) : localizeHitlMessage(data));
   });
   redrawPlanCards();
+  redrawWorkOrderCards();
+}
+
+function redrawWorkOrderCards() {
+  hitlCards.forEach((data, rid) => {
+    const trigger = hitlTrigger(data);
+    if (trigger !== 'work_order' && trigger !== 'work_order_amendment'
+        && trigger !== 'work_step' && trigger !== 'work_report') return;
+    const card = document.querySelector(`[data-hitl-card="${CSS.escape(rid)}"]`);
+    if (!card) return;
+    const box = document.getElementById('hitl-controls-' + rid);
+    const live = !(box && box.dataset.answered === '1');
+    if (trigger === 'work_report') renderWorkReportCard(live, data);
+    else if (trigger === 'work_step') renderWorkStepCard(live, data);
+    else renderWorkOrderCard(live, data);
+    const remembered = workOrderStripState.get(rid);
+    if (remembered == null) return;
+    const fresh = document.querySelector(`[data-hitl-card="${CSS.escape(rid)}"] details[data-wo-strip]`);
+    if (fresh) {
+      fresh.open = remembered;
+      fresh.removeAttribute('data-auto-open');
+    }
+  });
 }
 
 // The plan card builds every label in JS — counts interpolated into "{n} tasks",
@@ -377,6 +401,21 @@ function disableHitlControls(requestId) {
   // Nothing left to act on: fold whatever this card was showing open.
   const card = document.querySelector(`[data-hitl-card="${CSS.escape(String(requestId || ''))}"]`);
   if (card) card.querySelectorAll('.fold-open').forEach(collapseFold);
+  // And close the strip we opened because an answer was needed. Only that one:
+  // a strip the reader opened by hand is being read, and a timeout firing under
+  // it is no reason to snap it shut.
+  //
+  // The marks inside are locked too. A card that timed out or was cancelled
+  // never went through respondWorkOrder, so its assumption and finding boxes
+  // stayed clickable on a question nobody is asking any more.
+  if (card) {
+    card.querySelectorAll('details[data-wo-strip][data-auto-open]').forEach(el => {
+      el.open = false;
+      el.removeAttribute('data-auto-open');
+    });
+    card.querySelectorAll('input[data-wo-assumption], input[data-wr-finding]')
+      .forEach(el => { el.disabled = true; });
+  }
   const box = document.getElementById('hitl-controls-' + requestId);
   if (!box) return;
   box.dataset.answered = '1';
@@ -394,40 +433,44 @@ function hitlResponseSummary(response) {
   const request = hitlCards.get(response.request_id || '') || {};
   const feedback = String(response.instructions || response.free_input || '').trim();
   const action = response.action;
+  const source = response.decision_source
+    || (response.auto === 'mode=auto' ? 'mode_auto' : 'human');
+  const withSource = text => source === 'human' ? text
+    : `${text} — ${t('hitl.source.' + source, source)}`;
   if (request.form && Array.isArray(request.form.blocks)) {
     const values = response.form_values;
     const n = values ? Object.values(values).reduce((s, o) => s + Object.keys(o || {}).length, 0) : 0;
-    return values ? t('hitl.form.saved').replace('{n}', n) : t('hitl.form.skipped');
+    return withSource(values ? t('hitl.form.saved').replace('{n}', n) : t('hitl.form.skipped'));
   }
   if (String(request.trigger || '').startsWith('work_order') && action === 'approve') {
     const rejected = ((response.form_values || {}).rejected_assumption_ids || []).length;
-    return t('workOrder.approved')
+    return withSource(t('workOrder.approved')
       + (rejected ? ' — ' + t('workOrder.rejectedAssumptions').replace('{n}', rejected) : '')
-      + (feedback ? ': ' + feedback : '');
+      + (feedback ? ': ' + feedback : ''));
   }
   if (request.trigger === 'work_step') {
     const key = action === 'approve' ? 'workStep.accepted' : action === 'edit' ? 'workStep.sentBack' : 'workStep.stopped';
     const stepId = ((request.context || {}).step || {}).id || '';
-    return t(key).replace('{step}', stepId) + (feedback ? ': ' + feedback : '');
+    return withSource(t(key).replace('{step}', stepId) + (feedback ? ': ' + feedback : ''));
   }
   if (request.trigger === 'work_report') {
     const disputed = ((response.form_values || {}).disputed_finding_ids || []).length;
     const key = action === 'approve' ? 'workReport.accepted' : action === 'edit' ? 'workReport.sentBack' : 'workReport.rejected';
-    return t(key)
+    return withSource(t(key)
       + (disputed ? ' — ' + t('workReport.disputedCount').replace('{n}', disputed) : '')
-      + (feedback ? ': ' + feedback : '');
+      + (feedback ? ': ' + feedback : ''));
   }
   // The receipts a run leaves in the feed. The keys were written when the rest
   // of this function was localised; these three lines kept their literals, so a
   // Russian session recorded every verdict as "✓ HITL Approved".
   if (action === 'provide_input')
-    return t('hitl.inputSent', { feedback: feedback || t('hitl.empty') });
-  if (action === 'select') return '☑ ' + (response.selected_option || feedback);
-  if (action === 'edit') return t('hitl.revisionRequested', { feedback: feedback });
+    return withSource(t('hitl.inputSent', { feedback: feedback || t('hitl.empty') }));
+  if (action === 'select') return withSource('☑ ' + (response.selected_option || feedback));
+  if (action === 'edit') return withSource(t('hitl.revisionRequested', { feedback: feedback }));
   // The feedback used to hang off the rejected branch alone: `a ? b : c + d`
   // groups as `a ? b : (c + d)`, so an approval with a comment dropped it.
-  return t(response.approved ? 'hitl.approved' : 'hitl.rejected')
-    + (feedback ? ': ' + feedback : '');
+  return withSource(t(response.approved ? 'hitl.approved' : 'hitl.rejected')
+    + (feedback ? ': ' + feedback : ''));
 }
 
 function hitlTimeoutSummary(data) {
@@ -456,6 +499,14 @@ function applyHitlOutcome(event) {
         el.checked = !rejected.includes(el.dataset.woAssumption);
         el.disabled = true;
       });
+      // The findings the operator marked wrong, put back the same way. Without
+      // this a reloaded report drew every finding unmarked, whatever was sent.
+      const disputed = values.disputed_finding_ids || [];
+      card.querySelectorAll('input[data-wr-finding]').forEach(el => {
+        el.checked = disputed.includes(el.dataset.wrFinding);
+        el.disabled = true;
+      });
+      woRecount(card);
     }
     disableHitlControls(rid);
     addSystemMsg(hitlResponseSummary(event), event.timestamp);
@@ -715,6 +766,87 @@ function woSection(labelKey, inner) {
         </div>`;
 }
 
+// ── The strip ────────────────────────────────────────────────────────────
+// Findings, assumptions, steps, the goal and its criteria: once a run has done
+// a few rounds they read as pages, and once a card is answered nobody reads
+// them again. So every card carries them behind ONE line that says what is
+// inside and how far it got — counts, step progress, the verdict, and the goal
+// or summary cut to the width that is left — and the lists open on a click.
+//
+// <details>, deliberately, and not a fold. A closed <details> keeps its
+// children in the DOM: respondWorkOrder still reads every checkbox, the replay
+// restores them, and a progress notice still ticks a step inside it and the
+// tally on the line itself. The `.fold-body` clip made exactly those
+// unreachable, which is why the lists used to sit outside every fold.
+//
+// Callers pass an EMPTY body when there is nothing to list — a strip that opens
+// onto an empty box is worse than no strip.
+function woStrip(counts, lead, body, open) {
+  if (!body || !String(body).trim()) return '';
+  const parts = (counts || []).filter(Boolean)
+    .join('<span class="text-outline-variant/50">·</span>');
+  const text = String(lead || '').trim();
+  // The counters may wrap onto a second line in a narrow column, but never push
+  // past the card: a strip that makes the whole feed scroll sideways is the
+  // opposite of what it is for. The lead text is what gives way first.
+  return `
+        <details data-wo-strip ${open ? 'open data-auto-open="1"' : ''}
+          class="group mt-2 rounded-md border border-outline-variant/20 bg-surface-container/40">
+          <summary class="flex items-center gap-2 min-w-0 px-2 py-1 cursor-pointer list-none select-none
+                          text-[11px] leading-5 text-on-surface-variant hover:text-on-surface">
+            <span class="material-symbols-outlined shrink-0 text-[15px] text-outline-variant transition-transform group-open:rotate-90">chevron_right</span>
+            <span class="flex flex-wrap items-center gap-x-2 min-w-0">${parts || hitlLabel('woStrip.details')}</span>
+            ${text ? `<span class="truncate min-w-0 flex-1 basis-24 text-outline-variant group-open:hidden" title="${escHtml(text)}">${escHtml(text)}</span>` : ''}
+          </summary>
+          <div class="px-3 pb-3 pt-2 border-t border-outline-variant/15">${body}</div>
+        </details>`;
+}
+
+// One counter on the strip's line: a label and a value. `attrs` lets a live
+// counter carry the hook its patcher looks for (data-wo-progress).
+function woCount(labelKey, value, cls = '', attrs = '') {
+  if (value === '' || value == null) return '';
+  return `<span class="inline-flex items-baseline gap-1">${hitlLabel(labelKey)}`
+    + `<span ${attrs} class="font-mono ${cls}">${escHtml(String(value))}</span></span>`;
+}
+
+// "closed/total" for a list of steps. `skipped` closes a step as `done` does —
+// the server counts it that way too (work_order.report_warnings).
+function woStepTally(steps) {
+  const list = steps || [];
+  if (!list.length) return '';
+  const closed = list.filter(s => !WO_STEP_OPEN.has(s.status || 'pending')).length;
+  return `${closed}/${list.length}`;
+}
+
+// A strip opens for exactly one reader: the one who has to answer this card
+// now. That is every LIVE card — silence approves nothing (hitl/mode.py: in
+// `basic` it refuses after ten minutes, in `debug` it waits, and in `auto` no
+// card is drawn at all), so a countdown is not "it will decide itself" and must
+// not hide the assumptions to reject or the findings to dispute behind a click.
+// History, notices and answered cards stay one line; disableHitlControls folds
+// the strip once the answer is in.
+function woStripOpen(live) {
+  return !!live;
+}
+
+// Re-count what the operator marked, onto the strip's line. The line is built
+// from the server payload, which knows nothing of ticks made in this tab — and
+// once the card is answered and its strip folds, that line is all anyone sees.
+function woRecount(card) {
+  if (!card) return;
+  const kept = [...card.querySelectorAll('input[data-wo-assumption]')];
+  const off = kept.filter(el => !el.checked).length;
+  card.querySelectorAll('[data-wo-assumption-count]').forEach(el => {
+    el.textContent = off ? `${kept.length - off}/${kept.length}` : String(kept.length);
+  });
+  const found = [...card.querySelectorAll('input[data-wr-finding]')];
+  const wrong = found.filter(el => el.checked).length;
+  card.querySelectorAll('[data-wr-finding-count]').forEach(el => {
+    el.textContent = wrong ? `${found.length} ✗${wrong}` : String(found.length);
+  });
+}
+
 // A card with a document shows its steps as one row of marks: the progress
 // notices still replace a chip in place, so the run stays visible, and what each
 // step is *for* is read in the panel. `woStepRow` keeps the full shape for a
@@ -768,7 +900,11 @@ function woStepReviewBadge(review) {
 }
 
 // The contract itself. interactive=true renders assumptions as checkboxes.
-function workOrderBody(order, rid, interactive, compact) {
+//
+// `opts.open` opens the strip (see woStripOpen); `opts.prefix` is anything that
+// belongs inside it ahead of the contract — an amendment's reason and diff —
+// and `opts.changes` counts that diff for the strip's line.
+function workOrderBody(order, rid, interactive, compact, opts = {}) {
   const assumptions = (order.assumptions || []).map(a => {
     if (interactive) {
       return `
@@ -794,29 +930,22 @@ function workOrderBody(order, rid, interactive, compact) {
       + order.steps.map(step => woStepRow(step, compact)).join('') + '</ol>'
     : '');
 
-  // What the card is answered with, and what a progress notice patches. Never
-  // folded: `.fold-body` clips with `overflow: hidden`, so a checkbox below the
-  // line cannot be clicked and a step chip cannot be seen to tick.
-  //
-  // With a document it is chips, because the words are in the file. Without
-  // one there is nowhere else for them to be, so it is the real thing.
-  const controls = `
-        <div class="text-xs text-on-surface-variant leading-relaxed flex flex-col gap-1.5 mt-3">
-          ${compact ? chipsRow(order, interactive) + stepsRow(order)
-    : assumptionsBlock + stepsBlock}
-          <div data-wo-deviations class="flex flex-col gap-1"></div>
-        </div>`;
+  // What the card is answered with, and what a progress notice patches. With a
+  // document it is chips, because the words are in the file; without one there
+  // is nowhere else for them to be, so it is the real thing.
+  const lists = compact ? chipsRow(order, interactive) + stepsRow(order)
+    : assumptionsBlock + stepsBlock;
+  const controls = lists.trim() ? `
+        <div class="text-xs text-on-surface-variant leading-relaxed flex flex-col gap-1.5">
+          ${lists}
+        </div>` : '';
 
-  if (compact) {
-    // Only the mechanism, never the prose: a checkbox per assumption because
-    // `respondWorkOrder` reads them back, a chip per step because the progress
-    // notices replace them as the agent works. Both say what they are in a
-    // tooltip and in full in the document this card opens.
-    return controls;
-  }
-
-  const body = `
-        <div class="text-xs text-on-surface-variant leading-relaxed">
+  // Everything goes behind the strip, prose and controls alike — a closed
+  // <details> clips nothing, so the checkboxes and step marks inside it keep
+  // working (see woStrip). With a document the prose stays out: it is in the
+  // file this card opens.
+  const prose = compact ? '' : `
+        <div class="text-xs text-on-surface-variant leading-relaxed mb-3">
           ${woSection('workOrder.goal', `<div class="text-on-surface">${mdBlock(order.goal || '')}</div>`)}
           ${woSection('workOrder.done', order.done_criteria ? mdBlock(order.done_criteria) : '')}
           ${tools ? `<div class="${toolsOnlyInternal ? 'wo-internal' : ''}">${woSection('workOrder.tools', `<div class="flex flex-wrap gap-1">${tools}</div>`)}</div>` : ''}
@@ -824,10 +953,18 @@ function workOrderBody(order, rid, interactive, compact) {
           ${woSection('workOrder.expected', order.expected_outcome ? mdBlock(order.expected_outcome) : '')}
           ${woSection('workOrder.fallback', order.fallback ? mdBlock(order.fallback) : '')}
         </div>`;
-  // The prose folds; the controls under it do not. `.fold-body` clips with
-  // `overflow: hidden`, so anything inside it that has to be clicked — or
-  // patched by a progress notice — would be unreachable below the 11rem line.
-  return foldable(body, JSON.stringify(order), { bg: 'rgb(var(--c-surface-container-low))' }) + controls;
+  const all = order.assumptions || [];
+  const dropped = all.filter(a => a.rejected).length;
+  const counts = [
+    opts.changes ? woCount('woStrip.changes', '+' + opts.changes, 'text-secondary') : '',
+    woCount('woStrip.steps', woStepTally(order.steps), 'text-on-surface', 'data-wo-progress'),
+    all.length ? woCount('woStrip.assumptions', dropped ? `${all.length - dropped}/${all.length}` : all.length,
+      '', 'data-wo-assumption-count') : '',
+  ];
+  // Deviations are warnings: they stay outside the strip, where nobody has to
+  // open anything to see that the agent stepped off its contract.
+  return woStrip(counts, order.goal, (opts.prefix || '') + prose + controls, opts.open)
+    + `<div data-wo-deviations class="flex flex-col gap-1 mt-1"></div>`;
 }
 
 // ── The two rows the card is answered with ────────────────────────────────
@@ -854,16 +991,23 @@ function chipsRow(order, interactive) {
 // run that skipped one would otherwise read 3/4 for ever.
 const WO_STEP_OPEN = new Set(['pending', 'in_progress']);
 
+// The "2/4" beside the chips lives on the strip's line now (woCount with
+// data-wo-progress), where it can be read without opening anything.
 function stepsRow(order) {
   const steps = order.steps || [];
   if (!steps.length) return '';
-  const closed = steps.filter(s => !WO_STEP_OPEN.has(s.status || 'pending')).length;
   return `<div class="flex items-baseline flex-wrap gap-1.5">
             <span class="text-[12px] text-outline-variant shrink-0">${hitlLabel('workOrder.steps')}</span>
             <ol data-wo-steps data-compact="1" class="inline-flex flex-wrap items-baseline gap-1">${
     steps.map(woStepChip).join('')}</ol>
-            <span data-wo-progress class="text-[11px] font-mono text-outline-variant">${closed}/${steps.length}</span>
           </div>`;
+}
+
+// How many things an amendment adds — the number on the strip's line.
+function workOrderDiffCount(ctx) {
+  const diff = (ctx && ctx.diff) || {};
+  return (diff.added_tools || []).length + (diff.added_side_effects || []).length
+    + (diff.added_steps || []).length;
 }
 
 function workOrderDiff(ctx) {
@@ -914,9 +1058,12 @@ function renderWorkOrderCard(live, data) {
             ${woHeader(isAmendment ? 'edit_note' : 'assignment', isAmendment ? 'workOrder.amendTitle' : 'workOrder.title',
     tier, data.agent_name, order.revision)}
             <p class="text-sm text-on-surface-variant leading-relaxed mt-2">${messageHtml}</p>
-            ${isAmendment ? workOrderDiff(ctx) : ''}
             ${documentBlock(data)}
-            ${workOrderBody(order, rid, !isAmendment, !!(data.document && data.document.artifact_id))}
+            ${workOrderBody(order, rid, !isAmendment, !!(data.document && data.document.artifact_id), {
+    open: woStripOpen(live),
+    prefix: isAmendment ? `<div class="text-xs text-on-surface-variant leading-relaxed mb-3">${workOrderDiff(ctx)}</div>` : '',
+    changes: isAmendment ? workOrderDiffCount(ctx) : 0,
+  })}
             ${countdown}
             <div id="hitl-controls-${rid}" class="mt-4 flex flex-col gap-2">
               <textarea id="hitl-feedback-${rid}" rows="2" data-i18n-placeholder="workOrder.ph.notes" placeholder="${escHtml(t('workOrder.ph.notes'))}"
@@ -1019,6 +1166,8 @@ function respondWorkOrder(rid, action) {
     ? [...card.querySelectorAll('input[data-wr-finding]')].filter(el => el.checked).map(el => el.dataset.wrFinding)
     : [];
   if (card) card.querySelectorAll('input[data-wo-assumption], input[data-wr-finding]').forEach(el => { el.disabled = true; });
+  // The strip is about to fold; its line has to say what was just decided.
+  woRecount(card);
   // What the operator marked travels with EVERY action, not with one of them.
   //
   // These two lists used to be attached per action — rejections only on
@@ -1064,7 +1213,7 @@ function wrWarning(w) {
     count: w.count != null ? w.count : '',
     verdict: t('workReport.verdict.' + w.verdict, w.verdict || ''),
   };
-  return `<p class="text-[11px] text-tertiary">⚠ ${escHtml(fillHitl('workReport.warn.' + w.code, params))}</p>`;
+  return `<span class="text-[11px] text-tertiary">⚠ ${escHtml(fillHitl('workReport.warn.' + w.code, params))}</span>`;
 }
 
 function wrFindingRow(f, interactive) {
@@ -1095,7 +1244,8 @@ function wrFindingRow(f, interactive) {
 }
 
 // The report set against the order. interactive=true lets the human mark findings wrong.
-function workReportBody(order, report, extra, interactive, compact) {
+// `open` opens the strip the lists sit behind (see woStripOpen).
+function workReportBody(order, report, extra, interactive, compact, open) {
   const warnings = (extra.warnings || []).map(wrWarning).join('');
   const journal = extra.journal || {
     tool_calls: order.tool_calls || {},
@@ -1106,8 +1256,12 @@ function workReportBody(order, report, extra, interactive, compact) {
   const disputed = new Set(report.disputed_finding_ids || []);
   const findings = (report.findings || [])
     .map(f => wrFindingRow({ ...f, disputed: disputed.has(f.id) }, interactive)).join('');
-  const verdict = report.fallback ? '' : woChip(
-    t('workReport.verdict.' + report.done_verdict, report.done_verdict || ''),
+  // No verdict, no chip. A replayed report can carry an empty `done_verdict`
+  // (replay.py records the call even when the tool refused it), and
+  // t('workReport.verdict.') would print its own key — now on the strip's line,
+  // the first thing anyone reads.
+  const verdict = report.fallback || !report.done_verdict ? '' : woChip(
+    t('workReport.verdict.' + report.done_verdict, report.done_verdict),
     WR_VERDICT_STYLE[report.done_verdict] || WR_VERDICT_STYLE.partial);
   const done = order.done_criteria || verdict ? `
             <p>${mdInline(order.done_criteria || '')} ${verdict}</p>
@@ -1143,23 +1297,30 @@ function workReportBody(order, report, extra, interactive, compact) {
     ? (interactive ? `<p class="text-[12px] text-on-surface-variant mb-1.5">${hitlLabel('workReport.findingsHint')}</p>` : '')
       + `<ol class="flex flex-col gap-1.5">${findings}</ol>`
     : '');
+  // A warning is the one thing that must not wait for someone to open a panel,
+  // so it stays outside the strip — as one wrapped line, not a boxed list.
   const warningsBlock = warnings
-    ? `<div class="mt-3 flex flex-col gap-1 p-2 rounded border border-tertiary/30 bg-tertiary/5">${warnings}</div>`
+    ? `<div class="mt-2 flex flex-wrap gap-x-4 gap-y-0.5">${warnings}</div>`
     : '';
 
-  if (compact) {
-    // The findings carry the dispute checkboxes, and a warning is the one thing
-    // that must not wait for someone to open a panel.
-    return `
-        <div class="text-xs text-on-surface-variant leading-relaxed">
-          ${warningsBlock}
-          ${findingsBlock}
-        </div>`;
-  }
+  const all = report.findings || [];
+  const nDisputed = all.filter(f => disputed.has(f.id)).length;
+  const counts = [
+    verdict,
+    all.length ? woCount('woStrip.findings', nDisputed ? `${all.length} ✗${nDisputed}` : all.length,
+      '', 'data-wr-finding-count') : '',
+    woCount('woStrip.steps', woStepTally(order.steps), 'text-on-surface'),
+    (report.artifacts || []).length ? woCount('woStrip.artifacts', report.artifacts.length) : '',
+  ];
+  const lead = report.fallback ? '' : (report.summary || report.actual_outcome || order.goal);
 
-  const body = `
+  // With a document the findings are all the card keeps: they carry the dispute
+  // checkboxes, and the rest is in the file this card opens.
+  // No findings in a compact card means nothing to list: an empty body, so no
+  // strip at all rather than one that opens onto an empty box.
+  const body = compact ? (findingsBlock ? `
+        <div class="text-xs text-on-surface-variant leading-relaxed">${findingsBlock}</div>` : '') : `
         <div class="text-xs text-on-surface-variant leading-relaxed">
-          ${warningsBlock}
           ${woSection('workOrder.goal', mdBlock(order.goal || ''))}
           ${woSection('workReport.summary', summary)}
           ${findingsBlock}
@@ -1170,8 +1331,30 @@ function workReportBody(order, report, extra, interactive, compact) {
           ${woSection('workReport.artifacts', artifacts ? `<div class="flex flex-col gap-1">${artifacts}</div>` : '')}
           ${woSection('workReport.journal', journalHtml)}
         </div>`;
-  return foldable(body, JSON.stringify(report), { bg: 'rgb(var(--c-surface-container-low))' });
+  return warningsBlock + woStrip(counts, lead, body, open);
 }
+
+// Counts react at the moment a mark changes, not only after Submit/replay.
+document.addEventListener('change', event => {
+  const target = event.target;
+  if (!target || !target.matches
+      || !target.matches('input[data-wo-assumption], input[data-wr-finding]')) return;
+  woRecount(target.closest('[data-hitl-card]'));
+});
+
+// Once the operator opens/closes a strip themselves it is no longer the strip
+// auto-opened for an unanswered card. Timeouts and language redraws preserve
+// that explicit choice.
+document.addEventListener('toggle', event => {
+  const details = event.target;
+  if (!event.isTrusted || !details || !details.matches
+      || !details.matches('details[data-wo-strip]')) return;
+  details.removeAttribute('data-auto-open');
+  const card = details.closest('[data-hitl-card]');
+  if (card && card.dataset.hitlCard) {
+    workOrderStripState.set(card.dataset.hitlCard, details.open);
+  }
+}, true);
 
 function renderWorkReportCard(live, data) {
   const rid = data.request_id;
@@ -1189,7 +1372,8 @@ function renderWorkReportCard(live, data) {
             <p class="font-mono text-[10px] text-outline-variant mt-1">${escHtml(t('workReport.round').replace('{n}', report.round || 1))}</p>
             <p class="text-sm text-on-surface-variant leading-relaxed mt-2">${messageHtml}</p>
             ${documentBlock(data)}
-            ${workReportBody(order, report, ctx, !report.fallback, !!(data.document && data.document.artifact_id))}
+            ${workReportBody(order, report, ctx, !report.fallback, !!(data.document && data.document.artifact_id),
+    woStripOpen(live))}
             ${woCountdown(live, data, timeout, 'workReport.countdown')}
             <div id="hitl-controls-${rid}" class="mt-4 flex flex-col gap-2">
               <textarea id="hitl-feedback-${rid}" rows="2" data-i18n-placeholder="workReport.ph.notes" placeholder="${escHtml(t('workReport.ph.notes'))}"
@@ -1308,8 +1492,8 @@ function renderWorkOrderNotice(data) {
     const order = data.work_order || {};
     const report = data.work_report || {};
     appendMsgToFeed(`
-          <div class="my-4 relative msg-enter max-w-4xl" data-wr-agent="${escHtml(data.agent_name || '')}">
-            <div class="relative bg-surface-container-low p-5 rounded-xl border border-outline-variant/25">
+          <div class="my-3 relative msg-enter max-w-4xl" data-wr-agent="${escHtml(data.agent_name || '')}">
+            <div class="relative bg-surface-container-low px-4 py-3 rounded-xl border border-outline-variant/25">
               ${woHeader('fact_check', 'workReport.title', data.tier || order.tier, data.agent_name, order.revision)}
               ${workReportBody(order, report, data, false)}
             </div>
@@ -1321,12 +1505,14 @@ function renderWorkOrderNotice(data) {
     const order = data.work_order || {};
     const amended = kind === 'amended';
     appendMsgToFeed(`
-          <div class="my-4 relative msg-enter max-w-4xl" data-wo-agent="${escHtml(data.agent_name || '')}" data-wo-rev="${escHtml(String(order.revision || 1))}">
-            <div class="relative bg-surface-container-low p-5 rounded-xl border border-outline-variant/25">
+          <div class="my-3 relative msg-enter max-w-4xl" data-wo-agent="${escHtml(data.agent_name || '')}" data-wo-rev="${escHtml(String(order.revision || 1))}">
+            <div class="relative bg-surface-container-low px-4 py-3 rounded-xl border border-outline-variant/25">
               ${woHeader(amended ? 'edit_note' : 'assignment', amended ? 'workOrder.amendTitle' : 'workOrder.noticeTitle',
       data.tier || order.tier, data.agent_name, order.revision)}
-              ${amended ? workOrderDiff(data) : ''}
-              ${workOrderBody(order, '', false)}
+              ${workOrderBody(order, '', false, false, {
+      prefix: amended ? `<div class="text-xs text-on-surface-variant leading-relaxed mb-3">${workOrderDiff(data)}</div>` : '',
+      changes: amended ? workOrderDiffCount(data) : 0,
+    })}
             </div>
           </div>`);
     scrollChat();
@@ -1345,13 +1531,14 @@ function renderWorkOrderNotice(data) {
     } else if (list) {
       list.insertAdjacentHTML('beforeend', html);
     }
-    // The compact row carries a "2/4" beside it; without this it would still
-    // read 0/4 while the chips went green one by one.
-    const tally = card.querySelector('[data-wo-progress]');
-    if (tally && list) {
+    // The strip's line carries a "2/4"; without this it would still read 0/4
+    // while the steps inside went green one by one — and with the strip closed,
+    // that number is the only progress anyone sees.
+    const tallies = card.querySelectorAll('[data-wo-progress]');
+    if (tallies.length && list) {
       const steps = [...list.querySelectorAll('[data-wo-step]')];
       const closed = steps.filter(el => !WO_STEP_OPEN.has(el.dataset.woStatus || 'pending')).length;
-      tally.textContent = `${closed}/${steps.length}`;
+      tallies.forEach(el => { el.textContent = `${closed}/${steps.length}`; });
     }
     return;
   }

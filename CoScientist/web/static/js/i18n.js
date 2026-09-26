@@ -225,6 +225,14 @@ const i18n = {
     en: 'Not used: nobody is asked, so there is nothing to wait for.',
     ru: 'Не действует: подтверждение не запрашивается, ждать нечего.'
   },
+  'settings.inactive.supersededByMode': {
+    en: 'Superseded by the confirmation mode above; still read to derive a mode for a stand configured before it existed.',
+    ru: 'Заменено режимом подтверждений выше; читается только чтобы вывести режим для стенда, настроенного до его появления.'
+  },
+  'settings.inactive.envPinned': {
+    en: 'Locked by environment variable {name}; change it in the process environment.',
+    ru: 'Заблокировано переменной окружения {name}; измените её в окружении процесса.'
+  },
   'settings.inactive.lightOnly': { en: 'Applies to the light theme only.', ru: 'Действует только в светлой теме.' },
   'settings.inactive.parentOff': {
     en: 'Works only while "{parent}" is on.',
@@ -605,14 +613,23 @@ const i18n = {
     en: 'Before starting, an executor agent shows its goal, steps, tools and assumptions. You can accept, correct or reject the plan.',
     ru: 'Перед началом агент-исполнитель показывает цель, шаги, инструменты и допущения. План можно принять, поправить или отклонить.'
   },
-  'settings.f.hitlTimeout.label': { en: 'If nobody answers', ru: 'Если никто не ответил' },
+  'settings.f.hitlMode.label': { en: 'Confirmation mode', ru: 'Режим подтверждений' },
+  'settings.f.hitlMode.desc': {
+    en: 'How this run handles every confirmation. auto — nobody is asked and each one is approved at once, for a run nobody is sitting with. basic — you are asked and have ten minutes. debug — you are asked and the run waits, however long it takes, for when the point is to watch a neighbouring system. Silence approves in none of the three.',
+    ru: 'Как прогон обращается с подтверждениями. auto — никого не спрашиваем, всё подтверждается сразу: для прогона, который некому сопровождать. basic — спрашиваем и ждём вас десять минут. debug — спрашиваем и ждём сколько угодно: когда нужно посмотреть работу соседней системы. Молчание не подтверждает ни в одном из трёх.'
+  },
+  'settings.f.hitlTimeout.label': { en: 'If nobody answers (legacy)', ru: 'Если никто не ответил (устаревшее)' },
   'settings.f.hitlTimeout.desc': {
-    en: 'What happens to an approval request left unanswered. "Approve after" — once the time is up, the action runs as if you had approved it.',
-    ru: 'Что делать с запросом подтверждения, на который никто не ответил. «Одобрить через» — по истечении времени действие выполняется так, будто вы его одобрили.'
+    en: 'Superseded by the confirmation mode above. Still read to derive a mode for a stand configured before the mode existed: a non-positive value means "wait for me", i.e. debug.',
+    ru: 'Заменено режимом подтверждений выше. Читается только чтобы вывести режим для стенда, настроенного до его появления: неположительное значение означает «ждать меня», то есть debug.'
   },
   'settings.f.hitlTimeout.envValues': {
-    en: '-1 — wait for a human (no auto-approval)\nN > 0 — approve automatically after N seconds',
-    ru: '-1 — ждать решения человека (без автоодобрения)\nN > 0 — одобрить автоматически через N секунд'
+    en: '-1 — reads as the debug mode (wait for the human)\nN > 0 — reads as the basic mode',
+    ru: '-1 — читается как режим debug (ждать человека)\nN > 0 — читается как режим basic'
+  },
+  'settings.f.hitlMode.envValues': {
+    en: 'auto — never ask\nbasic — ask, wait 10 minutes, then refuse\ndebug — ask and wait for the human',
+    ru: 'auto — не спрашивать\nbasic — спросить, ждать 10 минут, затем отказать\ndebug — спросить и ждать человека'
   },
   'settings.f.workOrderVeto.label': { en: 'Search and computation plans without an answer', ru: 'Планы поиска и вычислений без ответа' },
   'settings.f.workOrderVeto.desc': {
@@ -881,6 +898,14 @@ const i18n = {
   'workOrder.tier.read': { en: 'read', ru: 'чтение' },
   'workOrder.tier.compute': { en: 'compute', ru: 'вычисления' },
   'workOrder.tier.side_effect': { en: 'side effects', ru: 'побочные эффекты' },
+  // The one-line strip a Work Order / Work Report folds into (hitl.js woStrip).
+  // Short on purpose: the line also has to fit the goal or the summary.
+  'woStrip.steps': { en: 'Steps', ru: 'Шаги' },
+  'woStrip.assumptions': { en: 'Assumptions', ru: 'Условия' },
+  'woStrip.findings': { en: 'Findings', ru: 'Находки' },
+  'woStrip.artifacts': { en: 'Artifacts', ru: 'Артефакты' },
+  'woStrip.changes': { en: 'Changes', ru: 'Изменения' },
+  'woStrip.details': { en: 'Details', ru: 'Подробности' },
   'workOrder.goal': { en: 'Goal', ru: 'Цель' },
   'workOrder.done': { en: 'Done when', ru: 'Критерий готовности' },
   'workOrder.assumptions': { en: 'Assumptions', ru: 'Условия и ограничения' },
@@ -1190,6 +1215,9 @@ const i18n = {
     en: '⏱ HITL: no answer for {seconds} s — the proposal of agent {agent} was auto-approved, the pipeline continues.',
     ru: '⏱ HITL: нет ответа {seconds} с — предложение агента {agent} автоподтверждено, пайплайн продолжен.'
   },
+  'hitl.source.mode_auto': { en: 'decided by auto mode', ru: 'решено режимом auto' },
+  'hitl.source.timeout': { en: 'review timed out', ru: 'время ожидания истекло' },
+  'hitl.source.system': { en: 'system decision', ru: 'системное решение' },
 
   // ── WebSocket system messages ──
   'ws.datasetAttached': {
@@ -1444,6 +1472,7 @@ const i18n = {
   'graph.edge.defines_scope': { en: 'scope of', ru: 'область' },
   'graph.edge.relates_to': { en: 'relates to', ru: 'относится к' },
   'graph.edge.applies_to': { en: 'applies to', ru: 'применяется к' },
+  'graph.edge.conditional_successor': { en: 'if refuted, continue with', ru: 'при опровержении перейти к' },
   'graph.edge.via': { en: 'via', ru: 'через' },
   // Execution node kinds (panel subtitle)
   'graph.kind.goal': { en: 'request', ru: 'запрос' },
