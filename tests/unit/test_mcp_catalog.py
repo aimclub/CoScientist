@@ -157,6 +157,30 @@ def test_fedot_server_is_featured_first_with_required_wording():
     assert [tool["name"] for tool in result["tools"][:2]] == ["train_ml", "predict_ml"]
 
 
+def test_hybrid_epidemiology_server_uses_live_endpoint_and_russian_copy():
+    server = _server("6d7e3471063c3f95", "hybrid-surrogate-epidemics")
+    tool = _tool("6d7e3471063c3f95", "run_hybrid_model")
+    result = mcp_catalog._assemble_catalog(
+        {"status": "ready", "servers": [server], "tools": [tool]},
+        [_endpoint(server)],
+        [{"status": "reachable", "tools": [tool]}],
+    )
+
+    assert result["servers"][0]["display_name"]["ru"] == (
+        "Гибридное и суррогатное моделирование эпидемий"
+    )
+    assert result["tools"][0]["display_name"]["ru"] == (
+        "Запустить гибридную эпидемиологическую модель"
+    )
+
+    root = Path(__file__).resolve().parents[2]
+    configured = json.loads(
+        (root / "scripts/rag_tools/servers.json").read_text(encoding="utf-8")
+    )
+    epid = next(item for item in configured if item["name"] == "hybrid-surrogate-epidemics")
+    assert epid["url"] == "http://10.32.11.22:7332/mcp"
+
+
 def test_page_assets_and_navigation_are_wired():
     root = Path(__file__).resolve().parents[2]
     page = (root / "CoScientist/web/templates/tools.html").read_text(encoding="utf-8")
