@@ -883,7 +883,9 @@
             class="group w-full flex items-center gap-2 px-2.5 py-1.5 text-left cursor-pointer hover:bg-surface-variant/20 transition-colors">
             <span class="material-symbols-outlined text-[14px] text-outline-variant shrink-0">${open ? 'expand_more' : 'chevron_right'}</span>
             <span class="material-symbols-outlined text-[14px] ${st.tone} shrink-0${running ? ' tv-spin' : ''}">${icon}</span>
-            <span class="text-[11px] font-bold font-mono text-on-surface shrink-0 select-text cursor-text">${escHtml(rec.name)}</span>
+            ${rec.isDelegation && rec.targetAgent
+              ? `<span class="text-[11px] font-bold text-on-surface shrink-0 select-text cursor-text" title="${escHtml(rec.name)}" translate="no">${escHtml(tvAgentName(rec.targetAgent))}</span>`
+              : `<span class="text-[11px] font-bold font-mono text-on-surface shrink-0 select-text cursor-text">${escHtml(rec.name)}</span>`}
             <button type="button" data-uid="${rec.uid}" onclick="event.stopPropagation(); copyTvToolName(this)"
               onkeydown="event.stopPropagation()" title="${t('common.copy')}"
               class="shrink-0 -ml-1 flex items-center text-outline-variant opacity-0 group-hover:opacity-100 focus:opacity-100 hover:text-primary transition-opacity">
@@ -897,6 +899,15 @@
           </div>
           ${open ? renderToolCardBody(rec) : ''}
         </div>`;
+    }
+
+    // Agents are shown by their Russian role name — the same table the rail,
+    // the chat and the graph use (status_indicator.js); the runtime id stays
+    // in the tooltip and in what the copy button copies.
+    function tvAgentName(name) {
+      return (window.StatusIndicator && StatusIndicator.agentName)
+        ? (StatusIndicator.agentName(name) || String(name || ''))
+        : String(name || '').replace(/Agent$/, '');
     }
 
     // One branch of the call tree: the agent's own tool calls, each child
@@ -954,7 +965,7 @@
           ${nestBranches(tailChildren)}
         </div>`;
 
-      const cleanName = escHtml(node.name.replace(/Agent$/, ''));
+      const cleanName = escHtml(tvAgentName(node.name));
 
       return `
         <div class="rounded-lg border border-outline-variant/15 bg-surface-container-low/40">
@@ -962,7 +973,7 @@
             class="w-full flex items-center gap-2 px-2.5 py-2 text-left hover:bg-surface-variant/20 transition-colors">
             <span class="material-symbols-outlined text-[14px] text-outline-variant shrink-0">${collapsed ? 'chevron_right' : 'expand_more'}</span>
             <span class="material-symbols-outlined text-[14px] text-primary shrink-0">${agentIcon(node.name)}</span>
-            <span class="text-[11px] font-bold uppercase tracking-wider text-on-surface shrink-0">${cleanName}</span>
+            <span class="text-[11px] font-bold uppercase tracking-wider text-on-surface shrink-0" title="${escHtml(node.name)}" translate="no">${cleanName}</span>
             ${calls.length ? `<span class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-primary/10 text-primary shrink-0">${calls.length} call${calls.length === 1 ? '' : 's'}</span>` : `<span class="text-[8px] font-mono uppercase px-1.5 py-0.5 rounded bg-outline-variant/10 text-outline-variant/60 shrink-0">0 calls</span>`}
             <span class="flex-1"></span>
             <span class="flex items-center gap-1.5 text-[9px] font-mono shrink-0">${pills}</span>
