@@ -39,6 +39,17 @@ def get_multi_agent_tracer():
         os.environ.pop("OPIK_URL_OVERRIDE", None)
     os.environ["OPIK_PROJECT_NAME"] = project_name
 
+    url_override = settings.opik.url_override
+    if url_override:
+        os.environ["OPIK_URL_OVERRIDE"] = url_override
+    else:
+        os.environ.pop("OPIK_URL_OVERRIDE", None)
+
+    if project_name:
+        os.environ["OPIK_PROJECT_NAME"] = project_name
+    else:
+        os.environ.pop("OPIK_PROJECT_NAME", None)
+
     import opik
 
     # Don't let an opik misconfiguration (no key, no network) take down the app

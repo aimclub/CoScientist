@@ -69,9 +69,14 @@ _MEDIA_URL_RE = re.compile(
 )
 
 
-def report_dir_for(session_id: str, reports_root: Path | str = "logs/reports") -> Path:
+def _default_reports_root_str() -> str:
+    return os.getenv("REPORTS_ROOT") or os.getenv("EXPERIMENTS__REPORTS_DIR") or "logs/reports"
+
+
+def report_dir_for(session_id: str, reports_root: Path | str | None = None) -> Path:
     """The per-run report folder for a session."""
-    return Path(reports_root) / session_id
+    root = reports_root or _default_reports_root_str()
+    return Path(root) / session_id
 
 
 def _url_filename(url: str, default_ext: str) -> str:
@@ -158,9 +163,20 @@ def _table_to_markdown(path: Path) -> Optional[str]:
     """Render the first rows of a CSV/TSV as a markdown table, or None on failure.
 
     Uses the stdlib ``csv`` module so it never depends on pandas/tabulate being
-    installed in the host environment.
+    installed in the host environment. Excludes binary files and HTML documents.
     """
     import csv
+
+    if path.suffix.lower() not in _TABLE_EXTS:
+        return None
+
+    try:
+        with open(path, "rb") as bf:
+            head_bytes = bf.read(1024)
+        if b"\x00" in head_bytes:
+            return None
+    except Exception:
+        return None
 
     def clean(v: Any) -> str:
         return "" if v is None else str(v).replace("|", "\\|").replace("\n", " ")
@@ -221,7 +237,7 @@ def _artifact_link(dest: Path, session_id: str, kind: str, fallback: str) -> str
 def collect_artifacts(
     session_id: str,
     state: Optional[Dict[str, Any]] = None,
-    reports_root: Path | str = "logs/reports",
+    reports_root: Path | str | None = None,
     workspace_root: Path | str = "workspace",
     graph_nodes: Optional[List[Dict[str, Any]]] = None,
     index_key: Optional[tuple] = None,

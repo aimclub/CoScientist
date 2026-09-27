@@ -16,6 +16,10 @@ class RetrievalToolResult(BaseModel):
         description="JSON schema of the tool's accepted arguments (from the registry).",
     )
     score: float
+    url: Optional[str] = Field(
+        default=None,
+        description="HTTP MCP endpoint for this server, when the registry has one.",
+    )
 
 class ToolScore(BaseModel):
     index: int

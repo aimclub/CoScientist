@@ -189,6 +189,11 @@ class WebHITLHandler(AbstractHITLHandler):
             return None
         return str(user_id), str(session_id)
 
+    @staticmethod
+    def _is_experiment_review(request: HITLRequest) -> bool:
+        kind = (request.context or {}).get("experiment_review_kind")
+        return kind in {"plan", "result"}
+
     async def handle_request(self, request: HITLRequest) -> HITLResponse:
         request_id = str(uuid.uuid4())
         session_key = self._request_session_key(request)
@@ -251,15 +256,29 @@ class WebHITLHandler(AbstractHITLHandler):
                     request_id[:8],
                 )
 
+        wait_timeout = request.timeout_seconds or timeout_sec
         try:
             response_data = await self._await_response(entry)
         except asyncio.TimeoutError:
-            response_data = {"action": "approve", "approved": True}
+            if self._is_experiment_review(request):
+                response_data = {
+                    "action": "reject",
+                    "approved": False,
+                    "timed_out": True,
+                    "instructions": (
+                        "Experiment review timed out; execution remains paused."
+                    ),
+                }
+            else:
+                # Preserve the legacy timeout policy for every non-experiment
+                # HITL request, including Coder outward-facing actions.
+                response_data = {"action": "approve", "approved": True}
             timeout_event = {
                 "type": "hitl_timeout",
                 "request_id": request_id,
                 "agent_name": request.agent_name,
-                "timeout_seconds": timeout_sec,
+                "timeout_seconds": wait_timeout,
+                "paused": self._is_experiment_review(request),
                 "timestamp": datetime.now().isoformat(),
             }
             self._record(session_key, timeout_event)
@@ -290,6 +309,7 @@ class WebHITLHandler(AbstractHITLHandler):
             instructions=response_data.get("instructions"),
             free_input=response_data.get("free_input"),
             form_values=response_data.get("form_values"),
+            timed_out=response_data.get("timed_out", False),
         )
 
     @staticmethod

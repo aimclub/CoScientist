@@ -38,6 +38,28 @@ def _content(block: FrameBlock) -> str:
     return "; ".join(f"{f.name}: {f.value}".strip() for f in block.set_fields())
 
 
+def frame_operations(frame: ResearchFrame) -> List[Dict[str, Any]]:
+    """Executable slots for ExperimentContext — copied from the confirmed frame."""
+    from CoScientist.context_init.operations import operations_as_dicts
+
+    return operations_as_dicts(frame)
+
+
+def frame_constraint_rows(frame: ResearchFrame) -> List[Dict[str, Any]]:
+    """Typed constraint rows for ExperimentContext — no keyword interpretation."""
+    rows: List[Dict[str, Any]] = []
+    for block in frame.normalized().blocks:
+        if not block.set_fields():
+            continue
+        rows.append({
+            "kind": block.kind,
+            "title": block.title,
+            "subtype": block.subtype,
+            "content": _content(block),
+        })
+    return rows
+
+
 def frame_to_init_kwargs(frame: ResearchFrame) -> Dict[str, Any]:
     """Translate a (normalized) frame into ``store.init_research`` keyword args."""
     frame = frame.normalized()
@@ -154,4 +176,11 @@ def seed_frame(store, frame: ResearchFrame) -> Dict[str, Any]:
     return result
 
 
-__all__ = ["frame_to_init_kwargs", "seed_frame", "AGENT_SOURCE", "HUMAN_SOURCE"]
+__all__ = [
+    "frame_constraint_rows",
+    "frame_operations",
+    "frame_to_init_kwargs",
+    "seed_frame",
+    "AGENT_SOURCE",
+    "HUMAN_SOURCE",
+]

@@ -358,12 +358,21 @@ def test_search_limiter_ignores_research_tools():
             assert lim.limit_searches(_Tool(name), {}, ctx) is None
     assert ctx.state.get("_search_limiter_count", 0) == 0  # none counted as a search
 
-    # Real search tools are still capped.
+    # Downloads are not searches. Failed OpenAlex calls do not consume the cap.
     lim2, ctx2 = SearchLimiter(max_searches=2), _Ctx()
-    assert lim2.limit_searches(_Tool("tavily_search"), {}, ctx2) is None
     assert lim2.limit_searches(_Tool("download_papers_from_search"), {}, ctx2) is None
+    assert lim2.limit_searches(_Tool("search_papers"), {}, ctx2) is None
+    lim2.record_search_result(
+        _Tool("search_papers"), {}, ctx2,
+        {"isError": True, "content": [{"text": "429 Too Many Requests"}]},
+    )
+    assert ctx2.state.get("_search_limiter_count", 0) == 0
+    lim2.record_search_result(_Tool("search_papers"), {}, ctx2, {"ok": True})
+    lim2.record_search_result(_Tool("tavily_search"), {}, ctx2, {"ok": True})
     blocked = lim2.limit_searches(_Tool("search_papers"), {}, ctx2)
     assert blocked is not None and "limit" in blocked["result"].lower()
+    lim2.reset_search_budget(ctx2)
+    assert lim2.limit_searches(_Tool("search_papers"), {}, ctx2) is None
 
 
 # ── triggers ────────────────────────────────────────────────────────────────────

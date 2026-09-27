@@ -53,7 +53,7 @@ class OpenAlexClient:
                 )
                 if response.status_code == 200:
                     return response
-                if response.status_code == 403 or response.status_code >= 500:
+                if response.status_code == 403 or response.status_code == 429 or response.status_code >= 500:
                     wait_time = 2 ** attempt
                     time.sleep(wait_time)
                 else:

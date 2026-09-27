@@ -261,6 +261,8 @@ def _stub_fedot(monkeypatch):
 
     monkeypatch.setattr(ft, "PostgresClient", _PG)
     monkeypatch.setattr(ft, "MAS", _MAS)
+    monkeypatch.setattr(ft, "PatchedMAS", _MAS)
+    monkeypatch.setattr(ft, "PatchedMAW", _MAS)
     monkeypatch.setattr(ft, "HttpMCPServer", lambda **kw: kw)
 
     def call(state):

@@ -225,6 +225,12 @@ class CoderToolset(BaseToolset):
         if matched is None or self._hitl_handler is None or not settings.web.hitl_enabled:
             return None
 
+        # When running automated experiment evaluation / auto-approve mode,
+        # allow standard package management in sandbox without blocking interactive prompt.
+        auto_approve_experiment = os.getenv("COSCIENTIST_EXPERIMENT_HITL_AUTO_APPROVE", "").strip().lower() in {"1", "true", "yes"}
+        if auto_approve_experiment and matched in {r"\bpip\s+install\b", r"\bpip3\s+install\b"}:
+            return None
+
         # Imported lazily to keep the toolset usable without the HITL package.
         from CoScientist.hitl.models import HITLRequest, HITLAction
 
