@@ -15,7 +15,7 @@ const i18n = {
   'nav.noUser': { en: 'No user selected', ru: 'Пользователь не выбран' },
   'nav.connected': { en: 'Connected', ru: 'Подключено' },
   'nav.disconnected': { en: 'Disconnected', ru: 'Отключено' },
-  'nav.orchestrator': { en: 'ORCHESTRATOR', ru: 'ОРКЕСТРАТОР' },
+  'nav.orchestrator': { en: 'Orchestrator', ru: 'Оркестратор' },
 
   // ── Composer: report language (NOT the interface language) ──
   'composer.reportLang.ru': { en: 'Report: RU', ru: 'Отчёт: RU' },
@@ -1049,7 +1049,7 @@ const i18n = {
   'dataset.errProtocol': { en: 'The link must be an http(s) URL.', ru: 'Ссылка должна быть http(s) URL.' },
   'dataset.errNotZip': { en: 'The link must point to a .zip archive.', ru: 'Ссылка должна указывать на .zip архив.' },
   'dataset.notConnected': { en: 'Not connected — reconnect and try again.', ru: 'Нет подключения — переподключитесь и попробуйте снова.' },
-  'dataset.upload.title': { en: 'DATASET UPLOAD', ru: 'ЗАГРУЗКА ДАТАСЕТА' },
+  'dataset.upload.title': { en: 'Dataset upload', ru: 'Загрузка датасета' },
   'dataset.upload.details': { en: 'Details', ru: 'Подробности' },
   'dataset.upload.filename': { en: 'Filename:', ru: 'Файл:' },
   'dataset.upload.speed': { en: 'Speed:', ru: 'Скорость:' },
