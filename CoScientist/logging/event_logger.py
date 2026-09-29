@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from datetime import datetime
 from typing import Any, Optional
 
@@ -148,7 +149,14 @@ def _content_text(content: Any) -> str:
 
 
 def _emit(line: str) -> None:
-    print(line, flush=True)
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        # Windows consoles may use a legacy code page that cannot represent
+        # emoji or scientific symbols. Keep logging best-effort so an ADK
+        # callback never aborts the user's research request.
+        encoding = sys.stdout.encoding or "ascii"
+        print(line.encode(encoding, errors="backslashreplace").decode(encoding), flush=True)
     fh = _get_log_fh()
     if fh is not None:
         try:

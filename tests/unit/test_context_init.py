@@ -5,6 +5,7 @@ framing entities each run. These tests cover the frame model, the structured-for
 round-trip, the privileged graph seeding (with human-vs-agent provenance), and the
 schema permissions for the new ContextInitAgent writer.
 """
+import asyncio
 from collections import Counter
 
 from CoScientist.context_init.agent import (
@@ -234,3 +235,49 @@ def test_post_final_events_seeds_graph_and_emits_no_chat_message(tmp_path, monke
 
     # Verify no visible chat text is emitted
     assert event.content is None
+
+
+def test_followup_skips_frame_seeding_and_preserves_existing_research(tmp_path, monkeypatch):
+    import CoScientist.context_init.agent as context_agent
+    from CoScientist.hitl.session_agent import SessionAgent
+
+    store = ResearchGraphStore(directory=str(tmp_path))
+    store.init_research(source="ContextInitAgent", question="Original study")
+    store.commit(source="HypothesesAgent", nodes=[{
+        "type": "Hypothesis", "attrs": {"formulation": "Existing H1"},
+    }])
+    monkeypatch.setattr(context_agent, "get_research_graph", lambda _ctx: store)
+    called = []
+
+    async def parent_run(self, ctx):
+        called.append(ctx)
+        yield "new frame"
+
+    monkeypatch.setattr(SessionAgent, "_run_async_impl", parent_run)
+    agent = ContextInitSessionAgent.model_construct(name="ContextInitAgent")
+
+    async def collect():
+        return [event async for event in agent._run_async_impl(object())]
+
+    assert asyncio.run(collect()) == []
+    assert called == []
+    assert {n["id"] for n in store.full()["nodes"]} >= {"Q1", "H1"}
+
+
+def test_first_turn_still_runs_frame_stage(tmp_path, monkeypatch):
+    import CoScientist.context_init.agent as context_agent
+    from CoScientist.hitl.session_agent import SessionAgent
+
+    store = ResearchGraphStore(directory=str(tmp_path))
+    monkeypatch.setattr(context_agent, "get_research_graph", lambda _ctx: store)
+
+    async def parent_run(self, ctx):
+        yield "frame stage ran"
+
+    monkeypatch.setattr(SessionAgent, "_run_async_impl", parent_run)
+    agent = ContextInitSessionAgent.model_construct(name="ContextInitAgent")
+
+    async def collect():
+        return [event async for event in agent._run_async_impl(object())]
+
+    assert asyncio.run(collect()) == ["frame stage ran"]

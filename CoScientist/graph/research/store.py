@@ -29,6 +29,7 @@ from uuid import uuid4
 import networkx as nx
 
 from CoScientist.graph.research import schema
+from CoScientist.graph.research.summary import short_description
 from CoScientist.graph.research.models import CommitResult, ResearchEdge, ResearchNode
 from CoScientist.graph.session_scope import (
     DEFAULT_SESSION_KEY,
@@ -192,7 +193,8 @@ _FIELD_WORDS = {
 #: Never shown: bookkeeping the reader has no use for.
 _HIDDEN_FIELDS = {"_provenance", "selected", "display",
                   "contributors", "contributors_more",
-                  "report_artifact_id", "report_stamp", "report_lang"}
+                  "report_artifact_id", "report_stamp", "report_lang",
+                  "short_description", "postponed_reason"}
 
 #: Never shipped to an AGENT either. `get_context_slice` renders each node as
 #: 240 characters of its attrs dict, which is the whole of what a worker is
@@ -2372,6 +2374,7 @@ class ResearchGraphStore:
                 # and cost a third of the line, so it moves to the panel and the
                 # label says what the node is instead.
                 "label": headline,
+                "summary": short_description(kind, attrs, headline),
                 "type_word": _KIND_WORDS.get(kind, kind),
                 "index": ordinal.get(nid),
                 "status": view_status,
@@ -2516,7 +2519,7 @@ class ResearchGraphStore:
             if node.get("type") == "ResearchQuestion":
                 said = (node.get("attrs") or {}).get("formulation")
                 if said:
-                    return str(said)
+                    return short_description("ResearchQuestion", node.get("attrs") or {}, str(said))
         return "untitled study"
 
     def _latest_stamp(self) -> Optional[float]:

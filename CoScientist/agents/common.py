@@ -619,6 +619,25 @@ def _combine_llm_kwargs(*kwarg_dicts: dict) -> dict:
     return merged
 
 
+def _local_codex_proxy_kwargs() -> dict:
+    """Route ADK's LiteLLM calls through the user's configured local proxy.
+
+    This opt-in is set only by scripts/run_with_codex_proxy.py. The proxy key
+    stays in the launching process's environment and is never saved in .env.
+    """
+    if os.getenv("COSCIENTIST_CODEX_PROXY") != "1":
+        return {}
+    from urllib.parse import urlparse
+
+    base = settings.llm.main_url or ""
+    parsed = urlparse(base)
+    if parsed.scheme != "http" or parsed.hostname not in ("127.0.0.1", "localhost", "::1"):
+        raise ValueError("Codex proxy must be an HTTP loopback endpoint")
+    if not settings.llm.openai_api_key:
+        raise ValueError("Codex proxy client key is missing")
+    return {"api_base": base, "api_key": settings.llm.openai_api_key}
+
+
 def make_llm(
     model: str = MODEL,
     *,
@@ -629,6 +648,7 @@ def make_llm(
     kwargs = _combine_llm_kwargs(
         _reasoning_kwargs(model, reasoning),
         _openrouter_provider_kwargs(model),
+        _local_codex_proxy_kwargs(),
     )
     return RetryingLiteLlm(
         model=model, deadline_s=deadline_s, timeout=REQUEST_TIMEOUT,
@@ -644,6 +664,7 @@ def make_coder_llm(
     kwargs = _combine_llm_kwargs(
         _reasoning_kwargs(CODER_MODEL, reasoning),
         _openrouter_provider_kwargs(CODER_MODEL),
+        _local_codex_proxy_kwargs(),
     )
     return RetryingLiteLlm(
         model=CODER_MODEL,

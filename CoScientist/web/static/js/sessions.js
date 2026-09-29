@@ -184,12 +184,15 @@
       return created.session;
     }
 
-    // startFresh creates a new session (or reuses the newest one if it has no messages yet).
-    async function ensureUserSession(user, preferredSessionId = null, { startFresh = false } = {}) {
+    // startFresh: the remembered session belongs to a previous server run, so
+    // do not reopen it. Prefer a session that is running right now, then an
+    // untouched one (so restarts do not pile up empty sessions), else create.
+    async function ensureUserSession(user, preferredSessionId = null, { startFresh = false, strictPreferred = false } = {}) {
       activeUser = user;
       const sessions = await loadSessions(user);
       let selected = preferredSessionId ? sessions.find(item => item.id === preferredSessionId) : null;
-      // Fallback picks come from what the picker shows, not from hidden sessions.
+      if (strictPreferred && !selected) throw new Error('The linked session is no longer available.');
+      // Fallback picks come from what the picker shows, not hidden sessions.
       const shown = showHiddenSessions() ? sessions : sessions.filter(item => !item.hidden);
       if (!selected && startFresh) {
         selected = shown.find(item => item.status === 'processing')
@@ -357,6 +360,15 @@
         serverBootId = data.serverBootId || null;
         knownUsers = data.users || [];
         populateUserSelectors();
+        const deepLink = new URLSearchParams(location.search);
+        const requestedUserId = deepLink.get('user_id');
+        const requestedSessionId = deepLink.get('session_id');
+        if (requestedUserId && requestedSessionId) {
+          const linkedUser = knownUsers.find(item => item.id === requestedUserId);
+          if (!linkedUser) throw new Error('The linked user is no longer available.');
+          await ensureUserSession(linkedUser, requestedSessionId, { strictPreferred: true });
+          return;
+        }
         const savedUserId = localStorage.getItem(USER_STORAGE_KEY);
         let savedUser = knownUsers.find(item => item.id === savedUserId);
         const urlParams = new URLSearchParams(window.location.search);

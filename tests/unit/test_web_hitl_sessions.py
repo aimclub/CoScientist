@@ -39,6 +39,25 @@ async def _delivered(socket, *, ticks: int = 200):
     raise AssertionError("no HITL card was delivered")
 
 
+def test_harness_chat_mode_does_not_auto_approve_explicit_veto_window(monkeypatch):
+    monkeypatch.setenv("COSCIENTIST_HARNESS_CHAT_HITL", "1")
+
+    async def scenario():
+        handler = WebHITLHandler()
+        key = ("user_a", "session_a")
+        socket = _Socket()
+        await handler.attach_websocket(socket, key)
+        task = asyncio.create_task(handler.handle_request(_request(key, timeout_seconds=0.01)))
+        await asyncio.sleep(0.05)
+        assert not task.done()
+        assert socket.messages[0]["timeout_seconds"] == 0
+        assert handler.resolve_request(socket.messages[0]["request_id"],
+                                       {"action": "reject", "approved": False}, key)
+        assert not (await task).approved
+
+    asyncio.run(scenario())
+
+
 def test_hitl_request_and_response_are_scoped_to_session():
     async def scenario():
         handler = WebHITLHandler()

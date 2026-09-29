@@ -220,6 +220,11 @@ def render_research_protocol(ctx: PromptContext) -> str:
         "",
         "Via a SINGLE `research_commit` at the end of your turn you may ONLY:",
         "  • create nodes: " + ("; ".join(perm["create"]) or "(none)"),
+        "  • For each created node, add attrs.short_description: one or two "
+        "short sentences (aim for 100–170 characters, at most 170) in the user's language for "
+        "the graph card. Summarize only that node's supported content; keep "
+        "the full formulation/content in its usual attribute. This label is "
+        "display-only and must not introduce new claims.",
     ]
     if perm["edges"]:
         lines.append("  • add edges: " + "; ".join(perm["edges"]))

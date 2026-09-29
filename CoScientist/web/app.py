@@ -4124,9 +4124,13 @@ async def _run_chat_invocation(
 
                 print(f"[HITL] Waiting for browser response for interrupts: {interrupt_ids}")
 
-                # Wait for ALL interrupt responses (with timeout)
+                # In harness-chat mode the human may answer in a later chat
+                # turn. Never approve a request merely because that took time.
                 try:
-                    await asyncio.wait_for(wait_event.wait(), timeout=600)
+                    if os.getenv("COSCIENTIST_HARNESS_CHAT_HITL") == "1":
+                        await wait_event.wait()
+                    else:
+                        await asyncio.wait_for(wait_event.wait(), timeout=600)
                 except asyncio.TimeoutError:
                     print("[HITL] Review window elapsed; waiting for an explicit decision")
                     timeout_event = {
@@ -4249,6 +4253,7 @@ async def _run_chat_invocation(
                 "kind": "result",
             }
             payload["summary"] = summary
+        runtime.record_event(key, payload)
         await runtime.send(key, payload)
 
     finally:

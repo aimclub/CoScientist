@@ -1738,6 +1738,20 @@ def test_the_graph_page_only_wires_controls_it_still_has():
     assert not (wired - present), sorted(wired - present)
 
 
+def test_graph_nodes_have_no_hover_popups_but_still_open_details():
+    from starlette.testclient import TestClient
+
+    from CoScientist.web.app import create_app
+
+    with TestClient(create_app()) as client:
+        page = client.get("/graph").text
+
+    assert "titleOf(" not in page
+    assert "tooltipDelay" not in page
+    assert "network.on(\"click\", params =>" in page
+    assert "showDetail(nodeData[selectedId])" in page
+
+
 def test_a_headline_never_stands_in_for_the_thing_it_should_say(store):
     """The stock word won over content sitting under an unexpected key.
 
@@ -3341,3 +3355,52 @@ def test_the_medical_route_is_withdrawn_with_the_medical_agent(monkeypatch):
 
     monkeypatch.setattr(get_settings().web, "medical_agent_enabled", True)
     assert _route_enabled(ExecutionRoute.MEDICAL.value, settings)
+
+
+def test_graph_cards_and_slide_use_short_grounded_descriptions(store):
+    from CoScientist.graph.research.slide_render import render_slide
+
+    long_question = "Тема: безопасная фоновая починка памяти агента. " + "Длинные инструкции. " * 40
+    store.init_research(source="OrchestratorAgent", question=long_question,
+                        attrs={"domain": "Память LLM-агентов, LLM-судьи и фоновая починка"})
+    result = store.commit(source="HypothesesAgent", nodes=[{
+        "type": "Hypothesis", "attrs": {
+            "formulation": "Длинное проверяемое предположение. " * 15,
+            "short_description": "Проверяем безопасную починку памяти без потери верных фактов.",
+        }}])
+    assert result.ok, result.errors
+    viewed = {n["id"]: n for n in store.to_view()["nodes"]}
+    assert viewed["Q1"]["summary"] == "Память LLM-агентов, LLM-судьи и фоновая починка"
+    assert viewed["H1"]["summary"] == "Проверяем безопасную починку памяти без потери верных фактов."
+    assert viewed["H1"]["label"].startswith("Длинное проверяемое")
+    slide = render_slide(store.full())
+    assert "Проверяем безопасную починку памяти" in slide
+    assert "Длинные инструкции" not in slide
+    assert 'fill="#ffffff"' in slide
+
+
+def test_legacy_hypothesis_gets_complete_short_claim_without_losing_full_detail(store):
+    formulation = ("На LongMemEval обратимая починка внешней памяти с воздержанием "
+                   "повысит точность ответов на конфликтных историях минимум на 5 п.п. "
+                   "относительно retrieval+judge при вреде не выше 1%.")
+    store.init_research(source="OrchestratorAgent", question="Память агента")
+    result = store.commit(source="HypothesesAgent", nodes=[{
+        "type": "Hypothesis", "attrs": {"formulation": formulation},
+    }])
+    assert result.ok, result.errors
+    node = next(n for n in store.to_view()["nodes"] if n["kind"] == "hypothesis")
+    assert node["summary"].endswith("историях.")
+    assert 80 <= len(node["summary"]) <= 190
+    assert "…" not in node["summary"]
+    assert node["label"] == formulation
+
+
+def test_research_cards_show_bounded_description_in_light_theme():
+    from starlette.testclient import TestClient
+    from CoScientist.web.app import create_app
+
+    with TestClient(create_app()) as client:
+        page = client.get("/graph").text
+    assert "firstSentence(n.summary || rText(n), 190)" in page
+    assert "--bg: #f8fafc" in page
+    assert "titleOf(" not in page

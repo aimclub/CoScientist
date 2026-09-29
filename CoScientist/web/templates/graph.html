@@ -14,10 +14,10 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
   <style>
     :root {
-      --bg: #14161a; --surface: #1c1f26; --surface2: #23272f; --line: #2c313a;
-      --ink: #e8eaed; --ink2: #9aa3af; --ink3: #6b7280;
-      --good: #22c55e; --warn: #f59e0b; --crit: #ef4444; --info: #3b82f6;
-      --accent: #38bdf8; --orange: #f97316; --slate: #64748b; --violet: #8b5cf6;
+      --bg: #f8fafc; --surface: #ffffff; --surface2: #eef2f7; --line: #cbd5e1;
+      --ink: #172033; --ink2: #475569; --ink3: #64748b;
+      --good: #15803d; --warn: #b45309; --crit: #b91c1c; --info: #1d4ed8;
+      --accent: #0369a1; --orange: #c2410c; --slate: #64748b; --violet: #6d28d9;
     }
     * { box-sizing: border-box; }
     html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink);
@@ -37,10 +37,9 @@
     #status { color: var(--ink3); font-variant-numeric: tabular-nums; }
     .spacer { margin-left: auto; }
 
-    /* research header (question + progress) */
-    #head { position: fixed; top: 46px; left: 0; right: 0; z-index: 15; padding: 12px 16px;
-      background: linear-gradient(180deg, var(--surface) 0%, rgba(28,31,38,.0) 100%);
-      pointer-events: none; }
+    /* The graph is the main view; the full research request is in its node. */
+    #head { display: none; position: fixed; top: 46px; left: 0; right: 0; z-index: 15;
+      padding: 12px 16px; pointer-events: none; }
     #head.hidden { display: none; }
     #question { font-size: 15px; font-weight: 650; color: var(--ink); max-width: 62%;
       line-height: 1.35; margin-bottom: 10px; text-shadow: 0 2px 8px rgba(0,0,0,.5);
@@ -72,7 +71,7 @@
     :root { --dw: 480px; }
     #detail { position: fixed; top: 46px; right: 0; width: var(--dw); bottom: 0; background: var(--surface);
       border-left: 1px solid var(--line); padding: 0; overflow-y: auto; z-index: 18; display: none;
-      box-shadow: -12px 0 32px rgba(0,0,0,.4); font-size: 14.5px; line-height: 1.5; }
+      box-shadow: -12px 0 32px rgba(15,23,42,.12); font-size: 14.5px; line-height: 1.5; }
     #dgrip { position: fixed; top: 46px; bottom: 0; right: calc(var(--dw) - 5px); width: 10px;
       cursor: col-resize; z-index: 19; display: none; touch-action: none; }
     #dgrip::after { content: ""; position: absolute; top: 0; bottom: 0; left: 4px; width: 2px;
@@ -105,7 +104,7 @@
       max-height: 46vh; overflow-y: auto; }
     #detail .prov { background: var(--bg); border: 1px solid var(--line); border-left: 3px solid var(--accent);
       border-radius: 8px; padding: 9px 11px; margin: 6px 0; cursor: pointer; transition: border-color .12s, background .12s; }
-    #detail .prov:hover { border-color: var(--accent); background: #1a1f28; }
+    #detail .prov:hover { border-color: var(--accent); background: #eef5fc; }
     #detail .prov .tool { font-weight: 700; color: var(--accent); font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 13.5px; }
     #detail .prov .jump { float: right; color: var(--accent); font-size: 11.5px; opacity: .65; }
     #detail .prov.dim { opacity: .55; }
@@ -139,7 +138,7 @@
     .call { border: 1px solid var(--line); border-radius: 8px; margin: 6px 0; background: var(--bg); }
     .call .hd { display: flex; align-items: center; gap: 8px; padding: 8px 10px; cursor: pointer;
       user-select: none; }
-    .call .hd:hover { background: #1a1f28; }
+    .call .hd:hover { background: #eef5fc; }
     .call .st { width: 8px; height: 8px; border-radius: 50%; flex: none; }
     .call .tool { font-family: "IBM Plex Mono", ui-monospace, monospace; font-weight: 700; font-size: 13.5px;
       color: var(--accent); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
@@ -211,7 +210,7 @@
     .mdoc p { margin: 10px 0; }
     .mdoc ul, .mdoc ol { margin: 8px 0; padding-left: 26px; }
     .mdoc li { margin: 5px 0; } .mdoc li::marker { color: var(--ink3); }
-    .mdoc strong { color: #fff; }
+    .mdoc strong { color: var(--ink); }
     .mdoc code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 15px; background: var(--surface2);
       border: 1px solid var(--line); padding: 1px 6px; border-radius: 5px; }
     .mdoc pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px;
@@ -252,6 +251,7 @@
     <label id="autoReportWrap" style="display:none"><input type="checkbox" id="autoReport"
       onchange="toggleAutoNodeReports(this)" /> <span data-i18n="graph.nodeReport.auto">write node reports</span></label>
     <button id="refresh" data-i18n-title="graph.refresh">↻</button>
+    <button id="fit" title="Показать весь граф">⤢</button>
     <span class="spacer"></span>
     <span id="status" data-i18n="graph.connecting">connecting…</span>
       <a id="totrace" href="/trace" style="margin-left:auto;background:var(--surface2);color:var(--ink);border:1px solid var(--line);border-radius:7px;padding:5px 9px;font-size:12px;text-decoration:none" data-i18n="graph.backTrace">← session trace</a>
@@ -397,12 +397,12 @@
     // Three stops off the background is invisible past a dozen cards, and on
     // this study most links are untyped. "Black", on a dark canvas, is the
     // light end of the range.
-    const EDGE_NEUTRAL = "#cbd5e1", EDGE_BRIGHT = "#ffffff";
+    const EDGE_NEUTRAL = "#64748b", EDGE_BRIGHT = "#334155";
     //: The plan links (realises, elaborates) stay subordinate — they say which
     //: intention a record serves, not what the study found — but subordinate is
     //: not the same as unreadable.
     const EDGE_QUIET = "#94a3b8";
-    const EDGE_HALO = "#14161a";
+    const EDGE_HALO = "#f8fafc";
     //: A label is typeset by the same parser as a card, so a real weight is
     //: available: escape the text and wrap it in <b>. Bigger type would have
     //: been the other way to be noticed, and it costs room a graph does not
@@ -466,7 +466,7 @@
             .getPropertyValue('--bg').trim();
           if (/^#?[0-9a-f]{3}([0-9a-f]{3})?$/i.test(css)) v = channels(css);
         } catch (err) { v = null; }
-        _canvasRgb = (v && v.every(x => Number.isFinite(x))) ? v : [0x14, 0x16, 0x1a];
+        _canvasRgb = (v && v.every(x => Number.isFinite(x))) ? v : [0xf8, 0xfa, 0xfc];
       }
       return _canvasRgb;
     }
@@ -493,18 +493,18 @@
     };
     let lastPhases = [];
 
-    const STATUS_COLOR = { running:"#f1c40f", success:"#22c55e", failed:"#ef4444", interrupted:"#e67e22", pruned:"#64748b" };
+    const STATUS_COLOR = { running:WARN, success:GOOD, failed:CRIT, interrupted:ORANGE, pruned:SLATE };
     // Identity fills the node; status rings it. Colouring agents by identity
     // alone made a stuck "running" agent look exactly like a finished one, so
     // the only nodes that showed progress were goals and tool calls.
-    const IDENTITY_COLOR = { system:"#f4c542", agent:"#7eb6ff", agent_call:"#7eb6ff" };
+    const IDENTITY_COLOR = { system:WARN, agent:INFO, agent_call:INFO };
     // Every node in the log is a labelled box. Dots, diamonds and stars made a
     // trace read as a diagram of shapes; a run reads better as a row of cards
     // whose text you can scan.
     const SHAPE = { system:"hexagon" };
-    const statusColor = n => STATUS_COLOR[n.status] || "#cbd5e1";
+    const statusColor = n => STATUS_COLOR[n.status] || SLATE;
     const colorOf = n => IDENTITY_COLOR[n.kind] || statusColor(n);
-    const borderOf = n => IDENTITY_COLOR[n.kind] ? statusColor(n) : "#20232a";
+    const borderOf = n => IDENTITY_COLOR[n.kind] ? statusColor(n) : SLATE;
     const shapeOf = n => SHAPE[n.kind] || "box";
     // How long it took, in the unit a reader thinks in: a sandbox run that
     // waited six hours is "5h 51m", not "21081.8s".
@@ -618,7 +618,7 @@
       // A headline, still — but a wider one than the cramped column layout
       // could afford. At 150 characters an observation was cut before its
       // numbers ("mean AD=59.7%; …"), which is the part a reader came for.
-      const body = firstSentence(rText(n), 210);
+      const body = firstSentence(n.summary || rText(n), 190);
       if (body) L.push(visSafe(body));
       if (n.why)
         L.push("<i>" + visSafe(st.g + " " + t('graph.why.title') + ": "
@@ -681,17 +681,6 @@
     // window uses (status_indicator.js); runtime ids stay in the data.
     const shortAgent = a => (window.StatusIndicator && StatusIndicator.agentName)
       ? (StatusIndicator.agentName(a) || String(a)) : String(a).replace(/Agent$/, "");
-    // The tooltip used to print the raw identifiers — "type: hypothesis · status:
-    // under_verification" — while the card beside it said the same thing in the
-    // reader's own words. Research nodes carry those words from the server.
-    const titleOf = n => [
-      t('graph.tooltip.type', { kind: RESEARCH_KINDS.has(n.kind) ? rTypeName(n) : (n.kind || "") }),
-      n.executor_agent ? t('graph.tooltip.source', { agent: shortAgent(n.executor_agent) }) : "",
-      t('graph.tooltip.status', { status: RESEARCH_KINDS.has(n.kind) ? rStatusWord(n) : (n.status || "") }),
-      Array.isArray(n.calls) && n.calls.length ? t('graph.tooltip.toolCalls', { count: n.calls.length }) : "",
-      n.why ? t('graph.why.title') + ": " + String(n.why).slice(0, 200) : "",
-      n.output?String(n.output).slice(0,300):"" ].filter(Boolean).join("\n");
-
     // ── what is working right now ─────────────────────────────────────────────
     // An ACTION card pulses; everything else in flight is coloured and still.
     // The difference is the user's, and it is the right one: a plan step and an
@@ -781,13 +770,14 @@
     function makeNetwork(){
       const r = isResearch();
       if (network) network.destroy();
+      needsFit = true;
       network = new vis.Network(document.getElementById("net"), { nodes, edges }, {
-        nodes: { borderWidth: 2, shadow: { enabled: true, color: "rgba(0,0,0,0.35)", size: 10, x: 0, y: 3 } },
+        nodes: { borderWidth: 2, shadow: { enabled: true, color: "rgba(15,23,42,0.14)", size: 10, x: 0, y: 3 } },
         edges: { arrows: { to: { scaleFactor: r ? 0.8 : 0.55 } },
-                 color: { color: r ? "#94a3b8" : "#3a4150",
-                          highlight: r ? "#ffffff" : "#64748b" },
+                 color: { color: r ? "#64748b" : "#94a3b8",
+                          highlight: "#334155" },
                  font: { color: r ? "#cbd5e1" : "#8b93a1", size: r ? 13 : 10,
-                         strokeWidth: r ? 5 : 0, strokeColor: "#14161a" },
+                         strokeWidth: r ? 5 : 0, strokeColor: "#f8fafc" },
                  // The research graph now reads top to bottom through its stage
                  // bands, so its links bend the way they travel; the log still
                  // runs along a clock, left to right.
@@ -801,7 +791,7 @@
         // back into columns of its own choosing.
         layout: { hierarchical: false, randomSeed: 1 },
         physics: { enabled: false },
-        interaction: { hover: true, tooltipDelay: 120, navigationButtons: false },
+        interaction: { hover: true, navigationButtons: false },
       });
       // The stretches the request went through, painted behind the cards.
       // A band is not a node: it says nothing a card does not already say, it
@@ -1273,7 +1263,7 @@
       const c = R_KIND[n.kind] || st.c;
       const slot = place && place[n.id];
       const node = {
-        id: n.id, title: titleOf(n), shape: "box", label: researchLabel(n),
+        id: n.id, shape: "box", label: researchLabel(n),
         color: { background: solid(c, 0.14), border: c,
                  highlight: { background: solid(c, 0.22), border: c },
                  // Without an explicit hover vis falls back to its OWN default
@@ -1620,21 +1610,21 @@
             const isAgent = n.kind === "agent" || n.kind === "agent_call";
             const isGoal = n.kind === "goal", isResult = n.kind === "result";
             const c = colorOf(n);
-            const node = { id:n.id, title:titleOf(n), label:labelOf(n), shape:shapeOf(n),
+            const node = { id:n.id, label:labelOf(n), shape:shapeOf(n),
               margin: { top:9, bottom:9, left:12, right:12 },
               // Fixed, and the same number the server packs lanes with
               // (projection._CARD_WIDTH). If the two disagree the cards overlap.
               widthConstraint: { minimum: (n.card_width || 190) - 26,
                                  maximum: (n.card_width || 190) - 26 },
               color:{ background: solid(c, isGoal || isResult ? 0.22 : 0.16),
-                      border: borderOf(n) === "#20232a" ? c : borderOf(n),
+                       border: borderOf(n) === "#20232a" ? c : borderOf(n),
                       highlight: { background: solid(c, 0.32), border: c },
                       // Same default-hover trap as the research card: without
                       // this the box turns pale blue under a near-white label.
                       hover: { background: solid(c, 0.30), border: c } },
               borderWidth: 2,
               chosen: { node: true, label: false },
-              font:{ color:"#e8eaed", multi:false, align:"left",
+               font:{ color:INK, multi:false, align:"left",
                      size: isGoal?17:(isAgent?16:13), strokeWidth:0 } };
             // Position comes from the server: x from when the call started, y
             // from whose lane it belongs to. Pinned, so the picture stays put
@@ -1643,8 +1633,8 @@
               node.x = n.x; node.y = n.y;
               node.fixed = { x: true, y: true };
             }
-            if (isGoal) { node.borderWidth = 3; node.font.color = "#ffffff"; }
-            else if (isRoot) { node.borderWidth = 3; node.color.border = "#38bdf8"; }
+            if (isGoal) node.borderWidth = 3;
+            else if (isRoot) { node.borderWidth = 3; node.color.border = INFO; }
             batchNodes.push(node);
           }
           } catch (err) {
@@ -1722,7 +1712,7 @@
             edge.dashes = [2, 4]; edge.width = 1.6;
             edge.font = edgeFont(EDGE_QUIET, 12);
           }
-          else if (e.synthetic) { edge.color={color:"#2c313a",highlight:"#3a4150"}; edge.dashes=true; edge.width=1; edge.arrows=""; edge.label=""; }
+          else if (e.synthetic) { edge.color={color:"#cbd5e1",highlight:SLATE}; edge.dashes=true; edge.width=1; edge.arrows=""; edge.label=""; }
           else if (research) { const c=R_EDGE[e.type];
             edge.color={color:c||EDGE_NEUTRAL,highlight:c||EDGE_BRIGHT};
             edge.width=c?3:2.2;
@@ -1975,7 +1965,6 @@
       const qEl = document.getElementById("question");
       // Clamped to three lines in CSS, so the whole question has to be reachable
       // somewhere: the tooltip carries it verbatim.
-      qEl.title = qText;
       qEl.innerHTML = qText
         ? `<span class="q">❓ ${esc(head.root_id || "")}</span> · ${esc(qText)}` : "";
 
@@ -2006,8 +1995,6 @@
                                              { count: x.count }))}</span>`).join("");
     }
     function updateChrome(){
-      const r = isResearch();
-      document.getElementById("head").classList.toggle("hidden", !r);
       document.getElementById("net").style.top = "46px";
     }
 
@@ -2412,7 +2399,7 @@
             `<div class="row"><span class="val mono">${esc(f)}</span></div>`).join("") + `</div>` : "");
       return `<div class="call${openCalls.has(c.id) ? " open" : ""}" data-call="${esc(c.id)}">`
         + `<div class="hd" onclick="toggleCall(this.parentNode)">`
-        + `<i class="st" style="background:${STATUS_COLOR[c.status] || "#cbd5e1"}" title="${esc(c.status || "")}"></i>`
+          + `<i class="st" style="background:${STATUS_COLOR[c.status] || SLATE}" title="${esc(c.status || "")}"></i>`
         + `<span class="tool">${esc(c.tool || t('graph.detail.call'))}</span><span class="when">${esc(when)}</span>`
         + `<span class="caret">▶</span></div>`
         + (gist ? `<div class="gist">${esc(gist)}</div>` : "")
@@ -2854,6 +2841,7 @@
       pinned = {}; pinnedFor = ""; stageBands = []; routed = {}; studyGen += 1;
       for (const k in nodeData) delete nodeData[k]; closeDetail(); }
     document.getElementById("refresh").onclick = poll;
+    document.getElementById("fit").onclick = () => network && network.fit({ animation: true, padding: 32 });
     document.getElementById("view").onchange = () => {
       const sel = document.getElementById("turn");
       sel.innerHTML = ""; sel.dataset.keys = "";   // a request id is not a study id

@@ -229,20 +229,22 @@ class ContextInitSessionAgent(SessionAgent):
     async def _run_async_impl(
         self, ctx: InvocationContext
     ) -> AsyncGenerator[Event, None]:
-        """Run the framing stage only once per persisted ADK session.
+        """Skip framing on follow-ups, including restored legacy sessions.
 
-        The pipeline wrapper invokes every pre-stage for every chat turn.  Once
-        this agent successfully finishes, later user messages are continuations
-        of the same research and must go straight to the orchestrator.
+        A frame marker covers the current session, while the persisted graph
+        protects an existing study when that marker was lost on a restart.
         """
-        if frame_is_initialized(ctx.session.state):
+        state = getattr(getattr(ctx, "session", None), "state", {})
+        if frame_is_initialized(state):
             logger.info(
                 "research frame already initialized; skipping ContextInitAgent "
                 "for session %s",
                 session_key(ctx)[1],
             )
             return
-
+        if get_research_graph(ctx).root_id() is not None:
+            logger.info("%s: continuing the active research graph", self.name)
+            return
         async for event in super()._run_async_impl(ctx):
             yield event
 

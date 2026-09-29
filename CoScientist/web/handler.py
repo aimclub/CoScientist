@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 import time
 import uuid
 from datetime import datetime
@@ -73,6 +74,8 @@ class WebHITLHandler(AbstractHITLHandler):
 
     @property
     def hitl_timeout_seconds(self) -> float:
+        if os.getenv("COSCIENTIST_HARNESS_CHAT_HITL") == "1":
+            return 0.0
         try:
             from CoScientist.hitl.mode import wait_seconds
 
@@ -388,6 +391,8 @@ class WebHITLHandler(AbstractHITLHandler):
             if request.requires_human and request.timeout_seconds is not None
             else wait_seconds()
         )
+        if os.getenv("COSCIENTIST_HARNESS_CHAT_HITL") == "1":
+            timeout_sec = 0
         payload = {
             "type": "hitl_request",
             "request_id": request_id,

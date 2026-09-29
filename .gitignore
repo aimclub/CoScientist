@@ -6,6 +6,7 @@
 # Local agent/session config — machine-specific, never shared
 .claude/
 .adk/
+.coscientist-harness.json
 
 # Python bytecode and build noise
 __pycache__/

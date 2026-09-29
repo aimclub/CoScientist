@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Slide-style render of a research graph (1280-wide dark deck slide).
+"""Slide-style render of a research graph (1280-wide light deck slide).
 
 Reads a research graph (the `research_active.json` snapshot or a live store) and
 draws it the way a research summary is actually presented: a context band on top
@@ -25,17 +25,19 @@ import re
 import sys
 from typing import Any, Dict, List, Optional, Tuple
 
+from CoScientist.graph.research.summary import short_description
+
 # ── design tokens ────────────────────────────────────────────────────────────
 W = 1280
-BG, SLIDE = "#05070b", "#0e1117"
-INK, MUTED, DIM = "#dfe7f0", "#9aa7b8", "#5b6676"
-NEUTRAL_FILL, NEUTRAL_STROKE = "#161b26", "#2b3341"
-BLUE, BLUE_FILL = "#58a6ff", "#12233a"
-AMBER, AMBER_FILL = "#d29922", "#2a2110"
-ORANGE, ORANGE_FILL = "#d98829", "#2a1e10"
-RED, RED_FILL = "#f0554d", "#2a1517"
-GREEN, GREEN_FILL = "#3fb950", "#0f2619"
-YELLOW, YELLOW_FILL = "#d4a017", "#2a2210"
+BG, SLIDE = "#f8fafc", "#ffffff"
+INK, MUTED, DIM = "#172033", "#475569", "#64748b"
+NEUTRAL_FILL, NEUTRAL_STROKE = "#f1f5f9", "#94a3b8"
+BLUE, BLUE_FILL = "#1d4ed8", "#eff6ff"
+AMBER, AMBER_FILL = "#a16207", "#fefce8"
+ORANGE, ORANGE_FILL = "#c2410c", "#fff7ed"
+RED, RED_FILL = "#b91c1c", "#fef2f2"
+GREEN, GREEN_FILL = "#15803d", "#f0fdf4"
+YELLOW, YELLOW_FILL = "#a16207", "#fffbeb"
 FONT = "Arial, Helvetica, sans-serif"
 
 # hypothesis status -> (stroke, fill, glyph, human label)
@@ -285,7 +287,7 @@ def chip(x: float, y: float, label: str, w: float = 0, fs: float = 8.6,
 
 
 def arrow(x1: float, y: float, x2: float, label: str, marker: str = "d",
-          color: str = "#4a5462") -> str:
+          color: str = NEUTRAL_STROKE) -> str:
     mid = (x1 + x2) / 2
     return (f'<line x1="{x1:.0f}" y1="{y:.0f}" x2="{x2:.0f}" y2="{y:.0f}" stroke="{color}" '
             f'stroke-width="1.4" marker-end="url(#{marker})"/>'
@@ -300,7 +302,9 @@ def _row_layout(g: "Graph", h: Dict[str, Any], i: int) -> Dict[str, Any]:
     """Content + measured heights for one hypothesis row (hypothesis → method →
     evidence → conclusion). Measuring before drawing lets the slide grow to fit."""
     stroke, fill, glyph, _word = H_STATUS.get(h.get("status") or "", H_STATUS["formulated"])
-    htext = wrap(a(h, "formulation", "statement") or NOT_SET, 266, 9.6, 5)
+    htext = wrap(short_description("Hypothesis", h.get("attrs") or {},
+                                   a(h, "formulation", "statement")) or NOT_SET,
+                 266, 9.6, 5)
     hh = max(100, 38 + len(htext) * 12.4 + 16)
 
     vms = g.linked(h["id"], "tested_by", types=("VerificationMethod",))
@@ -406,7 +410,7 @@ def render_slide(data: Dict[str, Any], compact: Optional[bool] = None) -> str:
         f'<svg viewBox="0 0 {W} {H}" width="{W}" height="{H}" xmlns="http://www.w3.org/2000/svg">',
         f'<rect width="{W}" height="{H}" fill="{SLIDE}"/>', "<defs>",
     ]
-    for mid, col in (("d", "#4a5462"), ("dr", RED), ("dy", YELLOW), ("db", BLUE), ("do", ORANGE)):
+    for mid, col in (("d", NEUTRAL_STROKE), ("dr", RED), ("dy", YELLOW), ("db", BLUE), ("do", ORANGE)):
         out.append(f'<marker id="{mid}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" '
                    f'markerHeight="6.5" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="{col}"/></marker>')
     out.append("</defs>")
@@ -426,7 +430,8 @@ def render_slide(data: Dict[str, Any], compact: Optional[bool] = None) -> str:
     out.append(f'<text x="620" y="59" font-size="9.4" fill="{DIM}" font-family="{FONT}">{E(meta)}</text>')
 
     # ── context band: question / framing / target metric ──
-    qtext = a(q, "formulation") or NOT_SET
+    qtext = short_description("ResearchQuestion", (q or {}).get("attrs") or {},
+                              a(q, "formulation")) or NOT_SET
     out.append(card(24, 100, 470, 85, BLUE_FILL, BLUE) +
                head("○", BLUE, "❓", T("question")) +
                body(wrap(qtext, 444, 9.6, 4)) + "</g>")
@@ -533,7 +538,7 @@ def render_slide(data: Dict[str, Any], compact: Optional[bool] = None) -> str:
                     key=lambda c: ((c.get("status") == "approved"),
                                    c.get("created_at") or 0, c["id"]))
     summary = (a(concls[-1], "synthesis") if concls else "") or NOT_SET
-    out.append(card(24, foot_y, 900, 61, "#131a27", BLUE) +
+    out.append(card(24, foot_y, 900, 61, BLUE_FILL, BLUE) +
                head("○", BLUE, "▣", T("outcome")) +
                body(wrap(summary, 858, 9.4, 2), y0=38, fs=9.4, lh=12.0) + "</g>")
     out.append(f'<text x="{24 + 900 - 6:.0f}" y="{foot_y + 21:.0f}" font-size="9" fill="{DIM}" '
@@ -557,7 +562,7 @@ def render_html(svg: str, title: str = "research graph") -> str:
             "<style>*{margin:0;padding:0;box-sizing:border-box}"
             f"html,body{{background:{BG}}}body{{display:flex;justify-content:center;padding:20px}}"
             f".slide{{width:{w}px;max-width:100%;aspect-ratio:{w}/{h};background:{SLIDE};"
-            "border-radius:12px;overflow:hidden;box-shadow:0 12px 40px -18px #000}"
+            "border-radius:12px;overflow:hidden;box-shadow:0 12px 40px -18px #33415555}"
             "svg{display:block;width:100%;height:100%}</style></head>"
             f'<body><div class="slide">{svg}</div></body></html>')
 
