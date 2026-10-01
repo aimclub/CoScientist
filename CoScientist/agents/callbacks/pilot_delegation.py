@@ -12,6 +12,12 @@ from google.adk.models.llm_response import LlmResponse
 from google.adk.tools.agent_tool import AgentTool
 from google.genai import types
 
+from CoScientist.agents.callbacks.link_registry import (
+    find_urls,
+    link_id_for,
+    register_user_links,
+)
+
 _REQUIRED = ("retrieve_tools", "ResearchAgent", "TaskExecutorAgent")
 _PILOT_SCIENCE_TOOLS = (
     "dataset_overview_heracleum_tox",
@@ -118,7 +124,16 @@ def preserve_pilot_target(tool, args, tool_context):
     target = re.search(r"\bTarget tool:\s*([A-Za-z_][A-Za-z_0-9]*)\b", source)
     if not target or target.group(1) not in _PILOT_SCIENCE_TOOLS:
         return None
-    if re.search(r"\bTarget tool:\s*" + re.escape(target.group(1)) + r"\b", request):
+    target_pattern = re.compile(
+        r"\bTarget tool:\s*" + re.escape(target.group(1))
+        + r"\b(?:\s*\(server_id=([A-Za-z0-9_-]+)\))?"
+    )
+    source_target = target_pattern.search(source)
+    request_target = target_pattern.search(request)
+    if request_target and (
+        not source_target.group(1)
+        or request_target.group(1) == source_target.group(1)
+    ):
         return None
     args["request"] = f"{source}\n\nExecutor subtask: {request}"
     return None
@@ -278,6 +293,8 @@ def require_pilot_delegations(callback_context, llm_response):
         return None
     completed = _completed_delegations(callback_context)
     missing = [name for name in _REQUIRED if name not in completed]
+    if missing == ["TaskExecutorAgent"]:
+        return _request_missing_science(callback_context, _PILOT_SCIENCE_TOOLS[0])
     if missing:
         raise RuntimeError(
             "Pilot delegation contract: final response before observed "
@@ -288,9 +305,137 @@ def require_pilot_delegations(callback_context, llm_response):
     missing_science = [name for name in _PILOT_SCIENCE_TOOLS if name not in verified_names]
     if missing_science:
         return _request_missing_science(callback_context, missing_science[0])
-    receipt = {"status": "computed", "scientific_mcp_calls": calls}
-    return LlmResponse(content=types.Content(role="model", parts=[types.Part(
-        text="Observed scientific MCP results:\n" + json.dumps(
-            receipt, ensure_ascii=False, indent=2
+    return None
+
+
+def _validate_profile_cost_claims(report, calls):
+    """Tie every stated synthesis cost to the molecule actually profiled."""
+    costs = {}
+    for call in calls:
+        if not isinstance(call, dict) or call.get("tool") != "predict_molecule_profile":
+            continue
+        name = (call.get("args") or {}).get("name_or_smiles")
+        result = call.get("result") or {}
+        answer = result.get("answer") if isinstance(result, dict) else None
+        synthesis = answer.get("synthesis_cost") if isinstance(answer, dict) else None
+        cost = synthesis.get("usd_per_g") if isinstance(synthesis, dict) else None
+        if isinstance(name, str) and isinstance(cost, (int, float)) and not isinstance(cost, bool):
+            costs[re.sub(r"\s+", " ", name).strip().casefold()] = float(cost)
+
+    if re.search(r"аналогичн\w*\s+вызов\w*|similar\s+(?:tool\s+)?calls", report, re.IGNORECASE):
+        raise RuntimeError("Pilot report claims unenumerated profile calls")
+
+    for amount in re.findall(
+        r"(?<!\d)(\d+(?:[.,]\d+)?)\*{0,2}\s*(?:USD|US\$)\s*/\s*g\b",
+        report, re.IGNORECASE,
+    ):
+        if float(amount.replace(",", ".")) not in costs.values():
+            raise RuntimeError(f"Pilot report has an unsupported synthesis cost: {amount} USD/g")
+
+    lines = report.splitlines()
+    for index, line in enumerate(lines):
+        if not line.lstrip().startswith("|"):
+            continue
+        headings = [cell.strip().casefold() for cell in line.strip().strip("|").split("|")]
+        cost_columns = [
+            column for column, heading in enumerate(headings)
+            if ("стоим" in heading or "cost" in heading)
+            and re.search(r"usd\s*/\s*g", heading, re.IGNORECASE)
+        ]
+        if not cost_columns:
+            continue
+        cost_column = cost_columns[0]
+        for row in lines[index + 1:]:
+            if not row.lstrip().startswith("|"):
+                break
+            cells = [cell.strip().strip("*") for cell in row.strip().strip("|").split("|")]
+            if len(cells) <= cost_column:
+                continue
+            amount = re.search(r"(?<!\d)\d+(?:[.,]\d+)?", cells[cost_column])
+            if not amount:
+                continue
+            molecule = re.sub(r"\s+", " ", cells[0]).strip().casefold()
+            observed = costs.get(molecule)
+            if observed is None or float(amount.group().replace(",", ".")) != observed:
+                raise RuntimeError(f"Pilot report has an unsupported synthesis cost for {cells[0]}")
+
+
+def validate_pilot_report(callback_context, llm_response):
+    """Keep the narrative report while refusing claims the observed work cannot support."""
+    if llm_response.partial:
+        return None
+    parts = getattr(llm_response.content, "parts", None) or []
+    if any(getattr(part, "function_call", None) for part in parts):
+        return None
+    report = "\n".join(part.text or "" for part in parts)
+    if len(report.strip()) < 250 or sum(line.startswith("|") for line in report.splitlines()) < 3:
+        raise RuntimeError("Pilot report is incomplete: a substantive report with a table is required")
+    if report.lstrip().startswith(("Observed scientific MCP results:", "{")):
+        raise RuntimeError("Pilot report is a raw receipt rather than a scientific report")
+
+    completed = _completed_delegations(callback_context)
+    calls = _scientific_calls(completed.get("TaskExecutorAgent", []))
+    evidence = json.dumps(completed, ensure_ascii=False, default=str)
+    registry = callback_context.state.get("user_links") or {}
+    observed_urls = {
+        url
+        for call in calls
+        if isinstance(call, dict)
+        and call.get("result") not in (None, "", {})
+        and not (
+            isinstance(call.get("result"), dict)
+            and call["result"].get("truncated")
         )
-    )]))
+        for url, _, _ in find_urls(json.dumps(
+            call["result"], ensure_ascii=False, default=str
+        ))
+    }
+    for link_id in re.findall(r"\[\[link([0-9a-f]+)\]\]", report, re.IGNORECASE):
+        ref = f"link{link_id.lower()}"
+        entry = registry.get(ref)
+        if not isinstance(entry, dict):
+            matches = [url for url in observed_urls if link_id_for(url, registry) == ref]
+            if len(matches) == 1:
+                register_user_links(callback_context.state, matches[0], with_mentions=False)
+                registry = callback_context.state.get("user_links") or {}
+                entry = registry.get(ref)
+        if not isinstance(entry, dict) or entry.get("url") not in evidence:
+            raise RuntimeError(f"Pilot report has an unsupported artifact link: {link_id}")
+    for target in re.findall(r"\]\(([^)]+\.(?:csv|tsv|png|svg|jpe?g|pdf)(?:\?[^)]*)?)\)", report, re.IGNORECASE):
+        if target not in evidence:
+            raise RuntimeError(f"Pilot report has an unsupported artifact: {target}")
+
+    for percentage in re.findall(r"\d+(?:[.,]\d+)?[\s\u202f]*%", report):
+        if percentage not in evidence:
+            raise RuntimeError(f"Pilot report has an unsupported percentage: {percentage}")
+
+    _validate_profile_cost_claims(report, calls)
+
+    result_text = json.dumps(calls, ensure_ascii=False, default=str).lower()
+    for line in report.splitlines():
+        lowered = line.lower()
+        figure_type = "heatmap" if "теплов" in lowered else (
+            "dendrogram" if "дендрограмм" in lowered else None
+        )
+        if not figure_type or figure_type in result_text:
+            continue
+        if re.search(r"\bне\s+(?:создан|построен|приложен)|отсутств|недоступ", lowered):
+            continue
+        if re.search(r"✅|создан|построен|сгенерирован|см\.\s*рисунок", lowered):
+            raise RuntimeError("Pilot report has an unsupported figure claim")
+
+    if re.search(r"согласуетс[яь].{0,100}экспериментальн", report, re.IGNORECASE | re.DOTALL):
+        research = json.dumps(completed.get("ResearchAgent", []), ensure_ascii=False, default=str)
+        if not re.search(r"\b(?:10\.\d{4,9}/\S+|PMID[:\s]*\d+)\b", research, re.IGNORECASE):
+            raise RuntimeError("Pilot report has an unsupported experimental comparison")
+
+    for source in re.findall(r"\b10\.\d{4,9}/[^\s|)]+|Supplementary\s+Tables?\s+S\d+(?:[-–]\s*S?\d+)?", report, re.IGNORECASE):
+        if source.rstrip(".,;*") not in evidence:
+            raise RuntimeError(f"Pilot report cites an unsupported source: {source}")
+    if re.search(r"не\s+найдено\s+никаких\s+публикац|отсутствуют\s+DOI/PMID", report, re.IGNORECASE):
+        raise RuntimeError("Pilot report makes an unsupported categorical literature claim")
+
+    if not (re.search(r"SMILES", report, re.IGNORECASE)
+            and re.search(r"недоступ|не\s+доступ|отсутств|не\s+содерж|не\s+предостав", report, re.IGNORECASE)):
+        raise RuntimeError("Pilot report must disclose the missing molecule-level SMILES data")
+    return None

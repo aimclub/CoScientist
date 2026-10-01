@@ -1409,14 +1409,18 @@ _cb("PaperSearchGuard", "before_tool", factory=lambda ctx: _paper_search_guard()
 _cb("ForbidExploreMyPapers", "before_tool", factory=lambda ctx: _forbid_explore_my_papers())
 # Catch hallucinated tool calls (e.g. `find`) and correct instead of crashing.
 _cb("guard_unknown_tools", "after_model", factory=_guard_unknown_tools)
+from CoScientist.agents.callbacks.pilot_exact_retrieval import ensure_pilot_exact_tool_retrieved
+_cb("ensure_pilot_exact_tool_retrieved", "after_model", func=ensure_pilot_exact_tool_retrieved)
 from CoScientist.agents.callbacks.pilot_delegation import (
     block_pilot_repeated_overview,
     enforce_pilot_executor_route,
     enforce_pilot_science_handoff,
     preserve_pilot_target,
     require_pilot_delegations,
+    validate_pilot_report,
 )
 _cb("require_pilot_delegations", "after_model", func=require_pilot_delegations)
+_cb("validate_pilot_report", "after_model", func=validate_pilot_report)
 _cb("enforce_pilot_science_handoff", "before_tool", func=enforce_pilot_science_handoff)
 _cb("block_pilot_repeated_overview", "before_tool", func=block_pilot_repeated_overview)
 _cb("enforce_pilot_executor_route", "before_tool", func=enforce_pilot_executor_route)
@@ -1427,12 +1431,14 @@ from CoScientist.agents.callbacks.experiment_execution import (
     record_scientific_mcp_result,
     reset_pilot_overview_cache,
     reuse_pilot_overview_result,
+    recover_pilot_json_science_call,
     require_first_scientific_tool_call,
     require_scientific_execution,
     reset_executor_science_receipt,
     reset_scientific_execution,
 )
 _cb("require_scientific_execution", "after_model", func=require_scientific_execution)
+_cb("recover_pilot_json_science_call", "after_model", func=recover_pilot_json_science_call)
 _cb("require_first_scientific_tool_call", "before_model", func=require_first_scientific_tool_call)
 _cb("record_scientific_mcp_result", "after_tool", func=record_scientific_mcp_result)
 _cb("reuse_pilot_overview_result", "before_tool", func=reuse_pilot_overview_result)

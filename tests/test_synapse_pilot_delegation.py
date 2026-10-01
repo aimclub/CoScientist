@@ -7,6 +7,7 @@ import pytest
 from google.adk.models.llm_response import LlmResponse
 from google.genai import types
 
+from CoScientist.agents.callbacks import pilot_delegation
 from CoScientist.agents.callbacks.pilot_delegation import require_pilot_delegations
 
 
@@ -63,9 +64,9 @@ def test_pilot_accepts_extra_calls_and_required_delegations_in_any_order():
         )),
         _event("ResearchAgent"),
     )
-    result = require_pilot_delegations(context, _model_response())
-    assert "225" in result.content.parts[0].text
-    assert "Pilot report" not in result.content.parts[0].text
+    report = _model_response()
+    assert require_pilot_delegations(context, report) is None
+    assert report.content.parts[0].text == "Pilot report"
 
 
 def test_pilot_enriches_executor_handoff_with_discovered_science_tools():
@@ -368,12 +369,120 @@ def test_pilot_combines_scientific_receipts_across_executor_delegations():
             )
         ),
     )
-    result = require_pilot_delegations(context, _model_response())
-    text = result.content.parts[0].text
-    assert all(name in text for name in (
+    assert require_pilot_delegations(context, _model_response()) is None
+
+
+def _verified_report_context():
+    return _context(
+        _event("retrieve_tools"), _event("ResearchAgent"),
+        _event("TaskExecutorAgent", result=_science_result(
+            "dataset_overview_heracleum_tox", "chemical_space_clustering",
+            "predict_ld50", "predict_molecule_profile",
+        )),
+    )
+
+
+GROUNDED_REPORT = (
+        "## Научный отчёт по Heracleum\n\n"
+        "| Этап | Наблюдение |\n|---|---|\n"
+        "| Обзор | MCP подтвердил 225 реконструированных соединений |\n"
+        "| Кластеризация | Результат вычислен инструментом |\n"
+        "| LD50 | Значения являются прогнозом модели |\n"
+        "| Профиль | Получен отдельным вызовом MCP |\n\n"
+        "Полные строки молекул и SMILES недоступны из агрегированного обзора. "
+        "Экспериментальная проверка LD50 в доступных результатах не подтверждена. "
+        "Тепловая карта и дендрограмма не приложены, потому что инструменты "
+        "не вернули файлы изображений. Таблица отражает только реально "
+        "полученные вычислительные результаты."
+)
+
+
+@pytest.mark.parametrize("claim", [
+    "Тепловая карта создана (рисунок [[linkcb93]]).",
+    "Кардиотоксичность составляет 87%.",
+    "Тепловая карта построена и включена в отчёт.",
+    "[Тепловая карта](results/heatmap.png) создана.",
+    "Это согласуется с оригинальными экспериментальными данными.",
+    "Источник: Supplementary Tables S1-S5.",
+    "По литературе не найдено никаких публикаций.",
+])
+def test_pilot_rejects_each_unsupported_claim(claim):
+    report = LlmResponse(content=types.Content(
+        role="model", parts=[types.Part(text=GROUNDED_REPORT + "\n" + claim)]
+    ))
+    with pytest.raises(RuntimeError, match="unsupported"):
+        pilot_delegation.validate_pilot_report(_verified_report_context(), report)
+
+
+def test_pilot_accepts_grounded_substantive_report():
+    context = _verified_report_context()
+    report_text = GROUNDED_REPORT
+    report = LlmResponse(content=types.Content(
+        role="model", parts=[types.Part(text=report_text)]
+    ))
+    assert pilot_delegation.validate_pilot_report(context, report) is None
+    assert report.content.parts[0].text == report_text
+
+
+def _one_profile_cost_context():
+    receipt = json.loads(_science_result(
         "dataset_overview_heracleum_tox", "chemical_space_clustering",
         "predict_ld50", "predict_molecule_profile",
+    )["result"])
+    profile = receipt["scientific_mcp_calls"][-1]
+    profile["args"] = {"name_or_smiles": "trioxsalen"}
+    profile["result"] = {"answer": {"synthesis_cost": {"usd_per_g": 1.87}}}
+    return _context(
+        _event("retrieve_tools"), _event("ResearchAgent"),
+        _event("TaskExecutorAgent", result={"result": json.dumps(receipt)}),
+    )
+
+
+def _cost_report(extra):
+    return LlmResponse(content=types.Content(
+        role="model", parts=[types.Part(text=GROUNDED_REPORT + "\n\n" + extra)]
     ))
+
+
+def test_pilot_accepts_cost_for_the_one_observed_profile():
+    report = _cost_report(
+        "| Соединение | Стоимость USD / g |\n|---|---|\n| trioxsalen | 1.87 |"
+    )
+    assert pilot_delegation.validate_pilot_report(_one_profile_cost_context(), report) is None
+
+
+def test_pilot_rejects_cost_row_without_a_profile_call():
+    report = _cost_report(
+        "| Соединение | Стоимость USD / g |\n|---|---|\n"
+        "| trioxsalen | 1.87 |\n| oxypeucedanin\u202fhydrate | 1.93 |"
+    )
+    with pytest.raises(RuntimeError, match="synthesis cost"):
+        pilot_delegation.validate_pilot_report(_one_profile_cost_context(), report)
+
+
+def test_pilot_rejects_unobserved_cost_amount_in_prose():
+    report = _cost_report("Стоимость isopsoralen составляет 1.95\u202fUSD\u202f/\u202fg.")
+    with pytest.raises(RuntimeError, match="synthesis cost"):
+        pilot_delegation.validate_pilot_report(_one_profile_cost_context(), report)
+
+
+def test_pilot_rejects_unenumerated_additional_profile_calls():
+    report = _cost_report(
+        "Оценка синтеза получена из predict_molecule_profile для trioxsalen "
+        "и аналогичных вызовов для остальных соединений."
+    )
+    with pytest.raises(RuntimeError, match="profile calls"):
+        pilot_delegation.validate_pilot_report(_one_profile_cost_context(), report)
+
+
+def test_pilot_report_requires_molecule_level_limitation():
+    report = LlmResponse(content=types.Content(role="model", parts=[types.Part(
+        text=GROUNDED_REPORT.replace(
+            "Полные строки молекул и SMILES недоступны из агрегированного обзора. ", ""
+        )
+    )]))
+    with pytest.raises(RuntimeError, match="SMILES"):
+        pilot_delegation.validate_pilot_report(_verified_report_context(), report)
 
 
 def test_pilot_requests_missing_profile_before_accepting_final_report():
@@ -401,6 +510,23 @@ def test_pilot_requests_missing_profile_before_accepting_final_report():
     assert "chemical_space_clustering" in call.args["request"]
     with pytest.raises(RuntimeError, match="predict_molecule_profile"):
         require_pilot_delegations(context, _model_response())
+
+
+def test_pilot_requests_first_science_tool_when_final_skips_executor():
+    context = _context(
+        _event("retrieve_tools"),
+        _event("ResearchAgent"),
+        state={"accumulated_tools": [{
+            "tool": "dataset_overview_heracleum_tox",
+            "server_id": "heracleum-server",
+        }]},
+    )
+
+    correction = require_pilot_delegations(context, _model_response())
+    call = correction.content.parts[0].function_call
+    assert call.name == "TaskExecutorAgent"
+    assert "Target tool: dataset_overview_heracleum_tox" in call.args["request"]
+    assert "server_id=heracleum-server" in call.args["request"]
 
 
 def test_pilot_recovers_missing_profile_after_reranker_clears_discovery():
@@ -464,11 +590,43 @@ def test_pilot_allows_intermediate_tool_calls():
     assert require_pilot_delegations(context, _model_response(partial=True)) is None
 
 
-@pytest.mark.parametrize("missing", REQUIRED)
+@pytest.mark.parametrize("missing", REQUIRED[:2])
 def test_pilot_rejects_final_report_without_real_call_and_response(missing):
     events = [_event(name) for name in REQUIRED if name != missing]
     with pytest.raises(RuntimeError, match=missing):
         require_pilot_delegations(_context(*events), _model_response())
+
+
+def test_pilot_rejects_missing_executor_without_discovered_server():
+    context = _context(_event("retrieve_tools"), _event("ResearchAgent"))
+    with pytest.raises(RuntimeError, match="dataset_overview_heracleum_tox.*not discovered"):
+        require_pilot_delegations(context, _model_response())
+
+
+def test_pilot_rejects_unverified_executor_after_one_targeted_attempt():
+    context = _context(
+        _event("retrieve_tools"), _event("ResearchAgent"),
+        state={"accumulated_tools": [{
+            "tool": "dataset_overview_heracleum_tox",
+            "server_id": "heracleum-server",
+        }]},
+    )
+    assert require_pilot_delegations(context, _model_response()) is not None
+    with pytest.raises(RuntimeError, match="no verified result"):
+        require_pilot_delegations(context, _model_response())
+
+
+def test_pilot_does_not_count_failed_executor_response():
+    context = _context(
+        _event("retrieve_tools"), _event("ResearchAgent"),
+        _event("TaskExecutorAgent", result={"status": "failed"}),
+        state={"accumulated_tools": [{
+            "tool": "dataset_overview_heracleum_tox",
+            "server_id": "heracleum-server",
+        }]},
+    )
+    correction = require_pilot_delegations(context, _model_response())
+    assert correction.content.parts[0].function_call.name == "TaskExecutorAgent"
 
 
 def test_pilot_ignores_other_invocations_and_failed_results():
@@ -531,3 +689,35 @@ def test_pilot_reasoning_matches_gpt_oss_gateway_without_changing_regular_demo()
         regular.agent("HypothesesAgent").reasoning
         == base.agent("HypothesesAgent").reasoning
     )
+
+
+def test_pilot_disables_human_requests_without_changing_regular_demo():
+    from CoScientist.assembly.schema import load_config, resolve_config_path
+
+    pilot = load_config(resolve_config_path("synapse_pilot"))
+    regular = load_config(resolve_config_path("synapse_demo"))
+
+    assert not any(agent.hitl or agent.work_order for agent in pilot.agents.values())
+    assert "hitl_before_tool" not in pilot.agent("CoderAgent").callbacks.before_tool
+    assert "ask_nir_report" not in pilot.agent("ResultAggregatorAgent").callbacks.before_agent
+    assert regular.agent("TaskExecutorAgent").hitl
+    assert regular.agent("ResearchAgent").work_order
+    assert "hitl_before_tool" in regular.agent("CoderAgent").callbacks.before_tool
+    assert "ask_nir_report" in regular.agent("ResultAggregatorAgent").callbacks.before_agent
+
+
+def test_pilot_omits_confirmation_tools_even_when_global_hitl_is_enabled(monkeypatch):
+    from CoScientist.assembly import build_system
+    from CoScientist.assembly.schema import load_config, resolve_config_path
+    from CoScientist.config.settings import get_settings
+
+    monkeypatch.setattr(get_settings().web, "hitl_enabled", True)
+    pilot = build_system(load_config(resolve_config_path("synapse_pilot")))
+
+    for agent in pilot.agents.values():
+        names = {getattr(tool, "name", None) for tool in getattr(agent, "tools", [])}
+        assert names.isdisjoint({
+            "request_approval", "request_selection", "declare_work_order",
+            "update_work_order",
+        })
+        assert getattr(agent, "hitl_handler", None) is None
