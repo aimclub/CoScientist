@@ -156,6 +156,53 @@ def test_an_unreadable_graph_never_costs_the_run_its_report(monkeypatch):
     assert guard_report_without_execution(SimpleNamespace(state=_skipped())) is None
 
 
+# ── открытый план: сначала решение оператора, потом отчёт ────────────────────
+
+def _roadmap(*statuses):
+    return {"_master_active_tasks": [
+        {"id": f"TASK-{i + 1}", "status": status, "title": f"step {i + 1}"}
+        for i, status in enumerate(statuses)
+    ]}
+
+
+def test_an_open_roadmap_defers_the_report_until_the_operator_decides():
+    """Прогон встаёт на паузу сразу после агрегатора, если в плане есть
+    незакрытый пункт. Писать отчёт до этого решения — значит писать его зря:
+    «Принять неполный результат» запускает агрегатор заново."""
+    text, note = _run(_roadmap("DONE", "TODO"))
+    assert text is not None, "агрегатор должен быть замкнут до решения"
+    assert "TASK-2" in text and "TASK-1" not in text
+    assert "Принять неполный результат" in text
+    assert note == ""
+
+
+def test_a_failed_roadmap_item_also_waits_for_the_decision():
+    text, _ = _run(_roadmap("DONE", "FAILED"))
+    assert text is not None and "TASK-2" in text
+
+
+def test_a_closed_roadmap_reports_as_before():
+    assert _run(_roadmap("DONE", "DONE")) == (None, None)
+
+
+def test_an_accepted_limited_outcome_lets_the_report_through(monkeypatch):
+    """После «Принять неполный результат» тот же план больше не задерживает
+    отчёт, а промпт получает предупреждение о неполноте."""
+    import CoScientist.execution_control as execution_control
+    from CoScientist.experiments.outcome.reconciliation import roadmap_digest
+
+    state = _roadmap("DONE", "TODO")
+    state["scientific_limited_scope_acceptance"] = {
+        "accepted": True, "decision_source": "human", "run_id": "run-1",
+        "roadmap_digest": roadmap_digest(state), "accepted_task_ids": ["TASK-2"],
+    }
+    monkeypatch.setattr(execution_control, "current_run",
+                        lambda: SimpleNamespace(run_id="run-1"))
+    text, note = _run(state)
+    assert text is None
+    assert "НЕ ПОЛНОСТЬЮ" in note
+
+
 # ── подключение ──────────────────────────────────────────────────────────────
 
 def test_the_guard_runs_first_in_both_profiles():

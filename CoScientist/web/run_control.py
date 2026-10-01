@@ -9,7 +9,11 @@ from typing import Any
 from pydantic_core import to_jsonable_python
 
 from CoScientist.execution_control import RunController, RunStopped, bind_run
-from CoScientist.agents.run_control_plugin import RECOVERY_STATE_KEY, unresolved_actions
+from CoScientist.agents.run_control_plugin import (
+    RECOVERY_STATE_KEY,
+    REPORT_ONLY_RESUME_STATE_KEY,
+    unresolved_actions,
+)
 from CoScientist.experiments.outcome.reconciliation import (
     DispositionKind,
     reconcile_scientific_outcome,
@@ -395,6 +399,9 @@ class ExecutionControlMixin:
                         "roadmap_digest": roadmap_digest(state),
                         "accepted_task_ids": list(accepted_ids),
                     }
+                    # The report is the only work left: the run stopped right
+                    # before ResultAggregatorAgent to ask for this decision.
+                    state[REPORT_ONLY_RESUME_STATE_KEY] = True
                     instruction = (
                         "The operator explicitly accepted a limited outcome for these "
                         f"outstanding roadmap items: {list(accepted_ids)}. Do not execute "
@@ -403,6 +410,7 @@ class ExecutionControlMixin:
                     )
                 else:
                     state.pop("scientific_limited_scope_acceptance", None)
+                    state.pop(REPORT_ONLY_RESUME_STATE_KEY, None)
                     instruction = (
                         "Continue only the outstanding saved root-roadmap work. Preserve "
                         "completed tasks and do not reset or replay the scientific run."

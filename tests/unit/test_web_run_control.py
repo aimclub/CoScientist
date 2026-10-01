@@ -9,7 +9,11 @@ from fastapi.testclient import TestClient
 
 from CoScientist.execution_control import bind_run, before_model_attempt, before_tool_action
 from CoScientist.web.app import WebRuntime, create_app
-from CoScientist.agents.run_control_plugin import RunControlPlugin, unresolved_actions
+from CoScientist.agents.run_control_plugin import (
+    REPORT_ONLY_RESUME_STATE_KEY,
+    RunControlPlugin,
+    unresolved_actions,
+)
 
 web_app = importlib.import_module("CoScientist.web.app")
 
@@ -541,6 +545,8 @@ def test_exact_root_roadmap_limits_can_be_human_accepted_and_resumed(monkeypatch
         acceptance = restored["scientific_limited_scope_acceptance"]
         assert acceptance["run_id"] == handle.run_id
         assert acceptance["accepted_task_ids"] == ["TASK-2"]
+        # Only the report is left: the resume must not plan the study again.
+        assert restored[REPORT_ONLY_RESUME_STATE_KEY] is True
         assert "Do not execute or retry" in started[0]["_execution_resume_instruction"]
         assert handle.status().attempts_used == 1
         from CoScientist.experiments.outcome.reconciliation import (
@@ -549,6 +555,46 @@ def test_exact_root_roadmap_limits_can_be_human_accepted_and_resumed(monkeypatch
         assert reconcile_scientific_outcome(
             restored, current_run_id=handle.run_id,
         ).kind is DispositionKind.COMPLETED_LIMITED
+        await runtime.close()
+
+    asyncio.run(scenario())
+
+
+def test_report_only_resume_runs_just_the_post_stages():
+    """An accepted limited outcome resumes straight into the report: every
+    top-level stage before ``pipeline.post`` is bypassed, its subtree with it,
+    and the marker is gone once the report stage starts."""
+    from CoScientist.assembly.schema import PIPELINE_ROOT_NAME, get_config
+
+    async def scenario():
+        runtime = WebRuntime()
+        key = ("report-only-user", "report-only-session")
+        handle = runtime.prepare_execution(
+            key, {"message": "study"},
+            SimpleNamespace(orchestrator=SimpleNamespace(max_llm_calls=100)),
+        )
+        plugin = RunControlPlugin()
+        root = SimpleNamespace(name=PIPELINE_ROOT_NAME)
+        state = {REPORT_ONLY_RESUME_STATE_KEY: True,
+                 "_execution_resume_pending": True}
+
+        async def enter(name, parent=root):
+            agent = SimpleNamespace(name=name, parent_agent=parent)
+            return await plugin.before_agent_callback(
+                agent=agent, callback_context=SimpleNamespace(state=state))
+
+        post = get_config().pipeline.post[0]
+        with bind_run(handle):
+            for stage in ("ContextInitAgent", "PlanningPipelineAgent", "OrchestratorAgent"):
+                assert await enter(stage) is not None, stage
+            # Nested agents are never reached once their stage is bypassed,
+            # and the plugin does not judge them on its own.
+            assert await enter("PlannerAgent", SimpleNamespace(name="PlanningPipelineAgent")) is None
+            assert await enter(post) is None
+            assert not state[REPORT_ONLY_RESUME_STATE_KEY]
+            assert state["_execution_resume_pending"] is False
+            # A later invocation is an ordinary run again.
+            assert await enter("OrchestratorAgent") is None
         await runtime.close()
 
     asyncio.run(scenario())

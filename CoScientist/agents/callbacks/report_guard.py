@@ -274,6 +274,27 @@ _PARTIAL_NOTE = {
     ),
 }
 
+#: Пауза `reconcile_scientific_outcome`, которую снимает только оператор:
+#: кнопками «Продолжить оставшиеся задачи» / «Принять неполный результат».
+_ROADMAP_DECISION_REASONS = frozenset({
+    "root_roadmap_incomplete", "root_roadmap_not_successful",
+})
+
+_AWAITING_ROADMAP_DECISION = {
+    "ru": (
+        "## Итоговый отчёт ждёт вашего решения\n\n"
+        "В плане остались незакрытые пункты: {ids}. Выберите на панели прогона "
+        "«Продолжить оставшиеся задачи» или «Принять неполный результат» — "
+        "отчёт будет составлен после этого."
+    ),
+    "en": (
+        "## The final report is waiting for your decision\n\n"
+        "Plan items are still open: {ids}. On the run panel choose "
+        "“Continue outstanding tasks” or “Accept limited outcome” — the report "
+        "is written after that."
+    ),
+}
+
 #: Причина дописывается только когда она есть — см. `_why`. Прогон, где до части
 #: задач просто не дошла очередь, ничем не «останавливался».
 _WHY_TAIL = {"ru": " Причина остановки: {why}.", "en": " Why it stopped: {why}."}
@@ -307,6 +328,19 @@ def guard_report_without_execution(callback_context: Any) -> types.Content | Non
             state,
             current_run_id=execution_handle.run_id if execution_handle else None,
         )
+        if disposition.reason in _ROADMAP_DECISION_REASONS:
+            # The plan still has open items and the operator has not decided
+            # yet. The run pauses for that decision right after this stage, so
+            # writing the report now would only throw it away: an accepted
+            # limited outcome resumes straight into this agent.
+            state[UNEXECUTED_NOTE_KEY] = ""
+            logger.info("REPORT_DEFERRED_FOR_ROADMAP_DECISION reason=%s open=%s",
+                        disposition.reason, list(disposition.unfinished_task_ids))
+            lang = _language(state)
+            return types.Content(role="model", parts=[types.Part(
+                text=_AWAITING_ROADMAP_DECISION[lang].format(
+                    ids=", ".join(disposition.unfinished_task_ids)),
+            )])
         if (not _module_was_engaged(state)
                 and disposition.kind is not DispositionKind.COMPLETED_LIMITED):
             return None

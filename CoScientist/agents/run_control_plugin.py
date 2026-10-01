@@ -20,6 +20,14 @@ from CoScientist.execution_control import before_tool_action, current_run
 
 logger = logging.getLogger(__name__)
 RECOVERY_STATE_KEY = "_execution_recovery"
+#: Set by an accepted limited outcome. The research itself is over; the next
+#: invocation runs only the ``pipeline.post`` stages (the report), and every
+#: earlier top-level stage is bypassed instead of planning the study again.
+REPORT_ONLY_RESUME_STATE_KEY = "_execution_report_only"
+#: Owned by the orchestrator's turn preparation (experiments/runtime/coalesce).
+#: A report-only continuation never reaches the orchestrator, so the marker is
+#: consumed here; left set, it would bind the NEXT user request to this turn.
+_RESUME_PENDING_STATE_KEY = "_execution_resume_pending"
 _READ_TOOLS = {"get_experiment_plan", "check_job", "get_active_tasks", "research_triggers"}
 _LOCAL_CONTROL_TOOLS = {
     "get_experiment_plan", "start_task", "record_result", "retry_task",
@@ -165,6 +173,35 @@ def _is_read_only_tool(name: str) -> bool:
         return False
 
 
+def _report_only_bypass(agent: Any, callback_context: Any) -> types.Content | None:
+    """Bypass a top-level stage before the report on a report-only resume.
+
+    Only direct children of the pipeline root are touched: skipping one skips
+    its whole subtree, and the post stages with their own sub-agents run as
+    usual. The marker is cleared when the first post stage starts, so it can
+    never leak into the next request.
+    """
+    state = callback_context.state
+    if not state.get(REPORT_ONLY_RESUME_STATE_KEY):
+        return None
+    from CoScientist.assembly.schema import PIPELINE_ROOT_NAME, get_config
+
+    parent = getattr(agent, "parent_agent", None)
+    if getattr(parent, "name", None) != PIPELINE_ROOT_NAME:
+        return None
+    name = str(getattr(agent, "name", ""))
+    if name in get_config().pipeline.post:
+        state[REPORT_ONLY_RESUME_STATE_KEY] = None
+        state[_RESUME_PENDING_STATE_KEY] = False
+        return None
+    # Returning Content from before_agent bypasses this agent; its parent
+    # sequence continues (ADK copies the invocation context per agent).
+    return types.Content(role="model", parts=[types.Part(text=(
+        f"Stage {name} was not run again: the operator accepted the result "
+        "as is, only the report is being written."
+    ))])
+
+
 class RunControlPlugin(BasePlugin):
     def __init__(self) -> None:
         super().__init__(name="run_control")
@@ -176,6 +213,9 @@ class RunControlPlugin(BasePlugin):
         # Track the current linear stage without importing assembly at startup.
         from CoScientist.assembly.schema import get_config
         name = str(getattr(agent, "name", ""))
+        skipped = _report_only_bypass(agent, callback_context)
+        if skipped is not None:
+            return skipped
         try:
             stages = get_config().linear_stages()
             index = next((i for i, stage in enumerate(stages) if stage.get("agent") == name), None)
