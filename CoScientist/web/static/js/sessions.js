@@ -576,16 +576,21 @@
 
     async function exportCurrentSession() {
       if (!activeUser || !activeSession) return addSystemMsg(t('sessions.noActiveExport'));
+      await exportSession(activeUser.id, activeSession.id);
+    }
+
+    // Any session's bundle, not only the open one (Settings → Users & sessions).
+    async function exportSession(userId, sessionId) {
       try {
         addSystemMsg(t('sessions.exporting'));
-        const resp = await fetch(`/api/users/${encodeURIComponent(activeUser.id)}/sessions/${encodeURIComponent(activeSession.id)}/export`, { method: 'POST' });
+        const resp = await fetch(`/api/users/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/export`, { method: 'POST' });
         if (!resp.ok) {
           const errMsg = await fetchErrorMessage(resp);
           throw new Error(errMsg);
         }
         const blob = await resp.blob();
         const disposition = resp.headers.get('content-disposition') || '';
-        let filename = `session_${activeSession.id}.cossession.zip`;
+        let filename = `session_${sessionId}.cossession.zip`;
         const utf8Match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
         if (utf8Match) {
           try { filename = decodeURIComponent(utf8Match[1]); } catch (_) { }

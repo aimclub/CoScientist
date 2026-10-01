@@ -238,6 +238,68 @@ class LocalSessionRegistry:
                 self._save()
             return count
 
+    def set_hidden(self, user_id: str, session_id: str, hidden: bool) -> dict[str, Any]:
+        """Hide or show one session in the picker. Display flag only."""
+        with self._lock:
+            session = self._sessions.get((user_id, session_id))
+            if not session:
+                raise KeyError(f"Unknown session '{session_id}' for user '{user_id}'.")
+            if hidden:
+                session["hidden"] = True
+            else:
+                session.pop("hidden", None)
+            self._save()
+            return dict(session)
+
+    def rename_user(self, user_id: str, nickname: str) -> dict[str, Any]:
+        if not isinstance(nickname, str):
+            raise ValueError("Nickname must be a string.")
+        nickname = " ".join(nickname.strip().split())
+        if not nickname:
+            raise ValueError("Nickname must not be empty.")
+        if len(nickname) > 64:
+            raise ValueError("Nickname must be at most 64 characters.")
+        nickname_key = nickname.casefold()
+        with self._lock:
+            user = self._users.get(user_id)
+            if not user:
+                raise KeyError(f"Unknown user '{user_id}'.")
+            owner = self._nickname_index.get(nickname_key)
+            if owner is not None and owner != user_id:
+                raise ValueError(f"Nickname '{nickname}' is already registered.")
+            self._nickname_index.pop(user["nickname"].casefold(), None)
+            self._nickname_index[nickname_key] = user_id
+            user["nickname"] = nickname
+            self._save()
+            return dict(user)
+
+    def delete_session(self, user_id: str, session_id: str) -> dict[str, Any]:
+        """Drop one session from the catalogue. Its files are the caller's job."""
+        with self._lock:
+            session = self._sessions.pop((user_id, session_id), None)
+            if not session:
+                raise KeyError(f"Unknown session '{session_id}' for user '{user_id}'.")
+            user = self._users.get(user_id)
+            if user and user.get("last_session_id") == session_id:
+                rest = [s for (owner_id, _), s in self._sessions.items() if owner_id == user_id]
+                rest.sort(key=lambda item: item["updated_at"], reverse=True)
+                user["last_session_id"] = rest[0]["id"] if rest else None
+            self._save()
+            return dict(session)
+
+    def delete_user(self, user_id: str) -> list[str]:
+        """Drop the user and every session of theirs; returns the session ids."""
+        with self._lock:
+            user = self._users.pop(user_id, None)
+            if not user:
+                raise KeyError(f"Unknown user '{user_id}'.")
+            self._nickname_index.pop(user["nickname"].casefold(), None)
+            removed = [sid for (owner_id, sid) in self._sessions if owner_id == user_id]
+            for sid in removed:
+                self._sessions.pop((user_id, sid), None)
+            self._save()
+            return removed
+
     def require_user(self, user_id: str) -> dict[str, Any]:
         user = self.get_user(user_id)
         if not user:

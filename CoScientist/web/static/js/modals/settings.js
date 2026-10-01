@@ -258,6 +258,12 @@
         }],
       },
       {
+        // Not a form: an administration panel rendered by user_admin.js. It
+        // has no fields, so nothing here goes through Save or .env export.
+        id: 'users', icon: 'manage_accounts', custom: 'userAdmin',
+        groups: [],
+      },
+      {
         id: 'system', icon: 'dns',
         groups: [
           {
@@ -442,6 +448,8 @@
       settingsDanger.message = '';
       settingsStatus = { key: 'settings.status.loading', kind: 'muted' };
       settingsDraft = null;
+      // Sizes and sessions change between visits; the panel reloads on view.
+      if (typeof userAdmin !== 'undefined') { userAdmin.users = null; userAdmin.loadError = ''; userAdmin.confirm = null; }
       modal.classList.remove('hidden');
       applyLanguage();
       renderSettings();
@@ -458,6 +466,7 @@
       if (!force && dirtyFields().length && !confirm(t('settings.confirmDiscard'))) return;
       document.getElementById('settings-modal').classList.add('hidden');
       settingsDraft = null;
+      if (typeof renderUserAdminConfirm === 'function') { userAdmin.confirm = null; renderUserAdminConfirm(); }
     }
 
     function discardSettingsChanges() {
@@ -527,7 +536,7 @@
       nav.innerHTML = SETTINGS_SECTIONS.map(section => {
         const active = !settingsQuery && section.id === settingsSection;
         return `
-          <button type="button" data-action="section" data-section="${section.id}"
+          <button type="button" data-action="section" data-section="${section.id}" title="${escHtml(t(`settings.section.${section.id}`))}"
             class="w-full flex items-center gap-2.5 px-3 py-2 rounded-md text-left text-xs transition-colors
               ${active ? 'bg-primary/10 text-primary font-semibold' : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'}">
             <span class="material-symbols-outlined text-base">${section.icon}</span>
@@ -538,6 +547,14 @@
     }
 
     function renderSettingsSection(section) {
+      if (section.custom === 'userAdmin') {
+        return `
+          <div class="mb-5">
+            <h4 class="font-headline text-base font-bold text-on-surface">${escHtml(t(`settings.section.${section.id}`))}</h4>
+            <p class="text-xs text-on-surface-variant/80 mt-0.5">${escHtml(t(`settings.section.${section.id}.desc`))}</p>
+          </div>
+          ${userAdminSectionHtml()}`;
+      }
       const hasEditable = EDITABLE_FIELDS.some(f => f.section === section.id);
       // A section of browser-only fields: nothing goes through Save, and its
       // reset puts back the appearance at once.

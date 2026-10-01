@@ -1287,6 +1287,81 @@ class WebRuntime(ExecutionControlMixin):
 
         return list_checkpoints(*key)
 
+    # --- Deletion (Settings → Users & sessions) ---
+    def forget_session(self, key: SessionKey) -> Optional["CoScientistManager"]:
+        """Drop every in-memory trace of one session; returns its manager."""
+        for table in (
+            self.agent_events, self.tool_full_values, self.metrics,
+            self.tz_snapshots, self.dataset_urls, self.dataset_refs,
+            self.report_languages, self.run_times, self.run_versions,
+            self.session_settings_cache, self.manager_agent_revisions,
+            self.control_locks, self.execution_locks, self.run_contexts,
+            self.active_runs, self.sockets, self.execution_handles,
+        ):
+            table.pop(key, None)
+        self.stale_manager_trees.discard(key)
+        self.stopping_runs.discard(key)
+        return self.managers.pop(key, None)
+
+    async def delete_session(self, key: SessionKey) -> dict[str, Any]:
+        """Stop, disconnect and erase one session everywhere it is stored.
+
+        Remote resources (uploaded datasets in S3, remote sandboxes) are left
+        alone. Each part is attempted; failures are reported, not raised.
+        """
+        self.registry.require_session(*key)
+        errors: dict[str, str] = {}
+        task = self.active_runs.get(key)
+        if task is not None and not task.done():
+            await self.stop_run(key)
+
+        await self.send(key, {"type": "session_deleted",
+                              "user_id": key[0], "session_id": key[1]})
+        for socket in list(self.sockets.get(key, [])):
+            try:
+                await socket.close(code=4404)
+            except Exception:  # noqa: BLE001 — the tab may already be gone
+                pass
+
+        manager = self.forget_session(key)
+        if manager is not None:
+            try:
+                await manager.close()
+            except Exception as exc:  # noqa: BLE001
+                errors["manager"] = str(exc)
+        try:
+            await self.session_service.delete_session(
+                app_name=APP_NAME, user_id=key[0], session_id=key[1])
+        except Exception as exc:  # noqa: BLE001
+            errors["adk_session"] = str(exc)
+
+        from CoScientist.graph.memory import evict_knowledge_graph
+        from CoScientist.graph.research.store import evict_research_graph
+        evict_knowledge_graph(*key)
+        evict_research_graph(*key)
+        errors.update(await asyncio.to_thread(_erase_session_files, key))
+
+        session = self.registry.delete_session(*key)
+        if errors:
+            logging.getLogger("CoScientist.web").warning(
+                "Session %s/%s deleted with leftovers: %s", key[0], key[1], errors)
+        return {"session": session, "errors": errors}
+
+    async def delete_user(self, user_id: str) -> dict[str, Any]:
+        user = self.registry.require_user(user_id)
+        deleted: list[str] = []
+        errors: dict[str, Any] = {}
+        for session in self.registry.list_sessions(user_id):
+            result = await self.delete_session((user_id, session["id"]))
+            deleted.append(session["id"])
+            if result["errors"]:
+                errors[session["id"]] = result["errors"]
+        self.registry.delete_user(user_id)
+        adk_path = getattr(self.session_service, "_path", None)
+        extra = (adk_path(APP_NAME, user_id, "x").parent,) if adk_path else ()
+        await asyncio.to_thread(_erase_user_dirs, user_id, extra)
+        return {"user": user, "deleted": deleted, "errors": errors}
+
 
 def _wire_hitl(runtime: WebRuntime) -> None:
     """Wire the routing Web handler once for this application runtime."""
@@ -1641,6 +1716,93 @@ async def lifespan(app: FastAPI):
 
     await close_catalog()
     await app.state.runtime.close()
+
+
+def _session_graph_dirs(key: SessionKey) -> list[Path]:
+    """Graph and artifact directories of a session (the roots may coincide)."""
+    from CoScientist.graph.research.store import _default_dir as research_root
+    from CoScientist.graph.session_scope import storage_dir
+
+    roots = {os.getenv("GRAPH_SNAPSHOT_DIR", "./graph_runs"), research_root()}
+    dirs: list[Path] = []
+    for root in roots:
+        path = storage_dir(root, key)
+        if path.resolve() not in {d.resolve() for d in dirs}:
+            dirs.append(path)
+    return dirs
+
+
+def _disk_usage(path: Path) -> int:
+    try:
+        if path.is_file():
+            return path.stat().st_size
+        return sum(p.stat().st_size for p in path.rglob("*") if p.is_file())
+    except OSError:
+        return 0
+
+
+def _session_stats(key: SessionKey) -> dict[str, Any]:
+    """Event count, checkpoint count and bytes on disk of one session."""
+    from CoScientist.web.checkpoints import checkpoint_dir
+    from CoScientist.web.session_store import events_path
+
+    events = 0
+    log = events_path(*key)
+    try:
+        with log.open("rb") as handle:
+            events = sum(1 for line in handle if line.strip())
+    except OSError:
+        pass
+    checkpoints = checkpoint_dir(*key)
+    try:
+        checkpoint_count = len(list(checkpoints.glob("*.json*")))
+    except OSError:
+        checkpoint_count = 0
+    size = _disk_usage(log) + _disk_usage(checkpoints)
+    size += sum(_disk_usage(d) for d in _session_graph_dirs(key))
+    return {"events": events, "checkpoints": checkpoint_count, "size_bytes": size}
+
+
+def _erase_session_files(key: SessionKey) -> dict[str, str]:
+    """Delete everything a session left on disk; returns per-part errors."""
+    import shutil
+
+    from CoScientist.web.checkpoints import delete_checkpoints
+    from CoScientist.web.session_store import delete_session as delete_events
+
+    errors: dict[str, str] = {}
+    if not delete_events(*key):
+        errors["events"] = "could not delete the event log"
+    try:
+        delete_checkpoints(*key)
+    except Exception as exc:  # noqa: BLE001
+        errors["checkpoints"] = str(exc)
+    for directory in _session_graph_dirs(key):
+        try:
+            shutil.rmtree(directory, ignore_errors=False)
+        except FileNotFoundError:
+            pass
+        except Exception as exc:  # noqa: BLE001
+            errors[f"graphs:{directory}"] = str(exc)
+    return errors
+
+
+def _erase_user_dirs(user_id: str, extra: tuple[Path, ...] = ()) -> None:
+    """Remove the now-empty per-user directories left after its sessions."""
+    from CoScientist.web.checkpoints import checkpoint_dir
+    from CoScientist.web.session_store import events_path
+
+    candidates = [
+        events_path(user_id, "x").parent,
+        checkpoint_dir(user_id, "x").parent,
+        *(d.parent for d in _session_graph_dirs((user_id, "x"))),
+        *extra,
+    ]
+    for directory in candidates:
+        try:
+            directory.rmdir()  # only when empty: never takes foreign data
+        except OSError:
+            pass
 
 
 def _clear_session_graphs(
@@ -2335,6 +2497,169 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse({"session": session})
+
+    # --- Settings → Users & sessions: listing with stats, rename, delete ---
+    def _protected_username() -> Optional[str]:
+        name = get_settings().web.coscientist_username
+        return name.strip().casefold() if name and name.strip() else None
+
+    async def _sessions_with_stats(user_id: str) -> list[dict[str, Any]]:
+        from CoScientist.web.session_store import has_events
+        sessions = runtime.registry.list_sessions(user_id)
+        stats = await asyncio.gather(*(
+            asyncio.to_thread(_session_stats, (user_id, s["id"])) for s in sessions
+        ))
+        for session, extra in zip(sessions, stats):
+            key = (user_id, session["id"])
+            session.update(extra)
+            session["empty"] = not runtime.agent_events.get(key) and not has_events(*key)
+            task = runtime.active_runs.get(key)
+            session["running"] = bool(task and not task.done())
+        return sessions
+
+    @app.get("/api/admin/users")
+    async def admin_list_users():
+        protected = _protected_username()
+        users = []
+        for user in runtime.registry.list_users():
+            sessions = await _sessions_with_stats(user["id"])
+            users.append({
+                **user,
+                "session_count": len(sessions),
+                "size_bytes": sum(s["size_bytes"] for s in sessions),
+                "last_activity": max((s["updated_at"] for s in sessions),
+                                     default=user.get("created_at")),
+                "running": any(s["running"] for s in sessions),
+                "protected": protected == user["nickname"].casefold(),
+            })
+        return JSONResponse({"users": users})
+
+    @app.get("/api/admin/users/{user_id}/sessions")
+    async def admin_list_sessions(user_id: str):
+        try:
+            sessions = await _sessions_with_stats(user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"sessions": sessions})
+
+    @app.patch("/api/users/{user_id}")
+    async def rename_user(user_id: str, data: dict):
+        try:
+            old = runtime.registry.require_user(user_id)
+            if _protected_username() == old["nickname"].casefold():
+                raise ValueError("The configured default user cannot be renamed.")
+            user = runtime.registry.rename_user(user_id, data.get("nickname", ""))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except ValueError as exc:
+            status_code = 409 if "already registered" in str(exc) else 400
+            raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        return JSONResponse({"user": user})
+
+    @app.delete("/api/users/{user_id}")
+    async def delete_user(user_id: str):
+        try:
+            user = runtime.registry.require_user(user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if _protected_username() == user["nickname"].casefold():
+            raise HTTPException(
+                status_code=400,
+                detail="The configured default user (COSCIENTIST_USERNAME) cannot be deleted.")
+        return JSONResponse(await runtime.delete_user(user_id))
+
+    @app.post("/api/users/bulk-delete")
+    async def bulk_delete_users(data: dict):
+        ids = data.get("ids")
+        if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+            raise HTTPException(status_code=400, detail="'ids' must be a list of user ids.")
+        protected = _protected_username()
+        deleted: list[str] = []
+        sessions = 0
+        skipped: dict[str, str] = {}
+        errors: dict[str, Any] = {}
+        for user_id in dict.fromkeys(ids):
+            user = runtime.registry.get_user(user_id)
+            if user is None:
+                skipped[user_id] = "unknown user"
+                continue
+            if protected == user["nickname"].casefold():
+                skipped[user_id] = "default user (COSCIENTIST_USERNAME)"
+                continue
+            result = await runtime.delete_user(user_id)
+            deleted.append(user_id)
+            sessions += len(result["deleted"])
+            if result["errors"]:
+                errors[user_id] = result["errors"]
+        return JSONResponse({"deleted": deleted, "sessions": sessions,
+                             "skipped": skipped, "errors": errors})
+
+    @app.delete("/api/users/{user_id}/sessions/{session_id}")
+    async def delete_user_session(user_id: str, session_id: str):
+        try:
+            result = await runtime.delete_session((user_id, session_id))
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse(result)
+
+    @app.post("/api/users/{user_id}/sessions/bulk-delete")
+    async def bulk_delete_user_sessions(user_id: str, data: dict):
+        try:
+            sessions = runtime.registry.list_sessions(user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        ids = data.get("ids")
+        selector = data.get("filter")
+        if ids is not None:
+            if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+                raise HTTPException(status_code=400, detail="'ids' must be a list of session ids.")
+            wanted = set(ids)
+            targets = [s["id"] for s in sessions if s["id"] in wanted]
+        elif selector == "empty":
+            from CoScientist.web.session_store import has_events
+            targets = [s["id"] for s in sessions
+                       if not runtime.agent_events.get((user_id, s["id"]))
+                       and not has_events(user_id, s["id"])]
+        elif selector == "older_than":
+            try:
+                days = float(data.get("days"))
+            except (TypeError, ValueError):
+                days = -1
+            if days < 0:
+                raise HTTPException(status_code=400, detail="'days' must be a non-negative number.")
+            from datetime import timedelta, timezone
+            cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+            targets = [s["id"] for s in sessions if s["updated_at"] < cutoff]
+        else:
+            raise HTTPException(status_code=400,
+                                detail="Pass 'ids' or 'filter' ('empty' | 'older_than').")
+        deleted: list[str] = []
+        errors: dict[str, Any] = {}
+        for session_id in targets:
+            try:
+                result = await runtime.delete_session((user_id, session_id))
+            except KeyError:
+                continue
+            deleted.append(session_id)
+            if result["errors"]:
+                errors[session_id] = result["errors"]
+        return JSONResponse({"deleted": deleted, "errors": errors})
+
+    @app.post("/api/users/{user_id}/sessions/{session_id}/hide")
+    async def hide_user_session(user_id: str, session_id: str):
+        try:
+            session = runtime.registry.set_hidden(user_id, session_id, True)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return JSONResponse({"session": session})
+
+    @app.post("/api/users/{user_id}/sessions/{session_id}/unhide")
+    async def unhide_user_session(user_id: str, session_id: str):
+        try:
+            session = runtime.registry.set_hidden(user_id, session_id, False)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse({"session": session})
 
     # Hiding only takes sessions out of the picker; nothing is deleted.

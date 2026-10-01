@@ -3782,3 +3782,9 @@ def get_research_graph(
             )
             _research_graphs[key] = graph
         return graph
+
+
+def evict_research_graph(user_id: str, session_id: str) -> None:
+    """Forget the cached research graph of a deleted session."""
+    with _registry_lock:
+        _research_graphs.pop((user_id, session_id), None)

@@ -73,3 +73,56 @@ def test_imported_session_survives_a_restart(tmp_path, monkeypatch):
     assert session is not None
     assert session["title"] == "KM-ARL run 11"
     assert session["created_at"] == "2026-09-27T13:05:32+00:00"
+
+
+def test_deleting_the_last_session_repoints_last_session_id():
+    registry = LocalSessionRegistry()
+    user = registry.create_user("Gleb")
+    older = registry.create_session(user["id"], "Older")
+    newer = registry.create_session(user["id"], "Newer")
+    assert registry.get_user(user["id"])["last_session_id"] == newer["id"]
+
+    registry.delete_session(user["id"], newer["id"])
+    assert registry.get_session(user["id"], newer["id"]) is None
+    assert registry.get_user(user["id"])["last_session_id"] == older["id"]
+
+    registry.delete_session(user["id"], older["id"])
+    assert registry.get_user(user["id"])["last_session_id"] is None
+    with pytest.raises(KeyError):
+        registry.delete_session(user["id"], older["id"])
+
+
+def test_deleting_a_user_drops_their_sessions_and_frees_the_nickname(tmp_path, monkeypatch):
+    monkeypatch.setenv("WEB_STATE_DIR", str(tmp_path))
+    registry = LocalSessionRegistry()
+    gleb = registry.create_user("Gleb")
+    alex = registry.create_user("Alex")
+    first = registry.create_session(gleb["id"], "One")
+    second = registry.create_session(gleb["id"], "Two")
+    kept = registry.create_session(alex["id"], "Alex work")
+
+    assert sorted(registry.delete_user(gleb["id"])) == sorted([first["id"], second["id"]])
+    assert registry.get_user(gleb["id"]) is None
+    assert registry.create_user("gleb")["nickname"] == "gleb"
+
+    reopened = LocalSessionRegistry()
+    assert [u["nickname"] for u in reopened.list_users()] == ["Alex", "gleb"]
+    assert reopened.get_session(alex["id"], kept["id"]) is not None
+    assert reopened.get_session(gleb["id"], first["id"]) is None
+
+
+def test_rename_user_keeps_nicknames_unique(tmp_path, monkeypatch):
+    monkeypatch.setenv("WEB_STATE_DIR", str(tmp_path))
+    registry = LocalSessionRegistry()
+    gleb = registry.create_user("Gleb")
+    registry.create_user("Alex")
+
+    with pytest.raises(ValueError, match="already registered"):
+        registry.rename_user(gleb["id"], "alex")
+    assert registry.rename_user(gleb["id"], "GLEB")["nickname"] == "GLEB"
+    assert registry.rename_user(gleb["id"], "  Gleb   K ")["nickname"] == "Gleb K"
+    # The old name is free again; the new one is taken.
+    registry.create_user("Gleb")
+    with pytest.raises(ValueError, match="already registered"):
+        registry.create_user("gleb k")
+    assert LocalSessionRegistry().get_user(gleb["id"])["nickname"] == "Gleb K"

@@ -464,6 +464,112 @@ const i18n = {
     en: 'Server-level options and values that are set only in .env.',
     ru: 'Параметры сервера и значения, которые задаются только в .env.'
   },
+  'settings.section.users': { en: 'Users & sessions', ru: 'Пользователи и сессии' },
+  'settings.section.users.desc': {
+    en: 'Every user of this server and their sessions: size on disk, rename, hide, export and delete.',
+    ru: 'Все пользователи этого сервера и их сессии: размер на диске, переименование, скрытие, экспорт и удаление.'
+  },
+
+  // Settings → Users & sessions
+  'admin.users': { en: 'Users', ru: 'Пользователи' },
+  'admin.noUsers': { en: 'No users yet.', ru: 'Пользователей пока нет.' },
+  'admin.reload': { en: 'Refresh', ru: 'Обновить' },
+  'admin.loadFailed': { en: 'Could not load users: {error}', ru: 'Не удалось загрузить пользователей: {error}' },
+  'admin.you': { en: 'you', ru: 'вы' },
+  'admin.running': { en: 'running', ru: 'выполняется' },
+  'admin.current': { en: 'open', ru: 'открыта' },
+  'admin.hidden': { en: 'hidden', ru: 'скрыта' },
+  'admin.empty': { en: 'empty', ru: 'пустая' },
+  'admin.protected': { en: 'default', ru: 'по умолчанию' },
+  'admin.protectedHint': {
+    en: 'The default user from COSCIENTIST_USERNAME is recreated on start, so it cannot be renamed or deleted here.',
+    ru: 'Пользователь по умолчанию из COSCIENTIST_USERNAME создаётся при запуске заново, поэтому здесь его нельзя переименовать или удалить.'
+  },
+  'admin.userStats': {
+    en: '{sessions} sessions · {size} · last active {last}',
+    ru: 'Сессий: {sessions} · {size} · активность {last}'
+  },
+  'admin.switchUser': { en: 'Switch to this user', ru: 'Переключиться на этого пользователя' },
+  'admin.rename': { en: 'Rename', ru: 'Переименовать' },
+  'admin.renamed': { en: 'Renamed.', ru: 'Переименовано.' },
+  'admin.deleteUser': { en: 'Delete user', ru: 'Удалить пользователя' },
+  'admin.sessionsOf': { en: 'Sessions of {name}', ru: 'Сессии пользователя {name}' },
+  'admin.searchSessions': { en: 'Search by title', ru: 'Поиск по названию' },
+  'admin.sortBy': { en: 'Sort', ru: 'Сортировка' },
+  'admin.sort.updated': { en: 'Last activity', ru: 'Последняя активность' },
+  'admin.sort.created': { en: 'Created', ru: 'Дата создания' },
+  'admin.sort.size': { en: 'Size', ru: 'Размер' },
+  'admin.deleteSelected': { en: 'Delete selected ({n}, {size})', ru: 'Удалить выбранные ({n}, {size})' },
+  'admin.deleteEmpty': { en: 'Delete empty', ru: 'Удалить пустые' },
+  'admin.deleteOlder': { en: 'Delete inactive for', ru: 'Удалить неактивные дольше' },
+  'admin.days': { en: 'days', ru: 'дн.' },
+  'admin.nothingOlder': { en: 'No sessions inactive for more than {days} days.', ru: 'Нет сессий, неактивных дольше {days} дн.' },
+  'admin.selectAll': { en: 'Select all', ru: 'Выбрать все' },
+  'admin.col.title': { en: 'Session', ru: 'Сессия' },
+  'admin.col.updated': { en: 'Last activity', ru: 'Активность' },
+  'admin.col.events': { en: 'Events', ru: 'События' },
+  'admin.col.size': { en: 'Size', ru: 'Размер' },
+  'admin.created': { en: 'created {date}', ru: 'создана {date}' },
+  'admin.checkpoints': { en: '{n} checkpoints', ru: 'контрольных точек: {n}' },
+  'admin.noSessions': { en: 'No sessions.', ru: 'Сессий нет.' },
+  'admin.open': { en: 'Open', ru: 'Открыть' },
+  'admin.hide': { en: 'Hide from the picker', ru: 'Скрыть из списка' },
+  'admin.unhide': { en: 'Show in the picker', ru: 'Показать в списке' },
+  'admin.export': { en: 'Export bundle', ru: 'Экспортировать бандл' },
+  'admin.delete': { en: 'Delete', ru: 'Удалить' },
+  'admin.deleting': { en: 'Deleting…', ru: 'Удаление…' },
+  'admin.deleteNote': {
+    en: 'Deleting removes the history, agent state, checkpoints, graphs and artifacts from this server for good. Uploaded datasets in S3 and remote sandboxes are not touched. Export a session first to keep a copy.',
+    ru: 'Удаление безвозвратно стирает с сервера историю, состояние агентов, контрольные точки, графы и артефакты. Загруженные в S3 датасеты и удалённые песочницы не затрагиваются. Чтобы сохранить копию, сначала экспортируйте сессию.'
+  },
+  'admin.yes': { en: 'Yes, delete', ru: 'Да, удалить' },
+  'admin.no': { en: 'No', ru: 'Нет' },
+  'admin.selectAllUsers': { en: 'Select all users', ru: 'Выбрать всех пользователей' },
+  'admin.deleteSelectedUsers': { en: 'Delete selected users ({n})', ru: 'Удалить выбранных ({n})' },
+  'admin.confirm.usersTitle': { en: 'Delete {n} users?', ru: 'Удалить пользователей ({n})?' },
+  'admin.deletedUsers': { en: 'Users deleted: {names} (sessions: {n}).', ru: 'Удалены пользователи: {names} (сессий: {n}).' },
+  'admin.skippedUsers': { en: '{n} could not be deleted.', ru: 'Не удалось удалить: {n}.' },
+  'admin.confirm.sessionTitle': { en: 'Delete “{name}”?', ru: 'Удалить «{name}»?' },
+  'admin.confirm.selectedTitle': { en: 'Delete selected sessions?', ru: 'Удалить выбранные сессии?' },
+  'admin.confirm.emptyTitle': { en: 'Delete empty sessions?', ru: 'Удалить пустые сессии?' },
+  'admin.confirm.olderTitle': { en: 'Delete sessions inactive for more than {days} days?', ru: 'Удалить сессии, неактивные дольше {days} дн.?' },
+  'admin.confirm.userTitle': { en: 'Delete user {name}?', ru: 'Удалить пользователя {name}?' },
+  'admin.confirm.sessions': { en: 'Sessions: {n}, on disk: {size}.', ru: 'Сессий: {n}, на диске: {size}.' },
+  'admin.confirm.user': {
+    en: 'The user and all their sessions will be deleted. Sessions: {n}, on disk: {size}.',
+    ru: 'Будут удалены пользователь и все его сессии. Сессий: {n}, на диске: {size}.'
+  },
+  'admin.confirm.users': {
+    en: 'These users and all their sessions will be deleted. Sessions: {n}, on disk: {size}.',
+    ru: 'Будут удалены эти пользователи и все их сессии. Сессий: {n}, на диске: {size}.'
+  },
+  'admin.confirm.running': {
+    en: 'Running sessions among them: {n}. Their runs will be stopped first.',
+    ru: 'Среди них выполняется: {n}. Их прогоны будут остановлены.'
+  },
+  'admin.confirm.userRunning': {
+    en: 'Some of these sessions are running. Their runs will be stopped first.',
+    ru: 'Часть этих сессий сейчас выполняется. Их прогоны будут остановлены.'
+  },
+  'admin.confirm.current': {
+    en: 'The session open in this tab is included; a new session will be opened instead.',
+    ru: 'Среди них открытая сейчас сессия — вместо неё откроется новая.'
+  },
+  'admin.confirm.self': {
+    en: 'This is you: after deletion you will be asked to choose a user.',
+    ru: 'Это вы: после удаления нужно будет выбрать пользователя заново.'
+  },
+  'admin.confirm.irreversible': { en: 'This cannot be undone.', ru: 'Отменить это нельзя.' },
+  'admin.deletedSessions': { en: 'Sessions deleted: {n}.', ru: 'Удалено сессий: {n}.' },
+  'admin.partialErrors': {
+    en: 'Some files could not be removed in {n} sessions; see the server log.',
+    ru: 'В {n} сессиях часть файлов удалить не удалось — подробности в логе сервера.'
+  },
+  'admin.failed': { en: 'Failed: {error}', ru: 'Ошибка: {error}' },
+  'admin.sessionDeletedNotice': {
+    en: 'This session was deleted in Settings → Users & sessions.',
+    ru: 'Эта сессия удалена в разделе «Настройки → Пользователи и сессии».'
+  },
 
   // Groups inside sections
   'settings.group.planning': { en: 'Planning', ru: 'Планирование' },

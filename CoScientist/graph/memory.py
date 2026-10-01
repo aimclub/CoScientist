@@ -250,6 +250,12 @@ def get_knowledge_graph(
         return graph
 
 
+def evict_knowledge_graph(user_id: str, session_id: str) -> None:
+    """Forget the cached execution graph of a deleted session."""
+    with _registry_lock:
+        _knowledge_graphs.pop((user_id, session_id), None)
+
+
 def reset_knowledge_graph(
     context: Any = None,
     *,

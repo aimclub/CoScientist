@@ -563,3 +563,181 @@ def test_old_sessions_can_be_hidden_at_once_and_shown_again():
 
         assert client.post(f"{base}/unhide-all").json() == {"shown": 1}
         assert not any(item.get("hidden") for item in client.get(base).json()["sessions"])
+
+
+def _seed_session_files(user_id, session_id, graph_root):
+    """Write one file into every place a session keeps state on disk."""
+    from CoScientist.graph.session_scope import storage_dir
+    from CoScientist.web.checkpoints import checkpoint_dir
+    from CoScientist.web.session_store import append_event
+
+    append_event(user_id, session_id, {"type": "user_message", "message": "hi"})
+    cp = checkpoint_dir(user_id, session_id)
+    cp.mkdir(parents=True, exist_ok=True)
+    (cp / "cp_1.json").write_text("{}", encoding="utf-8")
+    graphs = storage_dir(graph_root, (user_id, session_id))
+    graphs.mkdir(parents=True, exist_ok=True)
+    (graphs / "execution.json").write_text("{}", encoding="utf-8")
+    return [web_app._session_graph_dirs((user_id, session_id)), cp]
+
+
+def test_deleting_a_session_erases_its_files_and_leaves_neighbours(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRAPH_SNAPSHOT_DIR", str(tmp_path / "graph_runs"))
+    from CoScientist.web.session_store import events_path
+
+    app = create_app()
+    with TestClient(app) as client:
+        user = _create_user(client, "Gleb")
+        doomed = _create_session(client, user["id"], "Doomed")
+        kept = _create_session(client, user["id"], "Kept")
+        doomed_key = (user["id"], doomed["id"])
+        kept_key = (user["id"], kept["id"])
+        doomed_paths = _seed_session_files(*doomed_key, tmp_path / "graph_runs")
+        kept_paths = _seed_session_files(*kept_key, tmp_path / "graph_runs")
+        app.state.runtime.metrics[doomed_key] = {"cost": 1}
+
+        stats = client.get(f"/api/admin/users/{user['id']}/sessions").json()["sessions"]
+        doomed_row = next(s for s in stats if s["id"] == doomed["id"])
+        assert doomed_row["events"] == 1
+        assert doomed_row["checkpoints"] == 1
+        assert doomed_row["size_bytes"] > 0
+        assert doomed_row["empty"] is False
+
+        response = client.delete(f"/api/users/{user['id']}/sessions/{doomed['id']}")
+        assert response.status_code == 200
+        assert response.json()["errors"] == {}
+
+        assert not events_path(*doomed_key).exists()
+        graph_dirs, checkpoints = doomed_paths
+        assert not checkpoints.exists()
+        assert not any(d.exists() for d in graph_dirs)
+        assert doomed_key not in app.state.runtime.metrics
+        assert app.state.runtime.registry.get_session(*doomed_key) is None
+
+        assert events_path(*kept_key).exists()
+        assert kept_paths[1].exists()
+        assert all(d.exists() for d in kept_paths[0])
+
+        assert client.delete(f"/api/users/{user['id']}/sessions/{doomed['id']}").status_code == 404
+        listed = [s["id"] for s in client.get(f"/api/users/{user['id']}/sessions").json()["sessions"]]
+        assert listed == [kept["id"]]
+
+
+def test_deleting_a_user_cascades_and_the_default_user_is_protected(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRAPH_SNAPSHOT_DIR", str(tmp_path / "graph_runs"))
+    from CoScientist.web.session_store import events_path
+
+    app = create_app()
+    with TestClient(app) as client:
+        user = _create_user(client, "Doomed")
+        other = _create_user(client, "Other")
+        sessions = [_create_session(client, user["id"], f"S{i}") for i in range(2)]
+        for session in sessions:
+            _seed_session_files(user["id"], session["id"], tmp_path / "graph_runs")
+
+        response = client.delete(f"/api/users/{user['id']}")
+        assert response.status_code == 200
+        assert sorted(response.json()["deleted"]) == sorted(s["id"] for s in sessions)
+        assert not events_path(user["id"], "x").parent.exists()
+        nicknames = [u["nickname"] for u in client.get("/api/admin/users").json()["users"]]
+        assert "Doomed" not in nicknames and "Other" in nicknames
+        assert client.delete(f"/api/users/{user['id']}").status_code == 404
+
+        monkeypatch.setattr(web_app.get_settings().web, "coscientist_username", "other")
+        assert client.delete(f"/api/users/{other['id']}").status_code == 400
+        assert client.patch(f"/api/users/{other['id']}", json={"nickname": "X"}).status_code == 400
+
+
+def test_rename_user_and_hide_single_session():
+    app = create_app()
+    with TestClient(app) as client:
+        user = _create_user(client, "Gleb")
+        _create_user(client, "Alex")
+        session = _create_session(client, user["id"], "Work")
+        base = f"/api/users/{user['id']}"
+
+        assert client.patch(base, json={"nickname": "alex"}).status_code == 409
+        assert client.patch(base, json={"nickname": "Gleb K"}).json()["user"]["nickname"] == "Gleb K"
+
+        assert client.post(f"{base}/sessions/{session['id']}/hide").json()["session"]["hidden"] is True
+        assert "hidden" not in client.post(f"{base}/sessions/{session['id']}/unhide").json()["session"]
+        assert client.post(f"{base}/sessions/session_missing/hide").status_code == 404
+
+
+def test_bulk_delete_by_ids_empty_and_age():
+    app = create_app()
+    with TestClient(app) as client:
+        user = _create_user(client, "Gleb")
+        base = f"/api/users/{user['id']}/sessions"
+        empty = _create_session(client, user["id"], "Empty")
+        used = _create_session(client, user["id"], "Used")
+        app.state.runtime.agent_events[(user["id"], used["id"])].append({"type": "user_message"})
+
+        response = client.post(f"{base}/bulk-delete", json={"filter": "empty"})
+        assert response.json()["deleted"] == [empty["id"]]
+
+        # Nothing is older than a day yet.
+        assert client.post(f"{base}/bulk-delete",
+                           json={"filter": "older_than", "days": 1}).json()["deleted"] == []
+        assert client.post(f"{base}/bulk-delete",
+                           json={"filter": "older_than", "days": -1}).status_code == 400
+        assert client.post(f"{base}/bulk-delete", json={}).status_code == 400
+
+        response = client.post(f"{base}/bulk-delete", json={"ids": [used["id"], "session_missing"]})
+        assert response.json()["deleted"] == [used["id"]]
+        assert client.get(base).json()["sessions"] == []
+
+
+def test_deleting_a_running_session_stops_its_run_first(monkeypatch):
+    async def scenario():
+        runtime = web_app.WebRuntime()
+        user = runtime.registry.create_user("Runner")
+        session = runtime.registry.create_session(user["id"], "Busy")
+        key = (user["id"], session["id"])
+        started = asyncio.Event()
+        cancelled = asyncio.Event()
+
+        async def endless_chat(_runtime, _key, _data):
+            started.set()
+            try:
+                await asyncio.Event().wait()
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        monkeypatch.setattr(web_app, "_handle_chat", endless_chat)
+        assert await runtime.start_run(key, {"message": "go"})
+        await started.wait()
+
+        result = await runtime.delete_session(key)
+        assert cancelled.is_set()
+        assert key not in runtime.active_runs
+        assert result["session"]["id"] == session["id"]
+        assert runtime.registry.get_session(*key) is None
+
+    asyncio.run(scenario())
+
+
+def test_bulk_delete_users_skips_unknown_and_default(monkeypatch):
+    app = create_app()
+    with TestClient(app) as client:
+        first = _create_user(client, "First")
+        second = _create_user(client, "Second")
+        default = _create_user(client, "Keeper")
+        _create_session(client, first["id"], "A")
+        _create_session(client, second["id"], "B")
+        _create_session(client, second["id"], "C")
+        monkeypatch.setattr(web_app.get_settings().web, "coscientist_username", "keeper")
+
+        response = client.post("/api/users/bulk-delete", json={
+            "ids": [first["id"], second["id"], default["id"], "user_missing", first["id"]],
+        })
+        assert response.status_code == 200
+        body = response.json()
+        assert body["deleted"] == [first["id"], second["id"]]
+        assert body["sessions"] == 3
+        assert set(body["skipped"]) == {default["id"], "user_missing"}
+        nicknames = [u["nickname"] for u in client.get("/api/admin/users").json()["users"]]
+        assert nicknames == ["Keeper"]
+
+        assert client.post("/api/users/bulk-delete", json={"ids": "nope"}).status_code == 400

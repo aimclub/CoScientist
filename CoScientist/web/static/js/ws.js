@@ -63,6 +63,12 @@
           case 'run_control':
             if (window.RunControl) RunControl.feed(data);
             break;
+          // Deleted from Settings → Users & sessions (maybe in another tab).
+          // The server closes the socket next with 4404, and onclose then
+          // re-bootstraps this tab onto a session that still exists.
+          case 'session_deleted':
+            addSystemMsg(t('admin.sessionDeletedNotice'));
+            break;
           case 'connected':
             addTelemetry('INIT :: ' + data.message);
             break;
