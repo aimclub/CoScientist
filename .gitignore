@@ -255,3 +255,9 @@ reports/
 session_snapshots/
 hub_artifacts/
 tests/integration/parse_results/
+
+# Benchmark harness: run outputs and pinned verifier/oracle environments
+benchmarks/runs/
+benchmarks/.cache/
+# Task inputs are part of the benchmark, whatever their extension.
+!benchmarks/*/tasks/**

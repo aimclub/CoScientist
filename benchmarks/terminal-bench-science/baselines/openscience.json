@@ -1,0 +1,45 @@
+{
+  "system": "OpenScience",
+  "source": "https://github.com/synthetic-sciences/benchmarks-openscience",
+  "source_commit": "94b4c1b3b86083f65520f3e911f936749048b3bb",
+  "agent": {
+    "model": "openai/gpt-6-astra",
+    "variant": "high",
+    "worker_model": "openai/gpt-6-sol",
+    "worker_variant": "xhigh",
+    "deadline_sec": 28800
+  },
+  "note": "Single trial per task (best of one), Harbor on Modal with native verifiers. The publisher flagged eval-setup issues on 2026-10-01 and plans a rerun.",
+  "tasks": {
+    "geometric-pharmacophore-alignment": {
+      "reward": 1.0,
+      "tests": {
+        "total": 7,
+        "passed": 7,
+        "failed": 0,
+        "failed_names": []
+      },
+      "agent_seconds": 4006.7,
+      "n_input_tokens": 21960784,
+      "n_cache_tokens": 21442100,
+      "n_output_tokens": 152688,
+      "cost_usd": 16.2733,
+      "trace": "https://github.com/synthetic-sciences/benchmarks-openscience/tree/main/terminal-bench-science/geometric-pharmacophore-alignment/geometric-pharmacophore-alignmen__mUXJQDC"
+    },
+    "rdkit-ic-constraints": {
+      "reward": 1.0,
+      "tests": {
+        "total": 35,
+        "passed": 35,
+        "failed": 0,
+        "failed_names": []
+      },
+      "agent_seconds": 1584.8,
+      "n_input_tokens": 8335562,
+      "n_cache_tokens": 8002665,
+      "n_output_tokens": 104634,
+      "cost_usd": 12.9137999,
+      "trace": "https://github.com/synthetic-sciences/benchmarks-openscience/tree/main/terminal-bench-science/rdkit-ic-constraints/rdkit-ic-constraints__XG54XMh"
+    }
+  }
+}
