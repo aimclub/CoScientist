@@ -687,6 +687,11 @@ const i18n = {
     ru: 'На графе вызовов одинаковые агенты, работавшие параллельно, собраны в стопку. Щелчок раскрывает её, через столько секунд она сворачивается обратно.'
   },
   'settings.f.callGraphCollapse.envValues': { en: '1–600 (integer seconds).', ru: '1–600 (целое, секунды).' },
+  'settings.f.showCallGraph.label': { en: 'Show the call graph', ru: 'Показывать граф вызовов' },
+  'settings.f.showCallGraph.desc': {
+    en: 'A live graph of the agents the run has called, in the left panel under the agent list.',
+    ru: 'Живой граф агентов, вызванных в ходе запуска, — в левой панели под списком агентов.'
+  },
   'settings.f.showInternal.label': { en: 'Show internal agents and tools', ru: 'Показывать служебных агентов и инструменты' },
   'settings.f.showInternal.desc': {
     en: 'Pipeline stages, wrappers and system tools (marked internal in the system config) appear in the activity rail, the trace tree and Work Order cards. Useful for debugging.',

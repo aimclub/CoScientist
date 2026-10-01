@@ -1350,6 +1350,9 @@
 .cg-edge-idle { stroke: rgb(var(--c-outline-variant) / 0.35); stroke-dasharray: 3 3; }
 .cg-error .cg-box { stroke: rgb(var(--c-error) / 0.8); }
 .cg-error .cg-dot { fill: rgb(var(--c-error)); }
+/* The call graph is opt-in (Settings → Interface); without it the agent list takes the column. */
+html:not(.show-call-graph) #side-nav-panel { display: none; }
+html:not(.show-call-graph) #agent-nav { flex-grow: 1; }
 #side-nav-panel:fullscreen { margin: 0; border-radius: 0; min-height: 0; background: rgb(var(--c-surface-container-low)); }
 #side-nav-panel:fullscreen #call-graph-title { font-size: 13px; }
 #call-graph-scroll { cursor: grab; touch-action: none; user-select: none; }

@@ -26,6 +26,7 @@ const SIDE_NAV_WIDTH_KEY = 'coscientist.side_nav_width';
 const RIGHT_PANEL_KEY = 'coscientist.right_panel';
 const LANG_STORAGE_KEY = 'coscientist.lang';
 const SHOW_INTERNAL_KEY = 'coscientist.show_internal';
+const SHOW_CALL_GRAPH_KEY = 'coscientist.show_call_graph';
 const SHOW_HIDDEN_SESSIONS_KEY = 'coscientist.show_hidden_sessions';
 const SIDE_RAIL_KEY = 'coscientist.side_rail';
 const SIDE_RAIL_WIDTH_KEY = 'coscientist.side_rail_width';
@@ -42,6 +43,21 @@ try {
 } catch (_) { }
 let showInternal = !!showInternalStored;
 document.documentElement.classList.toggle('show-internal', showInternal);
+
+// Per-browser view preference: the live call graph in the side nav. Hidden
+// unless switched on in Settings → Interface; the html class drives the CSS.
+let showCallGraph = false;
+try { showCallGraph = localStorage.getItem(SHOW_CALL_GRAPH_KEY) === 'true'; } catch (_) { }
+document.documentElement.classList.toggle('show-call-graph', showCallGraph);
+
+function setShowCallGraph(value) {
+  showCallGraph = !!value;
+  try {
+    if (showCallGraph) localStorage.setItem(SHOW_CALL_GRAPH_KEY, 'true');
+    else localStorage.removeItem(SHOW_CALL_GRAPH_KEY);
+  } catch (_) { }
+  document.documentElement.classList.toggle('show-call-graph', showCallGraph);
+}
 
 // Mirror of the server settings (/api/settings). The settings modal edits a
 // draft copy and writes it back here after a successful save.

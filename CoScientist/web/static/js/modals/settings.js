@@ -253,6 +253,7 @@
             { id: 'accent', type: 'accent', scope: 'browser' },
             { id: 'font', type: 'font', scope: 'browser' },
             { id: 'showInternal', type: 'browserToggle', scope: 'browser', env: 'SHOW_INTERNAL__ENABLED' },
+            { id: 'showCallGraph', type: 'browserToggle', scope: 'browser' },
             { id: 'callGraphCollapse', path: 'general.callGraphCollapseSeconds', type: 'number', min: 1, max: 600, scope: 'instant', env: 'CALL_GRAPH__COLLAPSE_SECONDS' },
           ],
         }],
@@ -777,7 +778,8 @@
             </div>`;
         }
         case 'browserToggle':
-          return renderSwitch(`id="sf-${field.id}" data-browser-toggle="${field.id}"`, showInternal, false);
+          return renderSwitch(`id="sf-${field.id}" data-browser-toggle="${field.id}"`,
+            field.id === 'showCallGraph' ? showCallGraph : showInternal, false);
         case 'language': {
           // The one language control sets the interface and the report. The
           // server rejects a change while a run is active; lock the radio too.
@@ -1022,6 +1024,10 @@
         // Browser-only switches apply at once, like the language: no draft, no Save.
         if (e.target.dataset.browserToggle === 'showInternal') {
           setShowInternal(e.target.checked);
+          return;
+        }
+        if (e.target.dataset.browserToggle === 'showCallGraph') {
+          setShowCallGraph(e.target.checked);
           return;
         }
         // The colour picker previews on `input`; redraw once it is closed.
