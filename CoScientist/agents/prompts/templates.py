@@ -1972,6 +1972,13 @@ def orchestrator(ctx: PromptContext) -> str:
     # programmatically — no brittle hardcoded "3."/"5." around conditional ones.
     steps: list[str] = []
 
+    # Without the tracker the orchestrator has no update_task_status, and
+    # naming the tool would invite a phantom call.
+    closing_rule = (
+        "When a step's result comes back, close the step: `update_task_status(task_id, \"DONE\")`,\n"
+        "   or \"FAILED\" with a note why. Every step must be closed before your final answer.\n"
+        if ctx.has_tool("task_tracker") else ""
+    )
     if ctx.has_tool("create_plan_tool"):
         steps.append(
             "### TASK_MANAGEMENT\n"
@@ -1979,12 +1986,14 @@ def orchestrator(ctx: PromptContext) -> str:
             "   the roadmap of sub-tasks before executing them.\n"
             "Context of tasks:\n"
             "{active_tasks}\n"
+            + closing_rule
         )
     elif settings.orchestrator.use_planner or settings.web.start_mode in ("init", "planner", "orchestrator_planner", "orchestrator_plan"):
         steps.append(
             "### TASK_MANAGEMENT\n"
             "Context of tasks:\n"
             "{active_tasks}\n"
+            + closing_rule
         )
     else:
         steps.append(

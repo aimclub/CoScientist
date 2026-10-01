@@ -7,6 +7,10 @@ from google.adk.tools import BaseTool, FunctionTool
 from google.adk.tools.base_toolset import BaseToolset
 from google.adk.agents.readonly_context import ReadonlyContext
 
+#: Agents that run the plan rather than carry out its steps.
+MANAGEMENT_AGENTS = ("OrchestratorAgent", "PlannerAgent")
+
+
 class TaskTrackerToolset(BaseToolset):
     """Stateless task tools backed by the current ADK session state.
 
@@ -335,8 +339,11 @@ class TaskTrackerToolset(BaseToolset):
             A dictionary indicating success or failure.
         """
         current_agent = getattr(tool_context, "agent_name", None)
+        # A manager closing a step reports someone else's work: recording it
+        # as the step's executor would overwrite who actually did it.
         set_task_status(tool_context.state, task_id, status,
-                        notes=notes or "", agent=current_agent)
+                        notes=notes or "",
+                        agent=None if current_agent in MANAGEMENT_AGENTS else current_agent)
         found_task = next(
             (t for t in (tool_context.state.get("_master_active_tasks") or [])
              if isinstance(t, dict) and t.get("id") == task_id), None)
@@ -437,7 +444,7 @@ def clean_tasks_for_agent(
         return []
 
     cleaned_tasks = []
-    is_management = current_agent in ("OrchestratorAgent", "PlannerAgent", None)
+    is_management = current_agent in (*MANAGEMENT_AGENTS, None)
 
     for task in tasks:
         if not isinstance(task, dict):

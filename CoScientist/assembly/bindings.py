@@ -1267,6 +1267,11 @@ def _finish_after_plan_registered():
     return make_plan_registration_guard()
 
 
+def _guard_open_tasks():
+    from CoScientist.agents.callbacks import make_open_tasks_guard
+    return make_open_tasks_guard()
+
+
 def _pre_action_critique(ctx):
     from CoScientist.agents.callbacks import make_pre_action_critique
     return make_pre_action_critique(REGISTRY.prompt("pre_action_critic")(ctx))
@@ -1445,6 +1450,9 @@ _cb("reset_executor_science_receipt", "before_agent", func=reset_executor_scienc
 # re-registering to undo create_plan's own normalisation.
 _cb("finish_after_plan_registered", "after_model",
     factory=lambda ctx: _finish_after_plan_registered())
+# Keeps the orchestrator's turn open while tracker steps are unclosed — at
+# most two reminders, then the answer passes and the run pauses as before.
+_cb("guard_open_tasks", "after_model", factory=lambda ctx: _guard_open_tasks())
 # Trim prose/fences/trailing text around a JSON answer BEFORE strict
 # output_schema validation (providers don't always honour response_format).
 _cb("sanitize_json_output", "after_model", factory=lambda ctx: _sanitize_json_output())

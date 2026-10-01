@@ -1126,6 +1126,113 @@ def make_plan_registration_guard() -> Callable:
     return guard
 
 
+#: Where the open-step guard counts its nudges. Keyed by invocation, so a new
+#: request (or a resume) starts again from zero.
+_OPEN_TASKS_GUARD_STATE_KEY = "_open_tasks_guard"
+#: The one reconciliation pause an unclosed tracker step causes. A step closed
+#: as FAILED or CANCELLED pauses too (`root_roadmap_not_successful`), but that
+#: is a real outcome for the operator to weigh, not a forgotten update; and any
+#: other pause (an experiment awaiting review) has its own owner.
+_OPEN_ROADMAP_REASON = "root_roadmap_incomplete"
+
+
+def _is_final_text(llm_response: LlmResponse) -> bool:
+    if getattr(llm_response, "partial", False):
+        return False
+    if (getattr(llm_response, "custom_metadata", None) or {}).get("control_resolution"):
+        return False
+    content = getattr(llm_response, "content", None)
+    parts = getattr(content, "parts", None) if content is not None else None
+    if not parts or any(getattr(p, "function_call", None) for p in parts):
+        return False
+    return any((getattr(p, "text", "") or "").strip()
+               and not getattr(p, "thought", False) for p in parts)
+
+
+def make_open_tasks_guard(max_rounds: int = 2) -> Callable:
+    """Build an after_model_callback that keeps the orchestrator from ending
+    its turn while tracker steps are still open.
+
+    Nothing else closes a step that no work order and no experiment task
+    covers, so a forgotten `update_task_status` surfaced only after the report,
+    as a roadmap pause asking the operator to accept a limited result for work
+    that had in fact been done. The guard fires on exactly that condition — the
+    pause `reconcile_scientific_outcome` would raise — and only on a final text
+    answer.
+
+    A text reply would end the turn, so the answer is rewritten into a
+    `get_active_tasks` call: the model sees the open steps and keeps the turn to
+    close them or carry on. After `max_rounds` nudges in one invocation the
+    answer passes as is, and the run pauses for the operator as before.
+    """
+
+    def guard(
+        callback_context: CallbackContext, llm_response: LlmResponse
+    ) -> Optional[LlmResponse]:
+        if not _is_final_text(llm_response):
+            return None
+        state = callback_context.state
+        try:
+            from CoScientist.execution_control import current_run
+            from CoScientist.experiments.outcome.reconciliation import (
+                reconcile_scientific_outcome,
+            )
+
+            handle = current_run()
+            disposition = reconcile_scientific_outcome(
+                state, current_run_id=handle.run_id if handle else None,
+            )
+        except Exception as exc:  # noqa: BLE001 — the guard never breaks a run
+            logger.warning("open-task guard: outcome not reconciled: %s", exc)
+            return None
+        if disposition.reason != _OPEN_ROADMAP_REASON:
+            return None
+        # The same rows and the same notion of "unfinished" the pause uses —
+        # a FAILED step next to an open one is not listed as open.
+        from CoScientist.experiments.outcome.reconciliation import (
+            _root_task_state,
+            _root_tasks,
+        )
+
+        unfinished = set(_root_task_state(state)[0])
+        still_open = [t for i, t in enumerate(_root_tasks(state))
+                      if str(t.get("id") or t.get("task_id") or f"task-{i + 1}") in unfinished]
+        if not still_open:
+            return None
+
+        invocation = str(getattr(callback_context, "invocation_id", "") or "")
+        record = state.get(_OPEN_TASKS_GUARD_STATE_KEY) or {}
+        rounds = int(record.get("rounds") or 0) if record.get("invocation") == invocation else 0
+        open_ids = [str(t.get("id")) for t in still_open]
+        if rounds >= max_rounds:
+            logger.warning(
+                "[%s] final answer with open steps %s after %d reminder(s) — "
+                "passing it on", _agent_name(callback_context), open_ids, rounds)
+            return None
+        state[_OPEN_TASKS_GUARD_STATE_KEY] = {"invocation": invocation, "rounds": rounds + 1}
+
+        listed = "\n".join(
+            f"- {t.get('id')} [{t.get('status') or 'TODO'}] {t.get('title') or ''}".rstrip()
+            for t in still_open
+        )
+        logger.warning(
+            "[%s] final answer with open steps %s — reminder %d/%d",
+            _agent_name(callback_context), open_ids, rounds + 1, max_rounds)
+        note = (
+            "Before the final answer: these plan steps are not closed in the "
+            f"task tracker:\n{listed}\n"
+            "For each one, if its work is done, call update_task_status with "
+            "DONE; if it cannot be done, FAILED with a note why; otherwise "
+            "continue the work. Then give the final answer."
+        )
+        return LlmResponse(content=types.Content(role="model", parts=[
+            types.Part(text=note),
+            types.Part.from_function_call(name="get_active_tasks", args={}),
+        ]))
+
+    return guard
+
+
 def _note_step_participants(graph: Any, tasks: List[Dict[str, Any]],
                             matched: Dict[int, str],
                             by_ref: Dict[str, str]) -> None:

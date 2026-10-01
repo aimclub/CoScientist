@@ -59,7 +59,7 @@ agents:
       after_tool: [mark_pipeline_scope_lane, register_tool_result_links, mirror_plan_after_create]
       # expand_link_refs first: it is the egress point for the agent's own text,
       # and a later callback that returns a response short-circuits the chain.
-      after_model: [expand_link_refs, enforce_pipeline_scope_hops, coalesce_experiment_module_calls, suppress_experiment_module_after_completed, guard_unknown_tools]
+      after_model: [expand_link_refs, enforce_pipeline_scope_hops, coalesce_experiment_module_calls, suppress_experiment_module_after_completed, guard_unknown_tools, guard_open_tasks]
 
   # ── Shared agents: the module's methods laid over main's wiring ────────────
   HypothesesAgent:

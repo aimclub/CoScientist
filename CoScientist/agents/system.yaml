@@ -111,7 +111,9 @@ agents:
     # returned; a wrong delegation costs an entire sub-agent run.
     reasoning: low
     prompt: orchestrator
-    tools: [retrieval, graph, research_graph_orchestrator]
+    # task_tracker: the orchestrator is the one that sees a step's result
+    # come back, so it is the one that can close the step in the tracker.
+    tools: [retrieval, task_tracker, graph, research_graph_orchestrator]
     subordinates:
       - PlannerAgent
       - HypothesesAgent
@@ -124,7 +126,9 @@ agents:
       before_agent: [before_get_task, mirror_plan_before_agent, inject_graph_root, inject_research_context, inject_dataset_context, user_links]
       # The missing-tool patch handles older ADK; ADK 2.9 handles unknown
       # calls natively. The after_model guard would end the turn on prose.
-      after_model: [expand_link_refs]
+      # guard_open_tasks: a final answer with unclosed tracker steps is turned
+      # back into a get_active_tasks call (at most twice per invocation).
+      after_model: [expand_link_refs, guard_open_tasks]
       before_tool: [resolve_link_refs]
       after_tool: [register_tool_result_links, mirror_plan_after_create]
       # after_model: [pre_action_critique]
