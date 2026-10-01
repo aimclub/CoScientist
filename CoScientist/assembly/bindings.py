@@ -1133,6 +1133,11 @@ def _inject_graph_root():
     return inject_graph_root
 
 
+def _inject_current_plan():
+    from CoScientist.agents.callbacks import inject_current_plan
+    return inject_current_plan
+
+
 def _inject_dataset_context():
     from CoScientist.agents.callbacks import inject_dataset_context
     return inject_dataset_context
@@ -1375,6 +1380,8 @@ _cb("inject_research_context", "before_agent", factory=_inject_research_context)
 # Tell the agent about the dataset archive the user attached in the web UI; it
 # decides itself which calls need the link.
 _cb("inject_dataset_context", "before_agent", factory=lambda ctx: _inject_dataset_context())
+# The planner's view of the roadmap it is re-planning ({current_plan?}).
+_cb("inject_current_plan", "before_agent", factory=lambda ctx: _inject_current_plan())
 # Report language the user picked for this session: inject the whole block
 # (headings, substitution rule, glossary), not a bare language name.
 _cb("inject_report_language", "before_agent", factory=lambda ctx: _inject_report_language())

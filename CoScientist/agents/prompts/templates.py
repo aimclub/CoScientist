@@ -1847,6 +1847,7 @@ Plan tasks are delegation units, not a narration of your reasoning.
 
 {links_context?}
 {dataset_context?}
+{current_plan?}
 <<DISCOVERY>>
 
 ### AVAILABLE AGENTS

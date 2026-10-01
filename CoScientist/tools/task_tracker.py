@@ -2,6 +2,7 @@
 from google.adk.tools.tool_context import ToolContext
 from typing import Any, Dict, List, Optional
 from datetime import datetime
+import re
 
 from google.adk.tools import BaseTool, FunctionTool
 from google.adk.tools.base_toolset import BaseToolset
@@ -62,6 +63,10 @@ class TaskTrackerToolset(BaseToolset):
 
         Ids are renumbered TASK-1..TASK-N in final execution order, and the
         returned "plan" lists that order — check it before finishing your turn.
+
+        Re-planning keeps the work already done: steps of the current plan that
+        are DONE stay first, with their ids, and the new tasks are numbered
+        after them. Do not register a DONE step again.
         """
         if not isinstance(tasks, list):
             return {"result": "error", "message": "'tasks' must be a list of task definitions."}
@@ -151,7 +156,14 @@ class TaskTrackerToolset(BaseToolset):
 
         ordered_ids = self._topological_order(deps, position, warnings)
 
-        final_ids = {sid: f"TASK-{i + 1}" for i, sid in enumerate(ordered_ids)}
+        # A re-plan starts from the current state: finished steps are a record
+        # of work done, not a draft to redo, so they survive with their ids.
+        kept = [
+            t for t in (tool_context.state.get("_master_active_tasks") or [])
+            if isinstance(t, dict) and str(t.get("status") or "").upper() == "DONE"
+        ]
+        offset = max((self._task_number(t.get("id")) for t in kept), default=0)
+        final_ids = {sid: f"TASK-{offset + i + 1}" for i, sid in enumerate(ordered_ids)}
         new_tasks = []
         for sid in ordered_ids:
             task = by_source_id[sid]
@@ -171,13 +183,17 @@ class TaskTrackerToolset(BaseToolset):
                 "updated_at": datetime.now().isoformat(),
             })
 
-        tool_context.state["_master_active_tasks"] = new_tasks
+        tool_context.state["_master_active_tasks"] = kept + new_tasks
         current_agent = getattr(tool_context, "agent_name", None)
-        tool_context.state["active_tasks"] = clean_tasks_for_agent(new_tasks, current_agent)
+        tool_context.state["active_tasks"] = clean_tasks_for_agent(kept + new_tasks, current_agent)
 
+        message = f"Plan created with {len(new_tasks)} tasks, ordered for execution."
+        if kept:
+            message += (f" {len(kept)} finished step(s) kept ahead of them: "
+                        + ", ".join(str(t.get("id")) for t in kept) + ".")
         result = {
             "result": "success",
-            "message": f"Plan created with {len(new_tasks)} tasks, ordered for execution.",
+            "message": message,
             "plan": [
                 {
                     "id": t["id"],
@@ -193,6 +209,11 @@ class TaskTrackerToolset(BaseToolset):
         if warnings:
             result["warnings"] = warnings
         return result
+
+    @staticmethod
+    def _task_number(task_id: Any) -> int:
+        match = re.fullmatch(r"TASK-(\d+)", str(task_id or ""))
+        return int(match.group(1)) if match else 0
 
     @staticmethod
     def _source_ids(tasks: List[Dict[str, Any]]) -> List[str]:

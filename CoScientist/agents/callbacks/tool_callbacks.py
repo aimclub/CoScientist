@@ -582,6 +582,42 @@ def before_get_task(callback_context: CallbackContext):
     return None
 
 
+#: Rendered into the planner prompt through `{current_plan?}`.
+CURRENT_PLAN_STATE_KEY = "current_plan"
+
+
+def inject_current_plan(callback_context: CallbackContext):
+    """before_agent on the planner: show it the roadmap it is re-planning.
+
+    Empty for a first plan. On a re-plan (the orchestrator calling the planner
+    mid-run, or on a follow-up request) it lists every step with its status,
+    so the new plan starts from the current state instead of from scratch —
+    `create_plan` keeps the DONE steps, and the planner must not repeat them.
+    """
+    state = callback_context.state
+    tasks = [t for t in (state.get("_master_active_tasks") or []) if isinstance(t, dict)]
+    if not tasks:
+        state[CURRENT_PLAN_STATE_KEY] = ""
+        return None
+    rows = []
+    for t in tasks:
+        row = f"- {t.get('id')} [{t.get('status') or 'TODO'}] {t.get('title') or ''} → {t.get('assignee') or '?'}"
+        notes = " ".join(str(t.get("notes") or "").split())
+        if notes:
+            row += f"\n  notes: {notes[:300]}"
+        rows.append(row)
+    state[CURRENT_PLAN_STATE_KEY] = (
+        "### CURRENT PLAN (re-planning)\n"
+        "This session already has a roadmap; you are asked to re-plan from its "
+        "current state:\n" + "\n".join(rows) + "\n"
+        "DONE steps are kept automatically, ahead of your new tasks — do not "
+        "register them again. Register only the work still needed for the "
+        "request you were given. Steps that are not DONE and that you do not "
+        "register again are dropped from the plan."
+    )
+    return None
+
+
 def inject_graph_root(callback_context: CallbackContext):
     """Give the agent the session graph root: every agent, its capabilities and
     this session's trace, rendered via the {graph_root?} placeholder.

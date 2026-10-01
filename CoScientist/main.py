@@ -233,6 +233,7 @@ class CoScientistManager:
             from CoScientist.tools.session_scope_plugin import SessionScopePlugin
             from CoScientist.agents.checkpoint_plugin import CheckpointPlugin
             from CoScientist.agents.run_control_plugin import RunControlPlugin
+            from CoScientist.agents.planner_stage_plugin import PlannerStagePlugin
 
             # Build the agent system (reads start_mode + tunable params from settings).
             system = build_for_mode()
@@ -242,6 +243,9 @@ class CoScientistManager:
                 # must run before observers and agent-local callbacks.
                 CheckpointPlugin(),
                 RunControlPlugin(),
+                # The planner stage runs once per session: a follow-up or a
+                # resumed run starts at the orchestrator, which re-plans on demand.
+                PlannerStagePlugin(),
                 # First: deterministically refuse training on a fabricated
                 # dataset (before_tool gate) — fabrication buys nothing.
                 ArtifactGatePlugin(),

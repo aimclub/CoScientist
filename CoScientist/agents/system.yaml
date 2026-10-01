@@ -175,11 +175,17 @@ agents:
     # for `orchestrator_planner`, where the orchestrator owns create_plan_tool.
     enabled: true
     description: >-
-      produces a step-by-step roadmap for a complex, multi-step task;
-      call it first, then execute the roadmap by delegating each step.
+      produces a step-by-step roadmap for a complex, multi-step task, or
+      re-plans an existing roadmap from the current state of the work.
+    # The planner stage runs once per session (PlannerStagePlugin); after that
+    # the orchestrator decides whether a re-plan is worth a call.
     routing: >-
-      for a complex multi-step task, call this FIRST to produce a roadmap,
-      then follow it step by step.
+      for a complex multi-step task with no roadmap yet, call this FIRST to
+      produce one, then follow it step by step. When a roadmap already exists
+      (the task context is not empty) and no longer fits — a new request, a
+      failed step, a changed direction — call it to re-plan from the current
+      state: finished steps are kept, the rest is planned anew. If you already
+      know what to do next, do not call it — delegate to the agents yourself.
     # The roadmap is the shape of the whole run — the one place worth thinking
     # hard, and it is produced once.
     reasoning: medium
@@ -188,7 +194,7 @@ agents:
     output_key: planner_roadmap
     report_output: true
     callbacks:
-      before_agent: [inject_graph_root, inject_research_context, inject_dataset_context, user_links]
+      before_agent: [inject_graph_root, inject_research_context, inject_dataset_context, inject_current_plan, user_links]
       before_model: [redact_link_urls]
       after_model: [expand_link_refs, guard_unknown_tools, finish_after_plan_registered]
       before_tool: [resolve_link_refs]
