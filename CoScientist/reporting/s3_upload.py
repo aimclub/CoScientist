@@ -120,6 +120,22 @@ def upload_and_ref(
         return None
 
 
+def presign_ref(bucket: str, key: str, ttl: int) -> Optional[str]:
+    """A fresh GET link for a stored ``(bucket, key)``; None on any failure.
+
+    For references that must keep working longer than one link does — e.g. a
+    session's dataset archive, re-signed at the start of every run.
+    """
+    try:
+        service = _get_service()
+        if service is None:
+            return None
+        return service.generate_presigned_url(key, expiration=int(ttl), bucket_name=bucket)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("s3_upload: could not presign %s/%s (%s)", bucket, key, exc)
+        return None
+
+
 def _reset_for_tests() -> None:
     """Drop the cached service so tests can re-configure S3."""
     global _service, _service_broken
@@ -127,4 +143,4 @@ def _reset_for_tests() -> None:
     _service_broken = False
 
 
-__all__ = ["upload_and_presign", "upload_and_ref"]
+__all__ = ["presign_ref", "upload_and_presign", "upload_and_ref"]

@@ -16,7 +16,6 @@ initSideRail();
 refreshPlanGate();
 bootstrap();
 loadSettings();
-connectDatasetLogsSSE();
 
 // Keep-alive ping
 setInterval(() => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' })); }, 30000);

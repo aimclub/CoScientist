@@ -18,6 +18,7 @@ _TITLES: dict[str, tuple[str, str]] = {
     "OrchestratorAgent": ("Координатор исследования", "Research coordinator"),
     "RootOrchestrator": ("Координатор синтеза", "Synthesis coordinator"),
     "PlannerAgent": ("Планировщик исследования", "Research planner"),
+    "DatasetIntakeAgent": ("Анализ датасета", "Dataset analysis"),
     "ContextInitAgent": ("Подготовка исследования", "Research framing"),
     "TZSpecAgent": ("Техническое задание", "Technical specification"),
     "TZQueryGenAgent": ("Поисковые запросы", "Search query preparation"),
@@ -218,7 +219,7 @@ _BLOCK_TITLES: dict[str, str] = {
 }
 
 # Agents that frame the task: they open the run, in "Подготовка".
-_PREP_AGENTS = frozenset({"ContextInitAgent", "InitAgent", "TZSpecAgent"})
+_PREP_AGENTS = frozenset({"DatasetIntakeAgent", "ContextInitAgent", "InitAgent", "TZSpecAgent"})
 
 
 def _skeleton(config: SystemConfig, profile: str) -> dict[str, Any]:
@@ -425,6 +426,7 @@ _CALL_GRAPH_TITLES: dict[str, str] = {
     "RootOrchestrator": "Агент оркестратор",
     "PlannerAgent": "Агент планировщик",
     "PlanCriticAgent": "Агент критик плана",
+    "DatasetIntakeAgent": "Анализ датасета",
     "ContextInitAgent": "Агент постановщик",
     "InitAgent": "Агент постановщик",
     "TZSpecAgent": "Агент ТЗ",
@@ -477,6 +479,7 @@ _PRESENTATION: dict[str, tuple[str, str]] = {
     "OrchestratorAgent": ("coord", "Распределяет задачи между агентами, учитывает их результаты и управляет ходом исследования. Может повторно обращаться к агентам, если нужны дополнительные данные или вычисления."),
     "RootOrchestrator": ("coord", "Управляет исследованием синтеза: от технического задания и анализа литературы до выбора молекул, оптимизации условий и отчёта."),
     "PlannerAgent": ("plan", "Составляет общий план исследования: определяет задачи, ожидаемые результаты и порядок работы."),
+    "DatasetIntakeAgent": ("context", "Если к сессии прикреплён датасет для песочницы, до планирования поручает агенту Coder просмотреть его и кратко описать содержимое; план строится с учётом этого отчёта."),
     "ContextInitAgent": ("context", "Уточняет цель, ограничения и исходные данные. Формирует контекст, на который опираются остальные агенты."),
     "TZSpecAgent": ("document", "Формирует и согласует техническое задание: требования к результату, ограничения и критерии проверки."),
     "TZQueryGenAgent": ("search", "Преобразует техническое задание в конкретные вопросы для поиска научной литературы."),

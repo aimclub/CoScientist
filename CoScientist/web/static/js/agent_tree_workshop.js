@@ -3,7 +3,7 @@
   'use strict';
   const shortTitles = {
     OrchestratorAgent: 'Координатор', RootOrchestrator: 'Координатор синтеза',
-    ContextInitAgent: 'Подготовка', PlannerAgent: 'План исследования', ResearchAgent: 'Литература',
+    DatasetIntakeAgent: 'Анализ датасета', ContextInitAgent: 'Подготовка', PlannerAgent: 'План исследования', ResearchAgent: 'Литература',
     HypothesesAgent: 'Гипотезы', ExperimentModuleAgent: 'Эксперимент', ExperimentExecutorAgent: 'Исполнитель',
     ExperimentPlannerAgent: 'План эксперимента', ExperimentResultReviewAgent: 'Проверка',
     ExperimentAgent: 'ReAct · MCP', DatasetCollectorAgent: 'Сбор данных', MedicalAgent: 'Медицина',

@@ -1846,6 +1846,7 @@ to produce the SHORTEST executable roadmap that covers every user deliverable.
 Plan tasks are delegation units, not a narration of your reasoning.
 
 {links_context?}
+{dataset_context?}
 <<DISCOVERY>>
 
 ### AVAILABLE AGENTS
@@ -2406,6 +2407,7 @@ Available tools from agents:
 <<LANGUAGE>>
 <<KNOWLEDGE_GRAPH>><<RESEARCH_GRAPH>>
 {links_context?}
+{dataset_context?}
 ### Instructions:
 
 <<INSTRUCTIONS>>
@@ -3174,6 +3176,7 @@ def context_init(ctx: PromptContext) -> str:
 дешёвый эксперимент). Поэтому рамка важна.
 
 {links_context?}
+{dataset_context?}
 ОБЯЗАТЕЛЬНЫЕ БЛОКИ (ровно с такими названиями и полями, в этом порядке):
 <<BLOCKS_DESC>>
 

@@ -654,6 +654,7 @@ def _borrow_io(nodes: Dict[str, Dict[str, Any]], every: List[Dict[str, Any]],
 #: deliberately absent: it conducts every stretch and belongs to none, so a
 #: phase of its own would cut the picture into slivers.
 _PHASE_OF_AGENT = {
+    "DatasetIntakeAgent": "framing",
     "ContextInitAgent": "framing",
     "PlannerAgent": "framing",
     "PlanningPipelineAgent": "framing",

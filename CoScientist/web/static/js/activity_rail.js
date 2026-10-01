@@ -171,6 +171,7 @@
       MedicalAgent: 'ecg_heart',
       ExperimentAgent: 'science',
       FedotAgent: 'network_intelligence',
+      DatasetIntakeAgent: 'folder_zip',
       ContextInitAgent: 'assignment',
       ContextInitSessionAgent: 'assignment',
       ResultAggregatorAgent: 'summarize',

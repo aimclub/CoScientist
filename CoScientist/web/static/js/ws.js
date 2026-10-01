@@ -205,7 +205,7 @@
             applyDatasetUrl(data.dataset_url);
             addTelemetry('DATASET :: ' + (data.dataset_url ? 'attached' : 'detached'));
             addSystemMsg(data.dataset_url
-              ? t('ws.datasetAttached', { url: data.dataset_url })
+              ? t('ws.datasetAttached', { url: datasetDisplayName(data.dataset_url) })
               : t('ws.datasetDetached'));
             break;
           case 'dataset_url_rejected':

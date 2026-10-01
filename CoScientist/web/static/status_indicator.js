@@ -140,6 +140,7 @@
     PlannerAgent: { ru: 'Агент-планировщик', en: 'Planner agent' },
     PlanningPipelineAgent: { ru: 'Агент-планировщик', en: 'Planner agent' },
     PlanCriticAgent: { ru: 'Агент-критик', en: 'Plan critic agent' },
+    DatasetIntakeAgent: { ru: 'Анализ датасета', en: 'Dataset analysis' },
     ContextInitAgent: { ru: 'Агент рамки исследования', en: 'Research frame agent' },
     ContextInitSessionAgent: { ru: 'Агент рамки исследования', en: 'Research frame agent' },
     HypothesesAgent: { ru: 'Агент генерации гипотез', en: 'Hypotheses agent' },

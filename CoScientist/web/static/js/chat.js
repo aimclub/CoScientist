@@ -513,9 +513,21 @@
       toggleAttachMenu(false);
     });
 
+    // The archive's file name, not its link: an uploaded dataset's link is a
+    // long signed S3 URL that says nothing to the reader.
+    function datasetDisplayName(url) {
+      try {
+        const name = decodeURIComponent(new URL(url).pathname.split('/').pop() || '');
+        return name || url;
+      } catch (_) {
+        return url;
+      }
+    }
+
     function applyDatasetUrl(url) {
       datasetUrl = String(url || '');
       renderAttachments();
+      syncDatasetLogsSSE();
     }
 
     function renderAttachments() {
@@ -530,7 +542,8 @@
     <span class="flex items-center gap-1.5 max-w-full bg-surface-container-high border border-primary/20 rounded-md pl-2 pr-1 py-1">
       <span class="material-symbols-outlined text-primary text-sm">folder_zip</span>
       <a href="${escHtml(datasetUrl)}" target="_blank" title="${escHtml(datasetUrl)}"
-        class="font-mono text-[11px] text-on-surface-variant truncate max-w-[28rem] hover:text-primary">${escHtml(datasetUrl)}</a>
+        class="font-mono text-[11px] text-on-surface-variant truncate max-w-[28rem] hover:text-primary">${escHtml(datasetDisplayName(datasetUrl))}</a>
+      <span class="px-1 rounded bg-primary/15 text-primary text-[9px] font-bold uppercase tracking-wider">${escHtml(t('dataset.sandboxBadge'))}</span>
       <button type="button" onclick="clearDatasetLink()" title="${t('chat.detachDataset')}"
         class="p-0.5 text-outline-variant hover:text-error transition-colors flex items-center">
         <span class="material-symbols-outlined text-sm">close</span>

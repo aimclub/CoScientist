@@ -17,7 +17,7 @@ from uuid import uuid4
 from weakref import WeakKeyDictionary
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import File, FastAPI, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import (
     FileResponse,
     HTMLResponse,
@@ -146,6 +146,10 @@ TOOL_ACTIVITY_TRIM_SLACK = 200
 # was actually truncated get one.
 MAX_TOOL_FULL_VALUES = 300
 DATASET_URL_MAX_LENGTH = 2048
+# A .zip uploaded for the sandbox goes to S3; its link is re-signed for every
+# run, valid for the SigV4 maximum so a long run never outlives it.
+DATASET_UPLOAD_MAX_BYTES = int(os.getenv("DATASET_UPLOAD_MAX_MB", "2048")) * 1024 * 1024
+DATASET_LINK_TTL = 7 * 24 * 3600
 # Graph stores the Settings modal can wipe. The derived ``knowledge`` view is
 # absent on purpose: it is a projection of ``execution`` plus ``memory``.
 GRAPH_DELETE_TARGETS = ("execution", "research")
@@ -756,6 +760,9 @@ class WebRuntime(ExecutionControlMixin):
         # here as well as in ADK state so a reconnecting tab and a session whose
         # manager has not been built yet both see the same link.
         self.dataset_urls: dict[SessionKey, str] = {}
+        # Datasets uploaded through the UI: the S3 object behind the link, so the
+        # link can be re-signed instead of expiring under a long session.
+        self.dataset_refs: dict[SessionKey, tuple[str, str]] = {}
         # Report language chosen for a session from the settings language
         # toggle. Holds ONLY explicit choices — an absent key means the browser
         # has not spoken yet, which is what lets the UI default follow its
@@ -1165,6 +1172,13 @@ class WebRuntime(ExecutionControlMixin):
                 self.dataset_urls[key] = url
             else:
                 self.dataset_urls.pop(key, None)
+        elif key in self.dataset_refs:
+            # An uploaded archive: hand this run a freshly signed link.
+            from CoScientist.reporting.s3_upload import presign_ref
+
+            fresh = await asyncio.to_thread(presign_ref, *self.dataset_refs[key], DATASET_LINK_TTL)
+            if fresh:
+                self.dataset_urls[key] = fresh
         current = self.dataset_urls.get(key, "")
 
         user_id, session_id = key
@@ -3562,6 +3576,65 @@ def create_app() -> FastAPI:
         execution = get_knowledge_graph(user_id=user_id, session_id=session_id).full()
         return JSONResponse({"events": agent_run_events(execution)})
 
+    # --- Sandbox dataset upload ---
+    @app.post("/api/users/{user_id}/sessions/{session_id}/dataset")
+    async def upload_session_dataset(user_id: str, session_id: str,
+                                     file: UploadFile = File(...)):
+        """Attach a .zip from the user's computer as the session's SANDBOX dataset.
+
+        The archive goes to S3 and its signed link becomes the session's
+        ``dataset_url`` — exactly what pasting a link does — so the CoderAgent
+        hands it to the OpenHands sandbox, which unpacks it into /workspace.
+        Before the next plan, DatasetIntakeAgent has the coder describe it.
+        """
+        key = (user_id, session_id)
+        try:
+            runtime.registry.require_session(user_id, session_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        filename = Path(file.filename or "dataset.zip").name
+        if not filename.lower().endswith(".zip"):
+            raise HTTPException(status_code=400, detail="Only a .zip archive can be attached.")
+        safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", filename)[-120:] or "dataset.zip"
+
+        import tempfile
+        import zipfile
+
+        from CoScientist.reporting.s3_upload import presign_ref, upload_and_ref
+
+        with tempfile.TemporaryDirectory(prefix="dataset_") as tmp:
+            path = Path(tmp) / safe_name
+            size = 0
+            with path.open("wb") as out:
+                while chunk := await file.read(1 << 20):
+                    size += len(chunk)
+                    if size > DATASET_UPLOAD_MAX_BYTES:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"Archive exceeds {DATASET_UPLOAD_MAX_BYTES >> 20} MB.")
+                    out.write(chunk)
+            if not zipfile.is_zipfile(path):
+                raise HTTPException(status_code=400, detail="The file is not a valid .zip archive.")
+            prefix = "datasets/{}/{}/{}".format(
+                re.sub(r"[^A-Za-z0-9_-]", "", user_id)[:64],
+                re.sub(r"[^A-Za-z0-9_-]", "", session_id)[:64], uuid4().hex[:8])
+            ref = await asyncio.to_thread(upload_and_ref, path, prefix)
+        if ref is None:
+            raise HTTPException(status_code=503,
+                                detail="S3 storage is not configured or the upload failed.")
+        url = await asyncio.to_thread(presign_ref, *ref, DATASET_LINK_TTL)
+        if not url:
+            raise HTTPException(status_code=503, detail="Could not create a link to the archive.")
+        try:
+            url = _validated_dataset_url(url)
+        except ValueError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        runtime.dataset_refs[key] = ref
+        await runtime.apply_dataset_url(key, url)
+        await runtime.send(key, {"type": "dataset_url", "dataset_url": url})
+        return JSONResponse({"dataset_url": url, "filename": filename, "size": size,
+                             "s3_key": ref[1]})
+
     # --- Usage and cost ---
     @app.get("/api/users/{user_id}/sessions/{session_id}/metrics")
     async def get_metrics(user_id: str, session_id: str, report: bool = False):
@@ -3717,6 +3790,8 @@ def create_app() -> FastAPI:
                             "message": str(exc),
                         }, key)
                         continue
+                    # A pasted link or a detach replaces any uploaded archive.
+                    runtime.dataset_refs.pop(key, None)
                     await runtime.apply_dataset_url(key, url)
                     # Broadcast: every tab on this session shows the same
                     # attachment, whichever one set it.

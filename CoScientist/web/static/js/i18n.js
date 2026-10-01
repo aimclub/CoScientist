@@ -1336,8 +1336,8 @@ const i18n = {
 
   // ── WebSocket system messages ──
   'ws.datasetAttached': {
-    en: 'Dataset attached: {url}\nThe coder agent will pass it to the sandbox when a step needs that data.',
-    ru: 'Датасет прикреплён: {url}\nАгент Coder передаст его в песочницу, когда шагу понадобятся эти данные.'
+    en: 'Sandbox dataset attached: {url}\nBefore planning, the coder agent will look through it; it passes the archive to the sandbox when a step needs the data.',
+    ru: 'Датасет для песочницы прикреплён: {url}\nПеред планированием агент Coder просмотрит его; в песочницу он передаст архив, когда шагу понадобятся эти данные.'
   },
   'ws.datasetDetached': { en: 'Dataset link detached.', ru: 'Ссылка на датасет откреплена.' },
   'ws.datasetRejected': { en: 'Dataset link rejected: {message}', ru: 'Ссылка на датасет отклонена: {message}' },
@@ -1406,12 +1406,21 @@ const i18n = {
   'mcpRebuild.rebuild': { en: 'Rebuild', ru: 'Пересобрать' },
 
   // ── Dataset modal & upload widget ──
-  'dataset.menuItem': { en: 'Dataset link (.zip)', ru: 'Ссылка на датасет (.zip)' },
-  'dataset.title': { en: 'Dataset link (for openhands)', ru: 'Ссылка на датасет (для openhands)' },
+  'dataset.menuItem': { en: 'Dataset .zip', ru: 'Датасет .zip' },
+  'dataset.sandboxBadge': { en: 'Sandbox', ru: 'Песочница' },
+  'dataset.title': { en: 'Dataset for the sandbox', ru: 'Датасет для песочницы' },
   'dataset.desc': {
-    en: 'A direct http(s) URL of a .zip archive. The coder agent sees it and sends it to the sandbox, where it is unpacked, when a step needs that data.',
-    ru: 'Прямая http(s) ссылка на .zip архив. Агент Coder видит её и отправляет в песочницу, где архив распаковывается, когда шагу нужны эти данные.'
+    en: "A .zip archive for the coder agent's OpenHands sandbox: it is unpacked into /workspace when a step needs the data. Before planning, the coder agent looks through it and the plan takes its report into account.",
+    ru: 'Архив .zip для песочницы OpenHands агента Coder: он распаковывается в /workspace, когда шагу нужны эти данные. Перед планированием агент Coder просматривает его, и план учитывает его отчёт.'
   },
+  'dataset.uploadBtn': { en: 'Upload .zip to the sandbox', ru: 'Загрузить .zip в песочницу' },
+  'dataset.uploadNote': {
+    en: 'The archive is stored in S3 and passed to the coder agent; the other agents only see its report.',
+    ru: 'Архив сохраняется в S3 и передаётся агенту Coder; остальные агенты видят только его отчёт.'
+  },
+  'dataset.orLink': { en: 'or a direct link', ru: 'или прямая ссылка' },
+  'dataset.errNotZipFile': { en: 'Choose a .zip archive.', ru: 'Выберите .zip архив.' },
+  'dataset.uploadFailed': { en: 'Upload failed.', ru: 'Загрузка не удалась.' },
   'dataset.remove': { en: 'Remove', ru: 'Удалить' },
   'dataset.attach': { en: 'Attach', ru: 'Прикрепить' },
   'dataset.errEmpty': { en: 'Enter a link to a .zip archive.', ru: 'Введите ссылку на .zip архив.' },

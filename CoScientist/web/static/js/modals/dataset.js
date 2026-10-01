@@ -3,6 +3,7 @@
 // =========================================================================
     function openDatasetModal() {
       toggleAttachMenu(false);
+      setDatasetUploadProgress(null);
       const input = document.getElementById('dataset-url-input');
       input.value = datasetUrl;
       showDatasetError('');
@@ -62,6 +63,62 @@
 
     function clearDatasetLink() {
       if (sendDatasetUrl('')) closeDatasetModal();
+    }
+
+    // Upload a .zip from the computer. The server stores it in S3 and attaches
+    // its link to the session, then broadcasts `dataset_url` to every tab — the
+    // same message a pasted link produces, so the chip updates the usual way.
+    function setDatasetUploadProgress(name, pct) {
+      const box = document.getElementById('dataset-upload-progress');
+      if (!box) return;
+      box.classList.toggle('hidden', name == null);
+      if (name == null) return;
+      document.getElementById('dataset-upload-progress-name').textContent = name;
+      document.getElementById('dataset-upload-progress-pct').textContent = Math.round(pct) + '%';
+      document.getElementById('dataset-upload-progress-bar').style.width = pct + '%';
+    }
+
+    function uploadDatasetFile(file) {
+      const input = document.getElementById('dataset-file-input');
+      if (input) input.value = '';
+      if (!file) return;
+      showDatasetError('');
+      if (!/\.zip$/i.test(file.name)) {
+        showDatasetError(t('dataset.errNotZipFile'));
+        return;
+      }
+      if (!activeUser || !activeSession) {
+        showDatasetError(t('dataset.notConnected'));
+        return;
+      }
+      const btn = document.getElementById('dataset-upload-btn');
+      if (btn) btn.disabled = true;
+      setDatasetUploadProgress(file.name, 0);
+      const form = new FormData();
+      form.append('file', file);
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `/api/users/${encodeURIComponent(activeUser.id)}/sessions/${encodeURIComponent(activeSession.id)}/dataset`);
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) setDatasetUploadProgress(file.name, (e.loaded / e.total) * 100);
+      };
+      xhr.onload = () => {
+        if (btn) btn.disabled = false;
+        if (xhr.status >= 200 && xhr.status < 300) {
+          setDatasetUploadProgress(null);
+          closeDatasetModal();
+          return;
+        }
+        let detail = '';
+        try { detail = JSON.parse(xhr.responseText).detail || ''; } catch (_) { }
+        setDatasetUploadProgress(null);
+        showDatasetError(t('dataset.uploadFailed') + (detail ? ` ${detail}` : ''));
+      };
+      xhr.onerror = () => {
+        if (btn) btn.disabled = false;
+        setDatasetUploadProgress(null);
+        showDatasetError(t('dataset.uploadFailed'));
+      };
+      xhr.send(form);
     }
 
     // =========================================================================
@@ -141,6 +198,38 @@
       if (drawer) drawer.classList.toggle('hidden');
     }
 
+    // The sandbox's download stream is shared by everyone on that machine, so
+    // a page listens only while its session has a dataset attached and shows
+    // only the download of that archive.
+    function isOwnDatasetDownload(d) {
+      if (!datasetUrl) return false;
+      const url = d.dataset_url || d.url;
+      if (url) return url === datasetUrl;
+      if (d.filename) return d.filename === datasetDisplayName(datasetUrl);
+      return true;
+    }
+
+    function syncDatasetLogsSSE() {
+      if (!datasetUrl) return disconnectDatasetLogsSSE();
+      // Another session's archive may still be on screen after a switch.
+      if (activeUploadData && !isOwnDatasetDownload(activeUploadData)) {
+        activeUploadData = null;
+        const widget = document.getElementById('dataset-upload-widget');
+        if (widget) widget.classList.add('hidden');
+      }
+      connectDatasetLogsSSE();
+    }
+
+    function disconnectDatasetLogsSSE() {
+      if (datasetLogEventSource) {
+        datasetLogEventSource.close();
+        datasetLogEventSource = null;
+      }
+      activeUploadData = null;
+      const widget = document.getElementById('dataset-upload-widget');
+      if (widget) widget.classList.add('hidden');
+    }
+
     function connectDatasetLogsSSE() {
       if (datasetLogEventSource) return;
       try {
@@ -149,7 +238,7 @@
         datasetLogEventSource.addEventListener('download', (e) => {
           try {
             const d = JSON.parse(e.data);
-            if (d) updateDatasetUploadUI(d);
+            if (d && isOwnDatasetDownload(d)) updateDatasetUploadUI(d);
           } catch (_) { }
         });
         datasetLogEventSource.addEventListener('status', (e) => {

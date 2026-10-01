@@ -423,6 +423,13 @@ def _build_custom_agent(
         kwargs["sub_agents"] = [
             built[c] for c in cfg.children if system.agent(c).is_enabled()
         ]
+    # A non-LLM class that calls other agents itself (as AgentTools, so they
+    # keep their own parents) declares a `subordinates` field to receive them.
+    if (cfg.subordinates and built is not None
+            and "subordinates" in getattr(cls, "model_fields", {})):
+        kwargs["subordinates"] = [
+            built[s] for s in cfg.subordinates if system.agent(s).is_enabled()
+        ]
     if issubclass(cls, LlmAgent):
         tool_entries = _resolve_tools(cfg)
         hitl_attached = bool(cfg.hitl and _hitl_enabled())

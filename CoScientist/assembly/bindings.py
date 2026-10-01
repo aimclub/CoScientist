@@ -1568,6 +1568,7 @@ _cb("post_action_critique", "after_tool", factory=_post_action_critique)
 
 def _register_classes() -> None:
     from CoScientist.agents.custom_agents import (
+        DatasetIntakeAgent,
         ExecutorSwitchAgent,
         WebToolsDeployerAgent,
     )
@@ -1580,6 +1581,8 @@ def _register_classes() -> None:
     REGISTRY.register_agent_class("web_tools_deployer", WebToolsDeployerAgent)
     # Runs ONE of its children: the normal executor, or the reranker fallback.
     REGISTRY.register_agent_class("executor_switch", ExecutorSwitchAgent)
+    # Pre-stage: the CoderAgent describes an attached dataset before planning.
+    REGISTRY.register_agent_class("dataset_intake", DatasetIntakeAgent)
     # Context-init pre-stage: the review shows a STRUCTURED FORM (research frame)
     # and seeds the confirmed frame into the research graph.
     REGISTRY.register_agent_class("context_init_session", ContextInitSessionAgent)

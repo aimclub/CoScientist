@@ -72,8 +72,10 @@ def test_run_root_is_one_sequential_run_ending_in_the_aggregator(monkeypatch):
 
     assert isinstance(run_root, SequentialAgent)
     names = [a.name for a in run_root.sub_agents]
-    # The context-init pre-stage seeds the research frame before the orchestrator.
-    assert names[0] == "ContextInitAgent", "context-init runs before the orchestrator"
+    # Dataset intake opens the run (a no-op without a dataset), then the
+    # context-init pre-stage seeds the research frame before the orchestrator.
+    assert names[0] == "DatasetIntakeAgent", "dataset intake runs before framing and planning"
+    assert names[1] == "ContextInitAgent", "context-init runs before the orchestrator"
     assert names.index("OrchestratorAgent") < names.index("ResultAggregatorAgent")
     assert names[-1] == "ResultAggregatorAgent", "aggregator must be the terminal stage"
 
@@ -558,7 +560,8 @@ def test_build_for_mode_run_root_includes_pipeline_pre_and_post(monkeypatch):
     run_root = system.run_root
     assert isinstance(run_root, SequentialAgent)
     names = [a.name for a in run_root.sub_agents]
-    assert names[0] == "ContextInitAgent"
+    assert names[0] == "DatasetIntakeAgent"
+    assert names[1] == "ContextInitAgent"
     assert names[-1] == "ResultAggregatorAgent"
     assert "OrchestratorAgent" in names
 
@@ -577,15 +580,17 @@ def test_build_for_mode_planner_run_root(monkeypatch):
         run_root = system.run_root
         assert isinstance(run_root, SequentialAgent)
         names = [a.name for a in run_root.sub_agents]
-        # Two pre-stages now: the frame is confirmed and seeded, then written
-        # out as a техническое задание by GOST 19.201-78. The second reads what
-        # the first confirmed, so the order is load-bearing.
-        assert names[0] == "ContextInitAgent"
-        assert names[1] == "TZSpecAgent"
-        assert names[2] == "PlanningPipelineAgent"
+        # Three pre-stages: an attached dataset is described first (so the
+        # frame and the plan can use it), then the frame is confirmed and
+        # seeded, then written out as a техническое задание by GOST 19.201-78.
+        # Each reads what the one before produced, so the order is load-bearing.
+        assert names[0] == "DatasetIntakeAgent"
+        assert names[1] == "ContextInitAgent"
+        assert names[2] == "TZSpecAgent"
+        assert names[3] == "PlanningPipelineAgent"
         assert names[-1] == "ResultAggregatorAgent"
 
-        planning_agent = run_root.sub_agents[2]
+        planning_agent = run_root.sub_agents[3]
         planning_children = [a.name for a in planning_agent.sub_agents]
         assert planning_children == ["PlannerAgent", "OrchestratorAgent"]
 

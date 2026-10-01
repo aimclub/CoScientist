@@ -619,6 +619,10 @@ def inject_graph_root(callback_context: CallbackContext):
 # fills the argument in for it — sending the data is the agent's own decision.
 DATASET_URL_STATE_KEY = "dataset_url"
 DATASET_CONTEXT_STATE_KEY = "dataset_context"
+#: The CoderAgent's description of the attached dataset (DatasetIntakeAgent),
+#: and which dataset it describes — its link without the signature query.
+DATASET_REPORT_STATE_KEY = "dataset_report"
+DATASET_REPORT_FOR_STATE_KEY = "dataset_report_for"
 
 
 def inject_dataset_context(callback_context: CallbackContext):
@@ -628,16 +632,33 @@ def inject_dataset_context(callback_context: CallbackContext):
     session with no attached archive gets nothing at all instead of a heading
     describing data that does not exist.
     """
-    url = str(callback_context.state.get(DATASET_URL_STATE_KEY) or "").strip()
-    callback_context.state[DATASET_CONTEXT_STATE_KEY] = (
+    state = callback_context.state
+    url = str(state.get(DATASET_URL_STATE_KEY) or "").strip()
+    if not url:
+        state[DATASET_CONTEXT_STATE_KEY] = ""
+        return None
+    block = (
         "## Dataset attached to this session\n"
-        f"The user attached a dataset archive (.zip): {url}\n"
+        f"The user attached a dataset archive (.zip) for the sandbox: {url}\n"
         "When a step needs that data, send the link along as the `dataset_url`\n"
         "argument of the tool that fetches it (e.g. `run_sandbox_task`) — the\n"
         "sandbox is a separate machine and this is how the archive gets there.\n"
         "Judge for yourself whether a given call needs it, and never substitute\n"
         "a different dataset for the one the user attached.\n"
-    ) if url else ""
+    )
+    # The report is only shown for the dataset it describes: a replaced
+    # archive must not be planned against the old one's contents.
+    report = str(state.get(DATASET_REPORT_STATE_KEY) or "").strip()
+    from CoScientist.agents.custom_agents import dataset_identity
+
+    if report and state.get(DATASET_REPORT_FOR_STATE_KEY) == dataset_identity(url):
+        block += (
+            "\n### What the dataset contains (CoderAgent's analysis, before planning)\n"
+            "Plan and act on THIS data: use its files, fields and paths as reported "
+            "below instead of assuming them.\n\n"
+            f"{report}\n"
+        )
+    state[DATASET_CONTEXT_STATE_KEY] = block
     return None
 
 
