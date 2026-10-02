@@ -29,9 +29,6 @@ _SCREENING_FILENAME = f"coarse_inspiration_search_{MOOSECHEM_MODEL}_.json"
 _HYPOTHESES_FILENAME = f"hypothesis_generation_{MOOSECHEM_MODEL}_.json"
 _EVALUATION_FILENAME = f"evaluation_{MOOSECHEM_MODEL}_.json"
 
-DEFAULT_CORPUS_PATH = f"{MOOSECHEM_PATH}/Data/smart_corpus.json"
-DEFAULT_BACKGROUND_PATH = f"{MOOSECHEM_PATH}/Data/my_background.json"
-
 # Папка для job-статусов фоновых запусков run_moosechem
 JOBS_DIR = Path(os.getenv("MOOSECHEM_JOBS_DIR", "/app/jobs"))
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
@@ -164,12 +161,22 @@ def _search_openalex(query: str, max_results: int) -> list[list[str]]:
 
 
 # ── Вспомогательные функции: подготовка main.sh перед запуском ─────────────
-def _write_background_json(moosechem_path: Path, research_question: str, background_survey: str) -> Path:
-    """Пишет Data/my_background.json в формате, который ожидает MOOSE-Chem:
-    просто список из двух строк [question, background_survey]."""
+def _write_background_json(
+    moosechem_path: Path,
+    research_question: str,
+    background_survey: str,
+    dest: Optional[Path] = None,
+) -> Path:
+    """Пишет background JSON в формате, который ожидает MOOSE-Chem:
+    просто список из двух строк [question, background_survey].
+
+    dest must be per-job: a shared Data/my_background.json is overwritten by
+    concurrent users and then silently reused as "the" background.
+    """
     data_dir = moosechem_path / "Data"
     data_dir.mkdir(parents=True, exist_ok=True)
-    background_path = data_dir / "my_background.json"
+    background_path = dest or (data_dir / "my_background.json")
+    background_path.parent.mkdir(parents=True, exist_ok=True)
     with open(background_path, "w", encoding="utf-8") as f:
         json.dump([research_question, background_survey], f, ensure_ascii=False, indent=2)
     return background_path
@@ -221,8 +228,9 @@ def _build_corpus_job(
 
         background_path = None
         if write_background_json:
+            dest = Path(MOOSECHEM_PATH) / "Data" / f"background_{job_id}.json"
             background_path = str(_write_background_json(
-                Path(MOOSECHEM_PATH), research_question, background_survey
+                Path(MOOSECHEM_PATH), research_question, background_survey, dest=dest
             ))
 
         status_path.write_text(json.dumps({
@@ -333,6 +341,9 @@ def _run_moosechem_job(
         "screening_path": f"{checkpoint_full}/{_SCREENING_FILENAME}",
         "hypotheses_path": f"{checkpoint_full}/{_HYPOTHESES_FILENAME}",
         "evaluation_path": f"{checkpoint_full}/{_EVALUATION_FILENAME}",
+        "corpus_path": corpus_path,
+        "background_path": background_path,
+        "checkpoint_dir": checkpoint_dir,
     }
 
     # Ждём пока другой run_moosechem не завершится
@@ -411,22 +422,50 @@ def _run_moosechem_job(
             status_path.write_text(json.dumps({"status": "failed", "error": str(e), **result_paths}))
 
 
-def _find_latest_job(target_status: str = "success") -> Optional[dict]:
-    """Возвращает данные самого свежего job'а с заданным статусом, по mtime
-    файла статуса. Используется как дефолт в get_hypotheses/get_inspirations,
-    когда путь к файлу не передан явно."""
-    candidates = []
-    for status_file in JOBS_DIR.glob("*.json"):
-        try:
-            data = json.loads(status_file.read_text())
-        except (json.JSONDecodeError, OSError):
-            continue
-        if data.get("status") == target_status:
-            candidates.append((status_file.stat().st_mtime, data))
-    if not candidates:
+def _load_job(job_id: Optional[str]) -> Optional[dict]:
+    """Load a single job status file by id. Never scans other users' jobs."""
+    if not job_id or not isinstance(job_id, str):
         return None
-    candidates.sort(key=lambda x: x[0], reverse=True)
-    return candidates[0][1]
+    if "/" in job_id or "\\" in job_id or ".." in job_id:
+        return None
+    status_path = JOBS_DIR / f"{job_id}.json"
+    if not status_path.exists():
+        return None
+    try:
+        return json.loads(status_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def _resolve_result_path(
+    *,
+    job_id: Optional[str],
+    explicit_path: Optional[str],
+    path_key: str,
+) -> tuple[Optional[str], Optional[dict], Optional[str]]:
+    """Bind a result file to a specific job.
+
+    Refuses the old "latest successful job on this container" fallback — that
+    returned another user's hypotheses whenever evaluation_path/job_id was omitted.
+    Returns (path, job_data, error_message).
+    """
+    job = _load_job(job_id) if job_id else None
+    if explicit_path:
+        return explicit_path, job, None
+    if not job_id:
+        return None, None, (
+            f"job_id or {path_key} is required; refusing to use another run's results."
+        )
+    if job is None:
+        return None, None, f"No job found with id {job_id}."
+    if job.get("status") != "success":
+        return None, job, (
+            f"Job {job_id} is not complete (status={job.get('status')})."
+        )
+    path = job.get(path_key)
+    if not path:
+        return None, job, f"Job {job_id} has no {path_key}."
+    return path, job, None
 
 
 # ── Tool 1: сборка корпуса литературы ───────────────────────────────────────
@@ -451,8 +490,8 @@ def build_corpus(
     if not LLM_API_KEY:
         return {"answer": "Error: OPENROUTER_API_KEY is not configured.", "metadata": {}}
 
-    output_path = output_path or DEFAULT_CORPUS_PATH
     job_id = str(uuid.uuid4())[:8]
+    output_path = output_path or f"{MOOSECHEM_PATH}/Data/corpus_{job_id}.json"
 
     thread = threading.Thread(
         target=_build_corpus_job,
@@ -507,6 +546,7 @@ def run_moosechem(
     checkpoint_dir: str,
     corpus_path: Optional[str] = None,
     background_path: Optional[str] = None,
+    corpus_job_id: Optional[str] = None,
     main_sh: str = "main.sh",
 ) -> dict:
     """
@@ -525,24 +565,35 @@ def run_moosechem(
 
     Args:
         checkpoint_dir: Output directory name for results, relative to the
-            MOOSE-Chem root (e.g. "hyp_output").
-        corpus_path: Path to a custom inspiration corpus JSON. If omitted,
-            defaults to the corpus produced by the most recent build_corpus
-            call (MOOSE-Chem's standard corpus location).
+            MOOSE-Chem root (e.g. "hyp_abc123_mcp"). Must be unique per
+            research question — ASCII slugs of Cyrillic prompts collide.
+        corpus_path: Path to a custom inspiration corpus JSON.
         background_path: Path to a my_background.json with [question, survey].
-            If omitted, defaults to the background file produced by the most
-            recent build_corpus call.
+        corpus_job_id: Prefer this over shared defaults: load corpus_path /
+            background_path from that build_corpus job.
         main_sh: Name of the bash entry script (default "main.sh")
     """
     moosechem_path = Path(MOOSECHEM_PATH)
     if not moosechem_path.exists():
         return {"answer": f"Error: MOOSE-Chem not found at {MOOSECHEM_PATH}", "metadata": {}}
 
-    # Автодефолты: если build_corpus уже создал стандартные файлы — используем их
-    if corpus_path is None and Path(DEFAULT_CORPUS_PATH).exists():
-        corpus_path = DEFAULT_CORPUS_PATH
-    if background_path is None and Path(DEFAULT_BACKGROUND_PATH).exists():
-        background_path = DEFAULT_BACKGROUND_PATH
+    if corpus_job_id:
+        corpus_job = _load_job(corpus_job_id)
+        if corpus_job is None:
+            return {
+                "answer": f"Error: no corpus job found with id {corpus_job_id}.",
+                "metadata": {},
+            }
+        if corpus_job.get("status") != "success":
+            return {
+                "answer": (
+                    f"Error: corpus job {corpus_job_id} is not ready "
+                    f"(status={corpus_job.get('status')})."
+                ),
+                "metadata": corpus_job,
+            }
+        corpus_path = corpus_path or corpus_job.get("corpus_path")
+        background_path = background_path or corpus_job.get("background_path")
 
     checkpoint_full_path = moosechem_path / checkpoint_dir
     checkpoint_full_path.mkdir(parents=True, exist_ok=True)
@@ -605,22 +656,28 @@ def check_moosechem_status(job_id: str) -> dict:
 
 # ── Tool 4: получить топ гипотез ────────────────────────────────────────────
 @mcp.tool()
-def get_hypotheses(evaluation_path: Optional[str] = None, top_n: int = 5, min_score: float = 0.0) -> dict:
+def get_hypotheses(
+    job_id: Optional[str] = None,
+    evaluation_path: Optional[str] = None,
+    top_n: int = 5,
+    min_score: float = 0.0,
+) -> dict:
     """
     Retrieve the top-scored hypotheses generated by MOOSE-Chem.
 
     Args:
+        job_id: The job_id returned by run_moosechem. Required unless
+            evaluation_path is given. Never falls back to "the latest success
+            on this container" — that leaked other users' results.
         evaluation_path: Path to evaluation_<model>_.json produced by MOOSE-Chem.
-            If omitted, automatically uses the result of the most recently
-            completed run_moosechem job.
         top_n: Number of top hypotheses to return (by score, descending)
         min_score: Minimum score (0-4) to include a hypothesis
     """
-    if evaluation_path is None:
-        latest = _find_latest_job("success")
-        if latest is None:
-            return {"answer": "Error: no completed MOOSE-Chem runs found, and no evaluation_path given.", "metadata": {}}
-        evaluation_path = latest.get("evaluation_path")
+    evaluation_path, job, err = _resolve_result_path(
+        job_id=job_id, explicit_path=evaluation_path, path_key="evaluation_path"
+    )
+    if err:
+        return {"answer": f"Error: {err}", "metadata": {}}
 
     try:
         with open(evaluation_path, "r", encoding="utf-8") as f:
@@ -631,11 +688,9 @@ def get_hypotheses(evaluation_path: Optional[str] = None, top_n: int = 5, min_sc
     question = list(data[0].keys())[0]
     hypotheses_raw = data[0][question]
 
-    # Загружаем результаты критика из job-файла если есть
-    critic_results = {}
-    latest = _find_latest_job("success")
-    if latest:
-        critic_results = latest.get("critic_results", {})
+    # Critic annotations and corpus lookup must come from THIS job, not
+    # whichever run last succeeded on the shared Docker volume.
+    critic_results = (job or {}).get("critic_results", {}) or {}
 
     hypotheses = []
     for i, item in enumerate(hypotheses_raw):
@@ -675,7 +730,9 @@ def get_hypotheses(evaluation_path: Optional[str] = None, top_n: int = 5, min_sc
         round_idx += 1
 
     # Загружаем корпус для поиска абстрактов вдохновений
-    corpus_path = os.path.join(MOOSECHEM_PATH, "Data", "smart_corpus.json")
+    corpus_path = (job or {}).get("corpus_path") or os.path.join(
+        MOOSECHEM_PATH, "Data", "smart_corpus.json"
+    )
     corpus_index = {}
     if os.path.exists(corpus_path):
         try:
@@ -783,6 +840,7 @@ def get_hypotheses(evaluation_path: Optional[str] = None, top_n: int = 5, min_sc
         "answer": answer,
         "metadata": {
             "evaluation_path": evaluation_path,
+            "job_id": job_id,
             "research_question": question,
             "total_hypotheses": len(hypotheses),
             "hypotheses": top,
@@ -792,21 +850,24 @@ def get_hypotheses(evaluation_path: Optional[str] = None, top_n: int = 5, min_sc
 
 # ── Tool 5: какие статьи легли в основу гипотез (screening funnel) ─────────
 @mcp.tool()
-def get_inspirations(screening_path: Optional[str] = None) -> dict:
+def get_inspirations(
+    job_id: Optional[str] = None,
+    screening_path: Optional[str] = None,
+) -> dict:
     """
     Show which papers MOOSE-Chem selected as inspiration during the screening
     funnel (from the full corpus down to the final 3-5 inspiration papers).
 
     Args:
-        screening_path: Path to coarse_inspiration_search_<model>_.json. If
-            omitted, automatically uses the result of the most recently
-            completed run_moosechem job.
+        job_id: The job_id returned by run_moosechem. Required unless
+            screening_path is given. Does not fall back to the latest job.
+        screening_path: Path to coarse_inspiration_search_<model>_.json.
     """
-    if screening_path is None:
-        latest = _find_latest_job("success")
-        if latest is None:
-            return {"answer": "Error: no completed MOOSE-Chem runs found, and no screening_path given.", "metadata": {}}
-        screening_path = latest.get("screening_path")
+    screening_path, _job, err = _resolve_result_path(
+        job_id=job_id, explicit_path=screening_path, path_key="screening_path"
+    )
+    if err:
+        return {"answer": f"Error: {err}", "metadata": {}}
 
     try:
         with open(screening_path, "r", encoding="utf-8") as f:
