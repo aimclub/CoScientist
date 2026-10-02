@@ -20,9 +20,11 @@ BaseHypothesisTool contract is fully preserved:
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
+import unicodedata
 from typing import Any, Dict, List, Optional
 
 import aiohttp
@@ -109,6 +111,21 @@ def _build_variables(raw_vars: Dict[str, Any]) -> Variables:
     )
 
 
+def checkpoint_dir_for_query(research_question: str, background_survey: str = "") -> str:
+    """Stable per-query checkpoint dir that does not collapse non-ASCII text.
+
+    The previous slug ``re.sub(r'[^a-z0-9_]', '_', question[:40]) + "_mcp"``
+    stripped every Cyrillic character, so every Russian prompt hashed to the
+    same directory ``_mcp`` and MOOSE-Chem reused another user's cached run.
+    """
+    key = "\n".join([
+        unicodedata.normalize("NFC", research_question or "").strip(),
+        unicodedata.normalize("NFC", background_survey or "").strip(),
+    ])
+    digest = hashlib.sha256(key.encode("utf-8")).hexdigest()[:16]
+    return f"hyp_{digest}_mcp"
+
+
 def _split_claim_and_plan(text: str) -> tuple[str, str]:
     """Split hypothesis text into claim (before first '1.') and verification plan."""
     match = re.search(r'\n\s*1\.', text)
@@ -163,19 +180,25 @@ class MooseChemMCPTool(BaseHypothesisTool):
                 if not corpus_job_id:
                     return self._error("Failed to start corpus build.", start_time)
 
-                if not await self._wait_corpus(session, corpus_job_id):
+                corpus_meta = await self._wait_corpus(session, corpus_job_id)
+                if not corpus_meta:
                     return self._error("Corpus build failed or timed out.", start_time)
 
                 # Step 2: run MOOSE-Chem EA pipeline
-                job_id = await self._run_moosechem(session, query)
+                job_id = await self._run_moosechem(
+                    session, query, corpus_meta, corpus_job_id=corpus_job_id
+                )
                 if not job_id:
                     return self._error("Failed to start MOOSE-Chem job.", start_time)
 
                 if not await self._wait_moosechem(session, job_id):
                     return self._error("MOOSE-Chem job failed or timed out.", start_time)
 
-                # Step 3: fetch hypotheses with LLM-extracted tools and inspiration
-                raw_hypotheses = await self._get_hypotheses(session, query.max_hypotheses)
+                # Step 3: fetch hypotheses for THIS job only (never the
+                # container-global latest success — that leaks other users).
+                raw_hypotheses = await self._get_hypotheses(
+                    session, query.max_hypotheses, job_id=job_id
+                )
 
             # ---- Tool catalog: match hypotheses to available validation tools ----
             tool_catalog = query.tool_catalog
@@ -292,34 +315,51 @@ class MooseChemMCPTool(BaseHypothesisTool):
 
     async def _wait_corpus(
         self, session: aiohttp.ClientSession, corpus_job_id: str
-    ) -> bool:
-        """Poll corpus status until success or failure."""
+    ) -> Optional[Dict[str, Any]]:
+        """Poll corpus status until success or failure.
+
+        Returns the job metadata (including corpus_path / background_path) on
+        success so the subsequent run_moosechem call is bound to this corpus,
+        not the container-global default files.
+        """
         deadline = time.monotonic() + MAX_CORPUS_WAIT
         while time.monotonic() < deadline:
             result = await self._call_tool(
                 session, "check_corpus_status", {"corpus_job_id": corpus_job_id}
             )
-            status = result.get("metadata", result).get("status", "")
+            meta = result.get("metadata", result)
+            status = meta.get("status", "")
             if status == "success":
-                return True
+                return meta if isinstance(meta, dict) else {}
             if status == "failed":
-                return False
+                return None
             await asyncio.sleep(POLL_INTERVAL_CORPUS)
-        return False
+        return None
 
     async def _run_moosechem(
-        self, session: aiohttp.ClientSession, query: HypothesisQuery
+        self,
+        session: aiohttp.ClientSession,
+        query: HypothesisQuery,
+        corpus_meta: Optional[Dict[str, Any]] = None,
+        corpus_job_id: Optional[str] = None,
     ) -> str:
         """Start MOOSE-Chem EA pipeline. Returns job_id immediately."""
-        # Build a safe checkpoint directory name from the research question
-        checkpoint_dir = (
-            re.sub(r'[^a-z0-9_]', '_', query.research_question[:40].lower()).strip('_')
-            + "_mcp"
-        )
+        arguments: Dict[str, Any] = {
+            "checkpoint_dir": checkpoint_dir_for_query(
+                query.research_question, query.background_survey or ""
+            ),
+        }
+        if corpus_job_id:
+            arguments["corpus_job_id"] = corpus_job_id
+        if corpus_meta:
+            if corpus_meta.get("corpus_path"):
+                arguments["corpus_path"] = corpus_meta["corpus_path"]
+            if corpus_meta.get("background_path"):
+                arguments["background_path"] = corpus_meta["background_path"]
         result = await self._call_tool(
             session,
             "run_moosechem",
-            {"checkpoint_dir": checkpoint_dir},
+            arguments,
         )
         meta = result.get("metadata", result)
         return meta.get("job_id", "")
@@ -342,7 +382,10 @@ class MooseChemMCPTool(BaseHypothesisTool):
         return False
 
     async def _get_hypotheses(
-        self, session: aiohttp.ClientSession, max_hypotheses: int
+        self,
+        session: aiohttp.ClientSession,
+        max_hypotheses: int,
+        job_id: str,
     ) -> List[Dict[str, Any]]:
         # Cap at 3 (reverted from the 5-hypothesis experiment).
         max_hypotheses = min(max_hypotheses, 3)
@@ -354,7 +397,7 @@ class MooseChemMCPTool(BaseHypothesisTool):
         result = await self._call_tool(
             session,
             "get_hypotheses",
-            {"top_n": max_hypotheses, "min_score": 0.0},
+            {"job_id": job_id, "top_n": max_hypotheses, "min_score": 0.0},
             timeout_sec=180,
         )
         return result.get("metadata", {}).get("hypotheses", [])

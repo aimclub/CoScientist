@@ -75,13 +75,16 @@ native `MooseChemTool` instead of this MCP-backed one.
 
 ## Known gotchas
 
-- **Caching by research question.** MOOSE-Chem writes results into a
-  directory slugged from the research question. Re-running the same question
-  reuses the existing result instead of recomputing — including its
-  inspiration list, which may go stale relative to a freshly rebuilt corpus
-  (abstract lookups can silently miss). For a clean end-to-end run, remove the
-  job's result directory and restart the container (clears `/app/jobs` and
-  `MOOSECHEM_PATH/<slug>_mcp/`) before calling `build_corpus` again.
+- **Caching by research question.** Checkpoint directories are
+  `hyp_<sha256(question+background)[:16]>_mcp`. The same question reuses
+  that directory; a different question (including another Russian prompt)
+  must not. Cyrillic-only ASCII slugs used to collapse to `_mcp` and return
+  another user's cache — do not revive that. `get_hypotheses` / `get_inspirations`
+  require `job_id` (or an explicit path) and never pick the container-global
+  latest success. Corpus and background JSON are also per-job
+  (`Data/corpus_{id}.json`, `Data/background_{id}.json`). To force a clean
+  recompute, delete that job's checkpoint directory (and optionally its
+  files under `/app/jobs`) before calling `build_corpus` again.
 - **`get_hypotheses` timeout.** For each returned hypothesis, this tool makes
   two additional LLM calls server-side (tools + variables extraction). At 5
   hypotheses with untruncated abstracts this can take 60-90+ seconds — make
