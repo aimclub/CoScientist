@@ -249,6 +249,9 @@ def invoke_llm_with_retry(
                 )
             return response
         except Exception as e:
+            if getattr(e, 'status_code', None) == 403:
+                logger.error("LLM operation '%s' was denied (HTTP 403)", operation)
+                raise RuntimeError(f"LLM request denied (HTTP 403): {e}") from e
             if attempt == max_attempts:
                 logger.exception(
                     "LLM operation '%s' failed after %d attempts",

@@ -36,13 +36,15 @@ class ConvertedContent:
 
 
 class MarkerClient:
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, timeout: float = 600):
         self.base_url = base_url
+        self.timeout = timeout
 
     def convert(self, pdf_uri: str) -> ConvertedContent:
         content = load_bytes(pdf_uri)
         files = {"pdf_file": ("file.pdf", content, "application/pdf")}
-        response = requests.post(self.base_url, files=files)
+        response = requests.post(self.base_url, files=files, timeout=self.timeout)
+        response.raise_for_status()
 
         res = response.json()
         text, images, elapsed_time = res["html"], res["images"], res["processing_time"]

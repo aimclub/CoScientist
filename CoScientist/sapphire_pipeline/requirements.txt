@@ -1,0 +1,2 @@
+-r ../papers_processing_refactoring/requirements.txt
+pydantic-settings>=2.14.0,<3.0.0

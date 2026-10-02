@@ -14,8 +14,30 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 
+def _response_text(response) -> str:
+    """Extract text from an AIMessage, including block-based content."""
+    content = response.content
+    if isinstance(content, str):
+        return content.strip()
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        if parts:
+            return "".join(parts).strip()
+    raise ValueError("LLM response contains no text")
+
+
 def _has_non_empty_content(response) -> bool:
-    return isinstance(getattr(response, "content", None), str) and bool(response.content.strip())
+    try:
+        return bool(_response_text(response))
+    except (ValueError, AttributeError):
+        return False
 
 
 def pil_to_base64(image: Image.Image) -> str:
@@ -32,27 +54,27 @@ def pil_to_base64(image: Image.Image) -> str:
 def check_image_relevance(image_b64: str, llm) -> bool:
     try:
         query = [prompt_func({"text": cls_prompt, "image": [image_b64]})]
-        decision = invoke_llm_with_retry(
+        decision = _response_text(invoke_llm_with_retry(
             llm,
             query,
             operation="check image relevance",
             response_validator=_has_non_empty_content,
-        ).content.strip()
+        ))
         return decision != "False"
     except Exception as e:
         logger.error(f"Failed to check image relevance: {e}")
-        return False
+        raise
 
 
 def try_extract_table(image_b64: str, llm) -> str | None:
     try:
         table_query = [prompt_func({"text": table_extraction_prompt, "image": [image_b64]})]
-        res = invoke_llm_with_retry(
+        res = _response_text(invoke_llm_with_retry(
             llm,
             table_query,
             operation="extract table from image",
             response_validator=_has_non_empty_content,
-        ).content.strip()
+        ))
 
         if res != "No table":
             pattern = r'<table\b[^>]*>.*?</table>'
@@ -76,12 +98,12 @@ def caption_image(
 
         image_b64 = pil_to_base64(pil_image)
         query = [prompt_func({"text": image_captioning_prompt, "image": [image_b64]})]
-        caption = invoke_llm_with_retry(
+        caption = _response_text(invoke_llm_with_retry(
             llm,
             query,
             operation=f"caption image {image_info.id}",
             response_validator=_has_non_empty_content,
-        ).content.strip()
+        ))
         image_info.caption = caption
         return image_info
     except Exception as e:
