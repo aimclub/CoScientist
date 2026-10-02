@@ -255,3 +255,7 @@ reports/
 session_snapshots/
 hub_artifacts/
 tests/integration/parse_results/
+
+# Working notes, handoff files and draft PR text. These are session scratch,
+# not source. Nine of them reached main once already.
+scratchpad/

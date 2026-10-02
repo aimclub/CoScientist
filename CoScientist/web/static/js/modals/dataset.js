@@ -158,7 +158,10 @@
           }
         });
         datasetLogEventSource.onerror = () => {
-          // EventSource automatically retries
+          // EventSource retries by itself and does not go through the fetch
+          // wrapper in state.js, so an expired session would leave this stream
+          // retrying for ever against a 401 with nothing on screen.
+          if (window.probeSession) window.probeSession();
         };
       } catch (err) {
         console.warn('Dataset logs SSE connection error:', err);

@@ -148,6 +148,14 @@
           <label><input type="checkbox" data-opt="stats"> Счётчики</label>
           <label><input type="checkbox" data-opt="activity"> «В работе сейчас» <small>(на весь экран)</small></label>
         </div>
+        <!-- Plain form POST, no script: the session cookie is HttpOnly, so
+             only the server can clear it. -->
+        <form method="post" action="/auth/logout" class="ml-auto">
+          <button type="submit" title="Sign out"
+            class="text-outline-variant hover:text-primary transition-colors flex items-center">
+            <span class="material-symbols-outlined text-sm">logout</span>
+          </button>
+        </form>
       </div>
       <nav id="call-graph-crumbs" class="cg-crumbs hidden" aria-label="Уровень графа"></nav>
       <div id="call-graph-stats" class="cg-stats hidden"></div>

@@ -35,6 +35,7 @@ from CoScientist.agents.callbacks.report_language import (
 )
 from CoScientist.main import CoScientistManager
 from CoScientist.web.handler import WebHITLHandler, hitl_response_event
+from CoScientist.web import auth as web_auth
 from CoScientist.web.session_registry import LocalSessionRegistry
 from CoScientist.web.run_control import ExecutionControlMixin, register_execution_routes
 from CoScientist.agents import agent_system, planner_agent
@@ -119,6 +120,7 @@ def _pipeline_stages(run_settings: Settings | None = None) -> list:
 # ---------------------------------------------------------------------------
 WEB_DIR = Path(__file__).parent
 TEMPLATE_PATH = WEB_DIR / "templates" / "index.html"
+LOGIN_TEMPLATE_PATH = WEB_DIR / "templates" / "login.html"
 APP_NAME = "coscientist_app"
 
 
@@ -1713,6 +1715,71 @@ def create_app() -> FastAPI:
     )
     app.state.runtime = runtime
     register_execution_routes(app, runtime)
+
+    # Deny by default, for every route of this app AND of the sub-app mounted
+    # at /alembic. Registered here rather than per route: the app has 58+
+    # routes across two apps, two of them shadowed dead registrations, and a
+    # guard that must be remembered for each new route will eventually be
+    # forgotten. Raw ASGI, so it covers the /ws socket too.
+    app.add_middleware(web_auth.RequireAuth)
+    web_auth.check_configuration()
+
+    @app.get("/healthz")
+    async def healthz():
+        """Liveness probe. Exempt from auth so the deploy can poll it."""
+        return {"status": "ok"}
+
+    @app.get("/login", response_class=HTMLResponse)
+    async def login_page(error: str = ""):
+        html = LOGIN_TEMPLATE_PATH.read_text(encoding="utf-8")
+        message = ""
+        if error == "bad":
+            message = "Wrong password."
+        elif error == "rate":
+            message = "Too many attempts. Wait a few minutes and try again."
+        html = html.replace("<!--ERROR-->", _esc(message))
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+
+    @app.post("/auth/login")
+    async def login_submit(request: Request):
+        form = await request.form()
+        password = str(form.get("password") or "")
+        ip = web_auth.client_ip(request.scope)
+
+        # The password is checked before the throttle, and a correct password
+        # is never refused. This order is forced by the key: uvicorn runs
+        # without --proxy-headers, so behind a reverse proxy every client
+        # arrives as the proxy address and shares one counter. A hard block on
+        # that key is a block on everybody — ten wrong guesses from anywhere on
+        # the internet would shut the whole team out for the window. The
+        # counter still throttles wrong guesses, which is all it can honestly
+        # do here. See deploy/README.md on choosing a long random password.
+        #
+        # Off the event loop and on a pool of its own, because the check runs
+        # PBKDF2 over 200000 rounds and the order above lets any anonymous
+        # caller trigger it. See check_password_async in web/auth.py.
+        if not await web_auth.check_password_async(password):
+            web_auth.login_limiter.record_failure(ip)
+            logging.getLogger("CoScientist.web.auth").warning(
+                "Failed login from %s", ip
+            )
+            error = "rate" if web_auth.login_limiter.is_limited(ip) else "bad"
+            return RedirectResponse(f"/login?error={error}", status_code=303)
+
+        web_auth.login_limiter.reset(ip)
+        response = RedirectResponse("/", status_code=303)
+        # The scope decides whether the cookie is marked Secure, unless
+        # AUTH__COOKIE_SECURE pins it — see web/auth.py.
+        response.set_cookie(
+            value=web_auth.issue_token(), **web_auth.cookie_kwargs(request.scope)
+        )
+        return response
+
+    @app.post("/auth/logout")
+    async def logout():
+        response = RedirectResponse("/login", status_code=303)
+        response.delete_cookie(web_auth.COOKIE_NAME, path="/")
+        return response
 
     # Vendored JS/CSS (e.g. vis-network for the live graph) so the UI works
     # offline / behind a VPN without any CDN.
