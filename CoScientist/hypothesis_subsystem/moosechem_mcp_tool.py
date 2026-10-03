@@ -22,9 +22,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
+import os
 import re
 import time
 import unicodedata
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import aiohttp
@@ -45,6 +48,51 @@ from CoScientist.hypothesis_subsystem.models import (
 )
 
 _settings = get_settings()
+
+# NOTE: deliberately a TOP-LEVEL logger name. ``CoScientist.*`` loggers are
+# configured by the app with their own handlers and ``propagate=False``, so a
+# ``CoScientist.hypothesis_subsystem.moosechem_mcp_tool`` logger never reaches
+# the root console handler the integration test attaches — which is why the MCP
+# progress was invisible. A top-level name propagates to root exactly like the
+# ``hypothesis_subsystem`` audit logger, so it shows up live in the console and
+# in the per-case captured log.
+logger = logging.getLogger("moosechem_mcp")
+
+# ---------------------------------------------------------------------------
+# Online trace file (for offline analysis / ground-truth comparison)
+# ---------------------------------------------------------------------------
+# When MOOSECHEM_TRACE_DIR is set, every MCP request/response and every
+# hypothesis the pipeline produces (BEFORE the critic runs — so rejected ones
+# are kept too) is appended, one JSON object per line, flushed immediately.
+_TRACE_DIR_ENV = "MOOSECHEM_TRACE_DIR"
+_TRACE_RESULT_LIMIT = 40000  # chars — cap huge MCP payloads in the trace
+
+
+def _truncate_json(value: Any, limit: int = _TRACE_RESULT_LIMIT) -> Any:
+    """JSON-safe, size-capped rendering of a value for the trace file."""
+    try:
+        s = json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:  # noqa: BLE001
+        s = repr(value)
+    if len(s) > limit:
+        return {"_truncated": True, "_chars": len(s), "preview": s[:limit]}
+    return value
+
+
+def _write_trace(event: str, payload: Dict[str, Any]) -> None:
+    """Append one trace record (flushed) when a trace dir is configured."""
+    trace_dir = os.getenv(_TRACE_DIR_ENV)
+    if not trace_dir:
+        return
+    try:
+        os.makedirs(trace_dir, exist_ok=True)
+        path = os.path.join(trace_dir, "moosechem_trace.jsonl")
+        rec = {"ts": datetime.now(timezone.utc).isoformat(), "event": event, **payload}
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(rec, ensure_ascii=False, default=str) + "\n")
+            f.flush()
+    except Exception:  # noqa: BLE001 — tracing must never break a run
+        pass
 
 # MCP server URL from settings or fallback to localhost
 MOOSECHEM_MCP_URL: str = (
@@ -158,6 +206,7 @@ class MooseChemMCPTool(BaseHypothesisTool):
     def __init__(self, mcp_url: Optional[str] = None):
         self._mcp_url = mcp_url or MOOSECHEM_MCP_URL
         self._session_id: Optional[str] = None
+        logger.info("[MooseChemMCP] client initialised -> %s", self._mcp_url)
 
     # ------------------------------------------------------------------ #
     # BaseHypothesisTool contract                                          #
@@ -170,6 +219,16 @@ class MooseChemMCPTool(BaseHypothesisTool):
         """Run the full MOOSE-Chem pipeline via MCP and return ToolResult."""
         start_time = time.monotonic()
         self._session_id = None
+        logger.info(
+            "[MooseChemMCP] invoke START q='%s' max_hypotheses=%s url=%s",
+            query.research_question[:160], query.max_hypotheses, self._mcp_url,
+        )
+        _write_trace("invoke_start", {
+            "research_question": query.research_question,
+            "background_survey": query.background_survey,
+            "max_hypotheses": query.max_hypotheses,
+            "mcp_url": self._mcp_url,
+        })
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -207,6 +266,21 @@ class MooseChemMCPTool(BaseHypothesisTool):
             ]
             duration_ms = (time.monotonic() - start_time) * 1000
 
+            logger.info(
+                "[MooseChemMCP] invoke DONE hyps=%d corpus_job=%s moosechem_job=%s %.0fms",
+                len(hypotheses), corpus_job_id, job_id, duration_ms,
+            )
+            # Persist EVERY generated hypothesis (before the critic runs), so
+            # rejected/deferred ones are available for offline analysis too.
+            _write_trace("raw_hypotheses", {
+                "corpus_job_id": corpus_job_id,
+                "moosechem_job_id": job_id,
+                "count": len(hypotheses),
+                "hypotheses": [
+                    h.model_dump(mode="json") if hasattr(h, "model_dump") else h
+                    for h in hypotheses
+                ],
+            })
             return ToolResult(
                 strategy_type=self.strategy_type,
                 hypotheses=hypotheses,
@@ -220,6 +294,8 @@ class MooseChemMCPTool(BaseHypothesisTool):
             )
 
         except Exception as exc:
+            logger.exception("[MooseChemMCP] invoke FAILED: %s", exc)
+            _write_trace("invoke_error", {"error": str(exc)})
             return self._error(str(exc), start_time)
 
     # ------------------------------------------------------------------ #
@@ -272,6 +348,15 @@ class MooseChemMCPTool(BaseHypothesisTool):
         if self._session_id:
             headers["mcp-session-id"] = self._session_id
 
+        logger.info(
+            "[MooseChemMCP] -> call tool=%s args=%s (url=%s)",
+            tool_name, _redact_args(arguments), self._mcp_url,
+        )
+        _write_trace("mcp_request", {
+            "tool": tool_name,
+            "arguments": _truncate_json(arguments, 4000),
+        })
+        _t0 = time.monotonic()
         async with session.post(
             self._mcp_url,
             json=payload,
@@ -286,13 +371,25 @@ class MooseChemMCPTool(BaseHypothesisTool):
         # FastMCP returns content as list of {type, text} objects
         result = data.get("result", {})
         content = result.get("content", [])
+        parsed: Dict[str, Any]
         if content and isinstance(content, list):
             text = content[0].get("text", "{}")
             try:
-                return json.loads(text)
+                parsed = json.loads(text)
             except json.JSONDecodeError:
-                return {"answer": text}
-        return result
+                parsed = {"answer": text}
+        else:
+            parsed = result
+        logger.info(
+            "[MooseChemMCP] <- tool=%s ok=%.0fms status=%s",
+            tool_name, (time.monotonic() - _t0) * 1000.0, _summarize_mcp_result(tool_name, parsed),
+        )
+        _write_trace("mcp_response", {
+            "tool": tool_name,
+            "elapsed_ms": round((time.monotonic() - _t0) * 1000.0, 1),
+            "response": _truncate_json(parsed),
+        })
+        return parsed
 
     # ------------------------------------------------------------------ #
     # Pipeline steps                                                       #
@@ -322,18 +419,24 @@ class MooseChemMCPTool(BaseHypothesisTool):
         success so the subsequent run_moosechem call is bound to this corpus,
         not the container-global default files.
         """
-        deadline = time.monotonic() + MAX_CORPUS_WAIT
+        t0 = time.monotonic()
+        deadline = t0 + MAX_CORPUS_WAIT
+        logger.info("[MooseChemMCP] corpus build polling started (job=%s, max=%ds)",
+                    corpus_job_id, MAX_CORPUS_WAIT)
         while time.monotonic() < deadline:
             result = await self._call_tool(
                 session, "check_corpus_status", {"corpus_job_id": corpus_job_id}
             )
             meta = result.get("metadata", result)
             status = meta.get("status", "")
+            logger.info("[MooseChemMCP] corpus heartbeat elapsed=%.0fs status=%s",
+                        time.monotonic() - t0, status or "?")
             if status == "success":
                 return meta if isinstance(meta, dict) else {}
             if status == "failed":
                 return None
             await asyncio.sleep(POLL_INTERVAL_CORPUS)
+        logger.warning("[MooseChemMCP] corpus build timed out after %ds", MAX_CORPUS_WAIT)
         return None
 
     async def _run_moosechem(
@@ -368,17 +471,30 @@ class MooseChemMCPTool(BaseHypothesisTool):
         self, session: aiohttp.ClientSession, job_id: str
     ) -> bool:
         """Poll MOOSE-Chem job status until success or failure."""
-        deadline = time.monotonic() + MAX_MOOSECHEM_WAIT
+        t0 = time.monotonic()
+        deadline = t0 + MAX_MOOSECHEM_WAIT
+        logger.info(
+            "[MooseChemMCP] MOOSE-Chem generation polling started (job=%s, max=%ds)",
+            job_id, MAX_MOOSECHEM_WAIT,
+        )
         while time.monotonic() < deadline:
             result = await self._call_tool(
                 session, "check_moosechem_status", {"job_id": job_id}
             )
-            status = result.get("metadata", result).get("status", "")
+            meta = result.get("metadata", result) or {}
+            status = meta.get("status", "")
+            logger.info(
+                "[MooseChemMCP] moosechem heartbeat elapsed=%.0fs status=%s (alive)",
+                time.monotonic() - t0, status or "?",
+            )
             if status == "success":
                 return True
             if status == "failed":
+                logger.error("[MooseChemMCP] moosechem job FAILED: %s",
+                             meta.get("error") or meta)
                 return False
             await asyncio.sleep(POLL_INTERVAL_MOOSECHEM)
+        logger.error("[MooseChemMCP] moosechem job timed out after %ds", MAX_MOOSECHEM_WAIT)
         return False
 
     async def _get_hypotheses(
@@ -389,6 +505,8 @@ class MooseChemMCPTool(BaseHypothesisTool):
     ) -> List[Dict[str, Any]]:
         # Cap at 3 (reverted from the 5-hypothesis experiment).
         max_hypotheses = min(max_hypotheses, 3)
+        logger.info("[MooseChemMCP] fetching hypotheses (job=%s, top_n=%d)",
+                    job_id, max_hypotheses)
         """Fetch top hypotheses from the completed MOOSE-Chem job."""
         # [experiment: increased hypothesis budget] get_hypotheses now does
         # an LLM call (tools + variables extraction) per hypothesis on the
@@ -504,3 +622,36 @@ class MooseChemMCPTool(BaseHypothesisTool):
             success=False,
             error_message=message,
         )
+
+
+# --------------------------------------------------------------------------- #
+# Module-level logging helpers (kept OUT of the class body).                   #
+# --------------------------------------------------------------------------- #
+
+def _redact_args(arguments: Dict[str, Any]) -> str:
+    """Compact, log-safe rendering of MCP tool arguments."""
+    try:
+        shown = {
+            k: (v if not isinstance(v, str) or len(v) <= 200 else v[:200] + "...")
+            for k, v in arguments.items()
+        }
+        return json.dumps(shown, ensure_ascii=False, default=str)
+    except Exception:  # noqa: BLE001 — logging must never break a call
+        return repr(arguments)[:300]
+
+
+def _summarize_mcp_result(tool_name: str, parsed: Dict[str, Any]) -> str:
+    """One-line, log-safe summary of an MCP tool response."""
+    try:
+        meta = parsed.get("metadata", parsed) if isinstance(parsed, dict) else {}
+        if tool_name == "get_hypotheses":
+            hyps = (meta or {}).get("hypotheses", []) if isinstance(meta, dict) else []
+            return f"hypotheses={len(hyps)}"
+        if isinstance(meta, dict):
+            status = meta.get("status")
+            job = meta.get("job_id") or meta.get("corpus_job_id")
+            if status or job:
+                return f"status={status} job={job}"
+        return "ok"
+    except Exception:  # noqa: BLE001
+        return "ok"
