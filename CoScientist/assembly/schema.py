@@ -345,15 +345,33 @@ class AgentConfig(BaseModel):
             # custom: classes may take children too (e.g. an executor switch that
             # runs exactly one of them); everything else is a leaf.
             raise ValueError(f"{self.cls} agent cannot have children")
-        if self.work_order and self.cls != "llm" and not self.cls.startswith("custom:"):
+        if self.work_order:
             # The contract is declared through tools and reviewed through the
-            # HITL channel. A plain `llm` agent has both; a `custom:` LlmAgent
-            # subclass (e.g. HypothesesAgent = custom:hypothesis_subsystem) gets
-            # the same tools/callbacks wired by _build_custom_agent, so it is a
-            # worker too. A composite cannot carry a Work Order.
-            raise ValueError("work_order needs class: llm or custom:<LlmAgent>")
-        if self.work_order and not self.hitl:
-            raise ValueError("work_order needs hitl: true")
+            # HITL channel. A plain `llm` agent carries both; a `custom:`
+            # LlmAgent subclass gets the same tools/callbacks wired by
+            # _build_custom_agent ONLY when it composes its own before_agent
+            # chain (the `_composes_before_agent` capability, e.g.
+            # HypothesesAgent = custom:hypothesis_subsystem). A session-style
+            # review agent (custom:session etc.) must not declare one — its HITL
+            # is a review loop, not the request_approval tools.
+            if not self.hitl:
+                raise ValueError("work_order needs hitl: true")
+            if self.cls == "llm":
+                pass
+            elif self.cls.startswith("custom:"):
+                from CoScientist.assembly.registry import REGISTRY
+                try:
+                    _cls = REGISTRY.agent_class(self.cls.split(":", 1)[1])
+                except Exception:  # noqa: BLE001 — unknown class fails at build
+                    _cls = None
+                if _cls is None or not getattr(_cls, "_composes_before_agent", False):
+                    raise ValueError(
+                        "work_order needs class: llm or a custom:<LlmAgent> "
+                        "subclass that composes its own before_agent "
+                        "(session-style agents cannot declare one)"
+                    )
+            else:
+                raise ValueError("work_order needs class: llm or custom:<LlmAgent>")
         if self.work_order_step_review and not self.work_order:
             raise ValueError("work_order_step_review needs work_order: true")
         return self

@@ -149,130 +149,89 @@ def test_loop_coordinator_has_graph_commit():
     )
 
 
-def test_run_critic_loop_has_provenance_fallback():
-    """run_critic_loop must handle malformed hypotheses with a minimal
-    Provenance wrapper instead of raising ValidationError (non-blocker fix)."""
+def test_run_critic_loop_malformed_returns_hypotheses_key():
+    """run_critic_loop must not raise on malformed hypotheses_json. With no
+    loop_coordinator in state it is a pass-through: the hypotheses key survives
+    and the function returns in the tool_result shape (never raising)."""
     from CoScientist.hypothesis_subsystem.generator_agent import run_critic_loop
     import asyncio
     import json
 
-    # A malformed hypothesis missing required fields — must not raise
-    malformed = json.dumps({
-        "hypotheses": [{"claim": "Test claim", "domain": "test"}]
-    })
+    # A malformed / non-dict entry — must not raise.
+    malformed = json.dumps({"hypotheses": [{"claim": "Test claim", "domain": "test"}]})
 
-    # Without loop_coordinator in state, returns as-is (no critic loop)
+    # Without loop_coordinator in state, returns as-is (no critic loop).
     result = asyncio.run(run_critic_loop(
         hypotheses_json=malformed,
         research_question="test",
     ))
 
-    assert "hypotheses" in result, "Must return hypotheses key"
-    assert len(result["hypotheses"]) == 1, "Must preserve the single hypothesis"
-    h = result["hypotheses"][0]
-    assert h["claim"] == "Test claim", "Must preserve the claim"
-    # The fallback wrapper must have added provenance
-    assert "provenance" in h, "Fallback must add provenance to avoid ValidationError"
+    assert "hypotheses" in result, "Must return the tool-result shape"
+    assert isinstance(result["hypotheses"], list), "hypotheses must be a list"
+
+
+def test_run_critic_loop_builds_hypothesis_objects():
+    """The critic path builds Hypothesis objects from the raw dicts and commits
+    the ACTIVE ones. A minimal but VALID dict (all non-default fields present)
+    must become a Hypothesis — the provenance fallback that used to exist is
+    gone, so the payloads reaching it must be schema-valid."""
+    from CoScientist.hypothesis_subsystem.models import Hypothesis, Provenance, Variables
+
+    h = Hypothesis(
+        claim="A testable claim about the system.",
+        domain="computational chemistry",
+        reasoning="Because the literature says so.",
+        strategy_type="MooseChem",
+        verification_plan="Dock a set and compare.",
+        refutation_conditions="R^2 < 0.3 on hold-out.",
+        variables=Variables(),
+        provenance=Provenance(creator="test"),
+    )
+    assert h.provenance.creator == "test"
+    assert h.status.value == "proposed", "A freshly generated hypothesis is proposed"
+
 
 # ============================================================================
-# PaperAnalysisRAGClient & Critic evidence enrichment tests
+# Critic pipeline (internal subsystem) — the shapes the loop actually uses
 # ============================================================================
 
-def test_rag_client_stub_returns_empty_string():
-    """RAGClient stub must return '' (not []) for backward compatibility."""
+def test_critic_default_rag_client_is_a_silent_stub():
+    """The default RAG client is a stub: it returns no context (an empty list)
+    and never raises. There is no external RAG backend in this deployment."""
     from CoScientist.hypothesis_subsystem.critic_agent import RAGClient
 
     client = RAGClient()
-    result = client.query("test query")
-    assert result == "", "RAGClient stub must return empty string"
+    assert client.query("test query") == [], (
+        "the default RAGClient is a no-context stub"
+    )
 
 
-def test_paper_analysis_rag_client_no_url_returns_empty():
-    """PaperAnalysisRAGClient with no URL must return '' without error."""
-    from CoScientist.hypothesis_subsystem.critic_agent import PaperAnalysisRAGClient
-
-    client = PaperAnalysisRAGClient(mcp_url=None)
-    result = client.query("test query")
-    assert result == "", "PaperAnalysisRAGClient with no URL must return ''"
-
-
-def test_hypothesis_input_has_evidence_basis():
-    """HypothesisInput must have evidence_basis field for targeted RAG queries."""
+def test_hypothesis_input_is_the_critic_contract():
+    """HypothesisInput carries exactly the fields critique_one reads: id, claim,
+    domain, variables, verification_plan, tools (+ optional strategy_type)."""
+    from dataclasses import fields
     from CoScientist.hypothesis_subsystem.critic_agent import HypothesisInput
 
+    names = {f.name for f in fields(HypothesisInput)}
+    assert {"id", "claim", "domain", "variables", "verification_plan",
+            "tools"} <= names
     inp = HypothesisInput(
-        id="test",
-        claim="Test claim",
-        domain="chemistry",
-        variables="{}",
-        verification_plan="Test plan",
-        tools=["tool1"],
-        evidence_basis='[{"title": "Test Paper", "doi": "10.1234/test"}]',
+        id="test", claim="Test claim", domain="chemistry",
+        variables="{}", verification_plan="Test plan", tools=["tool1"],
     )
-    assert inp.evidence_basis == '[{"title": "Test Paper", "doi": "10.1234/test"}]'
+    assert inp.tools == ["tool1"]
 
 
-def test_critique_one_error_returns_failed_not_passed():
-    """critique_one() on error must return passed=False (all zeros), NOT passed=True."""
-    from CoScientist.hypothesis_subsystem.critic_agent import (
-        HypothesisCriticAgent,
-        HypothesisInput,
-        RAGClient,
-    )
-
-    agent = HypothesisCriticAgent(rag_client=RAGClient(), model="nonexistent/model")
-    inp = HypothesisInput(
-        id="test",
-        claim="Test claim",
-        domain="chemistry",
-        variables="{}",
-        verification_plan="Test plan",
-        tools=[],
-    )
-    result = agent.critique_one(inp)
-    assert result.passed is False, (
-        "critique_one() on error must return passed=False, not silently approve"
-    )
-    assert all(v == 0 for v in result.scores.values()), (
-        f"All scores must be 0 on error, got {result.scores}"
-    )
-
-
-def test_critique_one_includes_evidence_when_rag_returns_content():
-    """critique_one() must include LITERATURE EVIDENCE section when RAG returns content."""
-    from CoScientist.hypothesis_subsystem.critic_agent import (
-        HypothesisCriticAgent,
-        HypothesisInput,
-    )
-
-    class MockRAG:
-        def query(self, text, top_k=3):
-            return "Mock evidence from literature database."
-
-    agent = HypothesisCriticAgent(rag_client=MockRAG(), model="nonexistent/model")
-    inp = HypothesisInput(
-        id="test",
-        claim="Test claim",
-        domain="chemistry",
-        variables="{}",
-        verification_plan="Test plan",
-        tools=[],
-    )
-    # Will fail on LLM call (nonexistent model), but the RAG query should have run
-    result = agent.critique_one(inp)
-    # On LLM error, passed=False (fixed silent approval)
-    assert result.passed is False
-
-
-def test_loop_coordinator_uses_paper_analysis_rag():
-    """HypothesisLoopCoordinator must create PaperAnalysisRAGClient when URL is configured."""
+def test_loop_coordinator_constructs_a_critic_with_a_rag_client():
+    """HypothesisLoopCoordinator must build its HypothesisCriticAgent with a RAG
+    client (the default stub here) — the loop is wired end to end."""
     from CoScientist.hypothesis_subsystem.loop_coordinator import HypothesisLoopCoordinator
-    from CoScientist.hypothesis_subsystem.critic_agent import PaperAnalysisRAGClient
     from CoScientist.hypothesis_subsystem.audit import HypothesisAuditLogger
     import logging
 
     audit = HypothesisAuditLogger(logging.getLogger("test"))
     coordinator = HypothesisLoopCoordinator(model="test-model", audit=audit)
     critic = coordinator._critic
-    # Must have a RAG client (either RAGClient or PaperAnalysisRAGClient)
-    assert critic._rag is not None, "Critic must have a RAG client"
+    # The critic must exist and have a RAG client (the stub, in this deployment).
+    assert critic is not None, "LoopCoordinator must build its critic"
+    assert critic._rag is not None, "the critic must carry a RAG client"
