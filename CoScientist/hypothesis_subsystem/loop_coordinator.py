@@ -119,6 +119,30 @@ class HypothesisLoopCoordinator:
             self._audit.log_error("research_graph_commit", str(exc))
             return
 
+        # FALLBACK ONLY. HypothesesAgent is a graph-writing agent now (it owns
+        # the research_graph worker surface and the graph-aware prompt), so the
+        # normal path is the LLM committing its own Hypothesis/VerificationMethod/
+        # ConfirmationCriteria nodes with `research_commit`. Only a Hypothesis can
+        # be authored by HypothesesAgent (schema.AGENT_PERMISSIONS), so if the
+        # graph already holds any Hypothesis node the agent has already written
+        # its hypotheses — committing the generic wrappers here would only add
+        # duplicate, conflicting cards. This mirrors the original fix's intent
+        # (never leave the graph without a hypothesis) without fighting the LLM.
+        try:
+            existing = [
+                n for n in graph.full().get("nodes", [])
+                if n.get("type") == "Hypothesis"
+            ]
+        except Exception:  # noqa: BLE001 — a read failure must not block the fallback
+            existing = []
+        if existing:
+            logger.info(
+                "[hypothesis] research graph already holds %d Hypothesis node(s); "
+                "skipping programmatic fallback commit",
+                len(existing),
+            )
+            return
+
         root: Optional[str] = None
         try:
             root = graph.root_id()

@@ -75,6 +75,49 @@ When the tool catalog is available, prioritize hypotheses as follows:
 """
 
 # ============================================================================
+# Assembly strategy appendix
+# ----------------------------------------------------------------------------
+# Appended to the graph-aware "hypotheses" prompt (agents/prompts/templates.py)
+# when the wrapper runs through HypothesisSubsystemAgent. The graph prompt owns
+# the research-graph protocol (research_commit, the Hypothesis/VerificationMethod/
+# ConfirmationCriteria shape, "how to verify"); this appendix only tells the SAME
+# LLM that MooseChem is how it GENERATES the claims, and how to turn the returned
+# HypothesisList into that commit. It is deliberately implementation-neutral:
+# the 20-60 min MooseChem run must never be provoked (or repeated) by a prompt
+# that treats a strategy tool as a mandatory pipeline step.
+# ============================================================================
+
+SUBSYSTEM_STRATEGY_APPENDIX = """
+### HOW YOU GENERATE — the MooseChem strategy (graph-aware mode)
+
+You are the graph-writing hypothesis agent. Everything above describes WHAT a
+hypothesis is, HOW it is verified and how it is committed with `research_commit`.
+This section is only about the SOURCE of the claims.
+
+1. Build the inventory first. Call `retrieve_validation_tools(research_question)`
+   and read the catalog: what each tool does, what it takes, what it cannot do.
+   Equip every claim from THAT inventory — never invent a capability.
+2. Generate the claims with `generate_via_moosechem(research_question, ...)`. It
+   runs the MooseChem MCP pipeline (PubMed+OpenAlex corpus → LLM generation →
+   scoring) and returns a HypothesisList. Call it ONCE per research question — it
+   is a long run; do not repeat it to fill a missing argument.
+3. `run_critic_loop(hypotheses_json, research_question)` is OPTIONAL and gives
+   FEEDBACK on already-formed hypotheses (rigor, falsifiability). It does not
+   enrich a hypothesis and it does not commit anything — never treat it as a
+   required step in the pipeline, and never re-run MooseChem to satisfy it.
+4. COMMIT the chosen hypotheses yourself with `research_commit`. You — not the
+   tools, not the orchestrator — are the only role allowed to create Hypothesis,
+   VerificationMethod and ConfirmationCriteria nodes. For EACH hypothesis you
+   keep, commit it together with its VerificationMethod and ConfirmationCriteria
+   (and any Tool it truly needs), exactly as the research protocol above shows.
+   The MooseChem output is your draft: reshape it into the graph protocol, keep
+   the criteria measurable, and drop anything you are not ready to test.
+5. Your final answer is the `SELECTED HYPOTHESIS` text, not the raw MooseChem
+   JSON. A hypothesis that only appears in your prose — and was never committed
+   with `research_commit` — did not happen.
+"""
+
+# ============================================================================
 # Critic instruction
 # ============================================================================
 

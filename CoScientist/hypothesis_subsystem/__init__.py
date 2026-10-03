@@ -22,6 +22,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from google.adk.agents import LlmAgent
+from google.adk.tools import FunctionTool
 from google.adk.tools.agent_tool import AgentTool
 
 from CoScientist.config import get_settings
@@ -30,9 +31,13 @@ from CoScientist.hypothesis_subsystem.base_tool import BaseHypothesisTool
 from CoScientist.hypothesis_subsystem.generator_agent import (
     add_critic_loop_tool,
     build_hypothesis_generator,
+    generate_via_moosechem,
+    retrieve_validation_tools,
+    run_critic_loop,
 )
 from CoScientist.hypothesis_subsystem.loop_coordinator import HypothesisLoopCoordinator
 from CoScientist.hypothesis_subsystem.moosechem_mcp_tool import MooseChemMCPTool
+from CoScientist.hypothesis_subsystem.prompts import SUBSYSTEM_STRATEGY_APPENDIX
 import logging as _stdlib_logging
 from CoScientist.hypothesis_subsystem.tool_registry import HypothesisToolRegistry
 
@@ -40,6 +45,33 @@ from CoScientist.hypothesis_subsystem.tool_registry import HypothesisToolRegistr
 # ============================================================================
 # Internal helpers
 # ============================================================================
+
+def _merge_tools(internal_tools, assembler_tools):
+    """Union the subsystem's internal strategy tools with the assembler's
+    declared tools, keyed by tool name, the assembler's wiring winning for any
+    name both provide.
+
+    The regression this guards against: ``HypothesisSubsystemAgent`` used to
+    REPLACE the assembler's tools with its internal MooseChem pair, silently
+    dropping the ``research_graph`` worker surface declared in system.yaml — and
+    with it the agent's only way to create Hypothesis/VerificationMethod/
+    ConfirmationCriteria nodes. Merging keeps the graph surface attached while
+    still guaranteeing the strategy tools exist for a standalone build (no
+    assembler, ``assembler_tools is None``).
+    """
+    if assembler_tools is None:
+        return list(internal_tools)
+
+    def _name(tool):
+        return getattr(tool, "name", None) or getattr(tool, "__name__", None)
+
+    merged = list(assembler_tools)
+    have = {_name(t) for t in merged}
+    for tool in internal_tools:
+        if _name(tool) not in have:
+            merged.append(tool)
+    return merged
+
 
 def _make_inject_state(
     registry: HypothesisToolRegistry,
@@ -173,6 +205,12 @@ class HypothesisSubsystemAgent(LlmAgent):
         # the agent was built through system.yaml.
         assembler_before_agent = kwargs.pop("before_agent_callback", None)
         assembler_tools = kwargs.pop("tools", None)
+        # The assembler-rendered instruction is the graph-aware "hypotheses"
+        # prompt. It MUST reach the wrapper: it is what teaches research_commit
+        # and the Hypothesis/VerificationMethod/ConfirmationCriteria shape. When
+        # built standalone (tests embedding the subsystem) it is absent and the
+        # MooseChem-only GENERATOR_INSTRUCTION is used instead.
+        assembler_instruction = kwargs.pop("instruction", None)
 
         audit = HypothesisAuditLogger(
             _stdlib_logging.getLogger("hypothesis_subsystem")
@@ -202,17 +240,35 @@ class HypothesisSubsystemAgent(LlmAgent):
             else:
                 before_callbacks.append(assembler_before_agent)
 
-        # Tools: prefer the assembler-provided wiring (declared in system.yaml)
-        # so the guard_unknown_tools whitelist matches the actually-attached
-        # tools; fall back to the generator's own tools when constructed
-        # standalone (no assembler, e.g. tests embedding the subsystem directly).
-        tools = assembler_tools if assembler_tools is not None else generator.tools
+        # Tools: UNION the assembler wiring (declared in system.yaml: the
+        # research_graph worker surface + the MooseChem strategy tools) with the
+        # subsystem's own strategy tools. The assembler's wiring wins on any name
+        # both provide; a standalone build (no assembler) still gets the full
+        # MooseChem pipeline. Merging — never replacing — is what keeps
+        # research_graph attached, i.e. what lets this agent create
+        # Hypothesis/VerificationMethod/ConfirmationCriteria at all.
+        internal_tools: list = [
+            FunctionTool(retrieve_validation_tools),
+            FunctionTool(generate_via_moosechem),
+            FunctionTool(run_critic_loop),
+        ]
+        tools = _merge_tools(internal_tools, assembler_tools)
+
+        # Instruction: the assembler's graph-aware prompt when present, plus the
+        # strategy appendix describing the internal MooseChem pipeline. A
+        # standalone build falls back to the generator's own instruction.
+        instruction = assembler_instruction or generator.instruction
+        if instruction and SUBSYSTEM_STRATEGY_APPENDIX.strip() not in instruction:
+            instruction = (
+                instruction.rstrip("\n") + "\n\n"
+                + SUBSYSTEM_STRATEGY_APPENDIX.strip() + "\n"
+            )
 
         super().__init__(
             name=name,
             description=description,
             model=generator.model,
-            instruction=generator.instruction,
+            instruction=instruction,
             tools=tools,
             output_schema=generator.output_schema,
             output_key=output_key or generator.output_key,

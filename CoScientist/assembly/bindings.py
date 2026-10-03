@@ -47,6 +47,15 @@ def _hypothesis_critic_loop():
     return [FunctionTool(run_critic_loop)]
 
 
+def _hypothesis_retrieve():
+    """Factory for the retrieve_validation_tools FunctionTool.
+
+    Returns a list so the assembler's _flatten() works uniformly."""
+    from CoScientist.hypothesis_subsystem.generator_agent import retrieve_validation_tools
+    from google.adk.tools import FunctionTool
+    return [FunctionTool(retrieve_validation_tools)]
+
+
 def _paper_analysis():
     from CoScientist.tools import paper_analysis_toolset_instance
     return paper_analysis_toolset_instance
@@ -564,6 +573,21 @@ REGISTRY.register_tool(ToolEntry(
 # system.yaml so the assembler attaches them — keeping guard_unknown_tools'
 # whitelist populated and making the generator + critic loop visible to the
 # ADK runtime as regular tools.
+REGISTRY.register_tool(ToolEntry(
+    key="retrieve_validation_tools",
+    factory=_hypothesis_retrieve,
+    docs=(
+        ToolDoc(
+            name="retrieve_validation_tools",
+            signature="retrieve_validation_tools(research_question)",
+            purpose=("Discover the validation tools available RIGHT NOW for a "
+                     "question (MCP tool registry; static fallback). Call it "
+                     "FIRST so each hypothesis is equipped from the real "
+                     "inventory, not from invented capabilities."),
+        ),
+    ),
+))
+
 REGISTRY.register_tool(ToolEntry(
     key="generate_via_moosechem",
     factory=_hypothesis_generate,

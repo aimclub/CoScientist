@@ -357,22 +357,37 @@ agents:
     description: >-
       generates structured, falsifiable scientific hypotheses using PubMed
       literature mining, LLM generation, and iterative critic refinement;
-      always delegates hypothesis generation to its internal tool pipeline
-      (MooseChem → critic loop) — never fabricates hypotheses from its own
-      knowledge.
+      commits each hypothesis together with its VerificationMethod and
+      ConfirmationCriteria into the shared research graph, so the orchestrator
+      can schedule verification.
     routing: >-
       when the user asks to generate or propose a new hypothesis.
       The agent produces testable hypotheses with concrete verification plans
       and Popperian refutation criteria.
     planning: |-
       Use this to generate and test hypotheses with built-in critic validation.
-      The agent always delegates generation to its internal tool pipeline.
+      The agent writes its hypotheses — and how to verify them — into the
+      research graph itself.
+    # The GRAPH-AWARE generation prompt: research_commit, VerificationMethod,
+    # ConfirmationCriteria, the tool inventory rules. It is rendered by the
+    # assembler and handed to HypothesisSubsystemAgent, which owns the
+    # research-graph surface and is the sole role allowed to create
+    # Hypothesis/VerificationMethod/ConfirmationCriteria (schema.AGENT_PERMISSIONS).
+    prompt: hypotheses
     output_key: hypotheses
     report_output: true
-    # The subsystem's internal strategy tools are declared here so the assembler
-    # attaches them — keeping guard_unknown_tools' whitelist populated and making
-    # the generator + critic loop visible to the ADK runtime as regular tools.
-    tools: [generate_via_moosechem, run_critic_loop]
+    # Two surfaces, one LLM:
+    #   * research_graph (worker) — the graph write/read surface WITHOUT which
+    #     the generator can never create a Hypothesis/VerificationMethod/
+    #     ConfirmationCriteria node (the original regression);
+    #   * the MooseChem strategy tools (retrieve_validation_tools →
+    #     generate_via_moosechem → run_critic_loop) — the generation pipeline the
+    #     graph-aware prompt invokes as its source of hypotheses.
+    # All are declared here so the assembler attaches them, the prompt documents
+    # them, and guard_unknown_tools' whitelist accepts research_commit (calling
+    # it is precisely what was blocked before).
+    tools: [retrieve_validation_tools, generate_via_moosechem, run_critic_loop,
+            task_tracker, research_graph]
     callbacks:
       before_agent: [before_get_task, inject_research_context]
       after_model: [guard_unknown_tools]
