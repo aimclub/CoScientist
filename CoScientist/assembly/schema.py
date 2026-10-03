@@ -352,7 +352,7 @@ class AgentConfig(BaseModel):
             # _build_custom_agent ONLY when it composes its own before_agent
             # chain (the `_composes_before_agent` capability, e.g.
             # HypothesesAgent = custom:hypothesis_subsystem). A session-style
-            # review agent (custom:session etc.) must not declare one — its HITL
+            # review agent (custom:session etc.) must NOT declare one — its HITL
             # is a review loop, not the request_approval tools.
             if not self.hitl:
                 raise ValueError("work_order needs hitl: true")
@@ -362,7 +362,7 @@ class AgentConfig(BaseModel):
                 from CoScientist.assembly.registry import REGISTRY
                 try:
                     _cls = REGISTRY.agent_class(self.cls.split(":", 1)[1])
-                except Exception:  # noqa: BLE001 — unknown class fails at build
+                except Exception:  # noqa: BLE001 — unknown class fails at build anyway
                     _cls = None
                 if _cls is None or not getattr(_cls, "_composes_before_agent", False):
                     raise ValueError(
