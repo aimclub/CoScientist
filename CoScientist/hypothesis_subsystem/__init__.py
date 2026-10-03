@@ -185,6 +185,12 @@ class HypothesisSubsystemAgent(LlmAgent):
     passes for ``issubclass(cls, LlmAgent)`` custom classes.
     """
 
+    # The assembler hands us the Work Order RESET separately (as ``_wo_reset``)
+    # and leaves the composition of ``before_agent_callback`` to us, so the
+    # reset can run FIRST — before our state injection, the task fetch and every
+    # context hook, exactly as it does for a plain LlmAgent worker.
+    _composes_before_agent = True
+
     def __init__(
         self,
         name: str = "HypothesisGenerator",
@@ -205,6 +211,9 @@ class HypothesisSubsystemAgent(LlmAgent):
         # the agent was built through system.yaml.
         assembler_before_agent = kwargs.pop("before_agent_callback", None)
         assembler_tools = kwargs.pop("tools", None)
+        # The Work Order reset, supplied by the assembler when this agent opted
+        # into `work_order: true`. It must be FIRST in before_agent.
+        work_order_reset = kwargs.pop("_wo_reset", None)
         # The assembler-rendered instruction is the graph-aware "hypotheses"
         # prompt. It MUST reach the wrapper: it is what teaches research_commit
         # and the Hypothesis/VerificationMethod/ConfirmationCriteria shape. When
@@ -230,10 +239,15 @@ class HypothesisSubsystemAgent(LlmAgent):
         # ADK's canonical_before_agent_callbacks accepts either a single callable
         # or a list, and runs a list in order. Do NOT wrap them in a manual
         # composer that would try to call the assembler-provided LIST as one
-        # function (the original TypeError). Normalize to a list with our
-        # state-injection FIRST, then hand the whole chain to ADK.
+        # function (the original TypeError). Order: the Work Order reset FIRST
+        # (it must precede any read of the state), then our state injection, then
+        # whatever before_agent the config declared, then the hypothesis brief
+        # LAST (it reads the inventory and plan the earlier hooks refreshed).
         _inject = _make_inject_state(registry, loop_coordinator, audit)
-        before_callbacks: list = [_inject]
+        before_callbacks: list = []
+        if work_order_reset is not None:
+            before_callbacks.append(work_order_reset)
+        before_callbacks.append(_inject)
         if assembler_before_agent is not None:
             if isinstance(assembler_before_agent, list):
                 before_callbacks.extend(assembler_before_agent)

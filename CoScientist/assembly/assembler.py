@@ -220,14 +220,27 @@ def _attach_transient_error_refund(kwargs: dict) -> None:
     kwargs["after_tool_callback"] = [refund_transient_tool_error] + rest
 
 
-def _attach_work_order_callbacks(
-    kwargs: dict, agent_name: str, internal_tools: List[str], step_review: bool = False
-) -> None:
-    """Reset the contract and enforce it FIRST: on agent start, before anything
-    reads the state; before a tool, so a call the contract blocks never reaches
-    the other callbacks (a WebSearchLimiter would count it against the quota).
-    Link refs are not resolved yet then, which does not matter: the guard keys
-    on tool names and shell verbs, not on URLs."""
+def _as_list(value) -> list:
+    if value is None:
+        return []
+    return list(value) if isinstance(value, list) else [value]
+
+
+def _work_order_callbacks(
+    agent_name: str, internal_tools: List[str], step_review: bool = False
+) -> dict:
+    """The Work Order callbacks as a {kind: callable} dict — NOT folded into a
+    kwargs yet, so a custom LlmAgent (whose constructor composes its own
+    before_agent chain) can place the reset itself.
+
+    Reset FIRST: on agent start, before anything reads the state. Guard FIRST
+    before a tool, so a call the contract blocks never reaches the other
+    callbacks (a WebSearchLimiter would count it against the quota). Report
+    LAST after the agent, so the other after_agent callbacks (e.g. collectors)
+    see the answer as the agent gave it; the human's verdict may replace it.
+    Link refs are not resolved yet when these run, which does not matter: the
+    guard keys on tool names and shell verbs, not URLs.
+    """
     from CoScientist.hitl.work_order_guard import (
         make_reset_work_order,
         make_work_order_guard,
@@ -235,28 +248,40 @@ def _attach_work_order_callbacks(
         make_work_step_journal,
     )
 
-    def as_list(value) -> list:
-        if value is None:
-            return []
-        return list(value) if isinstance(value, list) else [value]
-
-    kwargs["before_agent_callback"] = (
-        [make_reset_work_order(agent_name)] + as_list(kwargs.get("before_agent_callback"))
-    )
-    kwargs["before_tool_callback"] = (
-        [make_work_order_guard(agent_name, internal_tools=internal_tools)] + as_list(kwargs.get("before_tool_callback"))
-    )
+    callbacks = {
+        "before_agent_callback": make_reset_work_order(agent_name),
+        "before_tool_callback": make_work_order_guard(agent_name, internal_tools=internal_tools),
+        "after_agent_callback": make_work_report_fallback(agent_name),
+    }
     if step_review:
         # First after the tool: the journal records the answer as the tool gave
         # it, before any other callback could replace it.
-        kwargs["after_tool_callback"] = (
-            [make_work_step_journal(agent_name, internal_tools=internal_tools)]
-            + as_list(kwargs.get("after_tool_callback"))
+        callbacks["after_tool_callback"] = make_work_step_journal(
+            agent_name, internal_tools=internal_tools
         )
-    # Last after the agent: the other after_agent callbacks (e.g. collectors)
-    # see the answer as the agent gave it; the human's verdict may replace it.
+    return callbacks
+
+
+def _attach_work_order_callbacks(
+    kwargs: dict, agent_name: str, internal_tools: List[str], step_review: bool = False
+) -> None:
+    """Fold the Work Order callbacks into an existing kwargs dict, in place,
+    preserving any callbacks already present (reset/guard prepended, report
+    appended). A custom LlmAgent that composes its own before_agent chain uses
+    :func:`_work_order_callbacks` directly instead of this helper."""
+    cb = _work_order_callbacks(agent_name, internal_tools, step_review)
+    kwargs["before_agent_callback"] = (
+        [cb["before_agent_callback"]] + _as_list(kwargs.get("before_agent_callback"))
+    )
+    kwargs["before_tool_callback"] = (
+        [cb["before_tool_callback"]] + _as_list(kwargs.get("before_tool_callback"))
+    )
+    if step_review:
+        kwargs["after_tool_callback"] = (
+            [cb["after_tool_callback"]] + _as_list(kwargs.get("after_tool_callback"))
+        )
     kwargs["after_agent_callback"] = (
-        as_list(kwargs.get("after_agent_callback")) + [make_work_report_fallback(agent_name)]
+        _as_list(kwargs.get("after_agent_callback")) + [cb["after_agent_callback"]]
     )
 
 
@@ -418,26 +443,74 @@ def _build_custom_agent(
             built[c] for c in cfg.children if system.agent(c).is_enabled()
         ]
     if issubclass(cls, LlmAgent):
+        # Same tool/HITL/Work-Order wiring as a plain LlmAgent, so an LlmAgent
+        # subclass built via `class: custom:<x>` (e.g. HypothesesAgent =
+        # custom:hypothesis_subsystem) carries the SAME worker interface as its
+        # peers: the work-order tools + guard/reset/report callbacks. Before
+        # this, work_order on a custom agent was silently ignored.
         tool_entries = _resolve_tools(cfg)
         hitl_attached = bool(cfg.hitl and _hitl_enabled())
         generic_hitl_attached = bool(hitl_attached and cfg.hitl_tools)
+        work_order_attached = bool(cfg.work_order and hitl_attached)
         tools = [t for e in tool_entries for t in _flatten(e.factory())]
+        if work_order_attached:
+            from CoScientist.hitl.work_order_tools import make_work_order_tools
+            tools.extend(make_work_order_tools(
+                cfg.name, _work_order_tool_names(cfg, system, tool_entries),
+                internal_tools=system.internal_tools,
+                step_review=cfg.work_order_step_review,
+            ))
         if generic_hitl_attached:
             from CoScientist.hitl.tool import get_hitl_tools
             tools.extend(get_hitl_tools(a2a_root=bool(cfg.root)))
             tool_entries = tool_entries + [
                 ToolEntry(key="hitl", factory=lambda: None, docs=HITL_TOOL_DOCS)
             ]
+        if work_order_attached:
+            tool_entries = tool_entries + [
+                ToolEntry(key="work_order", factory=lambda: None, docs=WORK_ORDER_TOOL_DOCS)
+            ]
         ctx = PromptContext(
             config=cfg,
             system=system,
             tool_entries=tool_entries,
             hitl_attached=generic_hitl_attached,
+            work_order_attached=work_order_attached,
         )
         kwargs["model"] = _resolve_model(cfg, system)
         if tools:
             kwargs["tools"] = tools
-        kwargs.update(_callback_kwargs(cfg, ctx))
+        callbacks = _callback_kwargs(cfg, ctx)
+        if work_order_attached:
+            wo = _work_order_callbacks(
+                cfg.name, system.internal_tools, step_review=cfg.work_order_step_review
+            )
+            if getattr(cls, "_composes_before_agent", False):
+                # The class composes its own before_agent chain (e.g.
+                # HypothesisSubsystemAgent prepends its state injection). Hand
+                # it the work-order RESET alone so it can keep that first, and
+                # fold the guard / step journal / report normally — those
+                # positions do not interact with composing before_agent.
+                kwargs["_wo_reset"] = wo["before_agent_callback"]
+                callbacks["before_tool_callback"] = (
+                    [wo["before_tool_callback"]]
+                    + _as_list(callbacks.get("before_tool_callback"))
+                )
+                if cfg.work_order_step_review:
+                    callbacks["after_tool_callback"] = (
+                        [wo["after_tool_callback"]]
+                        + _as_list(callbacks.get("after_tool_callback"))
+                    )
+                callbacks["after_agent_callback"] = (
+                    _as_list(callbacks.get("after_agent_callback"))
+                    + [wo["after_agent_callback"]]
+                )
+            else:
+                _attach_work_order_callbacks(
+                    callbacks, cfg.name, system.internal_tools,
+                    step_review=cfg.work_order_step_review,
+                )
+        kwargs.update(callbacks)
         if cfg.prompt:
             kwargs["instruction"] = _render_instruction(cfg, ctx)
         if cfg.output_key:
@@ -452,8 +525,11 @@ def _build_custom_agent(
             kwargs["output_schema"] = REGISTRY.output_schema(cfg.output_schema)
         if cfg.planner:
             kwargs["planner"] = REGISTRY.planner(cfg.planner)()
-        if hitl_attached:
+        if hitl_attached and not getattr(cls, "_composes_before_agent", False):
             # Session-style agents take a review-loop handler instead of tools.
+            # A plain LlmAgent subclass must NOT receive it: it has no
+            # `hitl_handler` field, and its Work Order / HITL tools already use
+            # the global handler in WorkOrderToolset / get_hitl_tools.
             from CoScientist.agents.common import hitl_handler
             kwargs["hitl_handler"] = hitl_handler
         if cfg.uses_critic():

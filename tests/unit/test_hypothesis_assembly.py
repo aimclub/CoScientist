@@ -86,7 +86,9 @@ def test_hypotheses_agent_keeps_graph_surface_and_strategy_tools():
         for c in agent.canonical_before_agent_callbacks
     ]
     assert callback_names[0] == "inject_state"
-    assert callback_names[1:] == ["before_get_task", "inject_research_context"]
+    assert callback_names[1:] == [
+        "before_get_task", "inject_research_context", "brief_hypotheses_regime",
+    ]
 
 
 def test_instruction_carries_graph_commit_and_strategy():

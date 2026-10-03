@@ -345,10 +345,15 @@ class AgentConfig(BaseModel):
             # custom: classes may take children too (e.g. an executor switch that
             # runs exactly one of them); everything else is a leaf.
             raise ValueError(f"{self.cls} agent cannot have children")
-        if self.work_order and (self.cls != "llm" or not self.hitl):
+        if self.work_order and self.cls != "llm" and not self.cls.startswith("custom:"):
             # The contract is declared through tools and reviewed through the
-            # HITL channel: only a plain llm agent with hitl has both.
-            raise ValueError("work_order needs class: llm and hitl: true")
+            # HITL channel. A plain `llm` agent has both; a `custom:` LlmAgent
+            # subclass (e.g. HypothesesAgent = custom:hypothesis_subsystem) gets
+            # the same tools/callbacks wired by _build_custom_agent, so it is a
+            # worker too. A composite cannot carry a Work Order.
+            raise ValueError("work_order needs class: llm or custom:<LlmAgent>")
+        if self.work_order and not self.hitl:
+            raise ValueError("work_order needs hitl: true")
         if self.work_order_step_review and not self.work_order:
             raise ValueError("work_order_step_review needs work_order: true")
         return self

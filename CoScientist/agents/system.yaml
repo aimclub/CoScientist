@@ -376,6 +376,14 @@ agents:
     prompt: hypotheses
     output_key: hypotheses
     report_output: true
+    # The generator's thinking budget, as a settings reference so a run can turn
+    # it down via HYPOTHESES__REASONING without moving the default.
+    reasoning: "${web.hypotheses_reasoning}"
+    # Same worker interface as ResearchAgent/MedicalAgent: declare a Work Order
+    # before the long external actions (the MooseChem run is 20-60 min), gated
+    # by HITL. Both are inert while web.hitl_enabled is off.
+    hitl: true
+    work_order: true
     # Two surfaces, one LLM:
     #   * research_graph (worker) — the graph write/read surface WITHOUT which
     #     the generator can never create a Hypothesis/VerificationMethod/
@@ -389,7 +397,10 @@ agents:
     tools: [retrieve_validation_tools, generate_via_moosechem, run_critic_loop,
             task_tracker, research_graph]
     callbacks:
-      before_agent: [before_get_task, inject_research_context]
+      # brief_hypotheses_regime LAST of the context hooks: it reads the tool
+      # inventory and the plan that before_get_task/inject_research_context just
+      # refreshed, and publishes them to the {hypothesis_brief?} prompt block.
+      before_agent: [before_get_task, inject_research_context, brief_hypotheses_regime]
       after_model: [guard_unknown_tools]
     a2a:
       key: hypotheses
